@@ -1,0 +1,263 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Montserrat:ital,wght@0,200;0,300;0,400;0,600;0,700;0,900;1,300;1,400&family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap');
+
+/* ─── BRAND TOKENS ──────────────────────── */
+:root {
+  --red:       #E31E24;
+  --red-deep:  #A51419;
+  --red-dim:   #6B0D10;
+  --red-glow:  rgba(227,30,36,.18);
+  --black:     #000000;
+  --black2:    #0A0A0A;
+  --black3:    #111111;
+  --black4:    #181818;
+  --white:     #FFFFFF;
+  --off:       #F0EEEB;
+  --muted:     rgba(255,255,255,.5);
+  --border:    rgba(255,255,255,.07);
+  --border-r:  rgba(227,30,36,.22);
+}
+
+/* ─── BASE ──────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;font-size:16px}
+body{
+  background:var(--black);
+  color:var(--white);
+  font-family:'Noto Naskh Arabic','Montserrat',sans-serif;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+/* ─── SCROLLBAR ─────────────────────────── */
+::-webkit-scrollbar{width:2px}
+::-webkit-scrollbar-track{background:var(--black)}
+::-webkit-scrollbar-thumb{background:var(--red);border-radius:1px}
+html{scrollbar-width:thin;scrollbar-color:var(--red) var(--black)}
+
+/* ─── CURSOR ────────────────────────────── */
+.cursor-dot{
+  position:fixed;width:7px;height:7px;
+  background:var(--red);border-radius:50%;
+  pointer-events:none;z-index:9999;
+  transform:translate(-50%,-50%);
+  transition:width .2s,height .2s,background .2s;
+  will-change:left,top;
+}
+.cursor-ring{
+  position:fixed;width:32px;height:32px;
+  border:1px solid rgba(227,30,36,.5);
+  pointer-events:none;z-index:9998;
+  transform:translate(-50%,-50%);
+  transition:border-color .3s,width .3s,height .3s;
+  will-change:left,top;
+}
+.cursor-dot.h{width:11px;height:11px}
+.cursor-ring.h{width:44px;height:44px;border-color:rgba(227,30,36,.8)}
+
+/* ─── FILM GRAIN ────────────────────────── */
+body::after{
+  content:'';position:fixed;inset:0;
+  pointer-events:none;z-index:998;opacity:.025;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:150px;
+}
+
+/* ─── FONT HELPERS ──────────────────────── */
+.f-bebas{font-family:'Bebas Neue',sans-serif}
+.f-mont{font-family:'Montserrat',sans-serif}
+.f-arabic{font-family:'Noto Naskh Arabic','Montserrat',sans-serif}
+
+/* ─── SECTION LABEL ─────────────────────── */
+.sec-label{
+  display:inline-flex;align-items:center;gap:12px;
+  font-family:'Montserrat',sans-serif;
+  font-size:9px;font-weight:600;
+  letter-spacing:5px;text-transform:uppercase;
+  color:var(--red);
+}
+.sec-label::before{
+  content:'';display:block;
+  width:24px;height:1px;
+  background:var(--red-deep);
+}
+
+/* ─── SECTION TITLE ─────────────────────── */
+.sec-title{
+  font-family:'Bebas Neue',sans-serif;
+  font-size:clamp(40px,5.5vw,72px);
+  line-height:.93;
+  letter-spacing:-1px;
+  color:var(--white);
+}
+.sec-title .r{color:var(--red)}
+
+/* ─── BUTTON STYLES ─────────────────────── */
+.btn-red{
+  display:inline-block;
+  background:var(--red);color:var(--white);
+  font-family:'Montserrat',sans-serif;
+  font-weight:700;font-size:11px;
+  letter-spacing:3px;text-transform:uppercase;
+  padding:14px 36px;border:none;cursor:pointer;
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px));
+  transition:background .25s,transform .2s;
+  text-decoration:none;
+}
+.btn-red:hover{background:var(--red-deep)}
+.btn-red:active{transform:scale(.98)}
+
+.btn-ghost{
+  display:inline-block;
+  background:transparent;color:var(--white);
+  font-family:'Montserrat',sans-serif;
+  font-weight:600;font-size:11px;
+  letter-spacing:3px;text-transform:uppercase;
+  padding:13px 36px;
+  border:1px solid rgba(255,255,255,.18);
+  cursor:pointer;text-decoration:none;
+  transition:border-color .25s,color .25s;
+}
+.btn-ghost:hover{border-color:var(--red);color:var(--red)}
+
+.btn-wa{
+  display:inline-flex;align-items:center;gap:10px;
+  background:#25D366;color:var(--white);
+  font-family:'Montserrat',sans-serif;
+  font-weight:700;font-size:11px;
+  letter-spacing:3px;text-transform:uppercase;
+  padding:14px 36px;border:none;cursor:pointer;
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px));
+  transition:background .25s;
+  text-decoration:none;
+}
+.btn-wa:hover{background:#1da851}
+
+/* ─── NAV SCROLL ────────────────────────── */
+.nav-solid{
+  background:rgba(0,0,0,.97) !important;
+  border-bottom:1px solid var(--border-r) !important;
+}
+
+/* ─── MARQUEE ───────────────────────────── */
+@keyframes mq-ltr{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.mq-track{animation:mq-ltr 26s linear infinite;display:flex;width:max-content}
+.mq-track:hover{animation-play-state:paused}
+
+/* ─── FILMSTRIP ─────────────────────────── */
+@keyframes film-d{from{transform:translateY(0)}to{transform:translateY(50px)}}
+@keyframes film-u{from{transform:translateY(0)}to{transform:translateY(-50px)}}
+.anim-fd{animation:film-d 2.5s linear infinite}
+.anim-fu{animation:film-u 2.5s linear infinite}
+
+/* ─── YOUTUBE ───────────────────────────── */
+.yt{position:relative;padding-bottom:56.25%;height:0;overflow:hidden}
+.yt iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+
+/* ─── GRADIENT TEXT ─────────────────────── */
+@keyframes gt-shift{0%,100%{background-position:0%}50%{background-position:100%}}
+.grad-r{
+  background:linear-gradient(90deg,#E31E24,#ff4444,#E31E24);
+  background-size:200%;
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+  animation:gt-shift 3.5s ease infinite;
+}
+
+/* ─── CARDS ─────────────────────────────── */
+.card-dark{
+  background:var(--black3);
+  border:1px solid var(--border);
+  transition:border-color .3s,background .3s;
+}
+.card-dark:hover{
+  border-color:var(--border-r);
+  background:var(--black4);
+}
+
+/* ─── SERVICE CARD ──────────────────────── */
+.svc{
+  position:relative;overflow:hidden;
+  background:var(--black3);
+  transition:background .35s;
+}
+.svc::after{
+  content:'';position:absolute;
+  bottom:0;left:0;right:0;height:2px;
+  background:var(--red);
+  transform:scaleX(0);transform-origin:right;
+  transition:transform .45s cubic-bezier(.16,1,.3,1);
+}
+.svc:hover{background:var(--black4)}
+.svc:hover::after{transform:scaleX(1);transform-origin:left}
+
+/* ─── PORTFOLIO ─────────────────────────── */
+.port{position:relative;overflow:hidden;cursor:pointer;background:#0a0a0a}
+.port-inner{transition:transform .65s cubic-bezier(.16,1,.3,1);width:100%;height:100%}
+.port:hover .port-inner{transform:scale(1.07)}
+.port-ov{
+  position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(0,0,0,.95) 0%,transparent 55%);
+  opacity:0;transition:opacity .35s;
+  display:flex;flex-direction:column;justify-content:flex-end;padding:20px;
+}
+.port:hover .port-ov{opacity:1}
+.port-play{
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%) scale(.65);
+  width:56px;height:56px;
+  border:2px solid rgba(227,30,36,.65);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--red);font-size:18px;padding-right:2px;
+  opacity:0;transition:all .35s;
+}
+.port:hover .port-play{opacity:1;transform:translate(-50%,-50%) scale(1)}
+
+/* ─── PROCESS ───────────────────────────── */
+.step:hover{background:rgba(227,30,36,.04)}
+
+/* ─── TESTIMONIAL ───────────────────────── */
+.test-c{position:relative;overflow:hidden}
+.test-c::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(227,30,36,.05),transparent);
+  opacity:0;transition:opacity .35s;
+}
+.test-c:hover::before{opacity:1}
+
+/* ─── WHATSAPP FLOAT ────────────────────── */
+.wa-float{
+  position:fixed;bottom:28px;left:28px;z-index:900;
+  width:56px;height:56px;
+  background:#25D366;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 20px rgba(37,211,102,.35);
+  transition:transform .3s,box-shadow .3s;
+}
+.wa-float:hover{transform:scale(1.1);box-shadow:0 8px 28px rgba(37,211,102,.5)}
+
+/* ─── LINK UNDERLINE ────────────────────── */
+.ul-hover{position:relative}
+.ul-hover::after{
+  content:'';position:absolute;
+  bottom:-3px;left:0;right:0;height:1px;
+  background:var(--red);
+  transform:scaleX(0);
+  transition:transform .3s ease;
+}
+.ul-hover:hover::after{transform:scaleX(1)}
+
+/* ─── GLASS ─────────────────────────────── */
+.glass{
+  background:rgba(255,255,255,.03);
+  border:1px solid rgba(255,255,255,.07);
+}
+
+/* ─── MOBILE MENU ───────────────────────── */
+.mobile-drop{animation:drop .3s cubic-bezier(.16,1,.3,1) both}
+@keyframes drop{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
