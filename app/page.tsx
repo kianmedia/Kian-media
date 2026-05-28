@@ -11,6 +11,9 @@ import Footer        from "@/components/Footer";
 import Cursor        from "@/components/Cursor";
 import WaFloat       from "@/components/WaFloat";
 
+// Force dynamic rendering — prevents static generation timeout
+export const dynamic = 'force-dynamic';
+
 export default function Home() {
   return (
     <>

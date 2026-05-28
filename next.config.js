@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
-  // Don't fail build on ESLint warnings (we still see them, just don't fail)
+  // Don't fail build on ESLint warnings
   eslint: { ignoreDuringBuilds: true },
   // Don't fail build on TypeScript warnings
   typescript: { ignoreBuildErrors: true },
@@ -17,7 +16,6 @@ const nextConfig = {
         { key: "X-Frame-Options",                   value: "SAMEORIGIN" },
         { key: "X-XSS-Protection",                  value: "1; mode=block" },
         { key: "Referrer-Policy",                   value: "strict-origin-when-cross-origin" },
-        { key: "Permissions-Policy",                value: "camera=(), microphone=(), geolocation=()" },
       ],
     }];
   },
