@@ -1,17 +1,20 @@
 "use client";
 
-import Navbar from "@/components/Navbar";
-import Hero from "@/components/Hero";
-import Marquee from "@/components/Marquee";
-import Services from "@/components/Services";
-import Portfolio from "@/components/Portfolio";
-import About from "@/components/About";
-import Process from "@/components/Process";
+import Navbar       from "@/components/Navbar";
+import Hero         from "@/components/Hero";
+import Showreel     from "@/components/Showreel";
+import About        from "@/components/About";
+import Services     from "@/components/Services";
+import Portfolio    from "@/components/Portfolio";
+import WhyKian      from "@/components/WhyKian";
+import Process      from "@/components/Process";
+import Industries   from "@/components/Industries";
 import Testimonials from "@/components/Testimonials";
-import Contact from "@/components/Contact";
-import Footer from "@/components/Footer";
-import Cursor from "@/components/Cursor";
-import WaFloat from "@/components/WaFloat";
+import Contact      from "@/components/Contact";
+import Footer       from "@/components/Footer";
+import Cursor       from "@/components/Cursor";
+import WaFloat      from "@/components/WaFloat";
+import Marquee      from "@/components/Marquee";
 
 export default function Home() {
   return (
@@ -21,11 +24,14 @@ export default function Home() {
       <Navbar />
       <main>
         <Hero />
+        <Showreel />
         <Marquee />
+        <About />
         <Services />
         <Portfolio />
-        <About />
+        <WhyKian />
         <Process />
+        <Industries />
         <Testimonials />
         <Contact />
       </main>

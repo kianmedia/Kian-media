@@ -1,60 +1,155 @@
 "use client";
 import { motion } from "framer-motion";
-const WA="966503422999";
-const MSG=encodeURIComponent("السلام عليكم، أريد الاستفسار عن خدمات كيان ميديا للإنتاج الفني");
-export default function Contact(){
+import { useState } from "react";
+
+const PROJECT_TYPES = [
+  "Corporate Film",
+  "Commercial / Ad",
+  "Drone Cinematography",
+  "Live Streaming",
+  "Event Coverage",
+  "Real Estate",
+  "Documentary",
+  "Wedding",
+  "Social Reels",
+  "Other",
+];
+
+const BUDGET_RANGES = [
+  "Under 25,000 SAR",
+  "25,000 — 75,000 SAR",
+  "75,000 — 200,000 SAR",
+  "200,000 — 500,000 SAR",
+  "500,000+ SAR",
+];
+
+export default function Contact() {
+  const [form, setForm] = useState({
+    name: "", company: "", phone: "", email: "",
+    project: PROJECT_TYPES[0], budget: BUDGET_RANGES[1], message: "",
+  });
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    // Build a WhatsApp message — no backend required
+    const msg =
+      `طلب عرض إنتاج | Kian Media Proposal Request\n\n` +
+      `👤 Name: ${form.name}\n` +
+      `🏢 Company: ${form.company}\n` +
+      `📞 Phone: ${form.phone}\n` +
+      `✉️  Email: ${form.email}\n` +
+      `🎬 Project: ${form.project}\n` +
+      `💰 Budget: ${form.budget}\n\n` +
+      `📝 Message:\n${form.message}`;
+    window.open(`https://wa.me/966503422999?text=${encodeURIComponent(msg)}`, "_blank");
+  };
+
+  const update = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
+
   return (
-    <section id="contact" style={{background:"#000",paddingTop:"112px",paddingBottom:"112px"}} className="relative overflow-hidden">
-      {/* Glow */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div style={{
-          position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",
-          width:"700px",height:"350px",
-          background:"rgba(227,30,36,.07)",
-          borderRadius:"50%",filter:"blur(120px)",
-        }}/>
-      </div>
-      <div className="max-w-4xl mx-auto px-6 text-center relative z-10">
-        <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}}
-          className="flex items-center justify-center gap-4 mb-7">
-          <span style={{width:"28px",height:"1px",background:"rgba(227,30,36,.55)",display:"block"}}/>
-          <div className="sec-label">ابدأ مشروعك</div>
-          <span style={{width:"28px",height:"1px",background:"rgba(227,30,36,.55)",display:"block"}}/>
-        </motion.div>
-        <motion.h2 initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.1}}
-          className="f-bebas text-white mb-6"
-          style={{fontSize:"clamp(52px,8vw,120px)",lineHeight:.93}}>
-          قصتك تستحق<br/>أن تُروى <span className="grad-r">باحتراف</span>
-        </motion.h2>
-        <motion.p initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.2}}
-          className="text-white/35 mb-14 max-w-lg mx-auto" style={{fontSize:"15px"}}>
-          نحن مستعدون لتحويل رؤيتك إلى محتوى بصري استثنائي
-        </motion.p>
-        <motion.div initial={{opacity:0,y:16}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.3}}
-          className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-14">
-          <a href={`https://wa.me/${WA}?text=${MSG}`} target="_blank" rel="noopener noreferrer" className="btn-wa w-full sm:w-auto justify-center">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-            </svg>
-            واتساب — راسلنا الآن
-          </a>
-          <a href="mailto:info@kianmedia.com" className="btn-ghost w-full sm:w-auto text-center">
-            ✉ info@kianmedia.com
-          </a>
-        </motion.div>
-        <div style={{width:"1px",height:"32px",background:"rgba(227,30,36,.2)",margin:"0 auto 24px"}}/>
-        <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.45}}
-          className="flex flex-col sm:flex-row gap-6 justify-center items-center text-white/35">
-          {["966503422999","966543553038"].map(n=>(
-            <a key={n} href={`tel:+${n}`}
-              className="f-mont flex items-center gap-2 transition-colors"
-              style={{fontSize:"13px",letterSpacing:"2px",textDecoration:"none",color:"rgba(255,255,255,.35)"}}
-              onMouseEnter={e=>(e.currentTarget.style.color="#E31E24")}
-              onMouseLeave={e=>(e.currentTarget.style.color="rgba(255,255,255,.35)")}>
-              <span style={{color:"#A51419"}}>📞</span> +{n}
-            </a>
-          ))}
-        </motion.div>
+    <section id="contact" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "120px", paddingBottom: "120px" }}>
+      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(227,30,36,0.08), transparent 50%)" }} />
+
+      <div className="max-w-6xl mx-auto px-6 lg:px-12 relative z-10">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
+
+          {/* Left column: heading + contact info */}
+          <motion.div
+            initial={{ opacity: 0, x: 30 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+            className="lg:col-span-5"
+            data-reveal
+          >
+            <div className="eyebrow mb-6">Start Your Project</div>
+            <h2 className="editorial text-white mb-6" style={{ fontSize: "clamp(34px,5vw,56px)" }}>
+              Let's craft <em>something remarkable</em>.
+            </h2>
+            <p className="f-arabic text-white/55 mb-10" style={{ fontSize: "16px", lineHeight: 1.9 }}>
+              لكل مشروع كبير بداية واحدة — محادثة. أرسل تفاصيل مشروعك وسيرتدّ عليك فريقنا الإنتاجي خلال ٢٤ ساعة بعرض أولي مفصّل.
+            </p>
+
+            <div className="space-y-6">
+              <div>
+                <div className="f-sans mb-1" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>WhatsApp</div>
+                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="f-sans text-white hover:text-red-500 transition" style={{ fontSize: "18px", letterSpacing: "1px" }}>+966 50 342 2999</a>
+              </div>
+              <div>
+                <div className="f-sans mb-1" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>Direct Line</div>
+                <a href="tel:+966543553038" className="f-sans text-white hover:text-red-500 transition" style={{ fontSize: "18px", letterSpacing: "1px" }}>+966 54 355 3038</a>
+              </div>
+              <div>
+                <div className="f-sans mb-1" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>Email</div>
+                <a href="mailto:info@kianmedia.com" className="f-sans text-white hover:text-red-500 transition" style={{ fontSize: "18px", letterSpacing: "0.5px" }}>info@kianmedia.com</a>
+              </div>
+              <div>
+                <div className="f-sans mb-1" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>Coverage</div>
+                <span className="f-arabic text-white" style={{ fontSize: "16px" }}>المملكة العربية السعودية · ١٣ منطقة</span>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Right column: form */}
+          <motion.form
+            onSubmit={submit}
+            initial={{ opacity: 0, x: -30 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
+            className="lg:col-span-7 glass p-8 lg:p-12"
+            data-reveal
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+              <div>
+                <label className="input-label">Name · الاسم</label>
+                <input required value={form.name} onChange={(e) => update("name", e.target.value)} placeholder="John Doe" className="input-field" />
+              </div>
+              <div>
+                <label className="input-label">Company · الجهة</label>
+                <input value={form.company} onChange={(e) => update("company", e.target.value)} placeholder="Company / Organization" className="input-field" />
+              </div>
+              <div>
+                <label className="input-label">Phone · الجوال</label>
+                <input required type="tel" value={form.phone} onChange={(e) => update("phone", e.target.value)} placeholder="+966 ..." className="input-field" />
+              </div>
+              <div>
+                <label className="input-label">Email · البريد</label>
+                <input required type="email" value={form.email} onChange={(e) => update("email", e.target.value)} placeholder="name@company.com" className="input-field" />
+              </div>
+              <div>
+                <label className="input-label">Project Type · نوع المشروع</label>
+                <select value={form.project} onChange={(e) => update("project", e.target.value)} className="input-field" style={{ background: "#050505" }}>
+                  {PROJECT_TYPES.map((t) => <option key={t} value={t} style={{ background: "#050505" }}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="input-label">Budget Range · الميزانية</label>
+                <select value={form.budget} onChange={(e) => update("budget", e.target.value)} className="input-field" style={{ background: "#050505" }}>
+                  {BUDGET_RANGES.map((b) => <option key={b} value={b} style={{ background: "#050505" }}>{b}</option>)}
+                </select>
+              </div>
+              <div className="md:col-span-2 mt-2">
+                <label className="input-label">Project Details · تفاصيل المشروع</label>
+                <textarea value={form.message} onChange={(e) => update("message", e.target.value)} placeholder="Tell us about your project, timeline, and goals..." rows={4} className="input-field" style={{ resize: "vertical" }} />
+              </div>
+            </div>
+
+            <div className="mt-8 flex flex-wrap gap-3 items-center">
+              <button type="submit" className="btn-red">
+                <span>Send via WhatsApp</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+              </button>
+              <a href="tel:+966503422999" className="btn-ghost">
+                <span>Book a Call</span>
+              </a>
+            </div>
+
+            <p className="f-sans mt-6" style={{ fontSize: "10px", letterSpacing: "1px", color: "rgba(255,255,255,0.3)" }}>
+              By submitting, you agree we'll contact you about your project. Response within 24 hours.
+            </p>
+          </motion.form>
+        </div>
       </div>
     </section>
   );
