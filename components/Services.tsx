@@ -1,6 +1,5 @@
 "use client";
-import { motion, useInView } from "framer-motion";
-import { useRef } from "react";
+import { motion } from "framer-motion";
 
 const SVCS=[
   {n:"01",icon:"🎬",ar:"الإنتاج السينمائي",   en:"Cinematic Production",
@@ -18,11 +17,9 @@ const SVCS=[
 ];
 
 function Card({s,i}:{s:typeof SVCS[0];i:number}){
-  const r=useRef(null);
-  const v=useInView(r,{once:true,margin:"-50px"});
   return (
-    <motion.div ref={r}
-      initial={{opacity:0,y:36}} animate={v?{opacity:1,y:0}:{}}
+    <motion.div
+      initial={{opacity:0,y:36}} whileInView={{opacity:1,y:0}} viewport={{once:true}}
       transition={{duration:.72,ease:[.16,1,.3,1],delay:(i%3)*.1}}
       className="svc p-11 cursor-default">
       <div className="f-bebas leading-none mb-5"
@@ -42,8 +39,6 @@ function Card({s,i}:{s:typeof SVCS[0];i:number}){
 }
 
 export default function Services(){
-  const r=useRef(null);
-  const v=useInView(r,{once:true});
   return (
     <section id="services" style={{background:"#000",paddingTop:"112px",paddingBottom:"112px"}} className="relative overflow-hidden">
       {/* BG word */}
@@ -53,9 +48,9 @@ export default function Services(){
       </div>
 
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
-        <div ref={r} className="mb-16">
-          <motion.div initial={{opacity:0,x:-18}} animate={v?{opacity:1,x:0}:{}} className="sec-label mb-5">خدماتنا</motion.div>
-          <motion.h2 initial={{opacity:0,y:24}} animate={v?{opacity:1,y:0}:{}} transition={{delay:.1}} className="sec-title">
+        <div className="mb-16">
+          <motion.div initial={{opacity:0,x:-18}} whileInView={{opacity:1,x:0}} viewport={{once:true}} className="sec-label mb-5">خدماتنا</motion.div>
+          <motion.h2 initial={{opacity:0,y:24}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.1}} className="sec-title">
             كل ما تحتاجه من<br/><span className="r">إنتاج فني</span> في مكان واحد
           </motion.h2>
         </div>

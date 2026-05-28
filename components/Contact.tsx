@@ -1,11 +1,8 @@
 "use client";
-import { motion, useInView } from "framer-motion";
-import { useRef } from "react";
+import { motion } from "framer-motion";
 const WA="966503422999";
 const MSG=encodeURIComponent("السلام عليكم، أريد الاستفسار عن خدمات كيان ميديا للإنتاج الفني");
 export default function Contact(){
-  const r=useRef(null);
-  const v=useInView(r,{once:true,margin:"-50px"});
   return (
     <section id="contact" style={{background:"#000",paddingTop:"112px",paddingBottom:"112px"}} className="relative overflow-hidden">
       {/* Glow */}
@@ -17,23 +14,23 @@ export default function Contact(){
           borderRadius:"50%",filter:"blur(120px)",
         }}/>
       </div>
-      <div ref={r} className="max-w-4xl mx-auto px-6 text-center relative z-10">
-        <motion.div initial={{opacity:0}} animate={v?{opacity:1}:{}}
+      <div className="max-w-4xl mx-auto px-6 text-center relative z-10">
+        <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}}
           className="flex items-center justify-center gap-4 mb-7">
           <span style={{width:"28px",height:"1px",background:"rgba(227,30,36,.55)",display:"block"}}/>
           <div className="sec-label">ابدأ مشروعك</div>
           <span style={{width:"28px",height:"1px",background:"rgba(227,30,36,.55)",display:"block"}}/>
         </motion.div>
-        <motion.h2 initial={{opacity:0,y:28}} animate={v?{opacity:1,y:0}:{}} transition={{delay:.1}}
+        <motion.h2 initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.1}}
           className="f-bebas text-white mb-6"
           style={{fontSize:"clamp(52px,8vw,120px)",lineHeight:.93}}>
           قصتك تستحق<br/>أن تُروى <span className="grad-r">باحتراف</span>
         </motion.h2>
-        <motion.p initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.2}}
+        <motion.p initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.2}}
           className="text-white/35 mb-14 max-w-lg mx-auto" style={{fontSize:"15px"}}>
           نحن مستعدون لتحويل رؤيتك إلى محتوى بصري استثنائي
         </motion.p>
-        <motion.div initial={{opacity:0,y:16}} animate={v?{opacity:1,y:0}:{}} transition={{delay:.3}}
+        <motion.div initial={{opacity:0,y:16}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.3}}
           className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-14">
           <a href={`https://wa.me/${WA}?text=${MSG}`} target="_blank" rel="noopener noreferrer" className="btn-wa w-full sm:w-auto justify-center">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -46,7 +43,7 @@ export default function Contact(){
           </a>
         </motion.div>
         <div style={{width:"1px",height:"32px",background:"rgba(227,30,36,.2)",margin:"0 auto 24px"}}/>
-        <motion.div initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.45}}
+        <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.45}}
           className="flex flex-col sm:flex-row gap-6 justify-center items-center text-white/35">
           {["966503422999","966543553038"].map(n=>(
             <a key={n} href={`tel:+${n}`}

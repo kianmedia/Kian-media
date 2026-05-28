@@ -261,3 +261,13 @@ body::after{
 /* ─── MOBILE MENU ───────────────────────── */
 .mobile-drop{animation:drop .3s cubic-bezier(.16,1,.3,1) both}
 @keyframes drop{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ════════════════════════════════════════════════
+   PRODUCTION SAFETY NET
+   If JS/Framer Motion fails to hydrate, never leave
+   content stuck invisible. Content is visible by default.
+   ════════════════════════════════════════════════ */
+[data-reveal] { opacity: 1 !important; }
+
+/* next/image fallback — plain imgs fill their box */
+img.logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }

@@ -1,35 +1,31 @@
 "use client";
-import { motion, useInView } from "framer-motion";
-import { useRef } from "react";
-import Image from "next/image";
+import { motion } from "framer-motion";
 
 const TAGS=["إنتاج سينمائي","Drone 4K","بث مباشر","مونتاج","وثائقي","أعراس","شركاتي"];
 const STATS=[{n:"٥+",l:"سنوات"},{n:"١٥٠+",l:"مشروع"},{n:"٥٠+",l:"عميل"},{n:"١٣",l:"منطقة"}];
 
 export default function About(){
-  const r=useRef(null);
-  const v=useInView(r,{once:true,margin:"-70px"});
   return (
     <section id="about" style={{background:"#000",paddingTop:"112px",paddingBottom:"112px"}} className="overflow-hidden">
-      <div ref={r} className="max-w-7xl mx-auto px-6 lg:px-12 grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-28 items-center">
+      <div className="max-w-7xl mx-auto px-6 lg:px-12 grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-28 items-center">
 
         {/* Text */}
         <div>
-          <motion.div initial={{opacity:0,x:-18}} animate={v?{opacity:1,x:0}:{}} className="sec-label mb-6">من نحن</motion.div>
-          <motion.h2 initial={{opacity:0,y:28}} animate={v?{opacity:1,y:0}:{}} transition={{delay:.1}} className="sec-title mb-8">
+          <motion.div initial={{opacity:0,x:-18}} whileInView={{opacity:1,x:0}} viewport={{once:true}} className="sec-label mb-6">من نحن</motion.div>
+          <motion.h2 initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.1}} className="sec-title mb-8">
             نؤمن أن كل قصة<br/>تستحق <span className="r">عدسة استثنائية</span>
           </motion.h2>
-          <motion.p initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.2}} className="text-white/50 leading-loose mb-5">
+          <motion.p initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.2}} className="text-white/50 leading-loose mb-5">
             كيان الابتكار للإنتاج الفني — شركة سعودية متخصصة تُعيد تعريف المحتوى البصري
             من خلال الجمع بين الرؤية الإبداعية وأحدث تقنيات التصوير.
           </motion.p>
-          <motion.p initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.25}} className="text-white/50 leading-loose mb-8">
+          <motion.p initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.25}} className="text-white/50 leading-loose mb-8">
             من مهرجانات الأفلام إلى الوثائقيات التاريخية وتغطيات الأعراس —
             نحمل الكاميرا بشغف ونُخرج الإبداع من كل لحظة.
           </motion.p>
 
           {/* Tags */}
-          <motion.div initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.3}} className="flex flex-wrap gap-2 mb-10">
+          <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.3}} className="flex flex-wrap gap-2 mb-10">
             {TAGS.map(t=>(
               <span key={t} className="f-mont text-white/42 hover:text-white cursor-default transition-all"
                 style={{border:"1px solid rgba(227,30,36,.28)",fontSize:"9px",letterSpacing:"2px",
@@ -42,7 +38,7 @@ export default function About(){
           </motion.div>
 
           {/* Stats */}
-          <motion.div initial={{opacity:0,y:16}} animate={v?{opacity:1,y:0}:{}} transition={{delay:.38}}
+          <motion.div initial={{opacity:0,y:16}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.38}}
             className="grid grid-cols-4 gap-px"
             style={{background:"rgba(227,30,36,.18)",border:"1px solid rgba(227,30,36,.18)"}}>
             {STATS.map(s=>(
@@ -60,7 +56,7 @@ export default function About(){
         </div>
 
         {/* Visual — logo framed */}
-        <motion.div initial={{opacity:0,x:36}} animate={v?{opacity:1,x:0}:{}} transition={{delay:.22,duration:.85}}
+        <motion.div initial={{opacity:0,x:36}} whileInView={{opacity:1,x:0}} viewport={{once:true}} transition={{delay:.22,duration:.85}}
           className="relative hidden lg:block">
 
           {/* Red accent badge */}
@@ -84,7 +80,7 @@ export default function About(){
                 width:"200px",height:"200px",
                 filter:"drop-shadow(0 0 80px rgba(227,30,36,.55)) drop-shadow(0 0 30px rgba(227,30,36,.3))",
               }}>
-                <Image src="/logo.png" alt="Kian Media" fill className="object-contain"/>
+                <img src="/logo.png" alt="Kian Media" style={{width:"100%",height:"100%",objectFit:"contain"}}/>
               </div>
               <span className="f-mont text-white/35 uppercase" style={{fontSize:"8px",letterSpacing:"8px"}}>
                 THROUGH THE LENS

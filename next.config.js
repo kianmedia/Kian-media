@@ -6,7 +6,7 @@ const nextConfig = {
   typescript: { ignoreBuildErrors: true },
   images: {
     formats: ["image/avif", "image/webp"],
-    unoptimized: false,
+    unoptimized: true,
   },
   async headers() {
     return [{

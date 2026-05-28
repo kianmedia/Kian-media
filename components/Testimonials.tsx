@@ -1,6 +1,5 @@
 "use client";
-import { motion, useInView } from "framer-motion";
-import { useRef } from "react";
+import { motion } from "framer-motion";
 const T=[
   {q:"فريق كيان قدّم لنا تغطية استثنائية للمهرجان — احتراف في كل تفصيلة من التصوير حتى التسليم.",name:"محمد العتيبي",role:"مدير فعاليات",av:"م"},
   {q:"الوثائقي تجاوز كل توقعاتنا. صور جوية مذهلة وسرد بصري راقٍ يعكس قيمة المشروع.",name:"فهد الزهراني",role:"مطور عقاري",av:"ف"},
@@ -8,23 +7,21 @@ const T=[
 ];
 const CLIENTS=["شركة العتيشان","ريفايفا","مسكوب","الزاهد","معهد سين","مهرجان أفلام السعودية"];
 export default function Testimonials(){
-  const r=useRef(null);
-  const v=useInView(r,{once:true,margin:"-50px"});
   return (
     <section style={{background:"#0a0a0a",paddingTop:"112px",paddingBottom:"112px"}} className="text-center">
-      <div ref={r} className="max-w-7xl mx-auto px-6 lg:px-12">
+      <div className="max-w-7xl mx-auto px-6 lg:px-12">
         <div className="flex items-center justify-center gap-4 mb-5">
           <span style={{width:"28px",height:"1px",background:"rgba(227,30,36,.55)",display:"block"}}/>
           <div className="sec-label">آراء عملائنا</div>
           <span style={{width:"28px",height:"1px",background:"rgba(227,30,36,.55)",display:"block"}}/>
         </div>
-        <motion.h2 initial={{opacity:0,y:20}} animate={v?{opacity:1,y:0}:{}} className="sec-title mb-14">
+        <motion.h2 initial={{opacity:0,y:20}} whileInView={{opacity:1,y:0}} viewport={{once:true}} className="sec-title mb-14">
           ثقتهم أكبر <span className="r">جائزة</span>
         </motion.h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-px" style={{background:"rgba(227,30,36,.1)"}}>
           {T.map((t,i)=>(
             <motion.div key={t.name}
-              initial={{opacity:0,y:28}} animate={v?{opacity:1,y:0}:{}} transition={{delay:i*.12,duration:.68}}
+              initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:i*.12,duration:.68}}
               className="test-c p-12 text-right" style={{background:"#111"}}>
               <span className="f-bebas block mb-4 leading-none" style={{fontSize:"88px",color:"rgba(227,30,36,.1)"}}>
                 "
@@ -43,7 +40,7 @@ export default function Testimonials(){
             </motion.div>
           ))}
         </div>
-        <motion.div initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.5}}
+        <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.5}}
           className="mt-16 flex flex-wrap justify-center gap-8 items-center">
           {CLIENTS.map(c=>(
             <span key={c} className="f-mont cursor-default transition-colors"

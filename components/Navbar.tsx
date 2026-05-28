@@ -1,6 +1,5 @@
 "use client";
 import { useState, useEffect } from "react";
-import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 
 const LINKS = [
@@ -33,7 +32,7 @@ export default function Navbar(){
         {/* Logo */}
         <a href="#" onClick={e=>go(e,"#")} className="flex items-center gap-3 group">
           <div className="relative w-12 h-12 overflow-hidden" style={{background:"#000",border:"1px solid rgba(227,30,36,.3)"}}>
-            <Image src="/logo.png" alt="Kian Media" fill className="object-contain p-[3px]" priority/>
+            <img src="/logo.png" alt="Kian Media" style={{width:"100%",height:"100%",objectFit:"contain",padding:"3px"}}/>
           </div>
           <div className="leading-none">
             <div className="f-bebas text-[20px] tracking-[6px] text-white">KIAN</div>

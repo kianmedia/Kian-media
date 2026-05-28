@@ -1,6 +1,6 @@
 "use client";
-import { motion, useInView, AnimatePresence } from "framer-motion";
-import { useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
 
 const CATS=["الكل","فعاليات","وثائقي","عقارات","أعراس","شركاتي"];
 
@@ -17,11 +17,9 @@ const ITEMS=[
 
 function PItem({item,idx}:{item:typeof ITEMS[0];idx:number}){
   const [play,setPlay]=useState(false);
-  const r=useRef(null);
-  const v=useInView(r,{once:true,margin:"-40px"});
   return (
-    <motion.div ref={r}
-      initial={{opacity:0,y:26}} animate={v?{opacity:1,y:0}:{}}
+    <motion.div
+      initial={{opacity:0,y:26}} whileInView={{opacity:1,y:0}} viewport={{once:true}}
       transition={{duration:.68,ease:[.16,1,.3,1],delay:idx*.07}}
       className={`port ${item.featured?"md:col-span-2 md:row-span-2":""}`}
       style={{minHeight:item.featured?"420px":"230px"}}>
@@ -57,21 +55,19 @@ function PItem({item,idx}:{item:typeof ITEMS[0];idx:number}){
 
 export default function Portfolio(){
   const [tab,setTab]=useState("الكل");
-  const r=useRef(null);
-  const v=useInView(r,{once:true});
   const filtered=tab==="الكل"?ITEMS:ITEMS.filter(p=>p.cat===tab);
 
   return (
     <section id="portfolio" style={{background:"#070707",paddingTop:"112px",paddingBottom:"112px"}}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
-        <div ref={r} className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-12">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-12">
           <div>
-            <motion.div initial={{opacity:0,x:-18}} animate={v?{opacity:1,x:0}:{}} className="sec-label mb-5">أعمالنا</motion.div>
-            <motion.h2 initial={{opacity:0,y:20}} animate={v?{opacity:1,y:0}:{}} transition={{delay:.1}} className="sec-title">
+            <motion.div initial={{opacity:0,x:-18}} whileInView={{opacity:1,x:0}} viewport={{once:true}} className="sec-label mb-5">أعمالنا</motion.div>
+            <motion.h2 initial={{opacity:0,y:20}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.1}} className="sec-title">
               جزء من <span className="r">رحلتنا البصرية</span>
             </motion.h2>
           </div>
-          <motion.div initial={{opacity:0}} animate={v?{opacity:1}:{}} transition={{delay:.2}} className="flex flex-wrap gap-[2px]">
+          <motion.div initial={{opacity:0}} whileInView={{opacity:1}} viewport={{once:true}} transition={{delay:.2}} className="flex flex-wrap gap-[2px]">
             {CATS.map(c=>(
               <button key={c} onClick={()=>setTab(c)}
                 className="f-mont transition-all duration-250"

@@ -1,4 +1,3 @@
-import Image from "next/image";
 const SOCIALS=[
   {l:"IG",h:"https://www.instagram.com/kian.alebtikar"},
   {l:"YT",h:"https://www.youtube.com/@kianalebtikar"},
@@ -19,7 +18,7 @@ export default function Footer(){
           <div>
             <div className="flex items-center gap-3 mb-5">
               <div className="relative" style={{width:"52px",height:"52px",border:"1px solid rgba(227,30,36,.28)"}}>
-                <Image src="/logo.png" alt="Kian" fill className="object-contain p-1"/>
+                <img src="/logo.png" alt="Kian" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px"}}/>
               </div>
               <div className="f-bebas text-white" style={{fontSize:"20px",letterSpacing:"5px"}}>KIAN MEDIA</div>
             </div>
