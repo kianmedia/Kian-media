@@ -109,22 +109,45 @@ export default function Showreel() {
   );
 }
 
-// Thumbnail loader with quality fallback chain: maxres → sd → hq
+// Thumbnail with smart fallback — detects YouTube's 120×90 gray placeholder
+// (returned with 200 OK when maxresdefault doesn't exist, so onError won't fire)
 function ShowreelThumb({ id }: { id: string }) {
-  const [step, setStep] = useState(0);
-  const sources = [
-    `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`,
-    `https://i.ytimg.com/vi/${id}/sddefault.jpg`,
-    `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-  ];
+  const [src, setSrc] = useState(`https://img.youtube.com/vi/${id}/maxresdefault.jpg`);
+  const [loaded, setLoaded] = useState(false);
+  const isMaxres = src.includes("maxresdefault");
+
+  const onLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (isMaxres && img.naturalWidth <= 120) {
+      setSrc(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+      return;
+    }
+    setLoaded(true);
+  };
+
+  const onError = () => {
+    if (isMaxres) setSrc(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+  };
+
   return (
-    <img
-      src={sources[step]}
-      alt="Kian Media Showreel"
-      loading="eager"
-      onError={() => { if (step < sources.length - 1) setStep(step + 1); }}
-      className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-[1.03]"
-      style={{ opacity: 0.85 }}
-    />
+    <>
+      <div
+        className="absolute inset-0 transition-opacity duration-500"
+        style={{
+          background: "linear-gradient(135deg, #0d0d0d 0%, #050505 100%)",
+          opacity: loaded ? 0 : 1,
+        }}
+      />
+      <img
+        src={src}
+        alt="Kian Media Showreel"
+        loading="eager"
+        decoding="async"
+        onLoad={onLoad}
+        onError={onError}
+        className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-[1.03]"
+        style={{ opacity: loaded ? 0.85 : 0 }}
+      />
+    </>
   );
 }

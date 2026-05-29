@@ -108,23 +108,49 @@ const ITEMS: Item[] = [
     ar: "إيفنت شركة عبدالواحد",                   en: "Abdulwahid Company Event" },
 ];
 
-// Thumbnail with quality fallback chain (maxres → sd → hq)
+// Thumbnail with smart fallback — detects YouTube's 120×90 gray placeholder
+// (returned with 200 OK when maxresdefault doesn't exist, so onError won't fire)
 function Thumb({ yt, alt }: { yt: string; alt: string }) {
-  const [step, setStep] = useState(0);
-  const sources = [
-    `https://i.ytimg.com/vi/${yt}/maxresdefault.jpg`,
-    `https://i.ytimg.com/vi/${yt}/sddefault.jpg`,
-    `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`,
-  ];
+  const [src, setSrc] = useState(`https://img.youtube.com/vi/${yt}/maxresdefault.jpg`);
+  const [loaded, setLoaded] = useState(false);
+  const isMaxres = src.includes("maxresdefault");
+
+  const onLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    // YouTube's "no maxres" placeholder is 120×90 (sometimes 480×360 for sddefault).
+    // If maxres returned a tiny placeholder, fall back to hqdefault (always exists).
+    if (isMaxres && img.naturalWidth <= 120) {
+      setSrc(`https://img.youtube.com/vi/${yt}/hqdefault.jpg`);
+      return;
+    }
+    setLoaded(true);
+  };
+
+  const onError = () => {
+    if (isMaxres) setSrc(`https://img.youtube.com/vi/${yt}/hqdefault.jpg`);
+  };
+
   return (
-    <img
-      src={sources[step]}
-      alt={alt}
-      loading="lazy"
-      onError={() => { if (step < sources.length - 1) setStep(step + 1); }}
-      className="absolute inset-0 w-full h-full object-cover transition-all duration-700 group-hover:scale-105"
-      style={{ opacity: 0.55 }}
-    />
+    <>
+      {/* Cinematic dark placeholder while loading */}
+      <div
+        className="absolute inset-0 transition-opacity duration-500"
+        style={{
+          background: "linear-gradient(135deg, #0d0d0d 0%, #050505 100%)",
+          opacity: loaded ? 0 : 1,
+        }}
+      />
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        onLoad={onLoad}
+        onError={onError}
+        className="absolute inset-0 w-full h-full object-cover transition-all duration-700 group-hover:scale-105"
+        style={{ opacity: loaded ? 0.55 : 0 }}
+      />
+    </>
   );
 }
 
