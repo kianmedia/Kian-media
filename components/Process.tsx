@@ -1,45 +1,53 @@
 "use client";
 import { motion } from "framer-motion";
-const STEPS=[
-  {n:"01",title:"الاستشارة",desc:"نستمع لرؤيتك ونضع خطة إنتاج تفصيلية تناسب أهدافك وميزانيتك."},
-  {n:"02",title:"التصوير",  desc:"فريقنا الاحترافي ينفذ مرحلة التصوير بأحدث المعدات والتقنيات."},
-  {n:"03",title:"المونتاج", desc:"نعالج المادة — مونتاج، تصحيح ألوان، موسيقى، ومؤثرات."},
-  {n:"04",title:"التسليم",  desc:"نسلّمك المنتج النهائي بالجودة المتفق عليها حتى رضاك التام."},
+import { useI18n } from "@/lib/i18n";
+
+const STEPS = [
+  { n: "01", ar: { title: "الاستشارة", desc: "نستمع لرؤيتك ونضع خطة إنتاج تفصيلية تناسب أهدافك وميزانيتك." },
+              en: { title: "Discovery",  desc: "We listen to your vision and build a detailed production plan aligned with your goals and budget." } },
+  { n: "02", ar: { title: "التطوير الإبداعي", desc: "سيناريو، معالجة بصرية، تصميم لقطات، واختيار طاقم الإنتاج المناسب." },
+              en: { title: "Creative Dev",     desc: "Script, visual treatment, shot design, and selection of the right production team." } },
+  { n: "03", ar: { title: "التصوير", desc: "فريقنا الاحترافي يُنفّذ مرحلة التصوير بأحدث المعدّات السينمائية وأطقم الدرون." },
+              en: { title: "Production", desc: "Our professional crew executes the shoot with the latest cinematic equipment and drone systems." } },
+  { n: "04", ar: { title: "المونتاج والتسليم", desc: "نُعالج المادة — مونتاج، تصحيح ألوان، صوت، مؤثرات — ونُسلّم بالجودة المتفق عليها." },
+              en: { title: "Post & Delivery",   desc: "We finish the material — edit, color, sound, VFX — and deliver to agreed specifications." } },
 ];
-export default function Process(){
+
+export default function Process() {
+  const { t } = useI18n();
   return (
-    <section style={{background:"#F2F0ED",color:"#000",paddingTop:"112px",paddingBottom:"112px"}} className="relative overflow-hidden">
-      {/* Giant watermark */}
-      <div className="f-bebas absolute pointer-events-none select-none"
-        style={{top:"-50px",left:"50%",transform:"translateX(-50%)",
-          fontSize:"380px",lineHeight:1,color:"rgba(227,30,36,.05)",whiteSpace:"nowrap",letterSpacing:"-10px"}}>
-        كيان
-      </div>
-      <div className="max-w-7xl mx-auto px-6 lg:px-12 relative z-10">
-        <div className="mb-16">
-          <motion.div initial={{opacity:0,x:-18}} whileInView={{opacity:1,x:0}} viewport={{once:true}}
-            className="sec-label mb-5" style={{color:"#E31E24"}}>
-            كيف نعمل
-          </motion.div>
-          <motion.h2 initial={{opacity:0,y:20}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:.1}}
-            className="f-bebas" style={{fontSize:"clamp(40px,5.5vw,70px)",lineHeight:.93,color:"#000"}}>
-            من الفكرة إلى<br/><span style={{color:"#E31E24"}}>التسليم النهائي</span>
-          </motion.h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-px"
-          style={{background:"rgba(0,0,0,.1)",border:"1px solid rgba(0,0,0,.1)"}}>
-          {STEPS.map((s,i)=>(
-            <motion.div key={s.n}
-              initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:i*.09,duration:.65}}
-              className="step bg-[#F2F0ED] p-12 group" style={{transition:"background .3s"}}>
-              <div className="f-bebas leading-none mb-5"
-                style={{fontSize:"84px",color:"rgba(227,30,36,.14)",transition:"color .3s"}}
-                onMouseEnter={e=>(e.currentTarget.style.color="rgba(227,30,36,.22)")}
-                onMouseLeave={e=>(e.currentTarget.style.color="rgba(227,30,36,.14)")}>
-                {s.n}
-              </div>
-              <h3 style={{fontSize:"17px",fontWeight:700,color:"#000",marginBottom:"10px"}}>{s.title}</h3>
-              <p style={{fontSize:"13px",color:"rgba(0,0,0,.48)",lineHeight:1.7}}>{s.desc}</p>
+    <section className="relative overflow-hidden" style={{ background: "#080808", paddingTop: "140px", paddingBottom: "140px" }}>
+      <div className="max-w-7xl mx-auto px-6 lg:px-12">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.9 }}
+          className="text-center mb-20"
+          data-reveal
+        >
+          <div className="eyebrow mb-6 mx-auto">{t({ ar: "كيف نعمل", en: "Our Process" })}</div>
+          <h2 className="editorial text-white" style={{ fontSize: "clamp(34px,5vw,58px)" }}>
+            {t({ ar: "أربع مراحل،", en: "Four stages," })}{" "}
+            <em>{t({ ar: "نتيجة واحدة استثنائية", en: "one remarkable result" })}</em>.
+          </h2>
+        </motion.div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-px" style={{ background: "rgba(255,255,255,0.08)" }}>
+          {STEPS.map((s, i) => (
+            <motion.div
+              key={s.n}
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.65, delay: i * 0.1 }}
+              className="group p-10 transition-all duration-500"
+              style={{ background: "#080808" }}
+            >
+              <span className="num block mb-6" style={{ fontSize: "80px" }}>{s.n}</span>
+              <h3 className="text-white mb-3" style={{ fontSize: "18px", fontWeight: 600 }}>{t({ ar: s.ar.title, en: s.en.title })}</h3>
+              <span className="block w-12 h-px mb-4" style={{ background: "var(--red)" }} />
+              <p className="text-white/55" style={{ fontSize: "14px", lineHeight: 1.8 }}>{t({ ar: s.ar.desc, en: s.en.desc })}</p>
             </motion.div>
           ))}
         </div>

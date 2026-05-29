@@ -1,54 +1,98 @@
-const SOCIALS=[
-  {l:"IG",h:"https://www.instagram.com/kian.alebtikar"},
-  {l:"YT",h:"https://www.youtube.com/@kianalebtikar"},
-  {l:"TK",h:"https://www.tiktok.com/@kianmedia1"},
-  {l:"X", h:"https://www.x.com/kianalebtikar"},
-  {l:"LI",h:"https://www.linkedin.com/company/kian-media-production/"},
+"use client";
+import { useI18n } from "@/lib/i18n";
+
+const SOCIALS = [
+  { label: "Instagram", short: "IG", url: "https://www.instagram.com/kian.alebtikar" },
+  { label: "YouTube",   short: "YT", url: "https://www.youtube.com/@kianalebtikar" },
+  { label: "TikTok",    short: "TK", url: "https://www.tiktok.com/@kianmedia1" },
+  { label: "Snapchat",  short: "SC", url: "https://www.snapchat.com/add/kianmedia" },
+  { label: "LinkedIn",  short: "LI", url: "https://www.linkedin.com/company/kian-media-production" },
 ];
-const COLS=[
-  {title:"الصفحات",links:[{t:"الرئيسية",h:"#"},{t:"من نحن",h:"#about"},{t:"خدماتنا",h:"#services"},{t:"أعمالنا",h:"#portfolio"}]},
-  {title:"الخدمات",links:[{t:"الإنتاج السينمائي",h:"#"},{t:"التصوير الجوي",h:"#"},{t:"البث المباشر",h:"#"},{t:"الأعراس",h:"#"},{t:"الفعاليات",h:"#"}]},
-  {title:"تواصل",links:[{t:"+966 503 422 999",h:"tel:+966503422999"},{t:"+966 543 553 038",h:"tel:+966543553038"},{t:"info@kianmedia.com",h:"mailto:info@kianmedia.com"},{t:"المملكة العربية السعودية",h:"#"}]},
-];
-export default function Footer(){
+
+export default function Footer() {
+  const { t } = useI18n();
+
+  const COLS = [
+    {
+      title: t({ ar: "الصفحات", en: "Navigation" }),
+      links: [
+        { t: t({ ar: "الرئيسية", en: "Home" }), h: "#" },
+        { t: t({ ar: "من نحن", en: "About" }), h: "#about" },
+        { t: t({ ar: "خدماتنا", en: "Services" }), h: "#services" },
+        { t: t({ ar: "أعمالنا", en: "Portfolio" }), h: "#portfolio" },
+      ],
+    },
+    {
+      title: t({ ar: "الخدمات", en: "Services" }),
+      links: [
+        { t: t({ ar: "الإنتاج السينمائي", en: "Cinematic Production" }), h: "#services" },
+        { t: t({ ar: "التصوير الجوي", en: "Drone Filming" }), h: "#services" },
+        { t: t({ ar: "البثّ المباشر", en: "Live Streaming" }), h: "#services" },
+        { t: t({ ar: "الأعراس الفاخرة", en: "Luxury Weddings" }), h: "#services" },
+        { t: t({ ar: "الفعاليات", en: "Event Coverage" }), h: "#services" },
+      ],
+    },
+    {
+      title: t({ ar: "تواصل", en: "Contact" }),
+      links: [
+        { t: "+966 50 342 2999", h: "tel:+966503422999" },
+        { t: "+966 54 355 3038", h: "tel:+966543553038" },
+        { t: "info@kianmedia.com", h: "mailto:info@kianmedia.com" },
+        { t: "sales@kianmedia.com", h: "mailto:sales@kianmedia.com" },
+        { t: t({ ar: "جميع مناطق المملكة", en: "All Saudi Regions" }), h: "#contact" },
+      ],
+    },
+  ];
+
   return (
-    <footer style={{background:"#030303",borderTop:"1px solid rgba(227,30,36,.14)",paddingTop:"56px",paddingBottom:"28px"}}>
+    <footer style={{ background: "#030303", borderTop: "1px solid rgba(227,30,36,0.14)", paddingTop: "70px", paddingBottom: "32px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-14">
           <div>
             <div className="flex items-center gap-3 mb-5">
-              <div className="relative" style={{width:"52px",height:"52px",border:"1px solid rgba(227,30,36,.28)"}}>
-                <img src="/logo.png" alt="Kian" style={{width:"100%",height:"100%",objectFit:"contain",padding:"4px"}}/>
+              <div className="relative" style={{ width: "52px", height: "52px" }}>
+                <img src="/logo.png" alt="Kian Media" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
               </div>
-              <div className="f-bebas text-white" style={{fontSize:"20px",letterSpacing:"5px"}}>KIAN MEDIA</div>
+              <div className="f-display text-white" style={{ fontSize: "20px", letterSpacing: "5px" }}>KIAN MEDIA</div>
             </div>
-            <p className="text-white/30 text-sm leading-relaxed mb-6" style={{maxWidth:"230px"}}>
-              كيان الابتكار للإنتاج الفني — محتوى بصري استثنائي في جميع مناطق المملكة.
+            <p className="text-white/35 leading-relaxed mb-6" style={{ fontSize: "13px", maxWidth: "260px" }}>
+              {t({
+                ar: "كيان الابتكار للإنتاج الفني — محتوى بصري سينمائي بمعايير دولية في جميع مناطق المملكة.",
+                en: "Kian Media Production — cinematic visual content at international standards across all regions of Saudi Arabia.",
+              })}
             </p>
-            <div className="flex gap-2">
-              {SOCIALS.map(s=>(
-                <a key={s.l} href={s.h} target="_blank" rel="noopener noreferrer"
-                  className="f-mont flex items-center justify-center text-white/30 transition-all"
-                  style={{width:"34px",height:"34px",border:"1px solid rgba(227,30,36,.2)",fontSize:"9px",fontWeight:700,textDecoration:"none"}}
-                  onMouseEnter={e=>{(e.currentTarget as HTMLAnchorElement).style.borderColor="#E31E24";(e.currentTarget as HTMLAnchorElement).style.color="#E31E24"}}
-                  onMouseLeave={e=>{(e.currentTarget as HTMLAnchorElement).style.borderColor="rgba(227,30,36,.2)";(e.currentTarget as HTMLAnchorElement).style.color="rgba(255,255,255,.3)"}}>
-                  {s.l}
+            <div className="flex gap-2 flex-wrap">
+              {SOCIALS.map((s) => (
+                <a
+                  key={s.short}
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="f-sans flex items-center justify-center text-white/40 transition-all"
+                  style={{ width: "34px", height: "34px", border: "1px solid rgba(227,30,36,0.2)", fontSize: "9px", fontWeight: 700, textDecoration: "none" }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#E31E24"; (e.currentTarget as HTMLAnchorElement).style.color = "#E31E24"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(227,30,36,0.2)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.4)"; }}
+                  aria-label={s.label}
+                >
+                  {s.short}
                 </a>
               ))}
             </div>
           </div>
-          {COLS.map(col=>(
+
+          {COLS.map((col) => (
             <div key={col.title}>
-              <h4 className="f-mont mb-5" style={{fontSize:"8px",letterSpacing:"4px",color:"#E31E24",textTransform:"uppercase"}}>
+              <h4 className="f-sans mb-5" style={{ fontSize: "9px", letterSpacing: "4px", color: "#E31E24", textTransform: "uppercase" }}>
                 {col.title}
               </h4>
-              <ul style={{listStyle:"none",display:"flex",flexDirection:"column",gap:"10px"}}>
-                {col.links.map(l=>(
+              <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "10px", padding: 0 }}>
+                {col.links.map((l) => (
                   <li key={l.t}>
-                    <a href={l.h} className="text-white/35 text-sm transition-colors"
-                      style={{textDecoration:"none"}}
-                      onMouseEnter={e=>(e.currentTarget.style.color="#E31E24")}
-                      onMouseLeave={e=>(e.currentTarget.style.color="rgba(255,255,255,.35)")}>
+                    <a
+                      href={l.h}
+                      className="text-white/45 transition-colors hover:text-white"
+                      style={{ textDecoration: "none", fontSize: "13px" }}
+                    >
                       {l.t}
                     </a>
                   </li>
@@ -57,17 +101,14 @@ export default function Footer(){
             </div>
           ))}
         </div>
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4 pt-6"
-          style={{borderTop:"1px solid rgba(255,255,255,.04)"}}>
-          <p className="f-mont text-white/18" style={{fontSize:"10px",letterSpacing:"1px"}}>
-            © 2026 Kian Al Ebtikar For Art Production — جميع الحقوق محفوظة
+
+        <div className="pt-8 flex flex-wrap items-center justify-between gap-4" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          <p className="text-white/30" style={{ fontSize: "11px" }}>
+            © {new Date().getFullYear()} Kian Al Ebtikar Art Production. {t({ ar: "جميع الحقوق محفوظة.", en: "All rights reserved." })}
           </p>
-          <a href="mailto:info@kianmedia.com"
-            className="f-mont transition-colors" style={{fontSize:"10px",letterSpacing:"1px",color:"rgba(163,20,25,.45)",textDecoration:"none"}}
-            onMouseEnter={e=>(e.currentTarget.style.color="#E31E24")}
-            onMouseLeave={e=>(e.currentTarget.style.color="rgba(163,20,25,.45)")}>
-            info@kianmedia.com
-          </a>
+          <p className="f-sans" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(255,255,255,0.25)", textTransform: "uppercase" }}>
+            Riyadh · Dammam · Jeddah · {t({ ar: "كل المناطق", en: "All Regions" })}
+          </p>
         </div>
       </div>
     </footer>

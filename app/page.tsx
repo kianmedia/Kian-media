@@ -1,5 +1,6 @@
 "use client";
 
+import { I18nProvider } from "@/lib/i18n";
 import Navbar       from "@/components/Navbar";
 import Hero         from "@/components/Hero";
 import Showreel     from "@/components/Showreel";
@@ -9,7 +10,9 @@ import Portfolio    from "@/components/Portfolio";
 import WhyKian      from "@/components/WhyKian";
 import Process      from "@/components/Process";
 import Industries   from "@/components/Industries";
-import Testimonials from "@/components/Testimonials";
+import Clients      from "@/components/Clients";
+import Reviews      from "@/components/Reviews";
+import Social       from "@/components/Social";
 import Contact      from "@/components/Contact";
 import Footer       from "@/components/Footer";
 import Cursor       from "@/components/Cursor";
@@ -18,7 +21,7 @@ import Marquee      from "@/components/Marquee";
 
 export default function Home() {
   return (
-    <>
+    <I18nProvider>
       <Cursor />
       <WaFloat />
       <Navbar />
@@ -32,10 +35,12 @@ export default function Home() {
         <WhyKian />
         <Process />
         <Industries />
-        <Testimonials />
+        <Clients />
+        <Reviews />
+        <Social />
         <Contact />
       </main>
       <Footer />
-    </>
+    </I18nProvider>
   );
 }
