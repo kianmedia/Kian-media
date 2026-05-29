@@ -6,37 +6,19 @@ export const metadata: Metadata = {
   description:
     "Premium cinematic video production, drone filming, live streaming, event coverage, corporate films, commercials, and wedding films in Saudi Arabia.",
   keywords: [
-    "Saudi video production",
-    "Dammam media production",
-    "drone filming Saudi Arabia",
-    "corporate video production",
-    "live streaming Saudi Arabia",
-    "event coverage",
-    "wedding videography",
-    "كيان الابتكار",
-    "إنتاج إعلامي السعودية",
-    "تصوير سينمائي",
-    "تصوير جوي بالدرون",
-    "بث مباشر",
-    "Kian Media",
-    "إنتاج فيديوهات الشركات",
+    "Saudi video production","Dammam media production","drone filming Saudi Arabia",
+    "corporate video production","live streaming Saudi Arabia","event coverage",
+    "wedding videography","كيان الابتكار","إنتاج إعلامي السعودية","تصوير سينمائي",
+    "تصوير جوي بالدرون","بث مباشر","Kian Media","إنتاج فيديوهات الشركات",
   ],
   metadataBase: new URL("https://kianmedia.com"),
   openGraph: {
     title: "Kian Media Production | Cinematic Video Production in Saudi Arabia",
-    description:
-      "Premium cinematic video production, drone filming, live streaming, event coverage, corporate films, commercials, and wedding films in Saudi Arabia.",
-    type: "website",
-    url: "https://kianmedia.com",
-    locale: "ar_SA",
-    siteName: "Kian Media",
+    description: "Premium cinematic video production, drone filming, live streaming, event coverage, corporate films, commercials, and wedding films in Saudi Arabia.",
+    type: "website", url: "https://kianmedia.com", locale: "ar_SA", siteName: "Kian Media",
   },
-  twitter: {
-    card: "summary_large_image",
-    site: "@kianalebtikar",
-    title: "Kian Media Production",
-    description: "Cinematic video production in Saudi Arabia.",
-  },
+  twitter: { card: "summary_large_image", site: "@kianalebtikar",
+    title: "Kian Media Production", description: "Cinematic video production in Saudi Arabia." },
   robots: { index: true, follow: true },
   alternates: { canonical: "https://kianmedia.com" },
   formatDetection: { telephone: true },
@@ -48,13 +30,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        {/* Editorial-luxury type system:
-            Cormorant Garamond — serif display for editorial moments
-            Bebas Neue — condensed display for hero impact
-            Inter Tight — refined sans for UI
-            Noto Naskh Arabic — Arabic with character */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=Inter+Tight:wght@200;300;400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500&family=Inter+Tight:wght@200;300;400;500;600;700&family=Tajawal:wght@300;400;500;700;800;900&display=swap"
           rel="stylesheet"
         />
         <meta name="theme-color" content="#000000" />

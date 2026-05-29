@@ -10,91 +10,121 @@ export default function Showreel() {
   const [open, setOpen] = useState(false);
 
   return (
-    <section id="showreel" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "120px", paddingBottom: "120px" }}>
+    <section id="showreel" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "100px", paddingBottom: "100px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
 
+        {/* Compact heading — no excess spacing */}
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.85, ease: [0.16, 1, 0.3, 1] }}
+          className="text-center mb-10"
+          data-reveal
+        >
+          <div className="eyebrow mb-5 mx-auto">{t({ ar: "الشورييل", en: "The Showreel" })}</div>
+          <h2 className="editorial text-white" style={{ fontSize: "clamp(32px,4.8vw,56px)" }}>
+            {t({ ar: "لمحة عمّا", en: "A glimpse of" })} <em>{t({ ar: "ننتجه", en: "what we craft" })}</em>
+          </h2>
+        </motion.div>
+
+        {/* Cinematic video card — directly attached to heading */}
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-          className="text-center mb-16"
-          data-reveal
-        >
-          <div className="eyebrow mb-6 mx-auto">{t({ ar: "الشورييل المميّز", en: "Featured Showreel" })}</div>
-          <h2 className="editorial text-white" style={{ fontSize: "clamp(34px,5vw,58px)" }}>
-            {t({ ar: "لمحة عن ما نُنتجه", en: "A glimpse into what we craft" })}
-          </h2>
-          <p className="text-white/45 mt-4" style={{ fontSize: "16px", lineHeight: 1.7, maxWidth: "600px", margin: "16px auto 0" }}>
-            {t({
-              ar: "لقطات منتقاة من إنتاجاتنا التجارية، الوثائقية، والميدانية في مختلف مناطق المملكة.",
-              en: "Selected frames from our commercial, documentary, and on-location productions across the Kingdom.",
-            })}
-          </p>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          whileInView={{ opacity: 1, scale: 1 }}
-          viewport={{ once: true }}
           transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
-          className="relative group"
+          className="relative group max-w-6xl mx-auto"
           data-reveal
         >
-          <div className="absolute -inset-4 pointer-events-none opacity-50 group-hover:opacity-80 transition-opacity duration-700" style={{ background: "radial-gradient(ellipse at center, rgba(227,30,36,0.18), transparent 70%)", filter: "blur(40px)" }} />
+          {/* Subtle ambient glow — much reduced */}
+          <div className="absolute -inset-2 pointer-events-none opacity-30 group-hover:opacity-50 transition-opacity duration-700"
+               style={{ background: "radial-gradient(ellipse at center, rgba(227,30,36,0.12), transparent 70%)", filter: "blur(30px)" }} />
 
           <button
             onClick={() => setOpen(true)}
-            className="relative block w-full overflow-hidden"
-            style={{ aspectRatio: "16/9", border: "1px solid rgba(227,30,36,0.2)", background: "#000", cursor: "pointer" }}
+            className="relative block w-full overflow-hidden group/card"
+            style={{ aspectRatio: "16/9", border: "1px solid rgba(255,255,255,0.08)", background: "#000", cursor: "pointer" }}
+            aria-label="Play showreel"
           >
-            <img
-              src={`https://i.ytimg.com/vi/${SHOWREEL_ID}/maxresdefault.jpg`}
-              alt="Kian Media Showreel"
-              loading="lazy"
-              className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
-              style={{ opacity: 0.7 }}
-              onError={(e) => { (e.target as HTMLImageElement).src = `https://i.ytimg.com/vi/${SHOWREEL_ID}/hqdefault.jpg`; }}
-            />
-            <div className="absolute inset-0" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.5) 100%)" }} />
+            {/* High-quality thumbnail with fallback chain */}
+            <ShowreelThumb id={SHOWREEL_ID} />
 
+            {/* Cinematic overlay — refined */}
+            <div className="absolute inset-0 transition-opacity duration-700 group-hover/card:opacity-90"
+                 style={{ background: "linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.1) 45%, rgba(0,0,0,0.45) 100%)" }} />
+
+            {/* Smaller, premium play button */}
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="relative">
-                <span className="absolute inset-0 rounded-full animate-ping" style={{ background: "rgba(227,30,36,0.4)" }} />
-                <span className="relative flex items-center justify-center transition-transform duration-500 group-hover:scale-110" style={{ width: "96px", height: "96px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 20px 60px rgba(227,30,36,0.55)" }}>
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M5 3l16 9-16 9z" /></svg>
+                <span className="absolute inset-0 rounded-full" style={{ background: "rgba(227,30,36,0.3)", animation: "pulseRing 2.5s ease-out infinite" }} />
+                <span className="relative flex items-center justify-center transition-transform duration-500 group-hover/card:scale-110"
+                      style={{ width: "68px", height: "68px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 12px 32px rgba(227,30,36,0.4)" }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: "3px" }}><path d="M5 3l16 9-16 9z" /></svg>
                 </span>
               </div>
             </div>
 
-            <div className="absolute bottom-0 left-0 right-0 p-8 md:p-12 flex flex-wrap items-end justify-between gap-4">
+            {/* Bottom caption — restrained */}
+            <div className="absolute bottom-0 left-0 right-0 p-6 md:p-10 flex flex-wrap items-end justify-between gap-3">
               <div>
-                <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "4px", textTransform: "uppercase", color: "var(--red)" }}>Kian Media · 2026</span>
-                <h3 className="f-serif text-white mt-2" style={{ fontSize: "clamp(22px,3vw,36px)", lineHeight: 1.1 }}>{t({ ar: "الشورييل الرسمي", en: "The Reel" })}</h3>
+                <span className="f-sans block mb-1.5" style={{ fontSize: "9px", letterSpacing: "3.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>
+                  Kian Media · {new Date().getFullYear()}
+                </span>
+                <h3 className="text-white" style={{ fontSize: "clamp(18px,2.4vw,28px)", lineHeight: 1.15, fontWeight: 600 }}>
+                  {t({ ar: "الشورييل الرسمي", en: "Official Showreel" })}
+                </h3>
               </div>
               <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "3px", color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>
                 {t({ ar: "اضغط للمشاهدة", en: "Click to watch" })}
               </div>
             </div>
 
-            <span className="absolute top-4 left-4" style={{ width: "32px", height: "32px", borderTop: "1px solid var(--red)", borderLeft: "1px solid var(--red)" }} />
-            <span className="absolute top-4 right-4" style={{ width: "32px", height: "32px", borderTop: "1px solid var(--red)", borderRight: "1px solid var(--red)" }} />
-            <span className="absolute bottom-4 left-4" style={{ width: "32px", height: "32px", borderBottom: "1px solid var(--red)", borderLeft: "1px solid var(--red)" }} />
-            <span className="absolute bottom-4 right-4" style={{ width: "32px", height: "32px", borderBottom: "1px solid var(--red)", borderRight: "1px solid var(--red)" }} />
+            {/* Refined corner brackets — single side only */}
+            <span className="absolute top-3 left-3" style={{ width: "20px", height: "20px", borderTop: "1px solid rgba(255,255,255,0.4)", borderLeft: "1px solid rgba(255,255,255,0.4)" }} />
+            <span className="absolute bottom-3 right-3" style={{ width: "20px", height: "20px", borderBottom: "1px solid rgba(255,255,255,0.4)", borderRight: "1px solid rgba(255,255,255,0.4)" }} />
           </button>
         </motion.div>
       </div>
 
+      <style jsx>{`
+        @keyframes pulseRing {
+          0% { transform: scale(1); opacity: 0.6; }
+          100% { transform: scale(1.6); opacity: 0; }
+        }
+      `}</style>
+
+      {/* Modal */}
       {open && (
-        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.95)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.96)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "1100px" }}>
-            <button onClick={() => setOpen(false)} className="f-sans" style={{ display: "block", marginInlineStart: "auto", marginBottom: "16px", background: "none", border: "none", color: "rgba(255,255,255,0.7)", fontSize: "13px", letterSpacing: "2px", cursor: "pointer" }}>✕ CLOSE</button>
-            <div className="yt" style={{ border: "1px solid rgba(227,30,36,0.3)", boxShadow: "0 30px 100px rgba(227,30,36,0.2)" }}>
+            <button onClick={() => setOpen(false)} className="f-sans" style={{ display: "block", marginInlineStart: "auto", marginBottom: "16px", background: "none", border: "none", color: "rgba(255,255,255,0.7)", fontSize: "12px", letterSpacing: "2px", cursor: "pointer" }}>✕ CLOSE</button>
+            <div className="yt" style={{ border: "1px solid rgba(255,255,255,0.1)" }}>
               <iframe src={`https://www.youtube.com/embed/${SHOWREEL_ID}?autoplay=1&rel=0`} title="Showreel" allowFullScreen allow="autoplay; encrypted-media" />
             </div>
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+// Thumbnail loader with quality fallback chain: maxres → sd → hq
+function ShowreelThumb({ id }: { id: string }) {
+  const [step, setStep] = useState(0);
+  const sources = [
+    `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`,
+    `https://i.ytimg.com/vi/${id}/sddefault.jpg`,
+    `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+  ];
+  return (
+    <img
+      src={sources[step]}
+      alt="Kian Media Showreel"
+      loading="eager"
+      onError={() => { if (step < sources.length - 1) setStep(step + 1); }}
+      className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-[1.03]"
+      style={{ opacity: 0.85 }}
+    />
   );
 }

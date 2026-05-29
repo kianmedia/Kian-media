@@ -23,12 +23,9 @@ export default function Contact() {
     e.preventDefault();
     const msg =
       `طلب عرض إنتاج | Kian Media Proposal Request\n\n` +
-      `👤 Name: ${form.name}\n` +
-      `🏢 Company: ${form.company}\n` +
-      `📞 Phone: ${form.phone}\n` +
-      `✉️  Email: ${form.email}\n` +
-      `🎬 Project: ${form.project || projectTypes[0]}\n` +
-      `💰 Budget: ${form.budget || budgetRanges[1]}\n\n` +
+      `👤 Name: ${form.name}\n🏢 Company: ${form.company}\n` +
+      `📞 Phone: ${form.phone}\n✉️  Email: ${form.email}\n` +
+      `🎬 Project: ${form.project || projectTypes[0]}\n💰 Budget: ${form.budget || budgetRanges[1]}\n\n` +
       `📝 Message:\n${form.message}`;
     window.open(`https://wa.me/966503422999?text=${encodeURIComponent(msg)}`, "_blank");
   };
@@ -37,17 +34,17 @@ export default function Contact() {
 
   return (
     <section id="contact" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "140px", paddingBottom: "140px" }}>
-      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(227,30,36,0.08), transparent 50%)" }} />
+      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(227,30,36,0.05), transparent 50%)" }} />
 
       <div className="max-w-6xl mx-auto px-6 lg:px-12 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
 
           {/* Left column */}
           <motion.div
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.9 }}
+            transition={{ duration: 0.85 }}
             className="lg:col-span-5"
             data-reveal
           >
@@ -56,32 +53,50 @@ export default function Contact() {
               {t({ ar: "لنصنع", en: "Let's craft" })}{" "}
               <em>{t({ ar: "شيئًا استثنائيًا", en: "something remarkable" })}</em>.
             </h2>
-            <p className="text-white/55 mb-10" style={{ fontSize: "16px", lineHeight: 1.9 }}>
+            <p className="text-white/55 mb-10" style={{ fontSize: "15px", lineHeight: 1.9 }}>
               {t({
                 ar: "لكل مشروع كبير بداية واحدة — محادثة. أرسل تفاصيل مشروعك وسيرتدّ عليك فريقنا الإنتاجي خلال ٢٤ ساعة بعرض أولي مفصّل.",
                 en: "Every great project starts with one conversation. Send your project brief and our production team will respond within 24 hours with a detailed initial proposal.",
               })}
             </p>
 
-            <div className="space-y-5">
+            <div className="space-y-6">
+              {/* Headquarters */}
               <div>
-                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>{t({ ar: "واتساب / جوال", en: "WhatsApp / Mobile" })}</div>
-                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="block text-white hover:text-red-500 transition" style={{ fontSize: "17px", letterSpacing: "0.5px" }}>+966 50 342 2999</a>
-                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "17px", letterSpacing: "0.5px" }}>+966 54 355 3038</a>
+                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
+                  {t({ ar: "المقر الرئيسي", en: "Main Headquarters" })}
+                </div>
+                <div className="text-white" style={{ fontSize: "17px", fontWeight: 600 }}>
+                  {t({ ar: "المنطقة الشرقية — الدمام", en: "Eastern Province — Dammam" })}
+                </div>
+                <div className="text-white/55 mt-1" style={{ fontSize: "13px" }}>
+                  {t({ ar: "الرياض · جدة · المدينة المنورة", en: "Riyadh · Jeddah · Madinah" })}
+                </div>
               </div>
+
               <div>
-                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
-                <a href="mailto:info@kianmedia.com" className="block text-white hover:text-red-500 transition" style={{ fontSize: "16px" }}>info@kianmedia.com</a>
-                <a href="mailto:sales@kianmedia.com" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "16px" }}>sales@kianmedia.com</a>
+                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "واتساب / جوال", en: "WhatsApp / Mobile" })}</div>
+                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="block text-white hover:text-red-500 transition" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>+966 50 342 2999</a>
+                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>+966 54 355 3038</a>
               </div>
+
               <div>
-                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase" }}>{t({ ar: "نطاق العمل", en: "Coverage" })}</div>
-                <span className="text-white" style={{ fontSize: "16px" }}>{t({ ar: "خدماتنا تشمل جميع مناطق المملكة العربية السعودية", en: "Serving all regions of Saudi Arabia" })}</span>
+                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
+                <a href="mailto:info@kianmedia.com" className="block text-white hover:text-red-500 transition" style={{ fontSize: "15px" }}>info@kianmedia.com</a>
+                <a href="mailto:sales@kianmedia.com" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "15px" }}>sales@kianmedia.com</a>
+              </div>
+
+              <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <p className="text-white/65" style={{ fontSize: "14px", lineHeight: 1.85, fontWeight: 500 }}>
+                  {t({
+                    ar: "نخدم جميع مناطق المملكة العربية السعودية، بالإضافة إلى المشاريع والإنتاجات خارج المملكة.",
+                    en: "We serve all regions of Saudi Arabia, in addition to projects and productions beyond the Kingdom.",
+                  })}
+                </p>
               </div>
             </div>
 
-            {/* Quick CTAs */}
-            <div className="mt-10 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-wrap gap-3">
               <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="btn-wa">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
                 <span>{t({ ar: "واتساب", en: "WhatsApp" })}</span>
@@ -95,10 +110,10 @@ export default function Contact() {
           {/* Right form */}
           <motion.form
             onSubmit={submit}
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.9, delay: 0.1 }}
+            transition={{ duration: 0.85, delay: 0.1 }}
             className="lg:col-span-7 glass p-8 lg:p-12"
             data-reveal
           >

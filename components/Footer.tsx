@@ -35,17 +35,17 @@ export default function Footer() {
     {
       title: t({ ar: "تواصل", en: "Contact" }),
       links: [
+        { t: t({ ar: "المقر: المنطقة الشرقية — الدمام", en: "HQ: Eastern Province — Dammam" }), h: "#contact" },
         { t: "+966 50 342 2999", h: "tel:+966503422999" },
         { t: "+966 54 355 3038", h: "tel:+966543553038" },
         { t: "info@kianmedia.com", h: "mailto:info@kianmedia.com" },
         { t: "sales@kianmedia.com", h: "mailto:sales@kianmedia.com" },
-        { t: t({ ar: "جميع مناطق المملكة", en: "All Saudi Regions" }), h: "#contact" },
       ],
     },
   ];
 
   return (
-    <footer style={{ background: "#030303", borderTop: "1px solid rgba(227,30,36,0.14)", paddingTop: "70px", paddingBottom: "32px" }}>
+    <footer style={{ background: "#030303", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "70px", paddingBottom: "32px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-14">
           <div>
@@ -55,10 +55,10 @@ export default function Footer() {
               </div>
               <div className="f-display text-white" style={{ fontSize: "20px", letterSpacing: "5px" }}>KIAN MEDIA</div>
             </div>
-            <p className="text-white/35 leading-relaxed mb-6" style={{ fontSize: "13px", maxWidth: "260px" }}>
+            <p className="text-white/40 mb-5" style={{ fontSize: "13px", lineHeight: 1.8, maxWidth: "270px" }}>
               {t({
-                ar: "كيان الابتكار للإنتاج الفني — محتوى بصري سينمائي بمعايير دولية في جميع مناطق المملكة.",
-                en: "Kian Media Production — cinematic visual content at international standards across all regions of Saudi Arabia.",
+                ar: "كيان الابتكار للإنتاج الفني — محتوى بصري سينمائي بمعايير دولية. نخدم جميع مناطق المملكة، بالإضافة إلى الإنتاجات خارج المملكة.",
+                en: "Kian Al Ebtikar Art Production — cinematic visual content at international standards. Serving all regions of Saudi Arabia, plus productions beyond the Kingdom.",
               })}
             </p>
             <div className="flex gap-2 flex-wrap">
@@ -69,9 +69,9 @@ export default function Footer() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="f-sans flex items-center justify-center text-white/40 transition-all"
-                  style={{ width: "34px", height: "34px", border: "1px solid rgba(227,30,36,0.2)", fontSize: "9px", fontWeight: 700, textDecoration: "none" }}
+                  style={{ width: "34px", height: "34px", border: "1px solid rgba(255,255,255,0.15)", fontSize: "9px", fontWeight: 700, textDecoration: "none" }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#E31E24"; (e.currentTarget as HTMLAnchorElement).style.color = "#E31E24"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(227,30,36,0.2)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.4)"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.15)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.4)"; }}
                   aria-label={s.label}
                 >
                   {s.short}
@@ -82,17 +82,13 @@ export default function Footer() {
 
           {COLS.map((col) => (
             <div key={col.title}>
-              <h4 className="f-sans mb-5" style={{ fontSize: "9px", letterSpacing: "4px", color: "#E31E24", textTransform: "uppercase" }}>
+              <h4 className="f-sans mb-5" style={{ fontSize: "9px", letterSpacing: "4px", color: "rgba(255,255,255,0.7)", textTransform: "uppercase", fontWeight: 600 }}>
                 {col.title}
               </h4>
               <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "10px", padding: 0 }}>
                 {col.links.map((l) => (
                   <li key={l.t}>
-                    <a
-                      href={l.h}
-                      className="text-white/45 transition-colors hover:text-white"
-                      style={{ textDecoration: "none", fontSize: "13px" }}
-                    >
+                    <a href={l.h} className="text-white/45 transition-colors hover:text-white" style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5 }}>
                       {l.t}
                     </a>
                   </li>
@@ -106,8 +102,8 @@ export default function Footer() {
           <p className="text-white/30" style={{ fontSize: "11px" }}>
             © {new Date().getFullYear()} Kian Al Ebtikar Art Production. {t({ ar: "جميع الحقوق محفوظة.", en: "All rights reserved." })}
           </p>
-          <p className="f-sans" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(255,255,255,0.25)", textTransform: "uppercase" }}>
-            Riyadh · Dammam · Jeddah · {t({ ar: "كل المناطق", en: "All Regions" })}
+          <p className="f-sans" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(255,255,255,0.3)", textTransform: "uppercase" }}>
+            {t({ ar: "الدمام · الرياض · جدة · المدينة المنورة", en: "Dammam · Riyadh · Jeddah · Madinah" })}
           </p>
         </div>
       </div>

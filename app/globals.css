@@ -3,8 +3,9 @@
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   KIAN MEDIA — Editorial Cinematic Design System
-   Black • Red • White. Quiet luxury, bold typography, agency-grade restraint.
+   KIAN MEDIA — Editorial Cinematic Design System v2
+   Netflix editorial · Apple cinematic · Luxury agency restraint.
+   Black + white primary. Red is accent only, used sparingly.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -14,16 +15,16 @@
   --carbon: #1a1a1a;
   --red: #E31E24;
   --red-deep: #A51419;
-  --red-glow: rgba(227, 30, 36, 0.45);
   --paper: #ffffff;
   --bone: #f5f1ea;
   --fog: rgba(255, 255, 255, 0.5);
   --mist: rgba(255, 255, 255, 0.12);
   --whisper: rgba(255, 255, 255, 0.06);
-  --serif: 'Cormorant Garamond', 'Noto Naskh Arabic', serif;
+  --serif: 'Cormorant Garamond', 'Tajawal', serif;
   --display: 'Bebas Neue', sans-serif;
-  --sans: 'Inter Tight', 'Noto Naskh Arabic', sans-serif;
-  --arabic: 'Noto Naskh Arabic', serif;
+  --sans: 'Inter Tight', 'Tajawal', sans-serif;
+  --arabic-display: 'Tajawal', 'Inter Tight', sans-serif;
+  --arabic-body: 'Tajawal', 'Inter Tight', sans-serif;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -37,74 +38,98 @@ body {
   overflow-x: hidden;
 }
 
-/* Subtle film grain over everything for cinematic texture */
+/* Arabic body — use Tajawal for cleaner editorial Arabic */
+html[lang="ar"] body { font-family: var(--arabic-body); }
+
+/* Very subtle grain — reduced from before */
 body::before {
   content: "";
   position: fixed; inset: 0; pointer-events: none; z-index: 1000;
-  opacity: 0.035; mix-blend-mode: overlay;
+  opacity: 0.025; mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
 }
 
-/* Scrollbar — slim and quiet */
+/* Scrollbar — minimal */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--black); }
-::-webkit-scrollbar-thumb { background: rgba(227,30,36,0.25); border-radius: 0; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(227,30,36,0.5); }
 
-/* Selection */
 ::selection { background: var(--red); color: #fff; }
 
 /* ─── Typography utilities ─────────────────────────────────────────────── */
 .f-serif { font-family: var(--serif); }
-.f-display { font-family: var(--display); letter-spacing: 0.01em; }
+.f-display { font-family: var(--display); letter-spacing: 0.02em; }
 .f-sans { font-family: var(--sans); }
-.f-arabic { font-family: var(--arabic); }
-/* Legacy aliases (existing components) */
+.f-arabic { font-family: var(--arabic-body); }
 .f-bebas { font-family: var(--display); }
 .f-mont { font-family: var(--sans); }
 
-/* ─── Section primitives ───────────────────────────────────────────────── */
+/* ─── Eyebrow / section label ──────────────────────────────────────────── */
 .eyebrow {
   display: inline-flex; align-items: center; gap: 14px;
   font-family: var(--sans);
   font-size: 11px; letter-spacing: 4px; text-transform: uppercase;
-  color: var(--red); font-weight: 500;
+  color: rgba(255,255,255,0.55); font-weight: 500;
 }
 .eyebrow::before {
-  content: ""; display: block; width: 36px; height: 1px;
+  content: ""; display: block; width: 32px; height: 1px;
   background: var(--red);
 }
 
-/* Legacy sec-label used by existing components */
 .sec-label {
   font-family: var(--sans);
   font-size: 11px; letter-spacing: 4px; text-transform: uppercase;
-  color: var(--red); font-weight: 500;
-  display: inline-block; padding-bottom: 6px;
+  color: rgba(255,255,255,0.55); font-weight: 500;
+  display: inline-block; padding-bottom: 8px;
   position: relative;
 }
 .sec-label::before {
   content: ""; position: absolute; bottom: 0; right: 50%;
   transform: translateX(50%);
-  width: 36px; height: 1px; background: var(--red);
+  width: 32px; height: 1px; background: var(--red);
 }
 
+/* ─── Section titles — editorial, balanced, premium ───────────────────── */
 .sec-title {
   font-family: var(--serif);
   font-size: clamp(34px, 5vw, 60px);
-  line-height: 1.05; letter-spacing: -0.02em;
+  line-height: 1.08; letter-spacing: -0.022em;
   color: #fff; font-weight: 400;
 }
 .sec-title .r { color: var(--red); font-style: italic; }
 
-/* Editorial display heading for bigger statements */
 .editorial {
   font-family: var(--serif);
   font-weight: 400;
   letter-spacing: -0.025em;
-  line-height: 1;
+  line-height: 1.04;
 }
-.editorial em { color: var(--red); font-style: italic; }
+.editorial em { color: var(--red); font-style: italic; font-weight: 500; }
+
+/* Arabic display variant — straight, bold, premium (no italic, no skew) */
+html[lang="ar"] .editorial {
+  font-family: var(--arabic-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  font-style: normal;
+}
+html[lang="ar"] .editorial em {
+  font-style: normal;
+  font-weight: 800;
+  color: var(--red);
+}
+
+html[lang="ar"] .sec-title {
+  font-family: var(--arabic-display);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+
+/* Premium Arabic body */
+html[lang="ar"] p { letter-spacing: 0; line-height: 1.85; }
 
 .grad-r {
   background: linear-gradient(135deg, #fff 0%, var(--red) 100%);
@@ -115,75 +140,75 @@ body::before {
 /* ─── Buttons ──────────────────────────────────────────────────────────── */
 .btn-red {
   display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-  padding: 14px 28px;
+  padding: 15px 30px;
   background: var(--red); color: #fff;
   font-family: var(--sans); font-size: 12px; font-weight: 600;
-  letter-spacing: 2px; text-transform: uppercase;
+  letter-spacing: 2.5px; text-transform: uppercase;
   border: 1px solid var(--red); cursor: pointer;
-  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative; overflow: hidden;
 }
 .btn-red::before {
   content: ""; position: absolute; inset: 0;
   background: var(--red-deep);
   transform: translateY(100%);
-  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   z-index: 0;
 }
 .btn-red:hover::before { transform: translateY(0); }
 .btn-red > * { position: relative; z-index: 1; }
-.btn-red:hover { box-shadow: 0 14px 40px rgba(227,30,36,0.4); }
+.btn-red:hover { box-shadow: 0 14px 36px rgba(227,30,36,0.28); }
 
 .btn-ghost {
   display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-  padding: 14px 28px;
+  padding: 15px 30px;
   background: transparent; color: #fff;
   font-family: var(--sans); font-size: 12px; font-weight: 500;
-  letter-spacing: 2px; text-transform: uppercase;
-  border: 1px solid rgba(255,255,255,0.25); cursor: pointer;
-  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  letter-spacing: 2.5px; text-transform: uppercase;
+  border: 1px solid rgba(255,255,255,0.22); cursor: pointer;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .btn-ghost:hover { border-color: #fff; background: rgba(255,255,255,0.04); }
 
 .btn-wa {
   display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-  padding: 14px 24px;
+  padding: 15px 26px;
   background: #25D366; color: #fff;
   font-family: var(--sans); font-size: 12px; font-weight: 600;
-  letter-spacing: 1.5px; text-transform: uppercase;
+  letter-spacing: 2px; text-transform: uppercase;
   border: none; cursor: pointer;
-  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.btn-wa:hover { background: #1ea854; box-shadow: 0 14px 40px rgba(37,211,102,0.3); }
+.btn-wa:hover { background: #1ea854; box-shadow: 0 14px 36px rgba(37,211,102,0.25); }
 
-/* ─── Glass cards ──────────────────────────────────────────────────────── */
+/* ─── Glass cards — refined ────────────────────────────────────────────── */
 .glass {
-  background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
+  background: linear-gradient(135deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.008) 100%);
   border: 1px solid var(--mist);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
 .glass-red {
-  background: linear-gradient(135deg, rgba(227,30,36,0.08) 0%, rgba(227,30,36,0.02) 100%);
-  border: 1px solid rgba(227,30,36,0.2);
+  background: linear-gradient(135deg, rgba(227,30,36,0.06) 0%, rgba(227,30,36,0.015) 100%);
+  border: 1px solid rgba(227,30,36,0.18);
 }
 
 /* ─── YouTube embed aspect ratio ───────────────────────────────────────── */
 .yt { position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; }
 .yt iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 
-/* ─── Marquee animations (existing) ────────────────────────────────────── */
+/* ─── Marquee animations — faster, denser ──────────────────────────────── */
 @keyframes scroll-x { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @keyframes scroll-x-r { from { transform: translateX(-50%); } to { transform: translateX(0); } }
-.anim-mq { animation: scroll-x 40s linear infinite; display: flex; gap: 60px; width: max-content; }
-.anim-mq-r { animation: scroll-x-r 40s linear infinite; display: flex; gap: 60px; width: max-content; }
+.anim-mq { animation: scroll-x 32s linear infinite; display: flex; width: max-content; }
+.anim-mq-r { animation: scroll-x-r 32s linear infinite; display: flex; width: max-content; }
 
 @keyframes scroll-y { from { transform: translateY(0); } to { transform: translateY(-50%); } }
 @keyframes scroll-y-r { from { transform: translateY(-50%); } to { transform: translateY(0); } }
 .anim-fd { animation: scroll-y 60s linear infinite; }
 .anim-fu { animation: scroll-y-r 60s linear infinite; }
 
-/* ─── Custom cursor (kept) ─────────────────────────────────────────────── */
+/* ─── Custom cursor ────────────────────────────────────────────────────── */
 .cursor-dot {
   width: 6px; height: 6px; background: var(--red); border-radius: 50%;
   transform: translate(-50%, -50%);
@@ -201,7 +226,7 @@ body::before {
   border-color: var(--red);
 }
 
-/* ─── Portfolio card (legacy class kept) ───────────────────────────────── */
+/* ─── Portfolio card ───────────────────────────────────────────────────── */
 .port { position: relative; overflow: hidden; cursor: pointer; background: #0a0a0a; }
 .port-inner { transition: transform .65s cubic-bezier(.16,1,.3,1); width: 100%; height: 100%; }
 .port:hover .port-inner { transform: scale(1.07); }
@@ -211,32 +236,25 @@ body::before {
   background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
 }
 .port:hover .port-ov { opacity: 1; }
-.port-play {
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%) scale(0.85);
-  opacity: 0; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.port:hover .port-play { opacity: 1; transform: translate(-50%,-50%) scale(1); }
 
-/* ─── Section dividers / red accent line ──────────────────────────────── */
+/* ─── Section dividers ─────────────────────────────────────────────────── */
 .red-line {
-  display: block; width: 60px; height: 2px;
+  display: block; width: 60px; height: 1px;
   background: var(--red); margin: 24px 0;
 }
 .red-line-center { margin: 24px auto; }
 
-/* ─── Animations ──────────────────────────────────────────────────────── */
 @keyframes float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
 }
 .animate-float { animation: float 4s ease-in-out infinite; }
 
-/* ─── Production safety net (kept from earlier fix) ───────────────────── */
+/* ─── Production safety net ────────────────────────────────────────────── */
 [data-reveal] { opacity: 1 !important; }
 img.logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
-/* ─── Form styles ─────────────────────────────────────────────────────── */
+/* ─── Form styles ──────────────────────────────────────────────────────── */
 .input-field {
   width: 100%;
   background: transparent;
@@ -257,11 +275,11 @@ img.logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
   display: block; margin-bottom: 4px;
 }
 
-/* ─── Number marker (for process / why-us) ────────────────────────────── */
+/* ─── Roman numeral / number marker ────────────────────────────────────── */
 .num {
   font-family: var(--serif);
   font-size: 100px; line-height: 1;
   color: transparent;
-  -webkit-text-stroke: 1px rgba(227,30,36,0.35);
+  -webkit-text-stroke: 1px rgba(255,255,255,0.1);
   font-style: italic; font-weight: 300;
 }
