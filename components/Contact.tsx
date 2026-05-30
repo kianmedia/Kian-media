@@ -33,8 +33,8 @@ export default function Contact() {
   const update = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
 
   return (
-    <section id="contact" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "140px", paddingBottom: "140px" }}>
-      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(227,30,36,0.05), transparent 50%)" }} />
+    <section id="contact" className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "140px", paddingBottom: "140px" }}>
+      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(193,18,31,0.05), transparent 50%)" }} />
 
       <div className="max-w-6xl mx-auto px-6 lg:px-12 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
@@ -60,13 +60,13 @@ export default function Contact() {
               })}
             </p>
 
-            <div className="space-y-6">
+            <div className="space-y-3">
               {/* Headquarters */}
-              <div>
-                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
+              <div className="contact-pill">
+                <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "var(--red)", textTransform: "uppercase", fontWeight: 700 }}>
                   {t({ ar: "المقر الرئيسي", en: "Main Headquarters" })}
                 </div>
-                <div className="text-white" style={{ fontSize: "17px", fontWeight: 600 }}>
+                <div className="text-white" style={{ fontSize: "16px", fontWeight: 600 }}>
                   {t({ ar: "المنطقة الشرقية — الدمام", en: "Eastern Province — Dammam" })}
                 </div>
                 <div className="text-white/55 mt-1" style={{ fontSize: "13px" }}>
@@ -74,20 +74,20 @@ export default function Contact() {
                 </div>
               </div>
 
-              <div>
-                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "واتساب / جوال", en: "WhatsApp / Mobile" })}</div>
-                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:text-red-500 transition" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0503422999</a>
-                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0543553038</a>
+              <div className="contact-pill">
+                <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "var(--red)", textTransform: "uppercase", fontWeight: 700 }}>{t({ ar: "واتساب / جوال", en: "WhatsApp / Mobile" })}</div>
+                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:opacity-70 transition" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0503422999</a>
+                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:opacity-70 transition mt-1" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0543553038</a>
               </div>
 
-              <div>
-                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
-                <a href="mailto:info@kianmedia.com" className="block text-white hover:text-red-500 transition" style={{ fontSize: "15px" }}>info@kianmedia.com</a>
-                <a href="mailto:sales@kianmedia.com" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "15px" }}>sales@kianmedia.com</a>
+              <div className="contact-pill">
+                <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "var(--red)", textTransform: "uppercase", fontWeight: 700 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
+                <a href="mailto:info@kianmedia.com" className="block text-white hover:opacity-70 transition" style={{ fontSize: "15px" }}>info@kianmedia.com</a>
+                <a href="mailto:sales@kianmedia.com" className="block text-white hover:opacity-70 transition mt-1" style={{ fontSize: "15px" }}>sales@kianmedia.com</a>
               </div>
 
-              <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                <p className="text-white/65" style={{ fontSize: "14px", lineHeight: 1.85, fontWeight: 500 }}>
+              <div className="contact-pill">
+                <p className="text-white/65" style={{ fontSize: "14px", lineHeight: 1.85, fontWeight: 400 }}>
                   {t({
                     ar: "نخدم جميع مناطق المملكة العربية السعودية، بالإضافة إلى المشاريع والإنتاجات خارج المملكة.",
                     en: "We serve all regions of Saudi Arabia, in addition to projects and productions beyond the Kingdom.",
@@ -136,16 +136,16 @@ export default function Contact() {
               </div>
               <div>
                 <label className="input-label">{t({ ar: "نوع المشروع", en: "Project Type" })}</label>
-                <select value={form.project} onChange={(e) => update("project", e.target.value)} className="input-field" style={{ background: "#050505" }}>
-                  <option value="" style={{ background: "#050505" }}>{t({ ar: "اختر النوع...", en: "Select type..." })}</option>
-                  {projectTypes.map((p) => <option key={p} value={p} style={{ background: "#050505" }}>{p}</option>)}
+                <select value={form.project} onChange={(e) => update("project", e.target.value)} className="input-field" style={{ background: "#0B0B0B" }}>
+                  <option value="" style={{ background: "#0B0B0B" }}>{t({ ar: "اختر النوع...", en: "Select type..." })}</option>
+                  {projectTypes.map((p) => <option key={p} value={p} style={{ background: "#0B0B0B" }}>{p}</option>)}
                 </select>
               </div>
               <div>
                 <label className="input-label">{t({ ar: "الميزانية", en: "Budget Range" })}</label>
-                <select value={form.budget} onChange={(e) => update("budget", e.target.value)} className="input-field" style={{ background: "#050505" }}>
-                  <option value="" style={{ background: "#050505" }}>{t({ ar: "اختر النطاق...", en: "Select range..." })}</option>
-                  {budgetRanges.map((b) => <option key={b} value={b} style={{ background: "#050505" }}>{b}</option>)}
+                <select value={form.budget} onChange={(e) => update("budget", e.target.value)} className="input-field" style={{ background: "#0B0B0B" }}>
+                  <option value="" style={{ background: "#0B0B0B" }}>{t({ ar: "اختر النطاق...", en: "Select range..." })}</option>
+                  {budgetRanges.map((b) => <option key={b} value={b} style={{ background: "#0B0B0B" }}>{b}</option>)}
                 </select>
               </div>
               <div className="md:col-span-2 mt-2">

@@ -9,12 +9,12 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  --black: #050505;
+  --black: #0B0B0B;
   --ink: #0a0a0a;
   --soot: #111111;
   --carbon: #1a1a1a;
-  --red: #E31E24;
-  --red-deep: #A51419;
+  --red: #C1121F;
+  --red-deep: #8B0E18;
   --paper: #ffffff;
   --bone: #f5f1ea;
   --fog: rgba(255, 255, 255, 0.5);
@@ -53,7 +53,7 @@ body::before {
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--black); }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 0; }
-::-webkit-scrollbar-thumb:hover { background: rgba(227,30,36,0.5); }
+::-webkit-scrollbar-thumb:hover { background: rgba(193,18,31,0.5); }
 
 ::selection { background: var(--red); color: #fff; }
 
@@ -157,7 +157,7 @@ html[lang="ar"] p { letter-spacing: 0; line-height: 1.85; }
 }
 .btn-red:hover::before { transform: translateY(0); }
 .btn-red > * { position: relative; z-index: 1; }
-.btn-red:hover { box-shadow: 0 14px 36px rgba(227,30,36,0.28); }
+.btn-red:hover { box-shadow: 0 14px 36px rgba(193,18,31,0.28); }
 
 .btn-ghost {
   display: inline-flex; align-items: center; justify-content: center; gap: 10px;
@@ -189,8 +189,8 @@ html[lang="ar"] p { letter-spacing: 0; line-height: 1.85; }
   -webkit-backdrop-filter: blur(12px);
 }
 .glass-red {
-  background: linear-gradient(135deg, rgba(227,30,36,0.06) 0%, rgba(227,30,36,0.015) 100%);
-  border: 1px solid rgba(227,30,36,0.18);
+  background: linear-gradient(135deg, rgba(193,18,31,0.06) 0%, rgba(193,18,31,0.015) 100%);
+  border: 1px solid rgba(193,18,31,0.18);
 }
 
 /* ─── YouTube embed aspect ratio ───────────────────────────────────────── */
@@ -216,7 +216,7 @@ html[lang="ar"] p { letter-spacing: 0; line-height: 1.85; }
 }
 .cursor-ring {
   width: 32px; height: 32px;
-  border: 1px solid rgba(227,30,36,0.4); border-radius: 50%;
+  border: 1px solid rgba(193,18,31,0.4); border-radius: 50%;
   transform: translate(-50%, -50%);
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s;
 }
@@ -289,4 +289,119 @@ img.logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
   direction: ltr;
   unicode-bidi: embed;
   display: inline-block;
+}
+
+/* ─── Premium service card — glassmorphism with cinematic restraint ────── */
+.svc-card {
+  position: relative;
+  padding: 32px 28px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+.svc-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 4px;
+  background: radial-gradient(ellipse at top, rgba(193,18,31,0.08), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+.svc-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(193,18,31,0.4);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
+  box-shadow: 0 18px 60px -20px rgba(193,18,31,0.25),
+              0 0 0 1px rgba(193,18,31,0.1);
+}
+.svc-card:hover::before { opacity: 1; }
+.svc-card:hover .svc-icon {
+  color: var(--red);
+  transform: translateY(-2px);
+}
+.svc-card.is-signature {
+  border-color: rgba(193,18,31,0.28);
+  background: linear-gradient(180deg, rgba(193,18,31,0.04) 0%, rgba(255,255,255,0.005) 100%);
+}
+.svc-card.is-signature::before {
+  background: radial-gradient(ellipse at top, rgba(193,18,31,0.15), transparent 70%);
+  opacity: 0.7;
+}
+.svc-icon {
+  display: inline-flex;
+  width: 44px; height: 44px;
+  align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.85);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  transition: color 0.4s, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.4s;
+  margin-bottom: 22px;
+}
+.svc-card:hover .svc-icon { border-color: rgba(193,18,31,0.4); }
+
+/* ─── Stat cell premium variant ─────────────────────────────────────────── */
+.stat-cell {
+  background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 28px 18px;
+  text-align: center;
+  transition: border-color 0.5s, background 0.5s, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.stat-cell:hover {
+  border-color: rgba(193,18,31,0.35);
+  background: linear-gradient(180deg, rgba(193,18,31,0.04) 0%, rgba(255,255,255,0.005) 100%);
+  transform: translateY(-2px);
+}
+
+/* ─── Client name cell — glass variant ─────────────────────────────────── */
+.client-cell {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.005) 100%);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 4px;
+  min-height: 110px;
+  padding: 18px;
+  display: flex; align-items: center; justify-content: center;
+  text-align: center;
+  transition: border-color 0.4s, background 0.4s, transform 0.4s;
+}
+.client-cell:hover {
+  border-color: rgba(193,18,31,0.3);
+  background: linear-gradient(180deg, rgba(193,18,31,0.04) 0%, rgba(255,255,255,0.005) 100%);
+  transform: translateY(-1px);
+}
+
+/* ─── Contact info row premium ─────────────────────────────────────────── */
+.contact-pill {
+  background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 18px 20px;
+  transition: border-color 0.4s, background 0.4s;
+}
+.contact-pill:hover {
+  border-color: rgba(193,18,31,0.3);
+}
+
+/* ─── Slight border-radius on existing buttons for consistency ────────── */
+.btn-red, .btn-ghost, .btn-wa { border-radius: 3px; }
+
+/* ─── Cinematic section gradient overlay helper ────────────────────────── */
+.sec-gradient {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 50% at 20% 0%, rgba(193,18,31,0.06), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 80% 100%, rgba(193,18,31,0.04), transparent 60%);
 }

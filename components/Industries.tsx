@@ -23,7 +23,7 @@ const INDUSTRIES = [
 export default function Industries() {
   const { t } = useI18n();
   return (
-    <section className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "140px", paddingBottom: "140px" }}>
+    <section className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "140px", paddingBottom: "140px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
         <motion.div
           initial={{ opacity: 0, y: 24 }}

@@ -23,7 +23,7 @@ export default function LangSwitch({ compact = false }: { compact?: boolean }) {
         cursor: "pointer",
         textTransform: "uppercase",
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#E31E24"; e.currentTarget.style.color = "#fff"; }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#C1121F"; e.currentTarget.style.color = "#fff"; }}
       onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
       aria-label="Toggle language"
     >

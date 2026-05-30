@@ -38,7 +38,7 @@ export default function Navbar() {
         background: scrolled ? "rgba(5,5,5,0.85)" : "transparent",
         backdropFilter: scrolled ? "blur(14px)" : "none",
         WebkitBackdropFilter: scrolled ? "blur(14px)" : "none",
-        borderBottom: scrolled ? "1px solid rgba(227,30,36,0.12)" : "1px solid transparent",
+        borderBottom: scrolled ? "1px solid rgba(193,18,31,0.12)" : "1px solid transparent",
       }}
     >
       <nav className="max-w-7xl mx-auto px-6 lg:px-12 flex items-center justify-between">
@@ -74,7 +74,7 @@ export default function Navbar() {
                 className="f-sans uppercase transition-all duration-300 hover:text-white"
                 style={
                   l.cta
-                    ? { fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#E31E24", border: "1px solid #E31E24", padding: "9px 22px" }
+                    ? { fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#C1121F", border: "1px solid #C1121F", padding: "9px 22px" }
                     : { fontSize: "11px", letterSpacing: "2px", fontWeight: 500, color: "rgba(255,255,255,0.6)" }
                 }
               >
@@ -110,13 +110,13 @@ export default function Navbar() {
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.28 }}
             className="md:hidden"
-            style={{ background: "rgba(0,0,0,0.98)", borderTop: "1px solid rgba(227,30,36,0.2)" }}
+            style={{ background: "rgba(0,0,0,0.98)", borderTop: "1px solid rgba(193,18,31,0.2)" }}
           >
             {LINKS.map((l) => (
               <a
                 key={l.h} href={l.h} onClick={(e) => go(e, l.h)}
                 className="flex items-center px-6 py-4 f-sans uppercase transition-colors"
-                style={{ fontSize: "13px", letterSpacing: "3px", color: l.cta ? "#E31E24" : "rgba(255,255,255,0.6)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                style={{ fontSize: "13px", letterSpacing: "3px", color: l.cta ? "#C1121F" : "rgba(255,255,255,0.6)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}
               >
                 {t({ ar: l.ar, en: l.en })}
               </a>

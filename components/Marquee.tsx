@@ -39,7 +39,7 @@ export default function Marquee() {
   const loop = [...items, ...items, ...items, ...items];
 
   return (
-    <div style={{ background: "#E31E24", borderTop: "1px solid #A51419", borderBottom: "1px solid #A51419", overflow: "hidden" }}>
+    <div style={{ background: "#C1121F", borderTop: "1px solid #A51419", borderBottom: "1px solid #A51419", overflow: "hidden" }}>
       <div className="anim-mq" style={{ padding: "16px 0", gap: 0 }}>
         {loop.map((item, i) => (
           <span

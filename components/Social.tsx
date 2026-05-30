@@ -59,8 +59,8 @@ const PLATFORMS: Platform[] = [
 export default function Social() {
   const { t } = useI18n();
   return (
-    <section className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "140px", paddingBottom: "140px" }}>
-      <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(to right, transparent, rgba(227,30,36,0.4), transparent)" }} />
+    <section className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "140px", paddingBottom: "140px" }}>
+      <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(to right, transparent, rgba(193,18,31,0.4), transparent)" }} />
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
 
         <motion.div

@@ -197,19 +197,19 @@ function Card({ item, idx, activeCat, onOpen }: { item: Item; idx: number; activ
       <Thumb yt={item.yt} alt={t({ ar: item.ar, en: item.en })} />
 
       <div className="absolute inset-0 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.94) 0%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.1) 100%)" }} />
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(227,30,36,0.16), transparent 60%)" }} />
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(193,18,31,0.16), transparent 60%)" }} />
 
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <span className="flex items-center justify-center transition-all duration-400 group-hover:scale-110"
-              style={{ width: "52px", height: "52px", borderRadius: "50%", background: "rgba(227,30,36,0.92)", boxShadow: "0 8px 28px rgba(227,30,36,0.4)" }}>
+              style={{ width: "52px", height: "52px", borderRadius: "50%", background: "rgba(193,18,31,0.92)", boxShadow: "0 8px 28px rgba(193,18,31,0.4)" }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: "2px" }}><path d="M5 3l16 9-16 9z" /></svg>
         </span>
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 p-5 pointer-events-none">
         <span className="f-sans inline-flex items-center gap-1.5 mb-2.5"
-              style={{ fontSize: "8px", letterSpacing: "2.5px", color: "rgba(227,30,36,0.95)", textTransform: "uppercase",
-                       padding: "3px 9px", border: "1px solid rgba(227,30,36,0.3)", background: "rgba(227,30,36,0.06)", fontWeight: 600 }}>
+              style={{ fontSize: "8px", letterSpacing: "2.5px", color: "rgba(193,18,31,0.95)", textTransform: "uppercase",
+                       padding: "3px 9px", border: "1px solid rgba(193,18,31,0.3)", background: "rgba(193,18,31,0.06)", fontWeight: 600 }}>
           ◆ {t({ ar: meta?.ar || "", en: meta?.en || "" })}
         </span>
         <h3 className="text-white" style={{ fontSize: "14.5px", fontWeight: 600, lineHeight: 1.4, letterSpacing: "-0.005em" }}>
@@ -228,7 +228,7 @@ function Card({ item, idx, activeCat, onOpen }: { item: Item; idx: number; activ
       </div>
 
       <span className="absolute top-0 right-0 transition-all duration-500 group-hover:w-10 group-hover:h-10"
-            style={{ width: "0", height: "0", borderTop: "1.5px solid #E31E24", borderRight: "1.5px solid #E31E24" }} />
+            style={{ width: "0", height: "0", borderTop: "1.5px solid #C1121F", borderRight: "1.5px solid #C1121F" }} />
     </motion.button>
   );
 }
@@ -242,7 +242,7 @@ function GroupHeader({ catKey }: { catKey: Exclude<CatKey, "all"> }) {
     <div className="col-span-full mt-10 first:mt-0 mb-1" data-reveal>
       <div className="flex items-center gap-4 mb-2">
         <span style={{ width: "28px", height: "1px", background: "var(--red)" }} />
-        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "3.5px", color: "rgba(227,30,36,0.95)", textTransform: "uppercase", fontWeight: 700 }}>
+        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "3.5px", color: "rgba(193,18,31,0.95)", textTransform: "uppercase", fontWeight: 700 }}>
           {meta.en}
         </span>
       </div>
@@ -289,7 +289,7 @@ export default function Portfolio() {
 
   return (
     <section id="portfolio" className="relative overflow-hidden" style={{ background: "#000", paddingTop: "140px", paddingBottom: "140px" }}>
-      <div className="absolute top-1/4 left-0 pointer-events-none" style={{ width: "40vw", height: "40vh", background: "radial-gradient(circle, rgba(227,30,36,0.04), transparent 70%)" }} />
+      <div className="absolute top-1/4 left-0 pointer-events-none" style={{ width: "40vw", height: "40vh", background: "radial-gradient(circle, rgba(193,18,31,0.04), transparent 70%)" }} />
 
       <div className="max-w-7xl mx-auto px-6 lg:px-12 relative z-10">
         <div className="mb-12 text-center" data-reveal>
@@ -320,14 +320,14 @@ export default function Portfolio() {
                 className="f-sans inline-flex items-center gap-2 transition-all duration-300"
                 style={{
                   fontSize: "10.5px", letterSpacing: "1.8px", padding: "9px 16px", fontWeight: 600,
-                  border: "1px solid " + (on ? "#E31E24" : "rgba(255,255,255,0.1)"),
-                  background: on ? "rgba(227,30,36,0.12)" : "transparent",
+                  border: "1px solid " + (on ? "#C1121F" : "rgba(255,255,255,0.1)"),
+                  background: on ? "rgba(193,18,31,0.12)" : "transparent",
                   color: on ? "#fff" : "rgba(255,255,255,0.5)",
                   cursor: "pointer", textTransform: "uppercase",
                 }}
               >
                 {t({ ar: c.ar, en: c.en })}
-                <span style={{ fontSize: "9px", opacity: 0.6, background: on ? "rgba(227,30,36,0.35)" : "rgba(255,255,255,0.08)", padding: "1px 6px", borderRadius: "10px", fontWeight: 600 }}>
+                <span style={{ fontSize: "9px", opacity: 0.6, background: on ? "rgba(193,18,31,0.35)" : "rgba(255,255,255,0.08)", padding: "1px 6px", borderRadius: "10px", fontWeight: 600 }}>
                   {n}
                 </span>
               </button>

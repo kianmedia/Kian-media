@@ -25,7 +25,7 @@ export default function About() {
   const { t } = useI18n();
 
   return (
-    <section id="about" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "140px", paddingBottom: "140px" }}>
+    <section id="about" className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "140px", paddingBottom: "140px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
 
         {/* Editorial split */}
@@ -73,7 +73,7 @@ export default function About() {
             <div className="pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-6">
                 <div>
-                  <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
+                  <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(193,18,31,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
                     {t({ ar: "المقر الرئيسي", en: "Main Headquarters" })}
                   </div>
                   <div className="text-white" style={{ fontSize: "16px", fontWeight: 600 }}>
@@ -81,7 +81,7 @@ export default function About() {
                   </div>
                 </div>
                 <div>
-                  <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
+                  <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(193,18,31,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
                     {t({ ar: "حضور إقليمي", en: "Regional Presence" })}
                   </div>
                   <div className="text-white" style={{ fontSize: "16px", fontWeight: 500 }}>
@@ -110,11 +110,11 @@ export default function About() {
               viewport={{ once: true }}
               transition={{ duration: 0.65, delay: (i % 4) * 0.08 }}
               className="group p-10 lg:p-12 transition-all duration-500"
-              style={{ background: "#050505" }}
+              style={{ background: "#0B0B0B" }}
             >
               {/* Roman numeral marker */}
               <div className="mb-6 flex items-baseline gap-3">
-                <span className="f-serif italic" style={{ fontSize: "20px", color: "rgba(227,30,36,0.75)", lineHeight: 1, fontWeight: 400 }}>
+                <span className="f-serif italic" style={{ fontSize: "20px", color: "rgba(193,18,31,0.75)", lineHeight: 1, fontWeight: 400 }}>
                   {["I", "II", "III", "IV"][i]}
                 </span>
                 <span className="block flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />

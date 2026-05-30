@@ -10,7 +10,7 @@ export default function Showreel() {
   const [open, setOpen] = useState(false);
 
   return (
-    <section id="showreel" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "100px", paddingBottom: "100px" }}>
+    <section id="showreel" className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "100px", paddingBottom: "100px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
 
         {/* Compact heading — no excess spacing */}
@@ -39,7 +39,7 @@ export default function Showreel() {
         >
           {/* Subtle ambient glow — much reduced */}
           <div className="absolute -inset-2 pointer-events-none opacity-30 group-hover:opacity-50 transition-opacity duration-700"
-               style={{ background: "radial-gradient(ellipse at center, rgba(227,30,36,0.12), transparent 70%)", filter: "blur(30px)" }} />
+               style={{ background: "radial-gradient(ellipse at center, rgba(193,18,31,0.12), transparent 70%)", filter: "blur(30px)" }} />
 
           <button
             onClick={() => setOpen(true)}
@@ -57,9 +57,9 @@ export default function Showreel() {
             {/* Smaller, premium play button */}
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="relative">
-                <span className="absolute inset-0 rounded-full" style={{ background: "rgba(227,30,36,0.3)", animation: "pulseRing 2.5s ease-out infinite" }} />
+                <span className="absolute inset-0 rounded-full" style={{ background: "rgba(193,18,31,0.3)", animation: "pulseRing 2.5s ease-out infinite" }} />
                 <span className="relative flex items-center justify-center transition-transform duration-500 group-hover/card:scale-110"
-                      style={{ width: "68px", height: "68px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 12px 32px rgba(227,30,36,0.4)" }}>
+                      style={{ width: "68px", height: "68px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 12px 32px rgba(193,18,31,0.4)" }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: "3px" }}><path d="M5 3l16 9-16 9z" /></svg>
                 </span>
               </div>

@@ -40,8 +40,8 @@ export default function Reviews() {
             className="glass-red p-12 lg:p-16 text-center relative overflow-hidden"
           >
             {/* Decorative quote marks */}
-            <span className="absolute top-6 left-8 f-serif italic" style={{ fontSize: "120px", color: "rgba(227,30,36,0.15)", lineHeight: 1, fontWeight: 400 }}>“</span>
-            <span className="absolute bottom-6 right-8 f-serif italic" style={{ fontSize: "120px", color: "rgba(227,30,36,0.15)", lineHeight: 1, fontWeight: 400 }}>”</span>
+            <span className="absolute top-6 left-8 f-serif italic" style={{ fontSize: "120px", color: "rgba(193,18,31,0.15)", lineHeight: 1, fontWeight: 400 }}>“</span>
+            <span className="absolute bottom-6 right-8 f-serif italic" style={{ fontSize: "120px", color: "rgba(193,18,31,0.15)", lineHeight: 1, fontWeight: 400 }}>”</span>
 
             <div className="relative z-10">
               <div style={{ fontSize: "28px", color: "var(--red)", marginBottom: "20px" }}>◆ ◆ ◆ ◆ ◆</div>
