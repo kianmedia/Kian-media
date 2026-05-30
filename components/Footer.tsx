@@ -12,6 +12,10 @@ const SOCIALS = [
 export default function Footer() {
   const { t } = useI18n();
 
+  const wa = "https://wa.me/966503422999?text=" + encodeURIComponent(
+    t({ ar: "السلام عليكم، أود الاستفسار عن خدمات كيان ميديا", en: "Hello, I'd like to inquire about Kian Media's services." })
+  );
+
   const COLS = [
     {
       title: t({ ar: "الصفحات", en: "Navigation" }),
@@ -20,34 +24,58 @@ export default function Footer() {
         { t: t({ ar: "من نحن", en: "About" }), h: "#about" },
         { t: t({ ar: "خدماتنا", en: "Services" }), h: "#services" },
         { t: t({ ar: "أعمالنا", en: "Portfolio" }), h: "#portfolio" },
+        { t: t({ ar: "لماذا كيان", en: "Why Us" }), h: "#why" },
       ],
     },
     {
       title: t({ ar: "الخدمات", en: "Services" }),
       links: [
         { t: t({ ar: "الإنتاج السينمائي", en: "Cinematic Production" }), h: "#services" },
-        { t: t({ ar: "التصوير الجوي", en: "Drone Filming" }), h: "#services" },
-        { t: t({ ar: "البثّ المباشر", en: "Live Streaming" }), h: "#services" },
+        { t: t({ ar: "الأفلام المؤسسية", en: "Corporate Films" }), h: "#services" },
+        { t: t({ ar: "التصوير العقاري والجوي", en: "Real Estate & Aerial" }), h: "#services" },
+        { t: t({ ar: "البث المباشر", en: "Live Streaming" }), h: "#services" },
         { t: t({ ar: "الأعراس الفاخرة", en: "Luxury Weddings" }), h: "#services" },
-        { t: t({ ar: "الفعاليات", en: "Event Coverage" }), h: "#services" },
       ],
     },
     {
       title: t({ ar: "تواصل", en: "Contact" }),
       links: [
-        { t: t({ ar: "المقر: المنطقة الشرقية — الدمام", en: "HQ: Eastern Province — Dammam" }), h: "#contact" },
+        { t: t({ ar: "المقر: الدمام", en: "HQ: Dammam" }), h: "#contact" },
         { t: "0503422999", h: "tel:+966503422999", ltr: true },
         { t: "0543553038", h: "tel:+966543553038", ltr: true },
         { t: "info@kianmedia.com", h: "mailto:info@kianmedia.com" },
-        { t: "sales@kianmedia.com", h: "mailto:sales@kianmedia.com" },
+        { t: t({ ar: "كل أيام الأسبوع · ٧ ص — ١١:٤٥ م", en: "All week · 7 AM – 11:45 PM" }), h: "#contact" },
       ],
     },
   ];
 
   return (
-    <footer style={{ background: "#030303", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "70px", paddingBottom: "32px" }}>
-      <div className="max-w-7xl mx-auto px-6 lg:px-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-14">
+    <footer style={{ background: "#030303" }}>
+
+      {/* ─── CTA Hero Block above footer ─── */}
+      <div style={{ background: "#0a0a0a", borderTop: "1px solid rgba(227,30,36,0.2)", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+        <div className="max-w-7xl mx-auto px-6 lg:px-12 py-20 lg:py-28 text-center">
+          <div className="eyebrow mb-6 mx-auto">{t({ ar: "نبدأ مشروعك", en: "Start Your Project" })}</div>
+          <h2 className="editorial text-white mb-6" style={{ fontSize: "clamp(30px,4.5vw,52px)" }}>
+            {t({ ar: "مشروعك القادم يبدأ", en: "Your next project starts" })}{" "}
+            <em>{t({ ar: "بمحادثة", en: "with a conversation" })}</em>
+          </h2>
+          <p className="text-white/55 mb-10" style={{ fontSize: "15px", lineHeight: 1.85, maxWidth: "560px", margin: "0 auto 40px" }}>
+            {t({
+              ar: "أرسل لنا تفاصيل مشروعك على واتساب وسيتواصل معك فريقنا خلال ٤ ساعات في أيام العمل.",
+              en: "Send us your project details on WhatsApp and our team will reach out within 4 hours on business days.",
+            })}
+          </p>
+          <a href={wa} target="_blank" rel="noopener noreferrer" className="btn-wa" style={{ fontSize: "14px", padding: "18px 36px" }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
+            <span>{t({ ar: "تواصل عبر واتساب", en: "Message us on WhatsApp" })}</span>
+          </a>
+        </div>
+      </div>
+
+      {/* ─── Main footer ─── */}
+      <div className="max-w-7xl mx-auto px-6 lg:px-12 pt-16 pb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-12">
           <div>
             <div className="flex items-center gap-3 mb-5">
               <div className="relative" style={{ width: "52px", height: "52px" }}>
@@ -70,7 +98,7 @@ export default function Footer() {
                   rel="noopener noreferrer"
                   className="f-sans flex items-center justify-center text-white/40 transition-all"
                   style={{ width: "34px", height: "34px", border: "1px solid rgba(255,255,255,0.15)", fontSize: "9px", fontWeight: 700, textDecoration: "none" }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#C1121F"; (e.currentTarget as HTMLAnchorElement).style.color = "#C1121F"; }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#E31E24"; (e.currentTarget as HTMLAnchorElement).style.color = "#E31E24"; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.15)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.4)"; }}
                   aria-label={s.label}
                 >

@@ -60,16 +60,29 @@ export default function Contact() {
               })}
             </p>
 
-            {/* Response time + business hours badge */}
+            {/* Response time + working days/hours */}
             <div className="mb-10 p-5" style={{ background: "rgba(227,30,36,0.06)", borderLeft: "3px solid #E31E24" }}>
               <div className="flex items-start gap-3">
                 <span style={{ color: "#E31E24", fontSize: "16px", marginTop: "2px" }}>◆</span>
-                <div>
-                  <div className="text-white mb-1" style={{ fontSize: "14px", fontWeight: 700 }}>
-                    {t({ ar: "نرد خلال ٤ ساعات في أيام العمل", en: "We respond within 4 hours on business days" })}
+                <div className="flex-1">
+                  <div className="text-white" style={{ fontSize: "14px", fontWeight: 700, lineHeight: 1.5 }}>
+                    {t({ ar: "نرد عليكم في أسرع وقت ممكن", en: "We respond as quickly as possible" })}
                   </div>
-                  <div className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
-                    {t({ ar: "السبت — الخميس · ٩ صباحًا — ٩ مساءً", en: "Saturday — Thursday · 9 AM — 9 PM" })}
+                  <div className="mt-3 space-y-1.5">
+                    <div className="text-white/65" style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
+                      <span style={{ color: "rgba(227,30,36,0.85)", fontWeight: 600 }}>
+                        {t({ ar: "أيام العمل: ", en: "Working Days: " })}
+                      </span>
+                      <span>{t({ ar: "طوال أيام الأسبوع", en: "All Week" })}</span>
+                    </div>
+                    <div className="text-white/65" style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
+                      <span style={{ color: "rgba(227,30,36,0.85)", fontWeight: 600 }}>
+                        {t({ ar: "ساعات العمل: ", en: "Working Hours: " })}
+                      </span>
+                      <span className="phone-ltr" style={{ display: "inline-block" }}>
+                        {t({ ar: "من ٧:٠٠ ص إلى ١١:٤٥ م", en: "7:00 AM – 11:45 PM" })}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
