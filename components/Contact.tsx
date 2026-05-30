@@ -33,8 +33,8 @@ export default function Contact() {
   const update = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
 
   return (
-    <section id="contact" className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "140px", paddingBottom: "140px" }}>
-      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(193,18,31,0.05), transparent 50%)" }} />
+    <section id="contact" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "140px", paddingBottom: "140px" }}>
+      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse at 80% 30%, rgba(227,30,36,0.05), transparent 50%)" }} />
 
       <div className="max-w-6xl mx-auto px-6 lg:px-12 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
@@ -53,20 +53,35 @@ export default function Contact() {
               {t({ ar: "لنصنع", en: "Let's craft" })}{" "}
               <em>{t({ ar: "شيئًا استثنائيًا", en: "something remarkable" })}</em>.
             </h2>
-            <p className="text-white/55 mb-10" style={{ fontSize: "15px", lineHeight: 1.9 }}>
+            <p className="text-white/55 mb-6" style={{ fontSize: "15px", lineHeight: 1.9 }}>
               {t({
-                ar: "لكل مشروع كبير بداية واحدة — محادثة. أرسل تفاصيل مشروعك وسيرتدّ عليك فريقنا الإنتاجي خلال ٢٤ ساعة بعرض أولي مفصّل.",
-                en: "Every great project starts with one conversation. Send your project brief and our production team will respond within 24 hours with a detailed initial proposal.",
+                ar: "لكل مشروع كبير بداية واحدة — محادثة. أرسل تفاصيل مشروعك وسيرتدّ عليك فريقنا الإنتاجي بعرض أولي مفصّل.",
+                en: "Every great project starts with one conversation. Send your project brief and our production team will respond with a detailed initial proposal.",
               })}
             </p>
 
-            <div className="space-y-3">
+            {/* Response time + business hours badge */}
+            <div className="mb-10 p-5" style={{ background: "rgba(227,30,36,0.06)", borderLeft: "3px solid #E31E24" }}>
+              <div className="flex items-start gap-3">
+                <span style={{ color: "#E31E24", fontSize: "16px", marginTop: "2px" }}>◆</span>
+                <div>
+                  <div className="text-white mb-1" style={{ fontSize: "14px", fontWeight: 700 }}>
+                    {t({ ar: "نرد خلال ٤ ساعات في أيام العمل", en: "We respond within 4 hours on business days" })}
+                  </div>
+                  <div className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
+                    {t({ ar: "السبت — الخميس · ٩ صباحًا — ٩ مساءً", en: "Saturday — Thursday · 9 AM — 9 PM" })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-6">
               {/* Headquarters */}
-              <div className="contact-pill">
-                <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "var(--red)", textTransform: "uppercase", fontWeight: 700 }}>
+              <div>
+                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>
                   {t({ ar: "المقر الرئيسي", en: "Main Headquarters" })}
                 </div>
-                <div className="text-white" style={{ fontSize: "16px", fontWeight: 600 }}>
+                <div className="text-white" style={{ fontSize: "17px", fontWeight: 600 }}>
                   {t({ ar: "المنطقة الشرقية — الدمام", en: "Eastern Province — Dammam" })}
                 </div>
                 <div className="text-white/55 mt-1" style={{ fontSize: "13px" }}>
@@ -74,20 +89,61 @@ export default function Contact() {
                 </div>
               </div>
 
-              <div className="contact-pill">
-                <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "var(--red)", textTransform: "uppercase", fontWeight: 700 }}>{t({ ar: "واتساب / جوال", en: "WhatsApp / Mobile" })}</div>
-                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:opacity-70 transition" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0503422999</a>
-                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:opacity-70 transition mt-1" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0543553038</a>
+              <div>
+                <div className="f-sans mb-3" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "أرقامنا", en: "Our Numbers" })}</div>
+                <div className="phone-ltr space-y-2.5" dir="ltr">
+                  {[ "+966503422999", "+966543553038" ].map((num) => {
+                    const intl = num.replace("+", "");
+                    return (
+                      <div key={num} className="flex items-center gap-3 group">
+                        <a
+                          href={`tel:${num}`}
+                          className="text-white transition-colors group-hover:text-red-400"
+                          style={{ fontSize: "16px", letterSpacing: "0.5px", fontWeight: 500, fontVariantNumeric: "tabular-nums", flex: 1 }}
+                          aria-label={`Call ${num}`}
+                        >
+                          {num}
+                        </a>
+                        <a
+                          href={`tel:${num}`}
+                          aria-label={`Call ${num}`}
+                          className="inline-flex items-center justify-center transition-all"
+                          style={{ width: "32px", height: "32px", border: "1px solid rgba(255,255,255,0.18)", color: "rgba(255,255,255,0.75)" }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#E31E24"; (e.currentTarget as HTMLAnchorElement).style.color = "#E31E24"; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.18)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.75)"; }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+                          </svg>
+                        </a>
+                        <a
+                          href={`https://wa.me/${intl}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`WhatsApp ${num}`}
+                          className="inline-flex items-center justify-center transition-all"
+                          style={{ width: "32px", height: "32px", border: "1px solid rgba(37,211,102,0.4)", color: "#25D366" }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#25D366"; (e.currentTarget as HTMLAnchorElement).style.color = "#fff"; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "#25D366"; }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z"/>
+                          </svg>
+                        </a>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="contact-pill">
-                <div className="f-sans mb-2" style={{ fontSize: "9px", letterSpacing: "3px", color: "var(--red)", textTransform: "uppercase", fontWeight: 700 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
-                <a href="mailto:info@kianmedia.com" className="block text-white hover:opacity-70 transition" style={{ fontSize: "15px" }}>info@kianmedia.com</a>
-                <a href="mailto:sales@kianmedia.com" className="block text-white hover:opacity-70 transition mt-1" style={{ fontSize: "15px" }}>sales@kianmedia.com</a>
+              <div>
+                <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
+                <a href="mailto:info@kianmedia.com" className="block text-white hover:text-red-500 transition" style={{ fontSize: "15px" }}>info@kianmedia.com</a>
+                <a href="mailto:sales@kianmedia.com" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "15px" }}>sales@kianmedia.com</a>
               </div>
 
-              <div className="contact-pill">
-                <p className="text-white/65" style={{ fontSize: "14px", lineHeight: 1.85, fontWeight: 400 }}>
+              <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <p className="text-white/65" style={{ fontSize: "14px", lineHeight: 1.85, fontWeight: 500 }}>
                   {t({
                     ar: "نخدم جميع مناطق المملكة العربية السعودية، بالإضافة إلى المشاريع والإنتاجات خارج المملكة.",
                     en: "We serve all regions of Saudi Arabia, in addition to projects and productions beyond the Kingdom.",
@@ -136,16 +192,16 @@ export default function Contact() {
               </div>
               <div>
                 <label className="input-label">{t({ ar: "نوع المشروع", en: "Project Type" })}</label>
-                <select value={form.project} onChange={(e) => update("project", e.target.value)} className="input-field" style={{ background: "#0B0B0B" }}>
-                  <option value="" style={{ background: "#0B0B0B" }}>{t({ ar: "اختر النوع...", en: "Select type..." })}</option>
-                  {projectTypes.map((p) => <option key={p} value={p} style={{ background: "#0B0B0B" }}>{p}</option>)}
+                <select value={form.project} onChange={(e) => update("project", e.target.value)} className="input-field" style={{ background: "#050505" }}>
+                  <option value="" style={{ background: "#050505" }}>{t({ ar: "اختر النوع...", en: "Select type..." })}</option>
+                  {projectTypes.map((p) => <option key={p} value={p} style={{ background: "#050505" }}>{p}</option>)}
                 </select>
               </div>
               <div>
                 <label className="input-label">{t({ ar: "الميزانية", en: "Budget Range" })}</label>
-                <select value={form.budget} onChange={(e) => update("budget", e.target.value)} className="input-field" style={{ background: "#0B0B0B" }}>
-                  <option value="" style={{ background: "#0B0B0B" }}>{t({ ar: "اختر النطاق...", en: "Select range..." })}</option>
-                  {budgetRanges.map((b) => <option key={b} value={b} style={{ background: "#0B0B0B" }}>{b}</option>)}
+                <select value={form.budget} onChange={(e) => update("budget", e.target.value)} className="input-field" style={{ background: "#050505" }}>
+                  <option value="" style={{ background: "#050505" }}>{t({ ar: "اختر النطاق...", en: "Select range..." })}</option>
+                  {budgetRanges.map((b) => <option key={b} value={b} style={{ background: "#050505" }}>{b}</option>)}
                 </select>
               </div>
               <div className="md:col-span-2 mt-2">
