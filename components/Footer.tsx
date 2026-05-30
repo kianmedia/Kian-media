@@ -36,8 +36,8 @@ export default function Footer() {
       title: t({ ar: "تواصل", en: "Contact" }),
       links: [
         { t: t({ ar: "المقر: المنطقة الشرقية — الدمام", en: "HQ: Eastern Province — Dammam" }), h: "#contact" },
-        { t: "+966 50 342 2999", h: "tel:+966503422999" },
-        { t: "+966 54 355 3038", h: "tel:+966543553038" },
+        { t: "0503422999", h: "tel:+966503422999", ltr: true },
+        { t: "0543553038", h: "tel:+966543553038", ltr: true },
         { t: "info@kianmedia.com", h: "mailto:info@kianmedia.com" },
         { t: "sales@kianmedia.com", h: "mailto:sales@kianmedia.com" },
       ],
@@ -88,7 +88,7 @@ export default function Footer() {
               <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "10px", padding: 0 }}>
                 {col.links.map((l) => (
                   <li key={l.t}>
-                    <a href={l.h} className="text-white/45 transition-colors hover:text-white" style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5 }}>
+                    <a href={l.h} className={"text-white/45 transition-colors hover:text-white" + ((l as { ltr?: boolean }).ltr ? " phone-ltr" : "")} style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5 }}>
                       {l.t}
                     </a>
                   </li>

@@ -76,8 +76,8 @@ export default function Contact() {
 
               <div>
                 <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "واتساب / جوال", en: "WhatsApp / Mobile" })}</div>
-                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="block text-white hover:text-red-500 transition" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>+966 50 342 2999</a>
-                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>+966 54 355 3038</a>
+                <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:text-red-500 transition" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0503422999</a>
+                <a href="https://wa.me/966543553038" target="_blank" rel="noopener noreferrer" className="phone-ltr block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "16px", letterSpacing: "0.5px" }}>0543553038</a>
               </div>
 
               <div>
@@ -128,7 +128,7 @@ export default function Contact() {
               </div>
               <div>
                 <label className="input-label">{t({ ar: "الجوال", en: "Phone" })}</label>
-                <input required type="tel" value={form.phone} onChange={(e) => update("phone", e.target.value)} placeholder="+966 ..." className="input-field" />
+                <input required type="tel" value={form.phone} onChange={(e) => update("phone", e.target.value)} placeholder="05xxxxxxxx" className="input-field phone-ltr" />
               </div>
               <div>
                 <label className="input-label">{t({ ar: "البريد", en: "Email" })}</label>

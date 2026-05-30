@@ -44,17 +44,17 @@ export default function Hero() {
 
       <div className="relative z-10 text-center px-6 max-w-5xl mx-auto py-32" data-reveal>
         {/* Eyebrow tag */}
-        <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-4 mb-12">
-          <span style={{ width: "40px", height: "1px", background: "rgba(255,255,255,0.25)" }} />
-          <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "5px", color: "rgba(255,255,255,0.5)", textTransform: "uppercase", fontWeight: 500 }}>
-            {t({ ar: "كيان الابتكار · المملكة العربية السعودية", en: "Kian Media · Saudi Arabia" })}
+        <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-4 mb-10">
+          <span style={{ width: "48px", height: "1px", background: "rgba(255,255,255,0.4)" }} />
+          <span className="f-sans" style={{ fontSize: "13px", letterSpacing: "4px", color: "rgba(255,255,255,0.9)", textTransform: "uppercase", fontWeight: 700 }}>
+            {t({ ar: "كيان ميديا · المملكة العربية السعودية", en: "Kian Media · Saudi Arabia" })}
           </span>
-          <span style={{ width: "40px", height: "1px", background: "rgba(255,255,255,0.25)" }} />
+          <span style={{ width: "48px", height: "1px", background: "rgba(255,255,255,0.4)" }} />
         </motion.div>
 
         {/* Logo — refined glow (less intense) */}
         <motion.div variants={f(0.15)} initial="hidden" animate="show" className="flex justify-center mb-12">
-          <div style={{ width: "clamp(85px,10vw,120px)", height: "clamp(85px,10vw,120px)", filter: "drop-shadow(0 0 30px rgba(227,30,36,0.3))" }}>
+          <div style={{ width: "clamp(120px,14vw,170px)", height: "clamp(120px,14vw,170px)", filter: "drop-shadow(0 0 35px rgba(227,30,36,0.32))" }}>
             <img src="/logo.png" alt="Kian Media" className="logo-img" />
           </div>
         </motion.div>

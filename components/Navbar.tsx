@@ -44,7 +44,17 @@ export default function Navbar() {
       <nav className="max-w-7xl mx-auto px-6 lg:px-12 flex items-center justify-between">
 
         {/* Logo */}
-        <a href="#" onClick={(e) => go(e, "#")} className="flex items-center gap-3 group">
+        <a
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            setOpen(false);
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+          className="flex items-center gap-3 group transition-opacity hover:opacity-80"
+          style={{ cursor: "pointer", textDecoration: "none" }}
+          aria-label="Back to homepage"
+        >
           <div className="relative w-11 h-11 overflow-hidden" style={{ background: "transparent" }}>
             <img src="/logo.png" alt="Kian Media" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           </div>

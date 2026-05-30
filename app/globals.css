@@ -283,3 +283,10 @@ img.logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
   -webkit-text-stroke: 1px rgba(255,255,255,0.1);
   font-style: italic; font-weight: 300;
 }
+
+/* ─── Phone numbers — force LTR in RTL contexts ────────────────────────── */
+.phone-ltr {
+  direction: ltr;
+  unicode-bidi: embed;
+  display: inline-block;
+}
