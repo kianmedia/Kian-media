@@ -86,6 +86,8 @@ const ITEMS: Item[] = [
     ar: "افتتاح مسكوب",                          en: "Miskob — Opening Commercial" },
   { id: 12, yt: "z7S6YWiO6xw", cats: ["commercial"],
     ar: "مجمع عيادات الحقيل",                    en: "Al-Hekail Medical Clinics" },
+  { id: 40, yt: "uhWmJrDfT78", cats: ["commercial"],
+    ar: "بوفيه عمر",                             en: "Omar Buffet" },
 
   // ━━━ 3. REAL ESTATE PRODUCTION ━━━
   // eG7K22u6xEU & robGTKwobn0 already added with cats: ["corporate", "realestate"] above
