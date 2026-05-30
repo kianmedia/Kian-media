@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
+
+const GA_ID = "G-2XZ60NZSSV";
 
 export const metadata: Metadata = {
   title: "Kian Media Production | Cinematic Video Production in Saudi Arabia",
@@ -37,7 +40,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="theme-color" content="#000000" />
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
       </head>
-      <body style={{ background: "#050505", color: "#fff" }}>{children}</body>
+      <body style={{ background: "#050505", color: "#fff" }}>
+        {/* Google Analytics 4 — gtag.js (App Router via next/script) */}
+        <Script
+          src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}
+          strategy="afterInteractive"
+        />
+        <Script id="ga4-init" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', '${GA_ID}');
+          `}
+        </Script>
+        {children}
+      </body>
     </html>
   );
 }
