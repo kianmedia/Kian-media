@@ -64,6 +64,8 @@ const ITEMS: Item[] = [
     ar: "شركات عقارية متنوعة — تصوير جوي",       en: "Real Estate Companies — Aerial Reel" },
   { id:  4, yt: "2xNe8PbjmZE", cats: ["corporate", "events"],
     ar: "شركة معادن — اليوم المفتوح",            en: "Maaden — Open Day" },
+  { id: 41, yt: "0LuP0-3FqnI", cats: ["corporate", "events", "cinematic"],
+    ar: "اليوم المفتوح لشركة معادن — ٢٠٢٥",      en: "Maaden — Open Day 2025" },
   { id:  5, yt: "9o8HL_IZjFA", cats: ["corporate"],
     ar: "الموارد البشرية والتنمية الاجتماعية",  en: "Ministry of Human Resources & Social Development" },
   { id:  6, yt: "MIs6GbXBxV4", cats: ["corporate", "events"],
