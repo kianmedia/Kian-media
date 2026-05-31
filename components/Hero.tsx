@@ -16,7 +16,7 @@ export default function Hero() {
   const [reel, setReel] = useState(false);
   const wa = "https://wa.me/966503422999?text=" + encodeURIComponent(
     isAr
-      ? "السلام عليكم، أود طلب عرض إنتاج إعلامي من كيان ميديا"
+      ? "السلام عليكم، أود طلب عرض سعر لخدمات الإنتاج من كيان ميديا"
       : "Hello, I would like to request a production proposal from Kian Media."
   );
   const go = (h: string) => document.querySelector(h)?.scrollIntoView({ behavior: "smooth" });
@@ -45,28 +45,28 @@ export default function Hero() {
       <div className="relative z-10 text-center px-6 max-w-5xl mx-auto py-32" data-reveal>
         {/* Eyebrow tag */}
         <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-5 mb-10">
-          <span style={{ width: "56px", height: "1px", background: "linear-gradient(to right, transparent, rgba(255,255,255,0.55))" }} />
+          <span style={{ width: "64px", height: "1px", background: "linear-gradient(to right, transparent, rgba(255,255,255,0.6))" }} />
           <span
             className="f-sans"
             style={{
-              fontSize: "clamp(14px, 1.4vw, 16px)",
-              letterSpacing: isAr ? "2px" : "4.5px",
+              fontSize: "clamp(15px, 1.7vw, 19px)",
+              letterSpacing: isAr ? "2.5px" : "5px",
               color: "#fff",
               textTransform: isAr ? "none" : "uppercase",
               fontWeight: 700,
               fontFamily: isAr ? "var(--arabic-display)" : "var(--sans)",
-              textShadow: "0 1px 12px rgba(0,0,0,0.6)",
+              textShadow: "0 1px 14px rgba(0,0,0,0.65)",
               whiteSpace: "nowrap",
             }}
           >
             {t({ ar: "كيان ميديا · المملكة العربية السعودية", en: "Kian Media · Saudi Arabia" })}
           </span>
-          <span style={{ width: "56px", height: "1px", background: "linear-gradient(to left, transparent, rgba(255,255,255,0.55))" }} />
+          <span style={{ width: "64px", height: "1px", background: "linear-gradient(to left, transparent, rgba(255,255,255,0.6))" }} />
         </motion.div>
 
         {/* Logo — refined glow (less intense) */}
         <motion.div variants={f(0.15)} initial="hidden" animate="show" className="flex justify-center mb-12">
-          <div style={{ width: "clamp(120px,14vw,170px)", height: "clamp(120px,14vw,170px)", filter: "drop-shadow(0 0 35px rgba(227,30,36,0.32))" }}>
+          <div style={{ width: "clamp(140px,16vw,200px)", height: "clamp(140px,16vw,200px)", filter: "drop-shadow(0 0 38px rgba(227,30,36,0.34))" }}>
             <img src="/logo.png" alt="Kian Media" className="logo-img" />
           </div>
         </motion.div>
@@ -136,7 +136,7 @@ export default function Hero() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isAr ? "scaleX(-1)" : "none" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
           </button>
           <button onClick={() => go("#contact")} className="btn-ghost">
-            <span>{t({ ar: "اطلب عرض إنتاج", en: "Request a Proposal" })}</span>
+            <span>{t({ ar: "اطلب عرض سعر", en: "Request a Quote" })}</span>
           </button>
           <a href={wa} target="_blank" rel="noopener noreferrer" className="btn-wa">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
