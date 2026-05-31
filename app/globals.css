@@ -349,3 +349,37 @@ img.logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .client-name-card:hover .client-name-text {
   color: #fff;
 }
+/* ═══════════════════════════════════════════════════════════════════════
+   تحسينات عالمية — انسخ هذا كامل والصقه في نهاية ملف app/globals.css
+   (لا يحذف شيئاً، فقط يضيف)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─── #11 الوصولية: حلقة تركيز حمراء واضحة عند التنقل بالكيبورد ─── */
+*:focus-visible {
+  outline: 2px solid rgba(227,30,36,0.7);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ─── #5 ظهور ناعم للصور عند تحميلها ─── */
+img.img-fade {
+  opacity: 0;
+  transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1);
+}
+img.img-fade.is-loaded {
+  opacity: 1;
+}
+
+/* ─── #9 توهج أحمر سينمائي أعمق على كروت المشاريع عند المرور ─── */
+.pf-card-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.55s cubic-bezier(0.16,1,0.3,1);
+  background: radial-gradient(120% 80% at 100% 100%, rgba(227,30,36,0.18), transparent 55%);
+}
+.group:hover .pf-card-glow { opacity: 1; }
