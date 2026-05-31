@@ -10,7 +10,7 @@ export default function Showreel() {
   const [open, setOpen] = useState(false);
 
   return (
-    <section id="showreel" className="relative overflow-hidden" style={{ background: "#0B0B0B", paddingTop: "100px", paddingBottom: "100px" }}>
+    <section id="showreel" className="relative overflow-hidden" style={{ background: "#050505", paddingTop: "100px", paddingBottom: "100px" }}>
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
 
         {/* Compact heading — no excess spacing */}
@@ -22,9 +22,9 @@ export default function Showreel() {
           className="text-center mb-10"
           data-reveal
         >
-          <div className="eyebrow mb-5 mx-auto">{t({ ar: "الشورييل", en: "The Showreel" })}</div>
+          <div className="eyebrow mb-5 mx-auto">{t({ ar: "العرض السينمائي", en: "The Showreel" })}</div>
           <h2 className="editorial text-white" style={{ fontSize: "clamp(32px,4.8vw,56px)" }}>
-            {t({ ar: "لمحة عمّا", en: "A glimpse of" })} <em>{t({ ar: "ننتجه", en: "what we craft" })}</em>
+            {t({ ar: "لمحة عن", en: "A glimpse of" })} <em>{t({ ar: "ما ننتجه", en: "what we craft" })}</em>
           </h2>
         </motion.div>
 
@@ -39,7 +39,7 @@ export default function Showreel() {
         >
           {/* Subtle ambient glow — much reduced */}
           <div className="absolute -inset-2 pointer-events-none opacity-30 group-hover:opacity-50 transition-opacity duration-700"
-               style={{ background: "radial-gradient(ellipse at center, rgba(193,18,31,0.12), transparent 70%)", filter: "blur(30px)" }} />
+               style={{ background: "radial-gradient(ellipse at center, rgba(227,30,36,0.12), transparent 70%)", filter: "blur(30px)" }} />
 
           <button
             onClick={() => setOpen(true)}
@@ -57,9 +57,9 @@ export default function Showreel() {
             {/* Smaller, premium play button */}
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="relative">
-                <span className="absolute inset-0 rounded-full" style={{ background: "rgba(193,18,31,0.3)", animation: "pulseRing 2.5s ease-out infinite" }} />
+                <span className="absolute inset-0 rounded-full" style={{ background: "rgba(227,30,36,0.3)", animation: "pulseRing 2.5s ease-out infinite" }} />
                 <span className="relative flex items-center justify-center transition-transform duration-500 group-hover/card:scale-110"
-                      style={{ width: "68px", height: "68px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 12px 32px rgba(193,18,31,0.4)" }}>
+                      style={{ width: "68px", height: "68px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 12px 32px rgba(227,30,36,0.4)" }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft: "3px" }}><path d="M5 3l16 9-16 9z" /></svg>
                 </span>
               </div>
@@ -72,7 +72,7 @@ export default function Showreel() {
                   Kian Media · {new Date().getFullYear()}
                 </span>
                 <h3 className="text-white" style={{ fontSize: "clamp(18px,2.4vw,28px)", lineHeight: 1.15, fontWeight: 600 }}>
-                  {t({ ar: "الشورييل الرسمي", en: "Official Showreel" })}
+                  {t({ ar: "العرض الرسمي لأعمالنا", en: "Official Showreel" })}
                 </h3>
               </div>
               <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "3px", color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>

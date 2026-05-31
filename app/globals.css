@@ -200,8 +200,8 @@ html[lang="ar"] p { letter-spacing: 0; line-height: 1.85; }
 /* ─── Marquee animations — faster, denser ──────────────────────────────── */
 @keyframes scroll-x { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @keyframes scroll-x-r { from { transform: translateX(-50%); } to { transform: translateX(0); } }
-.anim-mq { animation: scroll-x 22s linear infinite; display: flex; width: max-content; will-change: transform; }
-.anim-mq-r { animation: scroll-x-r 22s linear infinite; display: flex; width: max-content; will-change: transform; }
+.anim-mq { animation: scroll-x 60s linear infinite; display: flex; width: max-content; will-change: transform; }
+.anim-mq-r { animation: scroll-x-r 60s linear infinite; display: flex; width: max-content; will-change: transform; }
 
 @keyframes scroll-y { from { transform: translateY(0); } to { transform: translateY(-50%); } }
 @keyframes scroll-y-r { from { transform: translateY(-50%); } to { transform: translateY(0); } }
