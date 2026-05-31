@@ -383,3 +383,25 @@ img.img-fade.is-loaded {
   background: radial-gradient(120% 80% at 100% 100%, rgba(227,30,36,0.18), transparent 55%);
 }
 .group:hover .pf-card-glow { opacity: 1; }
+/* ═══════════════════════════════════════════════════════════════════════
+   إصلاح الموبايل — انسخ هذا كامل والصقه في نهاية ملف app/globals.css
+   (لا يحذف شيئاً، فقط يضيف)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* منع أي تمرير أفقي في كامل الموقع على الجوال */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* أزرار الهيرو: عرض كامل ومرتّبة عمودياً على الجوال */
+@media (max-width: 639px) {
+  #hero-ctas .btn-red,
+  #hero-ctas .btn-ghost,
+  #hero-ctas .btn-wa {
+    width: 100%;
+    max-width: 320px;
+    justify-content: center;
+  }
+}
+

@@ -14,15 +14,17 @@ const f = (d = 0) => ({
 export default function Hero() {
   const { t, isAr } = useI18n();
   const [reel, setReel] = useState(false);
+
   const wa = "https://wa.me/966503422999?text=" + encodeURIComponent(
     isAr
       ? "السلام عليكم، أود طلب عرض سعر لخدمات الإنتاج من كيان ميديا"
       : "Hello, I would like to request a production proposal from Kian Media."
   );
+
   const go = (h: string) => document.querySelector(h)?.scrollIntoView({ behavior: "smooth" });
 
   return (
-    <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden" style={{ background: "#050505" }}>
+    <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden" style={{ background: "#050505", maxWidth: "100vw" }}>
       {/* Cinematic background — reduced glow, more editorial */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute inset-0" style={{ background: "linear-gradient(170deg, #050505 0%, #0a0606 50%, #050505 100%)" }} />
@@ -31,9 +33,9 @@ export default function Hero() {
         <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.6) 100%)" }} />
       </div>
 
-      {/* Film strips — subtle */}
+      {/* Film strips — subtle (hidden on mobile to prevent overflow) */}
       {[false, true].map((right) => (
-        <div key={String(right)} className={`absolute top-0 bottom-0 w-5 overflow-hidden pointer-events-none ${right ? "right-4" : "left-4"}`} style={{ opacity: 0.06 }}>
+        <div key={String(right)} className={`hidden md:block absolute top-0 bottom-0 w-5 overflow-hidden pointer-events-none ${right ? "right-4" : "left-4"}`} style={{ opacity: 0.06 }}>
           <div className={right ? "anim-fu" : "anim-fd"} style={{ display: "flex", flexDirection: "column" }}>
             {Array.from({ length: 44 }).map((_, i) => (
               <div key={i} style={{ width: "14px", height: "10px", margin: "3px auto", border: "1px solid rgba(255,255,255,0.5)", flexShrink: 0 }} />
@@ -42,31 +44,33 @@ export default function Hero() {
         </div>
       ))}
 
-      <div className="relative z-10 text-center px-6 max-w-5xl mx-auto py-32" data-reveal>
+      <div className="relative z-10 text-center px-5 sm:px-6 max-w-5xl mx-auto py-24 sm:py-32 w-full" data-reveal>
         {/* Eyebrow tag */}
-        <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-5 mb-10">
-          <span style={{ width: "64px", height: "1px", background: "linear-gradient(to right, transparent, rgba(255,255,255,0.6))" }} />
+        <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-3 sm:gap-5 mb-10 flex-wrap px-2">
+          <span className="hidden sm:block" style={{ width: "clamp(28px,8vw,64px)", height: "1px", flexShrink: 0, background: "linear-gradient(to right, transparent, rgba(255,255,255,0.6))" }} />
           <span
             className="f-sans"
             style={{
-              fontSize: "clamp(15px, 1.7vw, 19px)",
-              letterSpacing: isAr ? "2.5px" : "5px",
+              fontSize: "clamp(12px, 3.4vw, 19px)",
+              letterSpacing: isAr ? "1.5px" : "3px",
               color: "#fff",
               textTransform: isAr ? "none" : "uppercase",
               fontWeight: 700,
               fontFamily: isAr ? "var(--arabic-display)" : "var(--sans)",
               textShadow: "0 1px 14px rgba(0,0,0,0.65)",
-              whiteSpace: "nowrap",
+              whiteSpace: "normal",
+              textAlign: "center",
+              maxWidth: "calc(100vw - 64px)",
             }}
           >
             {t({ ar: "كيان ميديا · المملكة العربية السعودية", en: "Kian Media · Saudi Arabia" })}
           </span>
-          <span style={{ width: "64px", height: "1px", background: "linear-gradient(to left, transparent, rgba(255,255,255,0.6))" }} />
+          <span className="hidden sm:block" style={{ width: "clamp(28px,8vw,64px)", height: "1px", flexShrink: 0, background: "linear-gradient(to left, transparent, rgba(255,255,255,0.6))" }} />
         </motion.div>
 
         {/* Logo — refined glow (less intense) */}
         <motion.div variants={f(0.15)} initial="hidden" animate="show" className="flex justify-center mb-12">
-          <div style={{ width: "clamp(140px,16vw,200px)", height: "clamp(140px,16vw,200px)", filter: "drop-shadow(0 0 38px rgba(227,30,36,0.34))" }}>
+          <div style={{ width: "clamp(120px,16vw,200px)", height: "clamp(120px,16vw,200px)", filter: "drop-shadow(0 0 38px rgba(227,30,36,0.34))" }}>
             <img src="/logo.png" alt="Kian Media" className="logo-img" />
           </div>
         </motion.div>
@@ -77,11 +81,14 @@ export default function Hero() {
             variants={f(0.3)} initial="hidden" animate="show"
             className="editorial text-white mb-6"
             style={{
-              fontSize: "clamp(32px, 5.5vw, 64px)",
-              lineHeight: 1.35,
+              fontSize: "clamp(26px, 7vw, 64px)",
+              lineHeight: 1.4,
               fontWeight: 700,
               fontStyle: "normal",
               letterSpacing: "-0.01em",
+              maxWidth: "100%",
+              overflowWrap: "break-word",
+              wordBreak: "break-word",
             }}
           >
             إنتاج إعلامي سينمائي
@@ -94,7 +101,7 @@ export default function Hero() {
           <motion.h1
             variants={f(0.3)} initial="hidden" animate="show"
             className="editorial text-white mb-6"
-            style={{ fontSize: "clamp(36px, 6.2vw, 82px)", lineHeight: 1.05 }}
+            style={{ fontSize: "clamp(30px, 7.5vw, 82px)", lineHeight: 1.1, maxWidth: "100%", overflowWrap: "break-word", wordBreak: "break-word" }}
           >
             Cinematic Media Production
             <br />
@@ -107,10 +114,10 @@ export default function Hero() {
           variants={f(0.45)} initial="hidden" animate="show"
           className="text-white/65 mx-auto mb-10"
           style={{
-            fontSize: "clamp(15px, 1.7vw, 19px)",
+            fontSize: "clamp(14px, 3.8vw, 19px)",
             fontWeight: isAr ? 400 : 300,
-            lineHeight: 1.7,
-            maxWidth: "640px",
+            lineHeight: 1.75,
+            maxWidth: "min(640px, 100%)",
             letterSpacing: isAr ? "0" : "0.005em",
           }}
         >
@@ -124,13 +131,13 @@ export default function Hero() {
         <motion.p
           variants={f(0.58)} initial="hidden" animate="show"
           className="f-sans uppercase mb-14"
-          style={{ fontSize: "clamp(9px, 1.2vw, 12px)", letterSpacing: "5px", color: "rgba(255,255,255,0.32)", fontWeight: 400 }}
+          style={{ fontSize: "clamp(8px, 2vw, 12px)", letterSpacing: "2.5px", color: "rgba(255,255,255,0.32)", fontWeight: 400, maxWidth: "100%", overflowWrap: "break-word" }}
         >
           Corporate · Commercial · Drone · Live · Documentary · Events
         </motion.p>
 
         {/* CTAs */}
-        <motion.div variants={f(0.7)} initial="hidden" animate="show" className="flex flex-wrap gap-3 justify-center mb-16">
+        <motion.div variants={f(0.7)} initial="hidden" animate="show" id="hero-ctas" className="flex flex-col sm:flex-row flex-wrap gap-3 justify-center items-center mb-16 w-full">
           <button onClick={() => go("#portfolio")} className="btn-red">
             <span>{t({ ar: "شاهد أعمالنا", en: "View Our Work" })}</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isAr ? "scaleX(-1)" : "none" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
@@ -145,30 +152,30 @@ export default function Hero() {
         </motion.div>
 
         {/* Stats — hairline grid (original Netflix-editorial style) */}
-        <motion.div variants={f(0.84)} initial="hidden" animate="show" className="grid grid-cols-2 md:grid-cols-4 gap-px max-w-3xl mx-auto" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.08)" }}>
-          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="f-display text-white" style={{ fontSize: "clamp(28px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
+        <motion.div variants={f(0.84)} initial="hidden" animate="show" className="grid grid-cols-2 md:grid-cols-4 gap-px max-w-3xl mx-auto w-full" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="f-display text-white" style={{ fontSize: "clamp(26px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
               <Counter to={2000} suffix="+" />
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "عميل", en: "Clients" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "عميل", en: "Clients" })}</div>
           </div>
-          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="f-display text-white" style={{ fontSize: "clamp(28px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
+          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="f-display text-white" style={{ fontSize: "clamp(26px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
               <Counter to={4000} suffix="+" />
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "إنتاج مكتمل", en: "Productions" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "إنتاج مكتمل", en: "Productions" })}</div>
           </div>
-          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="f-display text-white" style={{ fontSize: "clamp(28px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
+          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="f-display text-white" style={{ fontSize: "clamp(26px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
               <Counter to={10} suffix="+" />
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "سنوات خبرة", en: "Years" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "سنوات خبرة", en: "Years" })}</div>
           </div>
-          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="text-white" style={{ fontSize: "clamp(18px,2.3vw,24px)", lineHeight: 1.1, fontWeight: 700, fontFamily: isAr ? "var(--arabic-display)" : "var(--display)", letterSpacing: isAr ? "0" : "1px" }}>
+          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="text-white" style={{ fontSize: "clamp(16px,2.3vw,24px)", lineHeight: 1.1, fontWeight: 700, fontFamily: isAr ? "var(--arabic-display)" : "var(--display)", letterSpacing: isAr ? "0" : "1px" }}>
               {t({ ar: "كل المناطق", en: "ALL REGIONS" })}
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "السعودية وخارجها", en: "Saudi & Beyond" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "السعودية وخارجها", en: "Saudi & Beyond" })}</div>
           </div>
         </motion.div>
       </div>
