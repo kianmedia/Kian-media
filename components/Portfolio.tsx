@@ -11,7 +11,8 @@ type CatKey =
   | "events"
   | "documentary"
   | "cinematic"
-  | "festivals";
+  | "festivals"
+  | "weddings";
 
 type Item = {
   id: number;
@@ -19,6 +20,7 @@ type Item = {
   cats: CatKey[]; // an item can belong to multiple categories
   ar: string;
   en: string;
+  vertical?: boolean; // true for 9:16 YouTube Shorts
 };
 
 // ─── Categories in the exact order from the brief ──────────────────────────
@@ -31,6 +33,7 @@ const CATEGORIES: { key: CatKey; ar: string; en: string }[] = [
   { key: "documentary",  ar: "الأفلام الوثائقية",         en: "Documentary Films" },
   { key: "cinematic",    ar: "الإنتاج السينمائي",         en: "Cinematic Productions" },
   { key: "festivals",    ar: "مهرجانات الأفلام",          en: "Film Festivals" },
+  { key: "weddings",     ar: "الأعراس",                  en: "Weddings" },
 ];
 
 // Premium per-category descriptions (varied tone, not templated)
@@ -49,6 +52,8 @@ const DESC: Record<Exclude<CatKey, "all">, { ar: string; en: string }> = {
                  en: "Cinematic production with advanced visual treatment and direction worthy of leading brands." },
   festivals:   { ar: "تغطية متخصصة لمهرجانات الأفلام السينمائية في المملكة.",
                  en: "Specialized coverage of cinematic film festivals across the Kingdom." },
+  weddings:    { ar: "تصوير أعراس سينمائي فاخر — فرق رجالية ونسائية احترافية كاملة، توثّق ليلة العمر بأسلوب راقٍ.",
+                 en: "Luxury cinematic wedding films — full professional crews capturing the celebration with refined artistry." },
 };
 
 // ─── Items — manually curated per the exact brief categorization ───────────
@@ -90,6 +95,12 @@ const ITEMS: Item[] = [
     ar: "مجمع عيادات الحقيل",                    en: "Al-Hekail Medical Clinics" },
   { id: 40, yt: "uhWmJrDfT78", cats: ["commercial"],
     ar: "بوفيه عمر",                             en: "Omar Buffet" },
+  { id: 42, yt: "3HCrw8toqAA", cats: ["commercial"], vertical: true,
+    ar: "إعلان قصير",                            en: "Short Ad" },
+  { id: 43, yt: "Rn1WYI0n-ck", cats: ["commercial"], vertical: true,
+    ar: "إعلان قصير",                            en: "Short Ad" },
+  { id: 44, yt: "YZIipE09lpg", cats: ["commercial"], vertical: true,
+    ar: "إعلان قصير",                            en: "Short Ad" },
 
   // ━━━ 3. REAL ESTATE PRODUCTION ━━━
   // eG7K22u6xEU & robGTKwobn0 already added with cats: ["corporate", "realestate"] above
@@ -143,6 +154,22 @@ const ITEMS: Item[] = [
     ar: "مهرجان أفلام السعودية",                 en: "Saudi Film Festival" },
   { id: 32, yt: "voeIqpOlmqk", cats: ["festivals"],
     ar: "مهرجان أفلام السعودية",                 en: "Saudi Film Festival" },
+
+  // ━━━ 8. WEDDINGS ━━━
+  { id: 50, yt: "S6JdnS6s1Tc", cats: ["weddings"],
+    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
+  { id: 51, yt: "ngXJJd4wUAs", cats: ["weddings"],
+    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
+  { id: 52, yt: "VJjZWEwmFJU", cats: ["weddings"],
+    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
+  { id: 53, yt: "b2OuWey3qCc", cats: ["weddings"],
+    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
+  { id: 54, yt: "jul59VwBM94", cats: ["weddings"],
+    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
+  { id: 55, yt: "bOiD92ojI_4", cats: ["weddings"],
+    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
+  { id: 56, yt: "YcsbeqHlm9I", cats: ["weddings"],
+    ar: "برومو تصوير الأعراس",                   en: "Wedding Cinematography Promo" },
 ];
 
 // ─── Thumbnail with smart fallback ────────────────────────────────────────
@@ -206,6 +233,7 @@ function Card({ item, idx, activeCat, onOpen }: { item: Item; idx: number; activ
 
       <div className="absolute inset-0 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.94) 0%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.1) 100%)" }} />
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(227,30,36,0.16), transparent 60%)" }} />
+      <span className="pf-card-glow" />
 
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <span className="flex items-center justify-center transition-all duration-400 group-hover:scale-110"
@@ -281,7 +309,7 @@ export default function Portfolio() {
   const groupedAll = useMemo(() => {
     const groups: { cat: Exclude<CatKey, "all">; items: Item[] }[] = [];
     const seen = new Set<string>();
-    const order: Exclude<CatKey, "all">[] = ["corporate", "commercial", "realestate", "events", "documentary", "cinematic", "festivals"];
+    const order: Exclude<CatKey, "all">[] = ["corporate", "commercial", "realestate", "events", "documentary", "cinematic", "festivals", "weddings"];
     for (const cat of order) {
       const its = ITEMS.filter((i) => i.cats.includes(cat) && !seen.has(i.yt));
       its.forEach((i) => seen.add(i.yt));
