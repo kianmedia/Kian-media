@@ -29,7 +29,9 @@ function Form() {
       return;
     }
     setSending(true);
-    await submitToSheets("meeting", f);
+    // Send both "Mobile" and "Phone" keys (same value) so the sheet column
+    // gets filled regardless of whether it's named "Mobile" or "Phone".
+    await submitToSheets("meeting", { ...f, Phone: f["Mobile"] });
     setSending(false);
     setSent(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -96,7 +98,7 @@ function SuccessCard() {
       </div>
       <h3 className="editorial text-white" style={{ fontSize: "24px", marginBottom: "12px" }}>{t({ ar: "تم استلام طلبك", en: "Request Received" })}</h3>
       <p className="text-white/60" style={{ fontSize: "15px", lineHeight: 1.8, maxWidth: "420px", margin: "0 auto" }}>
-        {t({ ar: "شكراً لك. تم استلام طلب الحجز بنجاح وسنؤكد الموعد معك في أقرب وقت ممكن.", en: "Thank you. Your booking request has been received and we'll confirm the appointment as soon as possible." })}
+        {t({ ar: "تم استلام طلب الاجتماع بنجاح وسيقوم فريق كيان بالتواصل معك لتأكيد الموعد.", en: "Your meeting request has been received successfully. The Kian team will contact you to confirm the appointment." })}
       </p>
     </div>
   );

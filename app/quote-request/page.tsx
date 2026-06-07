@@ -117,7 +117,7 @@ function SuccessCard() {
       </div>
       <h3 className="editorial text-white" style={{ fontSize: "24px", marginBottom: "12px" }}>{t({ ar: "شكراً لك", en: "Thank You" })}</h3>
       <p className="text-white/60" style={{ fontSize: "15px", lineHeight: 1.8, maxWidth: "420px", margin: "0 auto" }}>
-        {t({ ar: "تم استلام طلبك بنجاح. سيتواصل معك فريقنا في أقرب وقت ممكن.", en: "Your request has been received successfully. Our team will contact you as soon as possible." })}
+        {t({ ar: "تم استلام طلبك بنجاح وسيتم التواصل معك خلال ٢٤ ساعة عبر الهاتف أو البريد الإلكتروني المسجل.", en: "Your request has been received successfully. We will contact you within 24 hours via your registered phone or email." })}
       </p>
     </div>
   );

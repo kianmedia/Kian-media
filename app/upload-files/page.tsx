@@ -10,14 +10,14 @@ function Form() {
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [f, setF] = useState({
-    "Client Name": "", "Project Name": "",
+    "Client Name": "", "Mobile": "", "Project Name": "",
     "Google Drive Link": "", "WeTransfer Link": "", "Dropbox Link": "", "Notes": "",
   });
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
 
   async function submit() {
-    if (!f["Client Name"]) {
-      alert(isAr ? "الرجاء كتابة اسم العميل" : "Please enter the client name");
+    if (!f["Client Name"] || !f["Mobile"]) {
+      alert(isAr ? "الرجاء كتابة اسم العميل ورقم الجوال" : "Please enter client name and mobile");
       return;
     }
     const hasLink = f["Google Drive Link"] || f["WeTransfer Link"] || f["Dropbox Link"];
@@ -38,8 +38,9 @@ function Form() {
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
       <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div><Label htmlFor="cn" required>{t({ ar: "اسم العميل", en: "Client Name" })}</Label><TextField id="cn" value={f["Client Name"]} onChange={(v) => set("Client Name", v)} required /></div>
-        <div><Label htmlFor="pn">{t({ ar: "اسم المشروع", en: "Project Name" })}</Label><TextField id="pn" value={f["Project Name"]} onChange={(v) => set("Project Name", v)} /></div>
+        <div><Label htmlFor="mo" required>{t({ ar: "رقم الجوال", en: "Mobile Number" })}</Label><TextField id="mo" type="tel" dir="ltr" value={f["Mobile"]} onChange={(v) => set("Mobile", v)} required /></div>
       </div>
+      <div><Label htmlFor="pn">{t({ ar: "اسم المشروع", en: "Project Name" })}</Label><TextField id="pn" value={f["Project Name"]} onChange={(v) => set("Project Name", v)} /></div>
 
       <div style={{ padding: "14px 16px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px" }}>
         <p className="f-sans" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.5)", lineHeight: 1.7, marginBottom: "2px" }}>
@@ -68,7 +69,7 @@ function SuccessCard() {
       </div>
       <h3 className="editorial text-white" style={{ fontSize: "24px", marginBottom: "12px" }}>{t({ ar: "تم الاستلام", en: "Received" })}</h3>
       <p className="text-white/60" style={{ fontSize: "15px", lineHeight: 1.8, maxWidth: "420px", margin: "0 auto" }}>
-        {t({ ar: "شكراً لك. تم استلام روابط مشروعك بنجاح وسيراجعها فريقنا قريباً.", en: "Thank you. Your project links have been received and our team will review them shortly." })}
+        {t({ ar: "تم استلام روابط المشروع بنجاح وسيقوم فريق كيان بمراجعتها والتواصل معك.", en: "Your project links have been received successfully. The Kian team will review them and contact you." })}
       </p>
     </div>
   );

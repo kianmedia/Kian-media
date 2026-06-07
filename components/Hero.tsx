@@ -14,17 +14,15 @@ const f = (d = 0) => ({
 export default function Hero() {
   const { t, isAr } = useI18n();
   const [reel, setReel] = useState(false);
-
   const wa = "https://wa.me/966503422999?text=" + encodeURIComponent(
     isAr
       ? "السلام عليكم، أود طلب عرض سعر لخدمات الإنتاج من كيان ميديا"
       : "Hello, I would like to request a production proposal from Kian Media."
   );
-
   const go = (h: string) => document.querySelector(h)?.scrollIntoView({ behavior: "smooth" });
 
   return (
-    <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden" style={{ background: "#050505", maxWidth: "100vw" }}>
+    <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden" style={{ background: "#050505" }}>
       {/* Cinematic background — reduced glow, more editorial */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute inset-0" style={{ background: "linear-gradient(170deg, #050505 0%, #0a0606 50%, #050505 100%)" }} />
@@ -33,7 +31,7 @@ export default function Hero() {
         <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.6) 100%)" }} />
       </div>
 
-      {/* Film strips — subtle (hidden on mobile to prevent overflow) */}
+      {/* Film strips — subtle */}
       {[false, true].map((right) => (
         <div key={String(right)} className={`hidden md:block absolute top-0 bottom-0 w-5 overflow-hidden pointer-events-none ${right ? "right-4" : "left-4"}`} style={{ opacity: 0.06 }}>
           <div className={right ? "anim-fu" : "anim-fd"} style={{ display: "flex", flexDirection: "column" }}>
@@ -46,7 +44,7 @@ export default function Hero() {
 
       <div className="relative z-10 text-center px-5 sm:px-6 max-w-5xl mx-auto py-24 sm:py-32 w-full" data-reveal>
         {/* Eyebrow tag */}
-        <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-3 sm:gap-5 mb-10 flex-wrap px-2">
+        <motion.div variants={f(0.05)} initial="hidden" animate="show" className="flex items-center justify-center gap-3 sm:gap-5 mb-10 px-4 flex-wrap">
           <span className="hidden sm:block" style={{ width: "clamp(28px,8vw,64px)", height: "1px", flexShrink: 0, background: "linear-gradient(to right, transparent, rgba(255,255,255,0.6))" }} />
           <span
             className="f-sans"
@@ -60,7 +58,7 @@ export default function Hero() {
               textShadow: "0 1px 14px rgba(0,0,0,0.65)",
               whiteSpace: "normal",
               textAlign: "center",
-              maxWidth: "calc(100vw - 64px)",
+              maxWidth: "calc(100vw - 80px)",
             }}
           >
             {t({ ar: "كيان ميديا · المملكة العربية السعودية", en: "Kian Media · Saudi Arabia" })}
@@ -70,7 +68,7 @@ export default function Hero() {
 
         {/* Logo — refined glow (less intense) */}
         <motion.div variants={f(0.15)} initial="hidden" animate="show" className="flex justify-center mb-12">
-          <div style={{ width: "clamp(120px,16vw,200px)", height: "clamp(120px,16vw,200px)", filter: "drop-shadow(0 0 38px rgba(227,30,36,0.34))" }}>
+          <div style={{ width: "clamp(140px,16vw,200px)", height: "clamp(140px,16vw,200px)", filter: "drop-shadow(0 0 38px rgba(227,30,36,0.34))" }}>
             <img src="/logo.png" alt="Kian Media" className="logo-img" />
           </div>
         </motion.div>
@@ -142,9 +140,9 @@ export default function Hero() {
             <span>{t({ ar: "شاهد أعمالنا", en: "View Our Work" })}</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isAr ? "scaleX(-1)" : "none" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
           </button>
-          <button onClick={() => go("#contact")} className="btn-ghost">
+          <a href="/quote-request" className="btn-ghost">
             <span>{t({ ar: "اطلب عرض سعر", en: "Request a Quote" })}</span>
-          </button>
+          </a>
           <a href={wa} target="_blank" rel="noopener noreferrer" className="btn-wa">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
             <span>{t({ ar: "واتساب", en: "WhatsApp" })}</span>
@@ -153,29 +151,29 @@ export default function Hero() {
 
         {/* Stats — hairline grid (original Netflix-editorial style) */}
         <motion.div variants={f(0.84)} initial="hidden" animate="show" className="grid grid-cols-2 md:grid-cols-4 gap-px max-w-3xl mx-auto w-full" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.08)" }}>
-          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="f-display text-white" style={{ fontSize: "clamp(26px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
+          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="f-display text-white" style={{ fontSize: "clamp(28px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
               <Counter to={2000} suffix="+" />
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "عميل", en: "Clients" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "عميل", en: "Clients" })}</div>
           </div>
-          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="f-display text-white" style={{ fontSize: "clamp(26px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
+          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="f-display text-white" style={{ fontSize: "clamp(28px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
               <Counter to={4000} suffix="+" />
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "إنتاج مكتمل", en: "Productions" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "إنتاج مكتمل", en: "Productions" })}</div>
           </div>
-          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="f-display text-white" style={{ fontSize: "clamp(26px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
+          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="f-display text-white" style={{ fontSize: "clamp(28px,3.6vw,42px)", lineHeight: 1, fontWeight: 400 }}>
               <Counter to={10} suffix="+" />
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "سنوات خبرة", en: "Years" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "سنوات خبرة", en: "Years" })}</div>
           </div>
-          <div className="text-center py-6 px-3 sm:px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
-            <div className="text-white" style={{ fontSize: "clamp(16px,2.3vw,24px)", lineHeight: 1.1, fontWeight: 700, fontFamily: isAr ? "var(--arabic-display)" : "var(--display)", letterSpacing: isAr ? "0" : "1px" }}>
+          <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
+            <div className="text-white" style={{ fontSize: "clamp(18px,2.3vw,24px)", lineHeight: 1.1, fontWeight: 700, fontFamily: isAr ? "var(--arabic-display)" : "var(--display)", letterSpacing: isAr ? "0" : "1px" }}>
               {t({ ar: "كل المناطق", en: "ALL REGIONS" })}
             </div>
-            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "السعودية وخارجها", en: "Saudi & Beyond" })}</div>
+            <div className="f-sans mt-2.5" style={{ fontSize: "9px", letterSpacing: "2.5px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: 500 }}>{t({ ar: "السعودية وخارجها", en: "Saudi & Beyond" })}</div>
           </div>
         </motion.div>
       </div>
