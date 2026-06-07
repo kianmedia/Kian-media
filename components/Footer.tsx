@@ -116,7 +116,21 @@ export default function Footer() {
               <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "10px", padding: 0 }}>
                 {col.links.map((l) => (
                   <li key={l.t}>
-                    <a href={l.h} className={"text-white/45 transition-colors hover:text-white" + ((l as { ltr?: boolean }).ltr ? " phone-ltr" : "")} style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5 }}>
+                    <a href={l.h} onClick={(e) => {
+                      // Hash links only work on the homepage. If the section
+                      // isn't on the current page, navigate to home + hash.
+                      if (l.h.indexOf("#") === 0 && typeof document !== "undefined") {
+                        const sel = l.h === "#" ? null : document.querySelector(l.h);
+                        if (l.h === "#") {
+                          if (window.location.pathname === "/") { e.preventDefault(); window.scrollTo({ top: 0, behavior: "smooth" }); }
+                          else { e.preventDefault(); window.location.href = "/"; }
+                        } else if (sel) {
+                          e.preventDefault(); sel.scrollIntoView({ behavior: "smooth" });
+                        } else {
+                          e.preventDefault(); window.location.href = "/" + l.h;
+                        }
+                      }
+                    }} className={"text-white/45 transition-colors hover:text-white" + ((l as { ltr?: boolean }).ltr ? " phone-ltr" : "")} style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5 }}>
                       {l.t}
                     </a>
                   </li>

@@ -32,9 +32,18 @@ export default function Navbar() {
   }, []);
 
   const go = (e: React.MouseEvent, h: string) => {
-    e.preventDefault();
     setOpen(false);
-    document.querySelector(h)?.scrollIntoView({ behavior: "smooth" });
+    // If the target section exists on the current page, smooth-scroll to it.
+    // Otherwise (e.g. on /quote-request), let the browser navigate to the
+    // homepage with the hash so links never become dead.
+    const el = typeof document !== "undefined" ? document.querySelector(h) : null;
+    if (el) {
+      e.preventDefault();
+      el.scrollIntoView({ behavior: "smooth" });
+    } else {
+      e.preventDefault();
+      window.location.href = "/" + h; // -> "/#about" etc.
+    }
   };
 
   return (
@@ -53,11 +62,14 @@ export default function Navbar() {
 
         {/* Logo */}
         <a
-          href="#"
+          href="/"
           onClick={(e) => {
-            e.preventDefault();
             setOpen(false);
-            window.scrollTo({ top: 0, behavior: "smooth" });
+            // On the homepage, just scroll to top. Elsewhere, let it navigate home.
+            if (window.location.pathname === "/") {
+              e.preventDefault();
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }
           }}
           className="flex items-center gap-3 group transition-opacity hover:opacity-80"
           style={{ cursor: "pointer", textDecoration: "none" }}
