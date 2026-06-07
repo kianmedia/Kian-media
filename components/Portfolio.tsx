@@ -1,6 +1,6 @@
 "use client";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
 
 type CatKey =
@@ -21,6 +21,8 @@ type Item = {
   ar: string;
   en: string;
   vertical?: boolean; // true for 9:16 YouTube Shorts
+  dAr?: string;       // optional per-project description (AR) — falls back to category desc
+  dEn?: string;       // optional per-project description (EN)
 };
 
 // ─── Categories in the exact order from the brief ──────────────────────────
@@ -62,17 +64,22 @@ const DESC: Record<Exclude<CatKey, "all">, { ar: string; en: string }> = {
 const ITEMS: Item[] = [
   // ━━━ 1. CORPORATE PRODUCTIONS ━━━
   { id:  1, yt: "XMjZBgROUIg", cats: ["corporate"],
-    ar: "برومو شركة العطيشان",                  en: "Al-Otaishan — Corporate Promo" },
+    ar: "برومو شركة العطيشان",                  en: "Al-Otaishan — Corporate Promo",
+    dAr: "فيلم مؤسسي يقدّم العطيشان بهوية بصرية قوية ولغة سينمائية تعكس مكانتها.", dEn: "A corporate film introducing Al-Otaishan with a bold visual identity and cinematic language." },
   { id:  2, yt: "F0MTiYeWZyw", cats: ["corporate"],
-    ar: "شركة ريفايفا",                          en: "Reviva — Brand Promo" },
+    ar: "شركة ريفايفا",                          en: "Reviva — Brand Promo",
+    dAr: "برومو علامة تجارية يبرز شخصية ريفايفا بإيقاع بصري حديث وألوان نابضة.", dEn: "A brand promo capturing Reviva\u2019s personality with a modern visual rhythm." },
   { id:  3, yt: "eG7K22u6xEU", cats: ["corporate", "realestate"],
     ar: "شركات عقارية متنوعة — تصوير جوي",       en: "Real Estate Companies — Aerial Reel" },
   { id:  4, yt: "2xNe8PbjmZE", cats: ["corporate", "events"],
-    ar: "شركة معادن — اليوم المفتوح",            en: "Maaden — Open Day" },
+    ar: "شركة معادن — اليوم المفتوح",            en: "Maaden — Open Day",
+    dAr: "تغطية اليوم المفتوح لمعادن — توثيق حدث ضخم بأسلوب سينمائي متعدد الكاميرات.", dEn: "Coverage of Maaden\u2019s Open Day \u2014 a large-scale event captured cinematically." },
   { id: 41, yt: "0LuP0-3FqnI", cats: ["corporate", "events", "cinematic"],
-    ar: "اليوم المفتوح لشركة معادن — ٢٠٢٥",      en: "Maaden — Open Day 2025" },
+    ar: "اليوم المفتوح لشركة معادن — ٢٠٢٥",      en: "Maaden — Open Day 2025",
+    dAr: "النسخة الأحدث من تغطية اليوم المفتوح لمعادن لعام ٢٠٢٥ بإنتاج سينمائي متكامل.", dEn: "The 2025 edition of Maaden\u2019s Open Day, delivered as a full cinematic production." },
   { id:  5, yt: "9o8HL_IZjFA", cats: ["corporate"],
-    ar: "الموارد البشرية والتنمية الاجتماعية",  en: "Ministry of Human Resources & Social Development" },
+    ar: "الموارد البشرية والتنمية الاجتماعية",  en: "Ministry of Human Resources & Social Development",
+    dAr: "إنتاج حكومي لوزارة الموارد البشرية يوثّق مبادراتها برسالة بصرية واضحة.", dEn: "A government production for MHRSD documenting its initiatives with a clear visual message." },
   { id:  6, yt: "MIs6GbXBxV4", cats: ["corporate", "events"],
     ar: "اليوم المفتوح — شركة دايسر",            en: "Daycer — Open Day" },
   { id:  7, yt: "eroGztKVLwY", cats: ["corporate"],
@@ -82,9 +89,11 @@ const ITEMS: Item[] = [
   { id:  9, yt: "k7WQOJbUSB8", cats: ["corporate"],
     ar: "منتدى الصناعات السعودي",                 en: "Saudi Industries Forum" },
   { id: 38, yt: "EjOMCO9pA6E", cats: ["corporate"],
-    ar: "شركة ريفي",                              en: "Refi Company" },
+    ar: "شركة ريفي",                              en: "Refi Company",
+    dAr: "فيلم تعريفي لشركة ريفي يترجم نشاطها إلى سرد بصري أنيق.", dEn: "A profile film for Refi translating its business into an elegant visual narrative." },
   { id: 39, yt: "GIyi34PPFG8", cats: ["corporate"],
-    ar: "شركة زد",                                en: "Zed Company" },
+    ar: "شركة زد",                                en: "Zed Company",
+    dAr: "إنتاج مؤسسي لشركة زد بإخراج معاصر يعكس طموح العلامة.", dEn: "A corporate production for Zed with contemporary direction reflecting the brand\u2019s ambition." },
 
   // ━━━ 2. COMMERCIAL ADS ━━━
   { id: 10, yt: "xvzneIB-OFs", cats: ["commercial"],
@@ -94,7 +103,8 @@ const ITEMS: Item[] = [
   { id: 12, yt: "z7S6YWiO6xw", cats: ["commercial"],
     ar: "مجمع عيادات الحقيل",                    en: "Al-Hekail Medical Clinics" },
   { id: 40, yt: "uhWmJrDfT78", cats: ["commercial"],
-    ar: "بوفيه عمر",                             en: "Omar Buffet" },
+    ar: "بوفيه عمر",                             en: "Omar Buffet",
+    dAr: "إعلان تجاري لبوفيه عمر يقدّم المنتج بإضاءة شهية وحركة كاميرا ديناميكية.", dEn: "A commercial for Omar Buffet presenting the product with appetizing lighting and dynamic camera work." },
   { id: 42, yt: "3HCrw8toqAA", cats: ["commercial"], vertical: true,
     ar: "إعلان قصير",                            en: "Short Ad" },
   { id: 43, yt: "Rn1WYI0n-ck", cats: ["commercial"], vertical: true,
@@ -173,9 +183,10 @@ const ITEMS: Item[] = [
 ];
 
 // ─── Thumbnail with smart fallback ────────────────────────────────────────
-function Thumb({ yt, alt }: { yt: string; alt: string }) {
+function Thumb({ yt, alt, hovering, vertical }: { yt: string; alt: string; hovering: boolean; vertical?: boolean }) {
   const [src, setSrc] = useState(`https://img.youtube.com/vi/${yt}/maxresdefault.jpg`);
   const [loaded, setLoaded] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
   const isMaxres = src.includes("maxresdefault");
 
   const onLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -190,6 +201,16 @@ function Thumb({ yt, alt }: { yt: string; alt: string }) {
     if (isMaxres) setSrc(`https://img.youtube.com/vi/${yt}/hqdefault.jpg`);
   };
 
+  // Mount the muted preview shortly after hover begins (debounce avoids loading
+  // a video on a quick pass-over). Unmount on leave to free resources.
+  useEffect(() => {
+    if (hovering) {
+      const id = setTimeout(() => setShowVideo(true), 320);
+      return () => clearTimeout(id);
+    }
+    setShowVideo(false);
+  }, [hovering]);
+
   return (
     <>
       <div className="absolute inset-0 transition-opacity duration-500"
@@ -201,6 +222,25 @@ function Thumb({ yt, alt }: { yt: string; alt: string }) {
         className="absolute inset-0 w-full h-full object-cover transition-all duration-700 group-hover:scale-105"
         style={{ opacity: loaded ? 0.55 : 0 }}
       />
+      {/* Muted autoplay preview on hover (desktop). Pointer-events off so the
+          card click still opens the full modal. */}
+      {showVideo && (
+        <iframe
+          src={`https://www.youtube.com/embed/${yt}?autoplay=1&mute=1&controls=0&loop=1&playlist=${yt}&playsinline=1&modestbranding=1&rel=0`}
+          title={alt}
+          allow="autoplay; encrypted-media"
+          tabIndex={-1}
+          className="absolute pointer-events-none transition-opacity duration-500"
+          style={{
+            opacity: 1,
+            border: 0,
+            // Scale up to cover the frame and hide YouTube chrome edges.
+            width: "180%", height: "180%",
+            top: "-40%", left: "-40%",
+            objectFit: "cover",
+          }}
+        />
+      )}
     </>
   );
 }
@@ -215,7 +255,10 @@ function Card({ item, idx, activeCat, onOpen }: { item: Item; idx: number; activ
       ? (activeCat as Exclude<CatKey, "all">)
       : (item.cats[0] as Exclude<CatKey, "all">);
   const meta = CATEGORIES.find((c) => c.key === shownCat);
-  const d = DESC[shownCat];
+  const catD = DESC[shownCat];
+  // Prefer a project-specific description; fall back to the category one.
+  const d = (item.dAr || item.dEn) ? { ar: item.dAr || catD?.ar || "", en: item.dEn || catD?.en || "" } : catD;
+  const [hovering, setHovering] = useState(false);
 
   return (
     <motion.button
@@ -225,11 +268,13 @@ function Card({ item, idx, activeCat, onOpen }: { item: Item; idx: number; activ
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1], delay: (idx % 3) * 0.05 }}
       onClick={() => onOpen(item.yt)}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
       className="group relative block w-full overflow-hidden text-start"
       style={{ aspectRatio: "16/11", border: "1px solid rgba(255,255,255,0.06)", background: "#070707", cursor: "pointer" }}
       aria-label={t({ ar: item.ar, en: item.en })}
     >
-      <Thumb yt={item.yt} alt={t({ ar: item.ar, en: item.en })} />
+      <Thumb yt={item.yt} alt={t({ ar: item.ar, en: item.en })} hovering={hovering} vertical={item.vertical} />
 
       <div className="absolute inset-0 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.94) 0%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.1) 100%)" }} />
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" style={{ background: "linear-gradient(to top, rgba(227,30,36,0.16), transparent 60%)" }} />

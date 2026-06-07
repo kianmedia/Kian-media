@@ -7,6 +7,7 @@ import Showreel     from "@/components/Showreel";
 import About        from "@/components/About";
 import Services     from "@/components/Services";
 import Portfolio    from "@/components/Portfolio";
+import Stats        from "@/components/Stats";
 import WhyKian      from "@/components/WhyKian";
 import Process      from "@/components/Process";
 import Industries   from "@/components/Industries";
@@ -32,6 +33,7 @@ export default function Home() {
         <About />
         <Services />
         <Portfolio />
+        <Stats />
         <WhyKian />
         <Process />
         <Industries />
