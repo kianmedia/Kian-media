@@ -19,8 +19,6 @@ const START_ITEMS = [
   { href: "/upload-files",  ar: "إرسال ملفات المشروع", en: "Submit Project Files" },
 ];
 
-const WA = "https://wa.me/966503422999";
-
 export default function Navbar() {
   const { t } = useI18n();
   const [scrolled, setScrolled] = useState(false);
@@ -130,20 +128,6 @@ export default function Navbar() {
               )}
             </AnimatePresence>
           </li>
-          {/* WhatsApp persistent button */}
-          <li>
-            <a
-              href={WA}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 transition-all duration-300"
-              style={{ fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#25D366", border: "1px solid #25D366", padding: "9px 14px", textTransform: "uppercase" }}
-              aria-label="WhatsApp"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
-              WhatsApp
-            </a>
-          </li>
           <li><LangSwitch compact /></li>
         </ul>
 
@@ -196,16 +180,6 @@ export default function Navbar() {
                 {t({ ar: s.ar, en: s.en })}
               </a>
             ))}
-            <a
-              href={WA}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-6 py-4 f-sans uppercase"
-              style={{ fontSize: "13px", letterSpacing: "3px", color: "#25D366", borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
-              WhatsApp
-            </a>
           </motion.div>
         )}
       </AnimatePresence>

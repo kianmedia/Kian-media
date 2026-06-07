@@ -26,7 +26,7 @@ function Form() {
       return;
     }
     setSending(true);
-    await submitToSheets("upload", f);
+    await submitToSheets("upload", { ...f, "Language": isAr ? "AR" : "EN" });
     setSending(false);
     setSent(true);
     window.scrollTo({ top: 0, behavior: "smooth" });

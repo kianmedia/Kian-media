@@ -8,9 +8,9 @@ import { useI18n } from "@/lib/i18n";
 const WA_NUMBER = "966503422999";
 
 const MEETING_TYPES = [
-  { value: "Online Meeting", ar: "اجتماع عن بُعد" },
-  { value: "Phone Consultation", ar: "استشارة هاتفية" },
-  { value: "On-Site Project Visit", ar: "زيارة ميدانية للمشروع" },
+  { en: "Online Meeting", ar: "اجتماع أونلاين" },
+  { en: "Phone Consultation", ar: "استشارة هاتفية" },
+  { en: "On-Site Project Visit", ar: "زيارة ميدانية للمشروع" },
 ];
 
 function Form() {
@@ -29,9 +29,25 @@ function Form() {
       return;
     }
     setSending(true);
-    // Send both "Mobile" and "Phone" keys (same value) so the sheet column
-    // gets filled regardless of whether it's named "Mobile" or "Phone".
-    await submitToSheets("meeting", { ...f, Phone: f["Mobile"] });
+    // Language-aware meeting type label
+    const mt = MEETING_TYPES.find((m) => m.en === f["Meeting Type"]);
+    const meetingTypeLabel = f["Meeting Type"] ? (isAr ? (mt?.ar ?? f["Meeting Type"]) : f["Meeting Type"]) : "";
+    // Send Mobile + Phone (same value) AND Date/Time under multiple common column
+    // names so the sheet column gets filled regardless of its exact header.
+    await submitToSheets("meeting", {
+      "Name": f["Name"],
+      "Company": f["Company"],
+      "Mobile": f["Mobile"],
+      "Phone": f["Mobile"],
+      "Email": f["Email"],
+      "Meeting Type": meetingTypeLabel,
+      "Preferred Date": f["Preferred Date"],
+      "Date": f["Preferred Date"],
+      "Preferred Time": f["Preferred Time"],
+      "Time": f["Preferred Time"],
+      "Notes": f["Notes"],
+      "Language": isAr ? "AR" : "EN",
+    });
     setSending(false);
     setSent(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -55,7 +71,7 @@ function Form() {
         <div><Label htmlFor="em">{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} /></div>
       </div>
       <div><Label htmlFor="mt" required>{t({ ar: "نوع الاجتماع", en: "Meeting Type" })}</Label>
-        <SelectField id="mt" value={f["Meeting Type"]} onChange={(v) => set("Meeting Type", v)} options={MEETING_TYPES.map((m) => ({ value: m.value, label: isAr ? m.ar : m.value }))} required /></div>
+        <SelectField id="mt" value={f["Meeting Type"]} onChange={(v) => set("Meeting Type", v)} options={MEETING_TYPES.map((m) => ({ value: m.en, label: isAr ? m.ar : m.en }))} required /></div>
       <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div><Label htmlFor="pd">{t({ ar: "التاريخ المفضّل", en: "Preferred Date" })}</Label><TextField id="pd" type="date" dir="ltr" value={f["Preferred Date"]} onChange={(v) => set("Preferred Date", v)} /></div>
         <div><Label htmlFor="pt">{t({ ar: "الوقت المفضّل", en: "Preferred Time" })}</Label><TextField id="pt" type="time" dir="ltr" value={f["Preferred Time"]} onChange={(v) => set("Preferred Time", v)} /></div>
