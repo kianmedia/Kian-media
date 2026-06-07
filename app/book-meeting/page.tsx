@@ -75,7 +75,6 @@ function Form() {
     setSending(false);
     setReference(ref);
     setSent(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const waText = encodeURIComponent(isAr

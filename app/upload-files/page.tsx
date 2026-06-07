@@ -41,7 +41,6 @@ function Form() {
     setSending(false);
     setReference(ref);
     setSent(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   if (sent) return <SuccessCard reference={reference} />;
