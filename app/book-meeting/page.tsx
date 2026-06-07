@@ -2,7 +2,8 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField } from "@/components/forms/Field";
-import { submitToSheets } from "@/lib/submitForm";
+import { submitToSheets, makeRef, isValidMobile } from "@/lib/submitForm";
+import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
 const WA_NUMBER = "966503422999";
@@ -13,13 +14,26 @@ const MEETING_TYPES = [
   { en: "On-Site Project Visit", ar: "زيارة ميدانية للمشروع" },
 ];
 
+const LEAD_SOURCES = [
+  { en: "Google", ar: "جوجل" },
+  { en: "Instagram", ar: "إنستقرام" },
+  { en: "LinkedIn", ar: "لينكدإن" },
+  { en: "TikTok", ar: "تيك توك" },
+  { en: "Snapchat", ar: "سناب شات" },
+  { en: "WhatsApp", ar: "واتساب" },
+  { en: "Referral", ar: "توصية" },
+  { en: "Existing Client", ar: "عميل حالي" },
+  { en: "Other", ar: "أخرى" },
+];
+
 function Form() {
   const { t, isAr } = useI18n();
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [reference, setReference] = useState("");
   const [f, setF] = useState({
     "Name": "", "Company": "", "Mobile": "", "Email": "",
-    "Meeting Type": "", "Preferred Date": "", "Preferred Time": "", "Notes": "",
+    "Meeting Type": "", "Preferred Date": "", "Preferred Time": "", "Notes": "", "Lead Source": "",
   });
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
 
@@ -28,10 +42,17 @@ function Form() {
       alert(isAr ? "الرجاء تعبئة الاسم ورقم الجوال على الأقل" : "Please fill at least name and mobile");
       return;
     }
+    if (!isValidMobile(f["Mobile"])) {
+      alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
+      return;
+    }
     setSending(true);
+    const ref = makeRef("meeting");
     // Language-aware meeting type label
     const mt = MEETING_TYPES.find((m) => m.en === f["Meeting Type"]);
     const meetingTypeLabel = f["Meeting Type"] ? (isAr ? (mt?.ar ?? f["Meeting Type"]) : f["Meeting Type"]) : "";
+    const lsObj = LEAD_SOURCES.find((l) => l.en === f["Lead Source"]);
+    const leadLabel = f["Lead Source"] ? (isAr ? (lsObj?.ar ?? f["Lead Source"]) : f["Lead Source"]) : "";
     // Send Mobile + Phone (same value) AND Date/Time under multiple common column
     // names so the sheet column gets filled regardless of its exact header.
     await submitToSheets("meeting", {
@@ -46,9 +67,13 @@ function Form() {
       "Preferred Time": f["Preferred Time"],
       "Time": f["Preferred Time"],
       "Notes": f["Notes"],
+      "Reference": ref,
+      "How did you hear about us": leadLabel,
+      "Lead Source": leadLabel,
       "Language": isAr ? "AR" : "EN",
     });
     setSending(false);
+    setReference(ref);
     setSent(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -58,7 +83,7 @@ function Form() {
     : "Hello, I'd like to book a meeting with Kian Media");
   const waLink = `https://wa.me/${WA_NUMBER}?text=${waText}`;
 
-  if (sent) return <SuccessCard />;
+  if (sent) return <SuccessCard reference={reference} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -77,6 +102,8 @@ function Form() {
         <div><Label htmlFor="pt">{t({ ar: "الوقت المفضّل", en: "Preferred Time" })}</Label><TextField id="pt" type="time" dir="ltr" value={f["Preferred Time"]} onChange={(v) => set("Preferred Time", v)} /></div>
       </div>
       <div><Label htmlFor="no">{t({ ar: "ملاحظات", en: "Notes" })}</Label><TextArea id="no" value={f["Notes"]} onChange={(v) => set("Notes", v)} rows={4} /></div>
+      <div><Label htmlFor="ls">{t({ ar: "كيف تعرفت علينا؟", en: "How did you hear about us?" })}</Label>
+        <SelectField id="ls" value={f["Lead Source"]} onChange={(v) => set("Lead Source", v)} options={LEAD_SOURCES.map((l) => ({ value: l.en, label: isAr ? l.ar : l.en }))} /></div>
 
       <button onClick={submit} disabled={sending} className="btn-red" style={{ width: "100%", justifyContent: "center", marginTop: "8px", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         <span>{sending ? "..." : t({ ar: "تأكيد الحجز", en: "Confirm Booking" })}</span>
@@ -105,20 +132,6 @@ function Form() {
   );
 }
 
-function SuccessCard() {
-  const { t } = useI18n();
-  return (
-    <div className="text-center" style={{ padding: "50px 30px", background: "rgba(227,30,36,0.05)", border: "1px solid rgba(227,30,36,0.25)", borderRadius: "4px" }}>
-      <div style={{ width: "64px", height: "64px", margin: "0 auto 24px", borderRadius: "50%", background: "rgba(227,30,36,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#E31E24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-      </div>
-      <h3 className="editorial text-white" style={{ fontSize: "24px", marginBottom: "12px" }}>{t({ ar: "تم استلام طلبك", en: "Request Received" })}</h3>
-      <p className="text-white/60" style={{ fontSize: "15px", lineHeight: 1.8, maxWidth: "420px", margin: "0 auto" }}>
-        {t({ ar: "تم استلام طلب الاجتماع بنجاح وسيقوم فريق كيان بالتواصل معك لتأكيد الموعد.", en: "Your meeting request has been received successfully. The Kian team will contact you to confirm the appointment." })}
-      </p>
-    </div>
-  );
-}
 
 export default function BookMeetingPage() {
   return (

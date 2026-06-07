@@ -2,7 +2,8 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField, CheckField } from "@/components/forms/Field";
-import { submitToSheets } from "@/lib/submitForm";
+import { submitToSheets, makeRef, isValidEmail, isValidMobile } from "@/lib/submitForm";
+import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
 // Full Kian Media services — value is the canonical EN; ar is the Arabic label.
@@ -41,14 +42,35 @@ const BUDGETS = [
   { en: "Above 100,000 SAR", ar: "أكثر من ١٠٠٬٠٠٠ ريال" },
 ];
 
+const LEAD_SOURCES = [
+  { en: "Google", ar: "جوجل" },
+  { en: "Instagram", ar: "إنستقرام" },
+  { en: "LinkedIn", ar: "لينكدإن" },
+  { en: "TikTok", ar: "تيك توك" },
+  { en: "Snapchat", ar: "سناب شات" },
+  { en: "WhatsApp", ar: "واتساب" },
+  { en: "Referral", ar: "توصية" },
+  { en: "Existing Client", ar: "عميل حالي" },
+  { en: "Other", ar: "أخرى" },
+];
+
+const PRIORITIES = [
+  { en: "Urgent (24 Hours)", ar: "عاجل (٢٤ ساعة)" },
+  { en: "Within One Week", ar: "خلال أسبوع" },
+  { en: "Within One Month", ar: "خلال شهر" },
+  { en: "Flexible", ar: "مرن" },
+];
+
 function Form() {
   const { t, isAr } = useI18n();
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [reference, setReference] = useState("");
 
   const [f, setF] = useState({
     "Full Name": "", "Company": "", "Mobile": "", "Email": "", "City": "",
     "Shooting Days": "", "Crew": "", "Description": "", "Budget": "", "Delivery Date": "", "Other Service": "",
+    "Lead Source": "", "Priority": "",
   });
   const [services, setServices] = useState<string[]>([]); // selected service EN values
   const [opts, setOpts] = useState({ Drone: false, Editing: false, "Voice Over": false, "Motion Graphics": false });
@@ -70,7 +92,16 @@ function Form() {
       alert(isAr ? "الرجاء اختيار خدمة واحدة على الأقل" : "Please select at least one service");
       return;
     }
+    if (!isValidMobile(f["Mobile"])) {
+      alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
+      return;
+    }
+    if (f["Email"] && !isValidEmail(f["Email"])) {
+      alert(isAr ? "البريد الإلكتروني غير صحيح" : "Invalid email address");
+      return;
+    }
     setSending(true);
+    const ref = makeRef("quote");
 
     // Build language-aware service list string
     const serviceLabels = services.map((en) => {
@@ -81,8 +112,13 @@ function Form() {
     // Budget language-aware
     const budgetObj = BUDGETS.find((b) => b.en === f["Budget"]);
     const budgetLabel = f["Budget"] ? (isAr ? (budgetObj?.ar ?? f["Budget"]) : f["Budget"]) : "";
+    const lsObj = LEAD_SOURCES.find((l) => l.en === f["Lead Source"]);
+    const leadLabel = f["Lead Source"] ? (isAr ? (lsObj?.ar ?? f["Lead Source"]) : f["Lead Source"]) : "";
+    const prObj = PRIORITIES.find((p) => p.en === f["Priority"]);
+    const priorityLabel = f["Priority"] ? (isAr ? (prObj?.ar ?? f["Priority"]) : f["Priority"]) : "";
 
     await submitToSheets("quote", {
+      "Reference": ref,
       "Full Name": f["Full Name"],
       "Company": f["Company"],
       "Mobile": f["Mobile"],
@@ -98,14 +134,18 @@ function Form() {
       "Description": f["Description"],
       "Budget": budgetLabel,
       "Delivery Date": f["Delivery Date"],
+      "How did you hear about us": leadLabel,
+      "Lead Source": leadLabel,
+      "Priority": priorityLabel,
       "Language": isAr ? "AR" : "EN",
     });
     setSending(false);
+    setReference(ref);
     setSent(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  if (sent) return <SuccessCard />;
+  if (sent) return <SuccessCard reference={reference} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -171,6 +211,12 @@ function Form() {
 
       <div><Label htmlFor="bd">{t({ ar: "نطاق الميزانية", en: "Budget Range" })}</Label>
         <SelectField id="bd" value={f["Budget"]} onChange={(v) => set("Budget", v)} options={BUDGETS.map((b) => ({ value: b.en, label: isAr ? b.ar : b.en }))} /></div>
+      <Row>
+        <div><Label htmlFor="pr">{t({ ar: "أولوية المشروع", en: "Project Priority" })}</Label>
+          <SelectField id="pr" value={f["Priority"]} onChange={(v) => set("Priority", v)} options={PRIORITIES.map((p) => ({ value: p.en, label: isAr ? p.ar : p.en }))} /></div>
+        <div><Label htmlFor="ls">{t({ ar: "كيف تعرفت علينا؟", en: "How did you hear about us?" })}</Label>
+          <SelectField id="ls" value={f["Lead Source"]} onChange={(v) => set("Lead Source", v)} options={LEAD_SOURCES.map((l) => ({ value: l.en, label: isAr ? l.ar : l.en }))} /></div>
+      </Row>
       <div><Label htmlFor="dd">{t({ ar: "تاريخ التسليم المتوقع", en: "Expected Delivery Date" })}</Label><TextField id="dd" type="date" dir="ltr" value={f["Delivery Date"]} onChange={(v) => set("Delivery Date", v)} /></div>
 
       {/* Large project description */}
@@ -187,20 +233,6 @@ function Row({ children }: { children: React.ReactNode }) {
   return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }} className="form-row">{children}</div>;
 }
 
-function SuccessCard() {
-  const { t } = useI18n();
-  return (
-    <div className="text-center" style={{ padding: "50px 30px", background: "rgba(227,30,36,0.05)", border: "1px solid rgba(227,30,36,0.25)", borderRadius: "4px" }}>
-      <div style={{ width: "64px", height: "64px", margin: "0 auto 24px", borderRadius: "50%", background: "rgba(227,30,36,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#E31E24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-      </div>
-      <h3 className="editorial text-white" style={{ fontSize: "24px", marginBottom: "12px" }}>{t({ ar: "شكراً لك", en: "Thank You" })}</h3>
-      <p className="text-white/60" style={{ fontSize: "15px", lineHeight: 1.8, maxWidth: "440px", margin: "0 auto" }}>
-        {t({ ar: "تم استلام طلبك بنجاح وسيتم التواصل معك خلال ٢٤ ساعة عبر الهاتف أو البريد الإلكتروني المسجل.", en: "Your request has been received successfully. We will contact you within 24 hours via your registered phone or email." })}
-      </p>
-    </div>
-  );
-}
 
 export default function QuoteRequestPage() {
   return (
