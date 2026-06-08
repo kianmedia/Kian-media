@@ -23,9 +23,21 @@ export default function Hero() {
 
   return (
     <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden" style={{ background: "#050505" }}>
-      {/* Cinematic background — reduced glow, more editorial */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute inset-0" style={{ background: "linear-gradient(170deg, #050505 0%, #0a0606 50%, #050505 100%)" }} />
+      {/* ─── Background video (muted, autoplay, loop) ─── */}
+      <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
+        <video
+          autoPlay
+          muted
+          loop
+          playsInline
+          poster="/hero-poster.jpg"
+          className="absolute inset-0 w-full h-full"
+          style={{ objectFit: "cover", opacity: 0.5 }}
+        >
+          <source src="/hero.mp4" type="video/mp4" />
+        </video>
+        {/* Dark overlays to keep text readable over the video */}
+        <div className="absolute inset-0" style={{ background: "linear-gradient(170deg, rgba(5,5,5,0.82) 0%, rgba(10,6,6,0.7) 50%, rgba(5,5,5,0.88) 100%)" }} />
         <div className="absolute top-0 left-0 w-[55vw] h-[60vh]" style={{ background: "radial-gradient(ellipse at 20% 20%, rgba(227,30,36,0.10) 0%, transparent 65%)" }} />
         <div className="absolute bottom-0 right-0 w-[45vw] h-[45vh]" style={{ background: "radial-gradient(ellipse at 80% 80%, rgba(227,30,36,0.05) 0%, transparent 65%)" }} />
         <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.6) 100%)" }} />
@@ -33,7 +45,7 @@ export default function Hero() {
 
       {/* Film strips — subtle */}
       {[false, true].map((right) => (
-        <div key={String(right)} className={`hidden md:block absolute top-0 bottom-0 w-5 overflow-hidden pointer-events-none ${right ? "right-4" : "left-4"}`} style={{ opacity: 0.06 }}>
+        <div key={String(right)} className={`hidden md:block absolute top-0 bottom-0 w-5 overflow-hidden pointer-events-none ${right ? "right-4" : "left-4"}`} style={{ opacity: 0.06, zIndex: 1 }}>
           <div className={right ? "anim-fu" : "anim-fd"} style={{ display: "flex", flexDirection: "column" }}>
             {Array.from({ length: 44 }).map((_, i) => (
               <div key={i} style={{ width: "14px", height: "10px", margin: "3px auto", border: "1px solid rgba(255,255,255,0.5)", flexShrink: 0 }} />
