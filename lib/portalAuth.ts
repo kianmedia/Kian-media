@@ -1,16 +1,22 @@
 // ════════════════════════════════════════════════════════════════════════
 // Kian Media — Client Portal: Supabase connection (REST, no extra packages)
 //
-// ⚠️ املأ القيمتين التاليتين من Supabase → Project Settings → API:
-//    1) SUPABASE_URL  = "https://gmqpkbrlwmkkylarbcqi.supabase.co/rest/v1/";
-//    2) SUPABASE_KEY  = "sb_publishable_9jh0CE30Z-9wGevHmVx5SQ_7uv3pz-6";
+// القيم تُقرأ من متغيرات البيئة — لا تكتب أي مفاتيح هنا:
+//   NEXT_PUBLIC_SUPABASE_URL       مثال: https://abcdefgh.supabase.co
+//   NEXT_PUBLIC_SUPABASE_ANON_KEY  مفتاح anon/publishable من Project Settings → API
+//
+// محلياً: ضع القيم في .env.local (انظر .env.example)
+// على Vercel: Project → Settings → Environment Variables ثم أعد النشر.
 //
 // المفتاح العام آمن للعرض في المتصفح لأن الحماية الفعلية في
 // Row Level Security داخل قاعدة البيانات (كل عميل يرى بياناته فقط).
 // ════════════════════════════════════════════════════════════════════════
 
-export const SUPABASE_URL = "PASTE_YOUR_PROJECT_URL_HERE";   // مثال: https://abcdefgh.supabase.co
-export const SUPABASE_KEY = "PASTE_YOUR_PUBLISHABLE_KEY_HERE";
+export const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
+export const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+
+/** True when both env vars are set — the portal can talk to Supabase. */
+export const SUPABASE_CONFIGURED = SUPABASE_URL.length > 0 && SUPABASE_KEY.length > 0;
 
 // ─── Types ───
 export type Session = {
@@ -59,6 +65,9 @@ export function clearSession() {
 
 // ─── Auth: email + password login ───
 export async function login(email: string, password: string): Promise<{ ok: boolean; session?: Session; error?: string }> {
+  if (!SUPABASE_CONFIGURED) {
+    return { ok: false, error: "Portal is not configured: missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY." };
+  }
   try {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: "POST",
@@ -85,6 +94,7 @@ export async function login(email: string, password: string): Promise<{ ok: bool
 
 // ─── Auth: refresh an expired session ───
 export async function refreshSession(s: Session): Promise<Session | null> {
+  if (!SUPABASE_CONFIGURED) return null;
   try {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: "POST",
