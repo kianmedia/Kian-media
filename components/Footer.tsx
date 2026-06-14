@@ -144,10 +144,19 @@ export default function Footer() {
           <p className="text-white/30" style={{ fontSize: "11px" }}>
             © {new Date().getFullYear()} Kian Al Ebtikar Art Production. {t({ ar: "جميع الحقوق محفوظة.", en: "All rights reserved." })}
           </p>
-          <p className="f-sans" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(255,255,255,0.3)", textTransform: "uppercase" }}>
-            {t({ ar: "الدمام · الرياض · جدة · المدينة المنورة", en: "Dammam · Riyadh · Jeddah · Madinah" })}
-          </p>
+          <div className="flex items-center gap-3">
+            <a href="/privacy-policy" className="text-white/40 transition-colors hover:text-white" style={{ fontSize: "11px", textDecoration: "none" }}>
+              {t({ ar: "سياسة الخصوصية", en: "Privacy Policy" })}
+            </a>
+            <span style={{ color: "rgba(255,255,255,0.2)" }}>·</span>
+            <a href="/terms" className="text-white/40 transition-colors hover:text-white" style={{ fontSize: "11px", textDecoration: "none" }}>
+              {t({ ar: "شروط الاستخدام", en: "Terms" })}
+            </a>
+          </div>
         </div>
+        <p className="f-sans text-center" style={{ marginTop: "18px", fontSize: "9px", letterSpacing: "3px", color: "rgba(255,255,255,0.25)", textTransform: "uppercase" }}>
+          {t({ ar: "الدمام · الرياض · جدة · المدينة المنورة", en: "Dammam · Riyadh · Jeddah · Madinah" })}
+        </p>
       </div>
     </footer>
   );

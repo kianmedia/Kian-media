@@ -12,6 +12,9 @@ const baseInput: React.CSSProperties = {
   fontFamily: "var(--sans)",
   outline: "none",
   transition: "border-color 0.3s, background 0.3s",
+  // Dark-mode native controls (date/time pickers, select dropdowns) so the
+  // selected value + calendar icon are visible instead of dark-on-dark.
+  colorScheme: "dark",
 };
 
 function focusOn(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) {
