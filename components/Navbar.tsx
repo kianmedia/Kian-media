@@ -140,6 +140,20 @@ export default function Navbar() {
               )}
             </AnimatePresence>
           </li>
+          {/* Client Portal entry (real route, not a hash link) */}
+          <li>
+            <a
+              href="/client-portal"
+              className="f-sans uppercase transition-all duration-300 inline-flex items-center gap-1.5"
+              style={{ fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "rgba(255,255,255,0.85)", border: "1px solid rgba(255,255,255,0.25)", padding: "9px 16px" }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#E31E24"; e.currentTarget.style.color = "#fff"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.25)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
+              aria-label={t({ ar: "بوابة العملاء", en: "Client Portal" })}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" /></svg>
+              {t({ ar: "بوابة العملاء", en: "Client Portal" })}
+            </a>
+          </li>
           <li><LangSwitch compact /></li>
         </ul>
 
@@ -192,6 +206,16 @@ export default function Navbar() {
                 {t({ ar: s.ar, en: s.en })}
               </a>
             ))}
+            {/* Client Portal entry (mobile) */}
+            <a
+              href="/client-portal"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 px-6 py-4 f-sans uppercase"
+              style={{ fontSize: "13px", letterSpacing: "2px", fontWeight: 600, color: "#fff", borderTop: "1px solid rgba(227,30,36,0.2)", background: "rgba(227,30,36,0.06)" }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" /></svg>
+              {t({ ar: "بوابة العملاء", en: "Client Portal" })}
+            </a>
           </motion.div>
         )}
       </AnimatePresence>

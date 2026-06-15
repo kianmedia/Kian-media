@@ -1,0 +1,235 @@
+"use client";
+// ════════════════════════════════════════════════════════════════════════
+// /client-portal/projects/[id] — project detail.
+// Overview: timeline, computed summary cards (delivery/review derived from live
+// deliverable + review data), role-aware deliverables block (admin manages /
+// client reviews), an admin-only client-notes section, and project messages.
+// Deliverables + reviews are fetched once here and shared with the children so
+// the summary cards stay in sync with every add/status/approval action.
+// ════════════════════════════════════════════════════════════════════════
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
+import { getProject, listChat } from "@/lib/portal/projects";
+import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
+import { adminListClientsByIds } from "@/lib/portal/admin";
+import {
+  TIMELINE_STEPS,
+  computeShootingStatus, computeDeliveryStatus, computeReviewStatus, computeTimelineIndex,
+} from "@/components/portal/projectMeta";
+import DeliverableReview from "@/components/portal/DeliverableReview";
+import AdminDeliverables from "@/components/portal/AdminDeliverables";
+import AdminClientNotes from "@/components/portal/AdminClientNotes";
+import AdminProjectStage from "@/components/portal/AdminProjectStage";
+import type { Project, ProjectMessage, Deliverable, DeliverableReview as Review } from "@/lib/portal/types";
+
+export default function ProjectDetailPage() {
+  const { t, isAr } = useI18n();
+  const { profile } = usePortal();
+  const isAdmin = profile.account_type === "admin";
+  const params = useParams();
+  const id = Array.isArray(params.id) ? params.id[0] : (params.id as string);
+
+  const [phase, setPhase] = useState<"loading" | "error" | "notfound" | "ready">("loading");
+  const [project, setProject] = useState<Project | null>(null);
+  const [messages, setMessages] = useState<ProjectMessage[]>([]);
+  const [err, setErr] = useState("");
+
+  // Shared deliverable/review data (powers the summary cards + both sub-views).
+  const [dlvPhase, setDlvPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [dlvs, setDlvs] = useState<Deliverable[]>([]);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  // Client email — admin only, for the "ready for preview" email recipient.
+  const [clientEmail, setClientEmail] = useState<string | null>(null);
+
+  const loadDeliverables = useCallback(async () => {
+    const dr = await listDeliverables(id);
+    if (!dr.ok) { setDlvPhase("error"); return; }
+    setDlvs(dr.data);
+    const rr = await listReviewsForDeliverables(dr.data.map((d) => d.id));
+    setReviews(rr.ok ? rr.data : []);
+    setDlvPhase("ready");
+  }, [id]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const pr = await getProject(id);
+      if (!alive) return;
+      if (!pr.ok) { setErr(pr.error); setPhase("error"); return; }
+      if (!pr.data) { setPhase("notfound"); return; }
+      setProject(pr.data);
+
+      // Chat is non-fatal.
+      const ch = await listChat(id);
+      if (!alive) return;
+      if (ch.ok) setMessages(ch.data);
+      setPhase("ready");
+    })();
+    return () => { alive = false; };
+  }, [id]);
+
+  useEffect(() => { void loadDeliverables(); }, [loadDeliverables]);
+
+  // Resolve the client's email (admin only) so the "ready for preview" email has
+  // a recipient. Clients never run this (admin-only RLS on the clients table).
+  useEffect(() => {
+    if (!isAdmin || !project?.client_id) return;
+    let alive = true;
+    (async () => {
+      const r = await adminListClientsByIds([project.client_id]);
+      if (alive && r.ok) setClientEmail(r.data[0]?.email ?? null);
+    })();
+    return () => { alive = false; };
+  }, [isAdmin, project?.client_id]);
+
+  const back = (
+    <Link href="/client-portal/projects" className="f-sans inline-flex items-center gap-2 mb-8"
+      style={{ fontSize: "11px", letterSpacing: "2px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)", textDecoration: "none" }}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isAr ? "none" : "scaleX(-1)" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+      {t({ ar: "العودة للمشاريع", en: "Back to Projects" })}
+    </Link>
+  );
+
+  if (phase === "loading") {
+    return <div>{back}<div className="f-sans text-center" style={{ padding: "60px 0", fontSize: "12px", letterSpacing: "3px", color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</div></div>;
+  }
+  if (phase === "notfound") {
+    return <div>{back}<div className="text-center" style={{ padding: "60px 24px", border: "1px dashed rgba(255,255,255,0.12)", borderRadius: "4px" }}><p className="text-white/55" style={{ fontSize: "15px" }}>{t({ ar: "المشروع غير موجود أو لا تملك صلاحية الوصول إليه.", en: "Project not found, or you don't have access to it." })}</p></div></div>;
+  }
+  if (phase === "error") {
+    return <div>{back}<div className="f-sans" style={{ padding: "16px", fontSize: "13px", color: "#ff8a8e", background: "rgba(227,30,36,0.08)", border: "1px solid rgba(227,30,36,0.3)", borderRadius: "3px" }}>{t({ ar: "تعذّر التحميل: ", en: "Couldn't load: " })}{err}</div></div>;
+  }
+
+  const p = project!;
+  // Timeline + header badge reflect the real operational stage: admin-set project
+  // stage, overridden forward by live deliverable state (e.g. final_delivered → تم التسليم).
+  const stepIndex = computeTimelineIndex(dlvs, p.status);
+  const currentStep = TIMELINE_STEPS[stepIndex] ?? TIMELINE_STEPS[0];
+  const statusLabel = { ar: currentStep.ar, en: currentStep.en };
+  const dlvReady = dlvPhase === "ready";
+  const shooting = computeShootingStatus(p.shooting_date, p.status);
+  const delivery = computeDeliveryStatus(dlvs, p.status);
+  const review = computeReviewStatus(dlvs, reviews);
+
+  return (
+    <div>
+      {back}
+
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-9">
+        <h1 className="text-white" style={{ fontSize: "clamp(24px,4vw,34px)", fontWeight: 700, fontFamily: isAr ? "var(--arabic-display)" : "var(--sans)", lineHeight: 1.25 }}>
+          {p.project_name}
+        </h1>
+        <span className="f-sans" style={{ fontSize: "11px", letterSpacing: "1.5px", textTransform: "uppercase", color: "#E31E24", background: "rgba(227,30,36,0.1)", border: "1px solid rgba(227,30,36,0.3)", padding: "8px 15px", borderRadius: "2px", whiteSpace: "nowrap" }}>
+          {t(statusLabel)}
+        </span>
+      </div>
+
+      {/* Timeline — 10 visual steps; scrolls horizontally on narrow screens */}
+      <Section title={t({ ar: "مرحلة المشروع", en: "Project Stage" })}>
+        <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+          <div className="flex items-start" dir="ltr" style={{ minWidth: "720px", gap: 0 }}>
+            {TIMELINE_STEPS.map((s, i) => {
+              const done = i <= stepIndex;
+              const isLast = i === TIMELINE_STEPS.length - 1;
+              return (
+                <div key={s.key} style={{ flex: isLast ? "0 0 72px" : "1 1 0%", minWidth: "72px" }}>
+                  <div className="flex items-center">
+                    <div style={{ width: "14px", height: "14px", borderRadius: "50%", flexShrink: 0, background: done ? "#E31E24" : "rgba(255,255,255,0.08)", border: `2px solid ${done ? "#E31E24" : "rgba(255,255,255,0.2)"}`, boxShadow: done ? "0 0 10px rgba(227,30,36,0.5)" : "none" }} />
+                    {!isLast && <div style={{ height: "2px", flex: 1, background: i < stepIndex ? "#E31E24" : "rgba(255,255,255,0.1)" }} />}
+                  </div>
+                  <div className="f-sans" style={{ marginTop: "8px", paddingInlineEnd: "8px", fontSize: "9.5px", lineHeight: 1.4, letterSpacing: "0.2px", color: i <= stepIndex ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.3)" }}>
+                    {t({ ar: s.ar, en: s.en })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </Section>
+
+      {/* Admin-only: set the project stage (drives the timeline) */}
+      {isAdmin && (
+        <Section title={t({ ar: "تحديد مرحلة المشروع", en: "Set Project Stage" })}>
+          <AdminProjectStage projectId={id} current={p.status} onChanged={(next) => setProject((prev) => (prev ? { ...prev, status: next } : prev))} />
+        </Section>
+      )}
+
+      {/* Details grid — computed from live deliverable/review data */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">
+        <Detail label={t({ ar: "حالة التصوير", en: "Shooting Status" })} value={t(shooting)} />
+        <Detail label={t({ ar: "حالة التسليم", en: "Delivery Status" })} value={dlvReady ? t(delivery) : "…"} />
+        <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={dlvReady ? t(review) : "…"} />
+      </div>
+
+      {/* Deliverables — admin manages; client reviews (preview modal + approve/revise) */}
+      <Section title={isAdmin ? t({ ar: "إدارة مخرجات المراجعة", en: "Manage Review Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
+        {dlvPhase === "loading" ? (
+          <p className="text-white/45" style={{ fontSize: "13.5px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>
+        ) : dlvPhase === "error" ? (
+          <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{t({ ar: "تعذّر تحميل المخرجات.", en: "Couldn't load deliverables." })}</div>
+        ) : isAdmin ? (
+          <AdminDeliverables projectId={id} projectName={p.project_name} clientEmail={clientEmail} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
+        ) : (
+          <DeliverableReview projectId={id} projectName={p.project_name} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
+        )}
+      </Section>
+
+      {/* Client notes & revision requests — admin only */}
+      {isAdmin && (
+        <Section title={t({ ar: "ملاحظات العميل وطلبات التعديل", en: "Client Notes & Revision Requests" })}>
+          <AdminClientNotes deliverables={dlvs} reviews={reviews} loading={dlvPhase === "loading"} />
+        </Section>
+      )}
+
+      {/* Project messages (minimal list) */}
+      <Section title={t({ ar: "محادثة المشروع", en: "Project Messages" })}>
+        {messages.length === 0 ? (
+          <p className="text-white/45" style={{ fontSize: "13.5px", lineHeight: 1.7 }}>
+            {t({ ar: "لا توجد رسائل في هذا المشروع بعد.", en: "No messages on this project yet." })}
+          </p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {messages.map((m) => {
+              const mine = m.sender_role === "client";
+              return (
+                <div key={m.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "85%", padding: "11px 14px", borderRadius: "8px", background: mine ? "rgba(227,30,36,0.12)" : "rgba(255,255,255,0.04)", border: `1px solid ${mine ? "rgba(227,30,36,0.25)" : "rgba(255,255,255,0.08)"}` }}>
+                  <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "4px" }}>
+                    {mine ? t({ ar: "أنت", en: "You" }) : t({ ar: "كيان ميديا", en: "Kian Media" })}
+                  </div>
+                  <div className="text-white/80" style={{ fontSize: "13.5px", lineHeight: 1.6 }}>{m.body}</div>
+                </div>
+              );
+            })}
+            <p className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", lineHeight: 1.7, marginTop: "4px" }}>
+              {t({ ar: "إرسال الرسائل — قادم في تحديث البوابة القادم.", en: "Sending messages — coming in the next portal update." })}
+            </p>
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom: "30px" }}>
+      <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600, marginBottom: "14px" }}>{title}</div>
+      <div style={{ padding: "20px 22px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: "14px 16px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px" }}>
+      <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "1.5px", color: "rgba(255,255,255,0.4)", textTransform: "uppercase", marginBottom: "6px" }}>{label}</div>
+      <div className="text-white" style={{ fontSize: "14.5px", fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
