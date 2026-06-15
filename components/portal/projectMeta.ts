@@ -35,3 +35,14 @@ export const DLV_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
   approved:           { ar: "معتمد",               en: "Approved" },
   final_delivered:    { ar: "تم التسليم النهائي", en: "Final Delivered" },
 };
+
+/** All deliverable statuses (admin dropdown). Order matches the workflow. */
+export const DELIVERABLE_STATUSES: { key: string; ar: string; en: string }[] = [
+  { key: "draft",              ar: "مسودة",            en: "Draft" },
+  { key: "internal_review",    ar: "مراجعة داخلية",    en: "Internal Review" },
+  { key: "client_review",      ar: "مراجعة العميل",    en: "Client Review" },
+  { key: "revision_requested", ar: "طلب تعديل",        en: "Revision Requested" },
+  { key: "approved",           ar: "معتمد",            en: "Approved" },
+  { key: "final_delivered",    ar: "تم التسليم النهائي", en: "Final Delivered" },
+  { key: "archived",           ar: "مؤرشف",            en: "Archived" },
+];

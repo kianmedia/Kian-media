@@ -9,23 +9,24 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
 import { getProject, listChat } from "@/lib/portal/projects";
-import { listDeliverables } from "@/lib/portal/deliverables";
 import {
-  STATUS_STEPS, projectStatusLabel, DELIVERY_LABELS, REVISION_LABELS, DLV_STATUS_LABELS,
+  STATUS_STEPS, projectStatusLabel, DELIVERY_LABELS, REVISION_LABELS,
 } from "@/components/portal/projectMeta";
-import type { Project, Deliverable, ProjectMessage } from "@/lib/portal/types";
-
-const CLIENT_VISIBLE = ["client_review", "revision_requested", "approved", "final_delivered"];
+import DeliverableReview from "@/components/portal/DeliverableReview";
+import AdminDeliverables from "@/components/portal/AdminDeliverables";
+import type { Project, ProjectMessage } from "@/lib/portal/types";
 
 export default function ProjectDetailPage() {
   const { t, isAr } = useI18n();
+  const { profile } = usePortal();
+  const isAdmin = profile.account_type === "admin";
   const params = useParams();
   const id = Array.isArray(params.id) ? params.id[0] : (params.id as string);
 
   const [phase, setPhase] = useState<"loading" | "error" | "notfound" | "ready">("loading");
   const [project, setProject] = useState<Project | null>(null);
-  const [deliverables, setDeliverables] = useState<Deliverable[]>([]);
   const [messages, setMessages] = useState<ProjectMessage[]>([]);
   const [err, setErr] = useState("");
 
@@ -38,11 +39,9 @@ export default function ProjectDetailPage() {
       if (!pr.data) { setPhase("notfound"); return; }
       setProject(pr.data);
 
-      // Deliverables + chat are non-fatal: a member may lack rows but still
-      // see the project header.
-      const [dl, ch] = await Promise.all([listDeliverables(id), listChat(id)]);
+      // Chat is non-fatal. Deliverables are loaded by the role-aware sub-component.
+      const ch = await listChat(id);
       if (!alive) return;
-      if (dl.ok) setDeliverables(dl.data.filter((d) => CLIENT_VISIBLE.includes(d.status)));
       if (ch.ok) setMessages(ch.data);
       setPhase("ready");
     })();
@@ -118,35 +117,9 @@ export default function ProjectDetailPage() {
         <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={t(revision)} />
       </div>
 
-      {/* Deliverables */}
-      <Section title={t({ ar: "المخرجات", en: "Deliverables" })}>
-        {deliverables.length === 0 ? (
-          <p className="text-white/45" style={{ fontSize: "13.5px", lineHeight: 1.7 }}>
-            {t({ ar: "لا توجد مخرجات جاهزة للمراجعة حالياً.", en: "No deliverables ready for review yet." })}
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            {deliverables.map((d) => {
-              const dl = DLV_STATUS_LABELS[d.status] ?? { ar: d.status, en: d.status };
-              return (
-                <div key={d.id} className="flex items-center justify-between gap-3" style={{ padding: "14px 16px", background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px" }}>
-                  <div>
-                    <div className="text-white" style={{ fontSize: "14.5px", fontWeight: 600 }}>{d.title}</div>
-                    <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", color: "rgba(255,255,255,0.4)", textTransform: "uppercase", marginTop: "3px" }}>
-                      {d.type} · v{d.version}
-                    </div>
-                  </div>
-                  <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "#E31E24", background: "rgba(227,30,36,0.1)", border: "1px solid rgba(227,30,36,0.3)", padding: "6px 11px", borderRadius: "2px", whiteSpace: "nowrap" }}>
-                    {t(dl)}
-                  </span>
-                </div>
-              );
-            })}
-            <p className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", lineHeight: 1.7, marginTop: "4px" }}>
-              {t({ ar: "المراجعة والاعتماد وطلب التعديل — قادمة في تحديث البوابة القادم.", en: "Review, approval, and revision actions — coming in the next portal update." })}
-            </p>
-          </div>
-        )}
+      {/* Deliverables — admin manages; client reviews (embed + approve/revise) */}
+      <Section title={isAdmin ? t({ ar: "إدارة المخرجات", en: "Manage Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
+        {isAdmin ? <AdminDeliverables projectId={id} /> : <DeliverableReview projectId={id} />}
       </Section>
 
       {/* Project messages (minimal list) */}
