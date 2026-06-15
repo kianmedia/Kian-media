@@ -93,6 +93,28 @@ export function computeDeliveryStatus(
   return ps ? { ar: ps.ar, en: ps.en } : { ar: "قيد الانتظار", en: "Pending" };
 }
 
+/**
+ * Active timeline step — project.status mapping, overridden by live deliverable
+ * state so the bar reflects the real operational stage (the legacy projects.status
+ * column isn't auto-advanced when a deliverable is delivered). Display-only;
+ * never writes the DB. Precedence mirrors the delivery card.
+ */
+export function computeTimelineIndex(
+  deliverables: { status: string }[], projectStatus: string,
+): number {
+  const idxOf = (k: string) => STATUS_STEPS.findIndex((s) => s.key === k);
+  const base = Math.max(0, idxOf(projectStatus));
+  const has = (s: string) => deliverables.some((d) => d.status === s);
+  const delivered = idxOf("delivered");
+  const ready = idxOf("ready_for_review");
+  const editing = idxOf("editing");
+  if (has("final_delivered"))     return delivered;                        // تم التسليم
+  if (has("approved"))            return ready;                            // ready for final delivery (not delivered)
+  if (has("client_review"))       return ready;                            // جاهز للمراجعة (even if project.status was advanced)
+  if (has("revision_requested"))  return Math.min(ready, Math.max(base, editing)); // review/revision, never delivered
+  return base;
+}
+
 /** حالة المراجعات — latest review decision, else awaiting-review / none. */
 export function computeReviewStatus(
   deliverables: { status: string }[],

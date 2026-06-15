@@ -63,6 +63,27 @@ export function notifyReviewReady(input: {
 }
 
 /**
+ * Client-facing "final files delivered" email. Fired from the ADMIN's browser
+ * when a deliverable is moved to final_delivered. Recipient is the client.
+ */
+export function notifyFinalDelivered(input: {
+  projectId: string;
+  projectName: string;
+  deliverableTitle: string;
+  clientEmail?: string | null;
+}): Promise<void> {
+  return postNotify({
+    Event: "final_delivered",
+    Subject: "تم التسليم النهائي - كيان",
+    To: input.clientEmail ?? "",
+    "Project Name": input.projectName,
+    "Deliverable Title": input.deliverableTitle,
+    Message: "تم تسليم النسخة النهائية من عملك.",
+    Link: portalLink(input.projectId),
+  });
+}
+
+/**
  * Kian/admin-facing "client review update" email. Fired from the CLIENT's
  * browser on approve / request-revision. We deliberately DO NOT send an admin
  * recipient from the client (clients can't read admin emails, and we won't leak

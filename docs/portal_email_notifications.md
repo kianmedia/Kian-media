@@ -22,6 +22,7 @@ The browser POSTs a fire-and-forget event (`mode: "no-cors"`, opaque) with
 |---|---|---|---|
 | `review_ready` | admin browser | deliverable added with / moved to `client_review` | the client (`To` field, resolved by the admin from `clients.email`) |
 | `review_update` | client browser | client approves or requests revision | Kian admin address **configured inside the Apps Script** (never sent from the client) |
+| `final_delivered` | admin browser | deliverable moved to `final_delivered` | the client (`To` field, resolved by the admin) |
 
 ### Payload keys
 
@@ -31,6 +32,9 @@ The browser POSTs a fire-and-forget event (`mode: "no-cors"`, opaque) with
 `review_update`: `_type=portal_notify`, `Event`, `Subject` ("تحديث مراجعة من العميل - كيان"),
 `Project Name`, `Deliverable Title`, `Action` (`approved`|`revision_requested`),
 `Note`, `Client Name`, `Client Email`, `Link`.
+
+`final_delivered`: `_type=portal_notify`, `Event`, `Subject` ("تم التسليم النهائي - كيان"),
+`To`, `Project Name`, `Deliverable Title`, `Message`, `Link`.
 
 `Link` is the portal deep-link (`<origin>/client-portal/projects/<id>`) — no secrets.
 
@@ -50,13 +54,13 @@ function doPost(e) {
 
   if (data._type === "portal_notify") {
     const link = data.Link ? ("\n\nرابط المشروع: " + data.Link) : "";
-    if (data.Event === "review_ready" && data.To) {
+    if ((data.Event === "review_ready" || data.Event === "final_delivered") && data.To) {
       MailApp.sendEmail(
         data.To,
-        data.Subject || "عملك جاهز للمعاينة - كيان",
+        data.Subject || "تحديث من كيان",
         "مشروع: " + data["Project Name"] +
         "\nالمخرَج: " + data["Deliverable Title"] +
-        "\n\n" + (data.Message || "العمل جاهز للمعاينة في بوابة العميل.") + link
+        "\n\n" + (data.Message || "") + link
       );
     } else if (data.Event === "review_update") {
       const action = data.Action === "approved" ? "اعتماد" : "طلب تعديل";

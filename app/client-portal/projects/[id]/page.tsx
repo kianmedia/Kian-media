@@ -16,8 +16,8 @@ import { getProject, listChat } from "@/lib/portal/projects";
 import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
 import { adminListClientsByIds } from "@/lib/portal/admin";
 import {
-  STATUS_STEPS, projectStatusLabel,
-  computeShootingStatus, computeDeliveryStatus, computeReviewStatus,
+  STATUS_STEPS,
+  computeShootingStatus, computeDeliveryStatus, computeReviewStatus, computeTimelineIndex,
 } from "@/components/portal/projectMeta";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
@@ -103,8 +103,11 @@ export default function ProjectDetailPage() {
   }
 
   const p = project!;
-  const stepIndex = Math.max(0, STATUS_STEPS.findIndex((s) => s.key === p.status));
-  const statusLabel = projectStatusLabel(p.status);
+  // Timeline + header badge reflect the real operational stage: project.status
+  // mapping overridden by live deliverable state (e.g. final_delivered → تم التسليم).
+  const stepIndex = computeTimelineIndex(dlvs, p.status);
+  const currentStep = STATUS_STEPS[stepIndex] ?? STATUS_STEPS[0];
+  const statusLabel = { ar: currentStep.ar, en: currentStep.en };
   const dlvReady = dlvPhase === "ready";
   const shooting = computeShootingStatus(p.shooting_date, p.status);
   const delivery = computeDeliveryStatus(dlvs, p.status);
@@ -164,7 +167,7 @@ export default function ProjectDetailPage() {
         ) : isAdmin ? (
           <AdminDeliverables projectId={id} projectName={p.project_name} clientEmail={clientEmail} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
         ) : (
-          <DeliverableReview projectId={id} projectName={p.project_name} items={dlvs} onChanged={loadDeliverables} />
+          <DeliverableReview projectId={id} projectName={p.project_name} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
         )}
       </Section>
 

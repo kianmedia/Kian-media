@@ -14,7 +14,7 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { adminAddDeliverable, adminSetDeliverable } from "@/lib/portal/admin";
-import { notifyReviewReady } from "@/lib/portal/notifyEmail";
+import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
 import type { Deliverable, DeliverableReview, DeliverableType, DeliverableStatus } from "@/lib/portal/types";
@@ -50,8 +50,9 @@ export default function AdminDeliverables({
     const r = await adminSetDeliverable({ deliverableId: d.id, status });
     setBusyId(null);
     if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked (workflow order)" : r.error) }); onChanged(); return; }
-    // Moving to client_review → email the client that work is ready for preview.
+    // Status-change emails (best-effort; never block the UI).
     if (status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: d.title, clientEmail });
+    else if (status === "final_delivered") void notifyFinalDelivered({ projectId, projectName, deliverableTitle: d.title, clientEmail });
     setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }) });
     onChanged();
   }
