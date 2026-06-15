@@ -46,3 +46,44 @@ export const DELIVERABLE_STATUSES: { key: string; ar: string; en: string }[] = [
   { key: "final_delivered",    ar: "تم التسليم النهائي", en: "Final Delivered" },
   { key: "archived",           ar: "مؤرشف",            en: "Archived" },
 ];
+
+export function deliverableStatusLabel(status: string): { ar: string; en: string } {
+  return DELIVERABLE_STATUSES.find((s) => s.key === status) ?? { ar: status, en: status };
+}
+
+/** Client review decision → label (admin client-notes section). */
+export const REVIEW_DECISION_LABELS: Record<string, { ar: string; en: string }> = {
+  approved:           { ar: "اعتماد",    en: "Approved" },
+  revision_requested: { ar: "طلب تعديل", en: "Revision Requested" },
+};
+
+// ─── Derived summary cards (computed from live deliverable/review data) ───
+// These replace the unmaintained legacy projects.delivery_status /
+// projects.revision_status free-text columns.
+
+/** حالة التسليم — highest-precedence deliverable state present, else project status. */
+export function computeDeliveryStatus(
+  deliverables: { status: string }[], projectStatus: string,
+): { ar: string; en: string } {
+  const has = (s: string) => deliverables.some((d) => d.status === s);
+  if (has("final_delivered"))    return { ar: "تم التسليم",     en: "Delivered" };
+  if (has("approved"))           return { ar: "جاهز للتسليم",   en: "Ready for Delivery" };
+  if (has("client_review"))      return { ar: "قيد المراجعة",   en: "In Review" };
+  if (has("revision_requested")) return { ar: "تعديلات مطلوبة", en: "Revisions Requested" };
+  const ps = STATUS_STEPS.find((s) => s.key === projectStatus);
+  return ps ? { ar: ps.ar, en: ps.en } : { ar: "قيد الانتظار", en: "Pending" };
+}
+
+/** حالة المراجعات — latest review decision, else awaiting-review / none. */
+export function computeReviewStatus(
+  deliverables: { status: string }[],
+  reviews: { decision: string; created_at: string }[],
+): { ar: string; en: string } {
+  if (reviews.length > 0) {
+    const latest = reviews.reduce((a, b) => (a.created_at >= b.created_at ? a : b));
+    if (latest.decision === "revision_requested") return { ar: "توجد ملاحظات", en: "Notes Provided" };
+    if (latest.decision === "approved")            return { ar: "معتمد",        en: "Approved" };
+  }
+  if (deliverables.some((d) => d.status === "client_review")) return { ar: "بانتظار المراجعة", en: "Awaiting Review" };
+  return { ar: "لا توجد مراجعات", en: "No Reviews" };
+}

@@ -5,10 +5,14 @@
 // (embed + Kian watermark) — NEVER a download. The project owner can Approve /
 // Request Revision via submitReview (RLS: client_owner + status client_review;
 // trigger flips status + notifies admins).
+//
+// Controlled: deliverables are fetched by the parent page; after a decision we
+// call onChanged() so the page refetches (updates the summary cards + the
+// admin-visible note the owner just wrote).
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listDeliverables, submitReview } from "@/lib/portal/deliverables";
+import { submitReview } from "@/lib/portal/deliverables";
 import { canApprove } from "@/lib/portal/projects";
 import { DLV_STATUS_LABELS } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
@@ -16,30 +20,25 @@ import type { Deliverable } from "@/lib/portal/types";
 
 const CLIENT_VISIBLE = ["client_review", "revision_requested", "approved", "final_delivered"];
 
-export default function DeliverableReview({ projectId }: { projectId: string }) {
+export default function DeliverableReview({
+  projectId, items, onChanged,
+}: { projectId: string; items: Deliverable[]; onChanged: () => void }) {
   const { t } = useI18n();
-  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
-  const [items, setItems] = useState<Deliverable[]>([]);
   const [owner, setOwner] = useState(false);
-  const [err, setErr] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reviseFor, setReviseFor] = useState<string | null>(null);
   const [reviseNote, setReviseNote] = useState("");
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
 
-  async function load() {
-    const r = await listDeliverables(projectId);
-    if (!r.ok) { setErr(r.error); setPhase("error"); return; }
-    setItems(r.data.filter((d) => CLIENT_VISIBLE.includes(d.status)));
-    setPhase("ready");
-  }
   useEffect(() => {
     let alive = true;
-    (async () => { await load(); const c = await canApprove(projectId); if (alive) setOwner(c); })();
+    (async () => { const c = await canApprove(projectId); if (alive) setOwner(c); })();
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  // RLS already scopes a client to these states; filter defensively.
+  const visible = items.filter((d) => CLIENT_VISIBLE.includes(d.status));
 
   async function decide(d: Deliverable, decision: "approved" | "revision_requested", note?: string) {
     setBusyId(d.id); setFlash(null);
@@ -48,16 +47,14 @@ export default function DeliverableReview({ projectId }: { projectId: string }) 
     if (!r.ok) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر الإرسال: ", en: "Failed: " }) + r.error }); return; }
     setReviseFor(null); setReviseNote("");
     setFlash({ id: d.id, kind: "ok", text: decision === "approved" ? t({ ar: "تم الاعتماد ✓", en: "Approved ✓" }) : t({ ar: "تم إرسال طلب التعديل ✓", en: "Revision requested ✓" }) });
-    void load();
+    onChanged();
   }
 
-  if (phase === "loading") return <P>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</P>;
-  if (phase === "error") return <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{err}</div>;
-  if (items.length === 0) return <P>{t({ ar: "لا توجد مخرجات جاهزة للمراجعة حالياً.", en: "No deliverables ready for review yet." })}</P>;
+  if (visible.length === 0) return <P>{t({ ar: "لا توجد مخرجات جاهزة للمراجعة حالياً.", en: "No deliverables ready for review yet." })}</P>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-      {items.map((d) => {
+      {visible.map((d) => {
         const dl = DLV_STATUS_LABELS[d.status] ?? { ar: d.status, en: d.status };
         const url = d.vimeo_review_url || d.preview_url;
         const canReview = owner && d.status === "client_review";

@@ -67,6 +67,20 @@ export function listReviews(deliverableId: string): Promise<Result<DeliverableRe
   );
 }
 
+/**
+ * All reviews across a set of deliverables (newest first). RLS scopes the rows:
+ * admin reads every review (is_admin path), a client reads only reviews on their
+ * own project's deliverables. Used for the project-detail summary cards and the
+ * admin "client notes & revision requests" section.
+ */
+export function listReviewsForDeliverables(ids: string[]): Promise<Result<DeliverableReview[]>> {
+  if (ids.length === 0) return Promise.resolve({ ok: true, data: [] });
+  const inList = ids.map((id) => enc(id)).join(",");
+  return pget<DeliverableReview[]>(
+    `deliverable_reviews?deliverable_id=in.(${inList})&select=*&order=created_at.desc`
+  );
+}
+
 export async function submitReview(
   deliverableId: string, decision: ReviewDecision, comments?: string
 ): Promise<Result<DeliverableReview>> {

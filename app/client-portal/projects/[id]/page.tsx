@@ -1,22 +1,26 @@
 "use client";
 // ════════════════════════════════════════════════════════════════════════
-// /client-portal/projects/[id] — project detail (S3 minimal).
-// Read-only overview: timeline, delivery/review status, shoot date,
-// client-visible deliverables, and a minimal project-messages list.
-// Full interactive workspace (review actions, chat composer, notes) = S7/S8.
+// /client-portal/projects/[id] — project detail.
+// Overview: timeline, computed summary cards (delivery/review derived from live
+// deliverable + review data), role-aware deliverables block (admin manages /
+// client reviews), an admin-only client-notes section, and project messages.
+// Deliverables + reviews are fetched once here and shared with the children so
+// the summary cards stay in sync with every add/status/approval action.
 // ════════════════════════════════════════════════════════════════════════
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { getProject, listChat } from "@/lib/portal/projects";
+import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
 import {
-  STATUS_STEPS, projectStatusLabel, DELIVERY_LABELS, REVISION_LABELS,
+  STATUS_STEPS, projectStatusLabel, computeDeliveryStatus, computeReviewStatus,
 } from "@/components/portal/projectMeta";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
-import type { Project, ProjectMessage } from "@/lib/portal/types";
+import AdminClientNotes from "@/components/portal/AdminClientNotes";
+import type { Project, ProjectMessage, Deliverable, DeliverableReview as Review } from "@/lib/portal/types";
 
 export default function ProjectDetailPage() {
   const { t, isAr } = useI18n();
@@ -30,6 +34,20 @@ export default function ProjectDetailPage() {
   const [messages, setMessages] = useState<ProjectMessage[]>([]);
   const [err, setErr] = useState("");
 
+  // Shared deliverable/review data (powers the summary cards + both sub-views).
+  const [dlvPhase, setDlvPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [dlvs, setDlvs] = useState<Deliverable[]>([]);
+  const [reviews, setReviews] = useState<Review[]>([]);
+
+  const loadDeliverables = useCallback(async () => {
+    const dr = await listDeliverables(id);
+    if (!dr.ok) { setDlvPhase("error"); return; }
+    setDlvs(dr.data);
+    const rr = await listReviewsForDeliverables(dr.data.map((d) => d.id));
+    setReviews(rr.ok ? rr.data : []);
+    setDlvPhase("ready");
+  }, [id]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -39,7 +57,7 @@ export default function ProjectDetailPage() {
       if (!pr.data) { setPhase("notfound"); return; }
       setProject(pr.data);
 
-      // Chat is non-fatal. Deliverables are loaded by the role-aware sub-component.
+      // Chat is non-fatal.
       const ch = await listChat(id);
       if (!alive) return;
       if (ch.ok) setMessages(ch.data);
@@ -47,6 +65,8 @@ export default function ProjectDetailPage() {
     })();
     return () => { alive = false; };
   }, [id]);
+
+  useEffect(() => { void loadDeliverables(); }, [loadDeliverables]);
 
   const back = (
     <Link href="/client-portal/projects" className="f-sans inline-flex items-center gap-2 mb-8"
@@ -69,8 +89,9 @@ export default function ProjectDetailPage() {
   const p = project!;
   const stepIndex = Math.max(0, STATUS_STEPS.findIndex((s) => s.key === p.status));
   const statusLabel = projectStatusLabel(p.status);
-  const delivery = DELIVERY_LABELS[p.delivery_status || "pending"] || DELIVERY_LABELS.pending;
-  const revision = REVISION_LABELS[p.revision_status || "none"] || REVISION_LABELS.none;
+  const dlvReady = dlvPhase === "ready";
+  const delivery = computeDeliveryStatus(dlvs, p.status);
+  const review = computeReviewStatus(dlvs, reviews);
 
   return (
     <div>
@@ -110,17 +131,32 @@ export default function ProjectDetailPage() {
         </div>
       </Section>
 
-      {/* Details grid */}
+      {/* Details grid — computed from live deliverable/review data */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">
         <Detail label={t({ ar: "تاريخ التصوير", en: "Shooting Date" })} value={p.shooting_date || t({ ar: "لم يُحدد بعد", en: "Not set yet" })} />
-        <Detail label={t({ ar: "حالة التسليم", en: "Delivery Status" })} value={t(delivery)} />
-        <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={t(revision)} />
+        <Detail label={t({ ar: "حالة التسليم", en: "Delivery Status" })} value={dlvReady ? t(delivery) : "…"} />
+        <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={dlvReady ? t(review) : "…"} />
       </div>
 
       {/* Deliverables — admin manages; client reviews (preview modal + approve/revise) */}
       <Section title={isAdmin ? t({ ar: "إدارة مخرجات المراجعة", en: "Manage Review Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
-        {isAdmin ? <AdminDeliverables projectId={id} /> : <DeliverableReview projectId={id} />}
+        {dlvPhase === "loading" ? (
+          <p className="text-white/45" style={{ fontSize: "13.5px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>
+        ) : dlvPhase === "error" ? (
+          <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{t({ ar: "تعذّر تحميل المخرجات.", en: "Couldn't load deliverables." })}</div>
+        ) : isAdmin ? (
+          <AdminDeliverables projectId={id} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
+        ) : (
+          <DeliverableReview projectId={id} items={dlvs} onChanged={loadDeliverables} />
+        )}
       </Section>
+
+      {/* Client notes & revision requests — admin only */}
+      {isAdmin && (
+        <Section title={t({ ar: "ملاحظات العميل وطلبات التعديل", en: "Client Notes & Revision Requests" })}>
+          <AdminClientNotes deliverables={dlvs} reviews={reviews} loading={dlvPhase === "loading"} />
+        </Section>
+      )}
 
       {/* Project messages (minimal list) */}
       <Section title={t({ ar: "محادثة المشروع", en: "Project Messages" })}>

@@ -4,16 +4,19 @@
 // "Add Review Deliverable" button opens a modal form (admin_add_deliverable).
 // New items default to allow_download=false + watermark_required=true (DB
 // defaults — the RPC has no params for them, so they're enforced automatically).
-// Each item shows a status control (admin_set_deliverable) + a preview window.
-// Setting status to client_review notifies the client (DB trigger).
+// Each item shows a status control (admin_set_deliverable), a preview window,
+// and the latest client note (from deliverable_reviews) if any.
+//
+// Controlled: deliverables + reviews are fetched by the parent page (so the
+// summary cards and the client-notes section share one source); mutations call
+// onChanged() to trigger a parent refetch.
 // ════════════════════════════════════════════════════════════════════════
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listDeliverables } from "@/lib/portal/deliverables";
 import { adminAddDeliverable, adminSetDeliverable } from "@/lib/portal/admin";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
-import type { Deliverable, DeliverableType, DeliverableStatus } from "@/lib/portal/types";
+import type { Deliverable, DeliverableReview, DeliverableType, DeliverableStatus } from "@/lib/portal/types";
 
 const ADD_STATUSES = ["draft", "internal_review", "client_review"] as const;
 const TYPES: { v: DeliverableType; ar: string; en: string }[] = [
@@ -22,32 +25,29 @@ const TYPES: { v: DeliverableType; ar: string; en: string }[] = [
   { v: "other", ar: "رابط / أخرى", en: "Link / Other" },
 ];
 
-export default function AdminDeliverables({ projectId }: { projectId: string }) {
+export default function AdminDeliverables({
+  projectId, items, reviews, onChanged,
+}: { projectId: string; items: Deliverable[]; reviews: DeliverableReview[]; onChanged: () => void }) {
   const { t, isAr } = useI18n();
-  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
-  const [items, setItems] = useState<Deliverable[]>([]);
-  const [err, setErr] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
 
-  async function load() {
-    const r = await listDeliverables(projectId);
-    if (!r.ok) { setErr(r.error); setPhase("error"); return; }
-    setItems(r.data);
-    setPhase("ready");
+  // Latest client note per deliverable (reviews arrive newest-first).
+  const latestNote = new Map<string, DeliverableReview>();
+  for (const r of reviews) {
+    if (!latestNote.has(r.deliverable_id) && r.comments?.trim()) latestNote.set(r.deliverable_id, r);
   }
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [projectId]);
 
   async function setStatus(d: Deliverable, status: DeliverableStatus) {
     if (status === d.status) return;
     setBusyId(d.id); setFlash(null);
     const r = await adminSetDeliverable({ deliverableId: d.id, status });
     setBusyId(null);
-    if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked (workflow order)" : r.error) }); void load(); return; }
+    if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked (workflow order)" : r.error) }); onChanged(); return; }
     setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }) });
-    void load();
+    onChanged();
   }
 
   return (
@@ -64,17 +64,15 @@ export default function AdminDeliverables({ projectId }: { projectId: string }) 
       </div>
 
       {/* Existing deliverables (admin sees all states) */}
-      {phase === "loading" && <p className="text-white/45" style={{ fontSize: "13.5px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}
-      {phase === "error" && <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{err}</div>}
-      {phase === "ready" && items.length === 0 && (
+      {items.length === 0 ? (
         <div className="text-center" style={{ padding: "40px 24px", border: "1px dashed rgba(255,255,255,0.12)", borderRadius: "4px" }}>
           <p className="text-white/45" style={{ fontSize: "13.5px" }}>{t({ ar: "لا توجد مخرجات بعد — أضف أول معاينة للمراجعة.", en: "No deliverables yet — add the first review item." })}</p>
         </div>
-      )}
-      {phase === "ready" && items.length > 0 && (
+      ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           {items.map((d) => {
             const url = d.vimeo_review_url || d.preview_url;
+            const note = latestNote.get(d.id);
             return (
               <div key={d.id} style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "14px 16px" }}>
                 <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -96,6 +94,17 @@ export default function AdminDeliverables({ projectId }: { projectId: string }) 
                     </select>
                   </div>
                 </div>
+
+                {/* Latest client note inline (full history lives in the notes section below) */}
+                {note && (
+                  <div style={{ marginTop: "10px", borderInlineStart: `2px solid ${note.decision === "revision_requested" ? "rgba(227,30,36,0.5)" : "rgba(124,252,154,0.4)"}`, paddingInlineStart: "10px" }}>
+                    <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: note.decision === "revision_requested" ? "#ff8a8e" : "#7CFC9A", marginBottom: "3px" }}>
+                      {t({ ar: "آخر ملاحظة من العميل:", en: "Latest client note:" })}
+                    </div>
+                    <p className="text-white/80" style={{ fontSize: "12.5px", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{note.comments}</p>
+                  </div>
+                )}
+
                 {flash && flash.id === d.id && <div className="f-sans" style={{ fontSize: "12px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
               </div>
             );
@@ -103,7 +112,7 @@ export default function AdminDeliverables({ projectId }: { projectId: string }) 
         </div>
       )}
 
-      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); void load(); }} />}
+      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); onChanged(); }} />}
       {preview && <PreviewModal title={preview.title} url={preview.url} onClose={() => setPreview(null)} />}
     </div>
   );
