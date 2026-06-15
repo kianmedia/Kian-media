@@ -83,10 +83,16 @@ function toSession(data: Record<string, unknown>): Session | null {
 export async function signup(
   email: string,
   password: string,
-  meta?: Record<string, string | boolean>
+  meta?: Record<string, string | boolean>,
+  redirectTo?: string,
 ): Promise<AuthResult> {
   if (!SUPABASE_CONFIGURED) return { ok: false, code: "not_configured", error: "Portal is not configured." };
-  const { status, data } = await gotrue("/auth/v1/signup", { email, password, data: meta ?? {} });
+  // redirect_to controls where the confirmation email link lands after verifying
+  // (must be allow-listed in Supabase Auth → URL Configuration → Redirect URLs).
+  const path = redirectTo
+    ? `/auth/v1/signup?redirect_to=${encodeURIComponent(redirectTo)}`
+    : `/auth/v1/signup`;
+  const { status, data } = await gotrue(path, { email, password, data: meta ?? {} });
   if (status >= 400) {
     const raw = rawError(data);
     return { ok: false, code: mapAuthError(status, raw), error: raw };

@@ -60,7 +60,7 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
   const authError = (code: AuthErrorCode, raw: string): string => {
     switch (code) {
       case "invalid_credentials":  return t({ ar: "بيانات الدخول غير صحيحة", en: "Invalid email or password" });
-      case "email_not_confirmed":  return t({ ar: "فعّل حسابك أولاً من رابط التأكيد في بريدك الإلكتروني", en: "Please confirm your email first via the link we sent you" });
+      case "email_not_confirmed":  return t({ ar: "فضلاً فعّل بريدك الإلكتروني أولاً من رابط التحقق المرسل لك.", en: "Please verify your email first via the verification link we sent you." });
       case "user_already_exists":  return t({ ar: "هذا البريد مسجّل مسبقاً — جرّب تسجيل الدخول", en: "This email is already registered — try signing in" });
       case "weak_password":        return t({ ar: "كلمة المرور ضعيفة — استخدم ٨ أحرف على الأقل", en: "Weak password — use at least 8 characters" });
       case "rate_limited":         return t({ ar: "محاولات كثيرة — انتظر دقيقة ثم أعد المحاولة", en: "Too many attempts — wait a minute and try again" });
@@ -124,12 +124,14 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
       marketing_opt_in: sMarketing,
     });
     const nowIso = new Date().toISOString();
+    // After confirming, the email link returns the user to the portal sign-in.
+    const confirmRedirect = typeof window !== "undefined" ? `${window.location.origin}/client-portal` : undefined;
     const r = await signup(sEmail.trim(), sPass, {
       full_name: sName.trim(), company: sCompany.trim(), mobile: sMobile.trim(), marketing_opt_in: sMarketing,
       // Consent record (durable DB columns proposed in S5-DB addendum; stored in
       // GoTrue user metadata for now so it's captured at signup time).
       privacy_accepted_at: nowIso, terms_accepted_at: nowIso, consent_version: "2026-06-14",
-    });
+    }, confirmRedirect);
     setBusy(false);
     if (!r.ok) { setErr(authError(r.code, r.error)); return; }
     if (r.needsConfirmation) { setConfirmEmailFor(sEmail.trim()); return; }
@@ -146,6 +148,12 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
         <h2 className="editorial text-white" style={{ fontSize: "26px", marginBottom: "12px" }}>
           {t({ ar: "تحقق من بريدك الإلكتروني", en: "Check your email" })}
         </h2>
+        <p className="text-white/75" style={{ fontSize: "15px", lineHeight: 1.9, marginBottom: "18px" }}>
+          {t({
+            ar: "تم إنشاء الحساب. فضلاً تحقق من بريدك الإلكتروني لتفعيل الدخول إلى بوابة العملاء.",
+            en: "Account created. Please check your email to verify and unlock access to the client portal.",
+          })}
+        </p>
         <p className="text-white/60" style={{ fontSize: "14.5px", lineHeight: 1.8, marginBottom: "8px" }}>
           {t({ ar: "أرسلنا رابط تفعيل إلى:", en: "We sent a confirmation link to:" })}
         </p>
