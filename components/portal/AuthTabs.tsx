@@ -7,9 +7,14 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { login, signup, type AuthErrorCode } from "@/lib/portal/auth";
+import { login, signup, requestPasswordReset, type AuthErrorCode } from "@/lib/portal/auth";
 import { isValidMobile } from "@/lib/submitForm";
 import { stashPendingProfile } from "@/components/portal/PortalShell";
+
+// Kian sales/support WhatsApp (Saudi number, wa.me intl format) + prefilled help text.
+const WA_SUPPORT_URL =
+  "https://wa.me/966503422999?text=" +
+  encodeURIComponent("مرحباً كيان، أحتاج مساعدة في الدخول إلى بوابة العملاء.");
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -36,6 +41,8 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [confirmEmailFor, setConfirmEmailFor] = useState<string | null>(null);
+  // Forgot-password feedback (kept separate from login errors).
+  const [reset, setReset] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // login fields
   const [lEmail, setLEmail] = useState("");
@@ -70,6 +77,29 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
     setBusy(false);
     if (!r.ok) { setErr(authError(r.code, r.error)); return; }
     onAuthed();
+  }
+
+  async function onForgot() {
+    setErr(""); setReset(null);
+    if (!lEmail.trim()) {
+      setReset({ kind: "err", text: t({ ar: "فضلاً أدخل البريد الإلكتروني أولاً.", en: "Please enter your email first." }) });
+      return;
+    }
+    setBusy(true);
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/client-portal/reset-password` : undefined;
+    let r: Awaited<ReturnType<typeof requestPasswordReset>>;
+    try { r = await requestPasswordReset(lEmail.trim(), redirectTo); }
+    catch { r = { ok: true }; } // network hiccup → still show generic message (no enumeration)
+    setBusy(false);
+    if (!r.ok && r.code === "rate_limited") {
+      setReset({ kind: "err", text: authError("rate_limited", "") });
+      return;
+    }
+    // Always show the same generic message — never reveal whether the email exists.
+    setReset({ kind: "ok", text: t({
+      ar: "تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني إذا كان الحساب موجودًا.",
+      en: "If an account exists, a password reset link has been sent to your email.",
+    }) });
   }
 
   async function onSignup() {
@@ -149,7 +179,7 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
       {/* Tab switch */}
       <div className="flex mb-7" style={{ border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" }}>
         {(["login", "signup"] as const).map((k) => (
-          <button key={k} onClick={() => { setTab(k); setErr(""); }}
+          <button key={k} onClick={() => { setTab(k); setErr(""); setReset(null); }}
             className="f-sans"
             style={{
               flex: 1, padding: "12px 0", fontSize: "12px", letterSpacing: "2px", fontWeight: 600, textTransform: "uppercase",
@@ -178,9 +208,24 @@ export default function AuthTabs({ onAuthed }: { onAuthed: () => void }) {
           <button onClick={() => void onLogin()} disabled={busy} className="btn-red" style={{ width: "100%", justifyContent: "center", opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer" }}>
             <span>{busy ? "..." : t({ ar: "دخول", en: "Sign In" })}</span>
           </button>
-          <p className="f-sans text-center" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.4)", lineHeight: 1.7 }}>
-            {t({ ar: "نسيت كلمة المرور؟ تواصل معنا عبر واتساب.", en: "Forgot your password? Contact us on WhatsApp." })}
-          </p>
+          <div className="text-center" style={{ display: "flex", flexDirection: "column", gap: "9px", marginTop: "2px" }}>
+            <div className="f-sans" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.45)", lineHeight: 1.7 }}>
+              <button type="button" onClick={() => void onForgot()} disabled={busy}
+                style={{ background: "none", border: "none", padding: 0, color: "rgba(255,255,255,0.75)", textDecoration: "underline", fontSize: "12.5px", cursor: busy ? "wait" : "pointer", fontFamily: "inherit" }}>
+                {t({ ar: "نسيت كلمة المرور؟", en: "Forgot your password?" })}
+              </button>
+              <span style={{ margin: "0 8px", color: "rgba(255,255,255,0.25)" }}>·</span>
+              <a href={WA_SUPPORT_URL} target="_blank" rel="noopener noreferrer"
+                style={{ color: "#25D366", textDecoration: "none", fontSize: "12.5px" }}>
+                {t({ ar: "تواصل معنا عبر واتساب", en: "Contact us on WhatsApp" })}
+              </a>
+            </div>
+            {reset && (
+              <div className="f-sans" style={{ fontSize: "12.5px", lineHeight: 1.6, color: reset.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>
+                {reset.text}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>

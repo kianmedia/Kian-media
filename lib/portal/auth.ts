@@ -115,6 +115,47 @@ export async function login(email: string, password: string): Promise<AuthResult
   return { ok: true, session };
 }
 
+/**
+ * Send a password-reset email (GoTrue /recover). Anti-enumeration: GoTrue
+ * returns 200 whether or not the email exists, so the caller shows a generic
+ * "if the account exists" message. `redirectTo` must be allow-listed in
+ * Supabase Auth → URL Configuration → Redirect URLs, else GoTrue falls back to
+ * the project Site URL.
+ */
+export async function requestPasswordReset(email: string, redirectTo?: string): Promise<AuthResult> {
+  if (!SUPABASE_CONFIGURED) return { ok: false, code: "not_configured", error: "Portal is not configured." };
+  const path = redirectTo
+    ? `/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`
+    : `/auth/v1/recover`;
+  const { status, data } = await gotrue(path, { email });
+  if (status === 429) return { ok: false, code: "rate_limited", error: rawError(data) };
+  // Any other non-2xx is treated as success too, so we never leak existence.
+  return { ok: true };
+}
+
+/**
+ * Set a new password using the recovery access token from the email link's URL
+ * hash (#access_token=…&type=recovery). PUT /auth/v1/user with that bearer.
+ */
+export async function updatePasswordWithToken(accessToken: string, newPassword: string): Promise<AuthResult> {
+  if (!SUPABASE_CONFIGURED) return { ok: false, code: "not_configured", error: "Portal is not configured." };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ password: newPassword }),
+    });
+  } catch (e) {
+    return { ok: false, code: "unknown", error: String(e) };
+  }
+  const text = await res.text();
+  let data: Record<string, unknown> = {};
+  try { data = text ? (JSON.parse(text) as Record<string, unknown>) : {}; } catch { /* keep {} */ }
+  if (res.status >= 400) { const raw = rawError(data); return { ok: false, code: mapAuthError(res.status, raw), error: raw }; }
+  return { ok: true };
+}
+
 /** Best-effort server-side revoke, then always clear the local session. */
 export async function logout(): Promise<void> {
   const s = await getValidSession();

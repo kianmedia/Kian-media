@@ -110,6 +110,10 @@ export default function PortalShell({ children }: { children: ReactNode }) {
     setPhase("auth");
   }, []);
 
+  // The password-reset page is reached from an email link with a recovery token
+  // (no session yet), so it must bypass the auth gate and render its own flow.
+  if (pathname === "/client-portal/reset-password") return <>{children}</>;
+
   // ─── Gates ───
   if (phase === "loading") {
     return (
