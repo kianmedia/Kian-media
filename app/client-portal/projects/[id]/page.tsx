@@ -117,8 +117,8 @@ export default function ProjectDetailPage() {
         <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={t(revision)} />
       </div>
 
-      {/* Deliverables — admin manages; client reviews (embed + approve/revise) */}
-      <Section title={isAdmin ? t({ ar: "إدارة المخرجات", en: "Manage Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
+      {/* Deliverables — admin manages; client reviews (preview modal + approve/revise) */}
+      <Section title={isAdmin ? t({ ar: "إدارة مخرجات المراجعة", en: "Manage Review Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
         {isAdmin ? <AdminDeliverables projectId={id} /> : <DeliverableReview projectId={id} />}
       </Section>
 
