@@ -14,8 +14,10 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { getProject, listChat } from "@/lib/portal/projects";
 import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
+import { adminListClientsByIds } from "@/lib/portal/admin";
 import {
-  STATUS_STEPS, projectStatusLabel, computeDeliveryStatus, computeReviewStatus,
+  STATUS_STEPS, projectStatusLabel,
+  computeShootingStatus, computeDeliveryStatus, computeReviewStatus,
 } from "@/components/portal/projectMeta";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
@@ -38,6 +40,8 @@ export default function ProjectDetailPage() {
   const [dlvPhase, setDlvPhase] = useState<"loading" | "ready" | "error">("loading");
   const [dlvs, setDlvs] = useState<Deliverable[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
+  // Client email — admin only, for the "ready for preview" email recipient.
+  const [clientEmail, setClientEmail] = useState<string | null>(null);
 
   const loadDeliverables = useCallback(async () => {
     const dr = await listDeliverables(id);
@@ -68,6 +72,18 @@ export default function ProjectDetailPage() {
 
   useEffect(() => { void loadDeliverables(); }, [loadDeliverables]);
 
+  // Resolve the client's email (admin only) so the "ready for preview" email has
+  // a recipient. Clients never run this (admin-only RLS on the clients table).
+  useEffect(() => {
+    if (!isAdmin || !project?.client_id) return;
+    let alive = true;
+    (async () => {
+      const r = await adminListClientsByIds([project.client_id]);
+      if (alive && r.ok) setClientEmail(r.data[0]?.email ?? null);
+    })();
+    return () => { alive = false; };
+  }, [isAdmin, project?.client_id]);
+
   const back = (
     <Link href="/client-portal/projects" className="f-sans inline-flex items-center gap-2 mb-8"
       style={{ fontSize: "11px", letterSpacing: "2px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)", textDecoration: "none" }}>
@@ -90,6 +106,7 @@ export default function ProjectDetailPage() {
   const stepIndex = Math.max(0, STATUS_STEPS.findIndex((s) => s.key === p.status));
   const statusLabel = projectStatusLabel(p.status);
   const dlvReady = dlvPhase === "ready";
+  const shooting = computeShootingStatus(p.shooting_date, p.status);
   const delivery = computeDeliveryStatus(dlvs, p.status);
   const review = computeReviewStatus(dlvs, reviews);
 
@@ -133,7 +150,7 @@ export default function ProjectDetailPage() {
 
       {/* Details grid — computed from live deliverable/review data */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">
-        <Detail label={t({ ar: "تاريخ التصوير", en: "Shooting Date" })} value={p.shooting_date || t({ ar: "لم يُحدد بعد", en: "Not set yet" })} />
+        <Detail label={t({ ar: "حالة التصوير", en: "Shooting Status" })} value={t(shooting)} />
         <Detail label={t({ ar: "حالة التسليم", en: "Delivery Status" })} value={dlvReady ? t(delivery) : "…"} />
         <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={dlvReady ? t(review) : "…"} />
       </div>
@@ -145,9 +162,9 @@ export default function ProjectDetailPage() {
         ) : dlvPhase === "error" ? (
           <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{t({ ar: "تعذّر تحميل المخرجات.", en: "Couldn't load deliverables." })}</div>
         ) : isAdmin ? (
-          <AdminDeliverables projectId={id} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
+          <AdminDeliverables projectId={id} projectName={p.project_name} clientEmail={clientEmail} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
         ) : (
-          <DeliverableReview projectId={id} items={dlvs} onChanged={loadDeliverables} />
+          <DeliverableReview projectId={id} projectName={p.project_name} items={dlvs} onChanged={loadDeliverables} />
         )}
       </Section>
 

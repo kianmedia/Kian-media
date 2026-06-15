@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { adminAddDeliverable, adminSetDeliverable } from "@/lib/portal/admin";
+import { notifyReviewReady } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
 import type { Deliverable, DeliverableReview, DeliverableType, DeliverableStatus } from "@/lib/portal/types";
@@ -26,8 +27,11 @@ const TYPES: { v: DeliverableType; ar: string; en: string }[] = [
 ];
 
 export default function AdminDeliverables({
-  projectId, items, reviews, onChanged,
-}: { projectId: string; items: Deliverable[]; reviews: DeliverableReview[]; onChanged: () => void }) {
+  projectId, projectName, clientEmail, items, reviews, onChanged,
+}: {
+  projectId: string; projectName: string; clientEmail?: string | null;
+  items: Deliverable[]; reviews: DeliverableReview[]; onChanged: () => void;
+}) {
   const { t, isAr } = useI18n();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
@@ -46,6 +50,8 @@ export default function AdminDeliverables({
     const r = await adminSetDeliverable({ deliverableId: d.id, status });
     setBusyId(null);
     if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked (workflow order)" : r.error) }); onChanged(); return; }
+    // Moving to client_review → email the client that work is ready for preview.
+    if (status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: d.title, clientEmail });
     setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }) });
     onChanged();
   }
@@ -112,13 +118,18 @@ export default function AdminDeliverables({
         </div>
       )}
 
-      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); onChanged(); }} />}
+      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={(info) => {
+        setShowAdd(false);
+        // Added straight into client_review → email the client it's ready to preview.
+        if (info.status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: info.title, clientEmail });
+        onChanged();
+      }} />}
       {preview && <PreviewModal title={preview.title} url={preview.url} onClose={() => setPreview(null)} />}
     </div>
   );
 }
 
-function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: () => void }) {
+function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: (info: { title: string; status: string }) => void }) {
   const { t, isAr } = useI18n();
   const [title, setTitle] = useState("");
   const [type, setType] = useState<DeliverableType>("video");
@@ -136,7 +147,7 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
     const r = await adminAddDeliverable({ projectId, title: title.trim(), type, previewUrl: previewUrl.trim() || undefined, vimeoUrl: vimeoUrl.trim() || undefined, status });
     setAdding(false);
     if (!r.ok) { setErr(t({ ar: "تعذّر الإضافة: ", en: "Add failed: " }) + r.error); return; }
-    onAdded();
+    onAdded({ title: title.trim(), status });
   }
 
   const input: React.CSSProperties = { width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "12px 14px", color: "#fff", fontSize: "14px", fontFamily: "var(--sans)", outline: "none", colorScheme: "dark" };

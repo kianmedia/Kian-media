@@ -12,8 +12,10 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
 import { submitReview } from "@/lib/portal/deliverables";
 import { canApprove } from "@/lib/portal/projects";
+import { notifyReviewUpdate } from "@/lib/portal/notifyEmail";
 import { DLV_STATUS_LABELS } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
 import type { Deliverable } from "@/lib/portal/types";
@@ -21,9 +23,10 @@ import type { Deliverable } from "@/lib/portal/types";
 const CLIENT_VISIBLE = ["client_review", "revision_requested", "approved", "final_delivered"];
 
 export default function DeliverableReview({
-  projectId, items, onChanged,
-}: { projectId: string; items: Deliverable[]; onChanged: () => void }) {
+  projectId, projectName, items, onChanged,
+}: { projectId: string; projectName: string; items: Deliverable[]; onChanged: () => void }) {
   const { t } = useI18n();
+  const { profile } = usePortal();
   const [owner, setOwner] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reviseFor, setReviseFor] = useState<string | null>(null);
@@ -45,6 +48,11 @@ export default function DeliverableReview({
     const r = await submitReview(d.id, decision, note);
     setBusyId(null);
     if (!r.ok) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر الإرسال: ", en: "Failed: " }) + r.error }); return; }
+    // Email Kian/admins that the client reviewed (best-effort; never blocks the UI).
+    void notifyReviewUpdate({
+      projectId, projectName, deliverableTitle: d.title, action: decision, note,
+      clientName: profile.full_name, clientEmail: profile.email,
+    });
     setReviseFor(null); setReviseNote("");
     setFlash({ id: d.id, kind: "ok", text: decision === "approved" ? t({ ar: "تم الاعتماد ✓", en: "Approved ✓" }) : t({ ar: "تم إرسال طلب التعديل ✓", en: "Revision requested ✓" }) });
     onChanged();

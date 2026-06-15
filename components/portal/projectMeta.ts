@@ -61,15 +61,34 @@ export const REVIEW_DECISION_LABELS: Record<string, { ar: string; en: string }> 
 // These replace the unmaintained legacy projects.delivery_status /
 // projects.revision_status free-text columns.
 
-/** حالة التسليم — highest-precedence deliverable state present, else project status. */
+/**
+ * حالة التصوير — real shooting_date if set; else "تم التصوير" once the project
+ * timeline reached shooting_completed (or later); else "لم يُحدد بعد".
+ * For a real date both ar/en hold the same string (renders verbatim via t()).
+ */
+export function computeShootingStatus(
+  shootingDate: string | null, projectStatus: string,
+): { ar: string; en: string } {
+  if (shootingDate) return { ar: shootingDate, en: shootingDate };
+  const idx = STATUS_STEPS.findIndex((s) => s.key === projectStatus);
+  const shotIdx = STATUS_STEPS.findIndex((s) => s.key === "shooting_completed");
+  if (idx >= 0 && idx >= shotIdx) return { ar: "تم التصوير", en: "Shot / Completed" };
+  return { ar: "لم يُحدد بعد", en: "Not set yet" };
+}
+
+/**
+ * حالة التسليم — highest-precedence deliverable state present, else project
+ * status. Never reports "ready to deliver" until the client has actually
+ * approved (client_review shows "awaiting client approval", not "ready").
+ */
 export function computeDeliveryStatus(
   deliverables: { status: string }[], projectStatus: string,
 ): { ar: string; en: string } {
   const has = (s: string) => deliverables.some((d) => d.status === s);
-  if (has("final_delivered"))    return { ar: "تم التسليم",     en: "Delivered" };
-  if (has("approved"))           return { ar: "جاهز للتسليم",   en: "Ready for Delivery" };
-  if (has("client_review"))      return { ar: "قيد المراجعة",   en: "In Review" };
-  if (has("revision_requested")) return { ar: "تعديلات مطلوبة", en: "Revisions Requested" };
+  if (has("final_delivered"))    return { ar: "تم التسليم",            en: "Delivered" };
+  if (has("approved"))           return { ar: "معتمد — جاهز للتسليم",   en: "Approved — Ready to Deliver" };
+  if (has("client_review"))      return { ar: "بانتظار اعتماد العميل",  en: "Awaiting Client Approval" };
+  if (has("revision_requested")) return { ar: "تعديل مطلوب قبل التسليم", en: "Revision Needed Before Delivery" };
   const ps = STATUS_STEPS.find((s) => s.key === projectStatus);
   return ps ? { ar: ps.ar, en: ps.en } : { ar: "قيد الانتظار", en: "Pending" };
 }
