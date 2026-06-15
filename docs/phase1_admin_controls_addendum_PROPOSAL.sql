@@ -1,0 +1,50 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- KIAN PORTAL — ADMIN CONTROLS ADDENDUM (PROPOSAL ONLY — NOT RUN)
+--
+-- The admin controls patch (project status, account status/type/level, send
+-- message) uses ONLY existing S1 RPCs + existing RLS. The items below were
+-- BLOCKED by missing grants and are deferred — apply after review if wanted.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+
+-- ── #2 Admin quote-request status control (BLOCKED: no UPDATE grant) ─────────
+-- quote_requests has SELECT + INSERT grants only; admins cannot UPDATE status.
+-- Add an is_admin()-guarded RPC (same pattern as S1) — do NOT broadly grant
+-- UPDATE. Uses ONLY the DB-supported status values (no invented stages):
+--   new · in_review · quoted · accepted · rejected · archived
+--
+-- create or replace function public.admin_set_quote_status(p_quote uuid, p_status text)
+-- returns boolean language plpgsql security definer set search_path = public as $$
+-- declare v_rows int;
+-- begin
+--   if not public.is_admin() then raise exception 'admin only'; end if;
+--   if p_status <> all (array['new','in_review','quoted','accepted','rejected','archived']) then
+--     raise exception 'invalid quote status: %', p_status;
+--   end if;
+--   update public.quote_requests set status = p_status
+--    where id = p_quote and is_deleted = false;
+--   get diagnostics v_rows = row_count;
+--   return v_rows > 0;
+-- end; $$;
+-- revoke execute on function public.admin_set_quote_status(uuid,text) from public, anon;
+-- grant  execute on function public.admin_set_quote_status(uuid,text) to authenticated;
+--
+-- NOTE: the desired labels (reviewing/contacted/won/lost/closed) are NOT in the
+-- DB CHECK. Mapping suggestion if you want them later (requires also editing the
+-- quote_requests.status CHECK): reviewing→in_review, won→accepted, lost→rejected,
+-- closed→archived, contacted→(new column or a new status value).
+
+
+-- ── #4 Generic "admin message/announcement" notification type (OPTIONAL) ─────
+-- Manual client notifications currently reuse a real admin MESSAGE
+-- (adminReplySupport → messages insert → auto message_new notification), which
+-- works today. If you want a dedicated free-form announcement that is NOT a
+-- chat message, add a 'general' type to the notifications CHECK:
+--
+-- alter table public.notifications drop constraint notifications_type_check;
+-- alter table public.notifications add constraint notifications_type_check
+--   check (type in ('quote_request_new','message_new','file_link_new',
+--     'project_note_new','deliverable_new','revision_requested',
+--     'deliverable_approved','deliverable_final_delivered',
+--     'project_status_changed','general'));
+-- Then admin_notify(p_user,'general',...) can send arbitrary titled alerts.

@@ -12,8 +12,9 @@ import { adminCount } from "@/lib/portal/admin";
 import { listNotifications } from "@/lib/portal/notifications";
 import type { NotificationRow } from "@/lib/portal/types";
 
+type TileMode = "actionable" | "readonly";
 interface Tile {
-  href: string; ar: string; en: string; count: number | null; descAr: string; descEn: string;
+  href: string; ar: string; en: string; count: number | null; descAr: string; descEn: string; mode: TileMode;
 }
 
 export default function AdminDashboard() {
@@ -39,10 +40,12 @@ export default function AdminDashboard() {
   }, []);
 
   const tiles: Tile[] = [
-    { href: "/client-portal/quotes",   ar: "طلبات عروض السعر",     en: "Quote Requests", count: counts?.newQuotes ?? null, descAr: "طلب جديد", descEn: "new" },
-    { href: "/client-portal/messages", ar: "رسائل العملاء",        en: "Client Messages", count: counts?.clientMsgs ?? null, descAr: "رسالة من العملاء", descEn: "from clients" },
-    { href: "/client-portal/files",    ar: "روابط وملفات العملاء", en: "Client Files", count: counts?.files ?? null, descAr: "رابط", descEn: "links" },
-    { href: "/client-portal/projects", ar: "المشاريع",             en: "Projects", count: counts?.projects ?? null, descAr: "مشروع", descEn: "projects" },
+    { href: "/client-portal/projects", ar: "إدارة المشاريع",       en: "Project Management", count: counts?.projects ?? null, descAr: "مشروع", descEn: "projects", mode: "actionable" },
+    { href: "/client-portal/quotes",   ar: "طلبات عروض السعر",     en: "Quote Requests", count: counts?.newQuotes ?? null, descAr: "طلب جديد", descEn: "new", mode: "readonly" },
+    { href: "/client-portal/messages", ar: "رسائل العملاء",        en: "Client Messages", count: counts?.clientMsgs ?? null, descAr: "رسالة من العملاء", descEn: "from clients", mode: "actionable" },
+    { href: "/client-portal/files",    ar: "روابط وملفات العملاء", en: "Client Files", count: counts?.files ?? null, descAr: "رابط", descEn: "links", mode: "readonly" },
+    { href: "/client-portal/accounts", ar: "إدارة العملاء",        en: "Accounts", count: null, descAr: "الحسابات والصلاحيات", descEn: "accounts & status", mode: "actionable" },
+    { href: "/client-portal/notifications", ar: "الإشعارات",       en: "Notifications", count: null, descAr: "آخر التحديثات", descEn: "latest updates", mode: "readonly" },
   ];
 
   return (
@@ -63,13 +66,19 @@ export default function AdminDashboard() {
             style={{ display: "block", textDecoration: "none", padding: "24px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", transition: "all 0.4s" }}>
             <div className="flex items-baseline justify-between gap-3">
               <h3 className="text-white" style={{ fontSize: "16px", fontWeight: 700 }}>{t({ ar: tile.ar, en: tile.en })}</h3>
-              <span className="f-display" style={{ fontSize: "28px", color: "#E31E24", lineHeight: 1 }}>
-                {tile.count === null ? "—" : tile.count}
+              {tile.count !== null && (
+                <span className="f-display" style={{ fontSize: "28px", color: "#E31E24", lineHeight: 1 }}>{tile.count}</span>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-2" style={{ marginTop: "6px" }}>
+              <p className="text-white/45" style={{ fontSize: "12px" }}>{t({ ar: tile.descAr, en: tile.descEn })}</p>
+              <span className="f-sans" style={{ fontSize: "8.5px", letterSpacing: "1px", textTransform: "uppercase", padding: "3px 8px", borderRadius: "2px",
+                color: tile.mode === "actionable" ? "rgba(124,252,154,0.8)" : "rgba(255,255,255,0.45)",
+                background: tile.mode === "actionable" ? "rgba(124,252,154,0.08)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${tile.mode === "actionable" ? "rgba(124,252,154,0.3)" : "rgba(255,255,255,0.12)"}` }}>
+                {tile.mode === "actionable" ? t({ ar: "قابل للتعديل", en: "Actionable" }) : t({ ar: "للعرض فقط", en: "View only" })}
               </span>
             </div>
-            <p className="text-white/45" style={{ fontSize: "12px", marginTop: "6px" }}>
-              {tile.count === null ? t({ ar: "جارٍ التحميل...", en: "Loading..." }) : t({ ar: tile.descAr, en: tile.descEn })}
-            </p>
           </Link>
         ))}
       </div>

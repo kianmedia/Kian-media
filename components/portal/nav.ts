@@ -23,6 +23,7 @@ const TABS: PortalTab[] = [
   { key: "quotes",        href: "/client-portal/quotes",        ar: "طلبات السعر", en: "Quotes",        adminAr: "طلبات عروض السعر",      adminEn: "Quote Requests",  roles: ["lead", "client", "admin"] },
   { key: "messages",      href: "/client-portal/messages",      ar: "الرسائل",     en: "Messages",      adminAr: "رسائل العملاء",         adminEn: "Client Messages", roles: ["lead", "client", "admin"] },
   { key: "files",         href: "/client-portal/files",         ar: "ملفاتي",      en: "My Files",      adminAr: "روابط وملفات العملاء",  adminEn: "Client Files",    roles: ["lead", "client", "admin"] },
+  { key: "accounts",      href: "/client-portal/accounts",      ar: "الحسابات",    en: "Accounts",      adminAr: "إدارة العملاء",         adminEn: "Accounts",        roles: ["admin"] },
   { key: "offers",        href: "/client-portal/offers",        ar: "العروض",      en: "Offers",        roles: ["lead", "client"] },
   { key: "notifications", href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications", roles: ["lead", "client", "admin"] },
   { key: "profile",       href: "/client-portal/profile",       ar: "ملفي",        en: "Profile",       adminAr: "الإعدادات",             adminEn: "Settings",        roles: ["lead", "client", "admin"] },

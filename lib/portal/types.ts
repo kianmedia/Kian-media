@@ -149,6 +149,17 @@ export interface Offer extends SoftDeletable {
   created_at: string;
 }
 
+/** Legacy `clients` table (admin-provisioned; the client→project link). */
+export interface ClientRow extends SoftDeletable {
+  id: string;
+  user_id: string;
+  full_name: string | null;
+  company: string | null;
+  mobile: string | null;
+  email: string | null;
+  created_at: string;
+}
+
 export interface Project extends SoftDeletable {
   id: string;
   project_name: string;

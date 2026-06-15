@@ -9,9 +9,16 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { listMyProjects } from "@/lib/portal/projects";
 import { projectStatusLabel } from "@/components/portal/projectMeta";
+import AdminProjects from "@/components/portal/AdminProjects";
 import type { Project } from "@/lib/portal/types";
 
+// Role switch: admin → project management (status control); client/lead → list.
 export default function ProjectsPage() {
+  const { profile } = usePortal();
+  return profile.account_type === "admin" ? <AdminProjects /> : <ClientProjects />;
+}
+
+function ClientProjects() {
   const { t, isAr } = useI18n();
   const { profile } = usePortal();
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");

@@ -11,9 +11,9 @@
 
 import { pget, ppost, prpc, enc, currentUserId, type Result } from "@/lib/portal/client";
 import type {
-  AccountStatus, AccountType, ClientLevel, DeliverableStatus, DeliverableType,
+  AccountStatus, AccountType, ClientLevel, ClientRow, DeliverableStatus, DeliverableType,
   FileLink, InternalComment, InternalCommentCategory, MessageRow, NotificationType,
-  Profile, ProjectMessage, ProjectStatus, QuoteRequest,
+  Profile, Project, ProjectMessage, ProjectStatus, QuoteRequest,
 } from "@/lib/portal/types";
 
 /** Sender info shown in the admin inbox (subset of profiles). */
@@ -28,6 +28,23 @@ export function adminListQuotes(status?: string): Promise<Result<QuoteRequest[]>
 /** All client-submitted file links (admin reads all via the files RLS policy). */
 export function adminListAllFiles(limit = 300): Promise<Result<FileLink[]>> {
   return pget<FileLink[]>(`file_links?select=*&order=created_at.desc&limit=${limit}`);
+}
+
+/** All projects (admin-all RLS). */
+export function adminListProjects(limit = 300): Promise<Result<Project[]>> {
+  return pget<Project[]>(`projects?select=*&is_deleted=eq.false&order=created_at.desc&limit=${limit}`);
+}
+
+/** Resolve client rows (name/company) for a set of clients.id values. */
+export async function adminListClientsByIds(ids: string[]): Promise<Result<ClientRow[]>> {
+  if (ids.length === 0) return { ok: true, data: [] };
+  const inList = ids.map((id) => enc(id)).join(",");
+  return pget<ClientRow[]>(`clients?id=in.(${inList})&select=id,user_id,full_name,company,email`);
+}
+
+/** All portal profiles for account management (admin reads all via profiles RLS). */
+export function adminListProfiles(limit = 500): Promise<Result<Profile[]>> {
+  return pget<Profile[]>(`profiles?select=*&order=created_at.desc&limit=${limit}`);
 }
 
 /** Exact row count for a dashboard tile (head request). 0 on any error. */
