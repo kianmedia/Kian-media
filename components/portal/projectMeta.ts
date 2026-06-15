@@ -3,12 +3,15 @@
 // Single source for the projects list, project detail timeline, and S7/S8.
 // ════════════════════════════════════════════════════════════════════════
 
+// Project STATUS values the DB actually supports (admin_set_project_status RPC
+// validates against exactly these 7). The admin stage dropdown is built from
+// these; setting any other value is rejected by the RPC.
 export const STATUS_STEPS: { key: string; ar: string; en: string }[] = [
   { key: "request_received",   ar: "استلام الطلب",   en: "Request Received" },
   { key: "pre_production",     ar: "مرحلة التحضير",  en: "Pre-Production" },
   { key: "shooting_scheduled", ar: "جدولة التصوير",  en: "Shooting Scheduled" },
   { key: "shooting_completed", ar: "اكتمال التصوير", en: "Shooting Completed" },
-  { key: "editing",            ar: "المونتاج",        en: "Editing" },
+  { key: "editing",            ar: "مرحلة المونتاج", en: "Editing" },
   { key: "ready_for_review",   ar: "جاهز للمراجعة",  en: "Ready for Review" },
   { key: "delivered",          ar: "تم التسليم",      en: "Delivered" },
 ];
@@ -16,6 +19,30 @@ export const STATUS_STEPS: { key: string; ar: string; en: string }[] = [
 export function projectStatusLabel(status: string): { ar: string; en: string } {
   return STATUS_STEPS.find((s) => s.key === status) ?? { ar: status, en: status };
 }
+
+// ─── Unified 10-step VISUAL timeline (project detail). Some steps are set by the
+// admin (project.status, DB-backed) and some are reached only by deliverable
+// state (client_review/approved/final_delivered). `filming` has no DB project
+// status yet — see docs/phase1_project_stages_PROPOSAL.sql.
+export type TimelineSource = "project" | "deliverable" | "proposed";
+export const TIMELINE_STEPS: { key: string; ar: string; en: string; source: TimelineSource }[] = [
+  { key: "request_received",   ar: "استلام الطلب",         en: "Request Received",        source: "project" },
+  { key: "pre_production",     ar: "مرحلة التحضير",        en: "Pre-Production",          source: "project" },
+  { key: "shooting_scheduled", ar: "جدولة التصوير",        en: "Shooting Scheduled",      source: "project" },
+  { key: "filming",            ar: "مرحلة التصوير",        en: "Filming",                 source: "proposed" },
+  { key: "shooting_completed", ar: "اكتمال التصوير",       en: "Shooting Completed",      source: "project" },
+  { key: "editing",            ar: "مرحلة المونتاج",       en: "Editing",                 source: "project" },
+  { key: "ready_for_review",   ar: "جاهز للمراجعة",        en: "Ready for Review",        source: "project" },
+  { key: "client_review",      ar: "بانتظار اعتماد العميل", en: "Awaiting Client Approval", source: "deliverable" },
+  { key: "approved",           ar: "معتمد",                en: "Approved",                source: "deliverable" },
+  { key: "delivered",          ar: "تم التسليم",           en: "Delivered",               source: "project" },
+];
+
+// Map a DB project.status → its index in the 10-step visual timeline.
+const PROJECT_STATUS_TO_TIMELINE: Record<string, number> = {
+  request_received: 0, pre_production: 1, shooting_scheduled: 2,
+  filming: 3, shooting_completed: 4, editing: 5, ready_for_review: 6, delivered: 9,
+};
 
 export const DELIVERY_LABELS: Record<string, { ar: string; en: string }> = {
   pending:     { ar: "قيد الانتظار", en: "Pending" },
@@ -62,18 +89,22 @@ export const REVIEW_DECISION_LABELS: Record<string, { ar: string; en: string }> 
 // projects.revision_status free-text columns.
 
 /**
- * حالة التصوير — real shooting_date if set; else "تم التصوير" once the project
- * timeline reached shooting_completed (or later); else "لم يُحدد بعد".
- * For a real date both ar/en hold the same string (renders verbatim via t()).
+ * حالة التصوير — derived from the project stage (4 states):
+ *   shooting_completed or later → تم التصوير
+ *   filming                     → جاري التصوير
+ *   shooting_scheduled / a date → تم جدولة التصوير
+ *   before shooting             → لم يبدأ التصوير
  */
 export function computeShootingStatus(
   shootingDate: string | null, projectStatus: string,
 ): { ar: string; en: string } {
-  if (shootingDate) return { ar: shootingDate, en: shootingDate };
   const idx = STATUS_STEPS.findIndex((s) => s.key === projectStatus);
+  const scheduledIdx = STATUS_STEPS.findIndex((s) => s.key === "shooting_scheduled");
   const shotIdx = STATUS_STEPS.findIndex((s) => s.key === "shooting_completed");
-  if (idx >= 0 && idx >= shotIdx) return { ar: "تم التصوير", en: "Shot / Completed" };
-  return { ar: "لم يُحدد بعد", en: "Not set yet" };
+  if (idx >= 0 && idx >= shotIdx)             return { ar: "تم التصوير",       en: "Shooting Completed" };
+  if (projectStatus === "filming")            return { ar: "جاري التصوير",     en: "Filming" };
+  if ((idx >= 0 && idx >= scheduledIdx) || shootingDate) return { ar: "تم جدولة التصوير", en: "Shooting Scheduled" };
+  return { ar: "لم يبدأ التصوير", en: "Not Started" };
 }
 
 /**
@@ -94,24 +125,24 @@ export function computeDeliveryStatus(
 }
 
 /**
- * Active timeline step — project.status mapping, overridden by live deliverable
- * state so the bar reflects the real operational stage (the legacy projects.status
- * column isn't auto-advanced when a deliverable is delivered). Display-only;
- * never writes the DB. Precedence mirrors the delivery card.
+ * Active step in the 10-step visual timeline. Follows the admin-set project
+ * stage first; live deliverable state can only override FORWARD (when stronger):
+ *   final_delivered → تم التسليم (9)
+ *   approved        → معتمد (8, or further if the project stage is already past it)
+ *   client_review   → بانتظار اعتماد العميل (7, or further)
+ *   revision_requested → back at the review/revision stage, never "delivered"
+ * Display-only; never writes the DB.
  */
 export function computeTimelineIndex(
   deliverables: { status: string }[], projectStatus: string,
 ): number {
-  const idxOf = (k: string) => STATUS_STEPS.findIndex((s) => s.key === k);
-  const base = Math.max(0, idxOf(projectStatus));
+  const base = PROJECT_STATUS_TO_TIMELINE[projectStatus] ?? 0;
   const has = (s: string) => deliverables.some((d) => d.status === s);
-  const delivered = idxOf("delivered");
-  const ready = idxOf("ready_for_review");
-  const editing = idxOf("editing");
-  if (has("final_delivered"))     return delivered;                        // تم التسليم
-  if (has("approved"))            return ready;                            // ready for final delivery (not delivered)
-  if (has("client_review"))       return ready;                            // جاهز للمراجعة (even if project.status was advanced)
-  if (has("revision_requested"))  return Math.min(ready, Math.max(base, editing)); // review/revision, never delivered
+  const REVIEW = 6; // ready_for_review — the highest a revision round may show
+  if (has("final_delivered"))     return 9;                            // تم التسليم
+  if (has("approved"))            return Math.max(base, 8);            // معتمد
+  if (has("client_review"))       return Math.max(base, 7);            // بانتظار اعتماد العميل
+  if (has("revision_requested"))  return Math.min(REVIEW, Math.max(base, 5)); // review/revision, never delivered
   return base;
 }
 

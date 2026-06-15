@@ -95,10 +95,13 @@ export default function AdminDeliverables({
                         {t({ ar: "عرض المعاينة", en: "Preview" })}
                       </button>
                     )}
-                    <select value={d.status} disabled={busyId === d.id} onChange={(e) => setStatus(d, e.target.value as DeliverableStatus)} className="f-sans"
-                      style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(227,30,36,0.4)", borderRadius: "3px", padding: "8px 10px", fontSize: "12.5px", cursor: busyId === d.id ? "wait" : "pointer", colorScheme: "dark", outline: "none" }}>
-                      {DELIVERABLE_STATUSES.map((s) => <option key={s.key} value={s.key} style={{ background: "#0a0a0a" }}>{isAr ? s.ar : s.en}</option>)}
-                    </select>
+                    <div>
+                      <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "3px" }}>{t({ ar: "حالة المخرج", en: "Deliverable Status" })}</div>
+                      <select value={d.status} disabled={busyId === d.id} onChange={(e) => setStatus(d, e.target.value as DeliverableStatus)} className="f-sans"
+                        style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(227,30,36,0.4)", borderRadius: "3px", padding: "8px 10px", fontSize: "12.5px", cursor: busyId === d.id ? "wait" : "pointer", colorScheme: "dark", outline: "none" }}>
+                        {DELIVERABLE_STATUSES.map((s) => <option key={s.key} value={s.key} style={{ background: "#0a0a0a" }}>{isAr ? s.ar : s.en}</option>)}
+                      </select>
+                    </div>
                   </div>
                 </div>
 

@@ -16,12 +16,13 @@ import { getProject, listChat } from "@/lib/portal/projects";
 import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
 import { adminListClientsByIds } from "@/lib/portal/admin";
 import {
-  STATUS_STEPS,
+  TIMELINE_STEPS,
   computeShootingStatus, computeDeliveryStatus, computeReviewStatus, computeTimelineIndex,
 } from "@/components/portal/projectMeta";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
+import AdminProjectStage from "@/components/portal/AdminProjectStage";
 import type { Project, ProjectMessage, Deliverable, DeliverableReview as Review } from "@/lib/portal/types";
 
 export default function ProjectDetailPage() {
@@ -103,10 +104,10 @@ export default function ProjectDetailPage() {
   }
 
   const p = project!;
-  // Timeline + header badge reflect the real operational stage: project.status
-  // mapping overridden by live deliverable state (e.g. final_delivered → تم التسليم).
+  // Timeline + header badge reflect the real operational stage: admin-set project
+  // stage, overridden forward by live deliverable state (e.g. final_delivered → تم التسليم).
   const stepIndex = computeTimelineIndex(dlvs, p.status);
-  const currentStep = STATUS_STEPS[stepIndex] ?? STATUS_STEPS[0];
+  const currentStep = TIMELINE_STEPS[stepIndex] ?? TIMELINE_STEPS[0];
   const statusLabel = { ar: currentStep.ar, en: currentStep.en };
   const dlvReady = dlvPhase === "ready";
   const shooting = computeShootingStatus(p.shooting_date, p.status);
@@ -127,29 +128,35 @@ export default function ProjectDetailPage() {
         </span>
       </div>
 
-      {/* Timeline */}
-      <Section title={t({ ar: "مراحل المشروع", en: "Project Timeline" })}>
-        <div className="flex items-center" dir="ltr" style={{ gap: 0 }}>
-          {STATUS_STEPS.map((s, i) => {
-            const done = i <= stepIndex;
-            return (
-              <div key={s.key} className="flex items-center" style={{ flex: i === STATUS_STEPS.length - 1 ? "0 0 auto" : "1 1 0%" }}>
-                <div style={{ width: "14px", height: "14px", borderRadius: "50%", flexShrink: 0, background: done ? "#E31E24" : "rgba(255,255,255,0.08)", border: `2px solid ${done ? "#E31E24" : "rgba(255,255,255,0.2)"}`, boxShadow: done ? "0 0 10px rgba(227,30,36,0.5)" : "none" }} />
-                {i < STATUS_STEPS.length - 1 && (
-                  <div style={{ height: "2px", flex: 1, background: i < stepIndex ? "#E31E24" : "rgba(255,255,255,0.1)" }} />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <div className="hidden md:flex" dir="ltr" style={{ marginTop: "10px" }}>
-          {STATUS_STEPS.map((s, i) => (
-            <div key={s.key} className="f-sans" style={{ flex: i === STATUS_STEPS.length - 1 ? "0 0 auto" : "1 1 0%", fontSize: "9.5px", letterSpacing: "0.3px", color: i <= stepIndex ? "rgba(255,255,255,0.75)" : "rgba(255,255,255,0.3)", textAlign: i === STATUS_STEPS.length - 1 ? "right" : "left", paddingInlineEnd: "6px" }}>
-              {t({ ar: s.ar, en: s.en })}
-            </div>
-          ))}
+      {/* Timeline — 10 visual steps; scrolls horizontally on narrow screens */}
+      <Section title={t({ ar: "مرحلة المشروع", en: "Project Stage" })}>
+        <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
+          <div className="flex items-start" dir="ltr" style={{ minWidth: "720px", gap: 0 }}>
+            {TIMELINE_STEPS.map((s, i) => {
+              const done = i <= stepIndex;
+              const isLast = i === TIMELINE_STEPS.length - 1;
+              return (
+                <div key={s.key} style={{ flex: isLast ? "0 0 72px" : "1 1 0%", minWidth: "72px" }}>
+                  <div className="flex items-center">
+                    <div style={{ width: "14px", height: "14px", borderRadius: "50%", flexShrink: 0, background: done ? "#E31E24" : "rgba(255,255,255,0.08)", border: `2px solid ${done ? "#E31E24" : "rgba(255,255,255,0.2)"}`, boxShadow: done ? "0 0 10px rgba(227,30,36,0.5)" : "none" }} />
+                    {!isLast && <div style={{ height: "2px", flex: 1, background: i < stepIndex ? "#E31E24" : "rgba(255,255,255,0.1)" }} />}
+                  </div>
+                  <div className="f-sans" style={{ marginTop: "8px", paddingInlineEnd: "8px", fontSize: "9.5px", lineHeight: 1.4, letterSpacing: "0.2px", color: i <= stepIndex ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.3)" }}>
+                    {t({ ar: s.ar, en: s.en })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </Section>
+
+      {/* Admin-only: set the project stage (drives the timeline) */}
+      {isAdmin && (
+        <Section title={t({ ar: "تحديد مرحلة المشروع", en: "Set Project Stage" })}>
+          <AdminProjectStage projectId={id} current={p.status} onChanged={(next) => setProject((prev) => (prev ? { ...prev, status: next } : prev))} />
+        </Section>
+      )}
 
       {/* Details grid — computed from live deliverable/review data */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">

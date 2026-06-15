@@ -1,0 +1,42 @@
+-- ════════════════════════════════════════════════════════════════════════
+-- PROPOSAL ONLY — NOT RUN. Project-stage coverage for the 10-step timeline.
+--
+-- The owner asked the admin stage dropdown to cover 10 stages. Three are not
+-- currently settable as project.status:
+--
+--   1. "مرحلة التصوير" (filming)            — a genuine NEW project stage,
+--      between shooting_scheduled and shooting_completed. NOT in the RPC's
+--      allowed list, so admin_set_project_status rejects it today.
+--
+--   2. "بانتظار اعتماد العميل" (client_review) — DELIVERABLE-derived, not a
+--   3. "معتمد" (approved)                    — project stage. The timeline
+--      reaches these from the deliverable status (admin_set_deliverable),
+--      so NO project-status value should be added for them. Adding them as
+--      project statuses would duplicate / fight the deliverable workflow.
+--
+-- projects.status is a legacy free-text column (no enum / no CHECK constraint),
+-- so the ONLY thing gating values is the RPC's IN-list below. To support
+-- "filming", widen that list. Run in Supabase SQL editor ONLY after owner
+-- approval. (Mirrors the existing function in docs/phase1_addendum_s1.sql.)
+-- ════════════════════════════════════════════════════════════════════════
+
+-- create or replace function public.admin_set_project_status(p_project uuid, p_status text)
+-- returns boolean language plpgsql security definer set search_path = public as $$
+-- declare v_rows int;
+-- begin
+--   if not public.is_admin() then raise exception 'admin only'; end if;
+--   if p_status <> all (array['request_received','pre_production','shooting_scheduled',
+--                             'filming',                       -- ← NEW (مرحلة التصوير)
+--                             'shooting_completed','editing','ready_for_review','delivered']) then
+--     raise exception 'invalid project status: %', p_status;
+--   end if;
+--   update public.projects set status = p_status
+--    where id = p_project and is_deleted = false;
+--   get diagnostics v_rows = row_count;
+--   return v_rows > 0;
+-- end; $$;
+
+-- After running: the app already maps "filming" → timeline step 4 (مرحلة التصوير)
+-- and the AdminProjectStage dropdown will enable it automatically (its
+-- TIMELINE_STEPS source is "proposed"; flip it to "project" in
+-- components/portal/projectMeta.ts once the RPC accepts it).
