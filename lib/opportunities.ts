@@ -280,3 +280,48 @@ export function archiveOpportunityRequest(requestId: string): Promise<Result<boo
 export function assignOpportunity(requestId: string, staffUserId: string | null): Promise<Result<boolean>> {
   return prpc<boolean>("assign_opportunity", { p_request: requestId, p_staff: staffUserId });
 }
+
+// ─── Applicant tracking (opportunity_applicant_tracking_ADDENDUM.sql) ───
+export interface MyOpportunityRequest {
+  id: string; request_number: string | null; opportunity_type: string;
+  status: string; message: string | null; details: Record<string, string>; created_at: string;
+}
+export interface OpportunityMessage {
+  id: string; request_id?: string; sender: "applicant" | "kian"; author_id?: string | null;
+  body: string; created_at: string;
+}
+
+/** Applicant-safe: the caller's own requests (email-matched, safe columns) via RPC. */
+export function listMyOpportunityRequests(): Promise<Result<MyOpportunityRequest[]>> {
+  return prpc<MyOpportunityRequest[]>("list_my_opportunity_requests", {});
+}
+/** Applicant-safe: the Kian⇄applicant thread for one of the caller's requests. */
+export function listMyOpportunityMessages(requestId: string): Promise<Result<OpportunityMessage[]>> {
+  return prpc<OpportunityMessage[]>("list_my_opportunity_messages", { p_request: requestId });
+}
+/** Applicant sends a message on their own request. */
+export function addOpportunityMessage(requestId: string, body: string): Promise<Result<string>> {
+  return prpc<string>("add_opportunity_message", { p_request: requestId, p_body: body });
+}
+/** Staff: read the applicant thread (RLS: owner/admin/manager/hr). */
+export function listOpportunityMessages(requestId: string): Promise<Result<OpportunityMessage[]>> {
+  return pget<OpportunityMessage[]>(`opportunity_messages?request_id=eq.${enc(requestId)}&is_deleted=eq.false&select=*&order=created_at.asc`);
+}
+/** Staff: post a public reply visible to the applicant. */
+export function addOpportunityReply(requestId: string, body: string): Promise<Result<string>> {
+  return prpc<string>("add_opportunity_reply", { p_request: requestId, p_body: body });
+}
+
+/** Applicant-facing status labels (warmer than the admin labels). */
+export const APPLICANT_STATUS_LABELS: Record<string, Bi> = {
+  new:                 { ar: "تم الاستلام", en: "Received" },
+  under_review:        { ar: "قيد المراجعة", en: "Under Review" },
+  shortlisted:         { ar: "تم الترشيح", en: "Shortlisted" },
+  contacted:           { ar: "تم التواصل", en: "Contacted" },
+  interview_scheduled: { ar: "موعد / مقابلة", en: "Interview" },
+  accepted:            { ar: "مقبول", en: "Accepted" },
+  rejected:            { ar: "غير مناسب حاليًا", en: "Not a fit right now" },
+  archived:            { ar: "مؤرشف", en: "Archived" },
+};
+/** Forward progress path (rejected/archived are terminal, shown separately). */
+export const APPLICANT_TIMELINE = ["new", "under_review", "shortlisted", "contacted", "interview_scheduled", "accepted"];

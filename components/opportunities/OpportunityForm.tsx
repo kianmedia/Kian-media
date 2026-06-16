@@ -95,6 +95,17 @@ export default function OpportunityForm({ type, onBack }: { type: OppType; onBac
           </a>
           <button onClick={onBack} className="btn-ghost" style={{ justifyContent: "center" }}><span>{t({ ar: "إرسال طلب آخر", en: "Submit another request" })}</span></button>
         </div>
+
+        {/* Track via the portal — sign in / sign up with the same email */}
+        <div style={{ marginTop: "28px", paddingTop: "22px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+          <div className="f-sans" style={{ fontSize: "11px", letterSpacing: "2px", textTransform: "uppercase", color: "rgba(227,30,36,0.9)", fontWeight: 600, marginBottom: "8px" }}>
+            {t({ ar: "تابع حالة طلبك عبر بوابة كيان", en: "Track your request in the Kian portal" })}
+          </div>
+          <p className="text-white/55" style={{ fontSize: "13px", lineHeight: 1.8, marginBottom: "14px", maxWidth: "460px", marginInline: "auto" }}>
+            {t({ ar: "استخدم نفس البريد الإلكتروني الذي قدمت به الطلب لعرض حالة طلبك ومراسلة فريق كيان.", en: "Use the same email you applied with to view your status and message the Kian team." })}
+          </p>
+          <a href="/client-portal" className="btn-red" style={{ justifyContent: "center" }}><span>{t({ ar: "تسجيل الدخول / إنشاء حساب", en: "Sign in / Create account" })}</span></a>
+        </div>
       </div>
     );
   }

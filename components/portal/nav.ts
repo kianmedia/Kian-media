@@ -41,6 +41,12 @@ const SETS: Record<ViewRole, string[]> = {
   lead:        ["overview", "quotes", "messages", "files", "offers", "notifications", "profile"],
 };
 
+/** Applicant tab — appended by PortalShell only when the logged-in email matches
+ *  one or more opportunity requests (so non-applicants never see it). */
+export const MY_OPPORTUNITIES_TAB: PortalTab = {
+  key: "my_opportunities", href: "/client-portal/my-opportunities", ar: "طلباتي", en: "My Requests",
+};
+
 /** Tabs for the viewer, with admin-area label overrides resolved. */
 export function tabsForViewer(p: Pick<Profile, "account_type" | "staff_role">): PortalTab[] {
   const c = caps(p);

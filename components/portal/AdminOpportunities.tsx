@@ -12,10 +12,10 @@ import { adminListProfiles } from "@/lib/portal/admin";
 import type { Profile } from "@/lib/portal/types";
 import {
   listOpportunities, listOpportunityNotes, updateOpportunityStatus, updateOpportunityPriority,
-  addOpportunityNote, assignOpportunity,
+  addOpportunityNote, assignOpportunity, listOpportunityMessages, addOpportunityReply,
   OPPORTUNITY_TYPES, OPP_STATUS_LABELS, OPP_STATUSES, OPP_PRIORITY_LABELS, OPP_PRIORITIES,
   oppTypeLabel, oppFieldLabel,
-  type OpportunityRequest, type OpportunityNote,
+  type OpportunityRequest, type OpportunityNote, type OpportunityMessage,
 } from "@/lib/opportunities";
 
 const PRIORITY_COLOR: Record<string, string> = { low: "rgba(255,255,255,0.4)", normal: "rgba(124,180,252,0.9)", high: "rgba(255,196,0,0.95)", urgent: "#ff6b6f" };
@@ -208,11 +208,23 @@ function DetailModal({ req, staff, canAssign, onClose, onChanged }: { req: Oppor
   const [assignee, setAssignee] = useState(req.assigned_to ?? "");
   const [notes, setNotes] = useState<OpportunityNote[]>([]);
   const [noteBody, setNoteBody] = useState("");
+  const [msgs, setMsgs] = useState<OpportunityMessage[]>([]);
+  const [replyBody, setReplyBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   async function loadNotes() { const r = await listOpportunityNotes(req.id); if (r.ok) setNotes(r.data); }
-  useEffect(() => { void loadNotes(); /* eslint-disable-next-line */ }, [req.id]);
+  async function loadMsgs() { const r = await listOpportunityMessages(req.id); if (r.ok) setMsgs(r.data); }
+  useEffect(() => { void loadNotes(); void loadMsgs(); /* eslint-disable-next-line */ }, [req.id]);
+
+  async function sendReply() {
+    if (!replyBody.trim()) return;
+    setBusy(true); setFlash(null);
+    const r = await addOpportunityReply(req.id, replyBody.trim());
+    setBusy(false);
+    if (!r.ok) { setFlash({ kind: "err", text: t({ ar: "تعذّر إرسال الرد", en: "Reply failed" }) }); return; }
+    setReplyBody(""); setFlash({ kind: "ok", text: t({ ar: "تم إرسال الرد للمتقدّم ✓", en: "Reply sent to applicant ✓" }) }); void loadMsgs();
+  }
 
   async function saveStatus(s: string) {
     setStatus(s); setBusy(true); setFlash(null);
@@ -322,8 +334,32 @@ function DetailModal({ req, staff, canAssign, onClose, onChanged }: { req: Oppor
           <button onClick={() => void archive()} disabled={busy} className="f-sans" style={{ fontSize: "10.5px", color: "#ff8a8e", background: "none", border: "1px solid rgba(227,30,36,0.35)", padding: "9px 13px", borderRadius: "3px", cursor: busy ? "wait" : "pointer" }}>{t({ ar: "أرشفة", en: "Archive" })}</button>
         </div>
 
+        {/* Applicant conversation (visible to the applicant) — distinct from internal notes */}
+        <div className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>{t({ ar: "المراسلات مع مقدّم الطلب (يراها المتقدّم)", en: "Applicant conversation (visible to applicant)" })}</div>
+        {msgs.length === 0 ? (
+          <p className="text-white/40" style={{ fontSize: "12.5px", marginBottom: "10px" }}>{t({ ar: "لا رسائل بعد.", en: "No messages yet." })}</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "10px" }}>
+            {msgs.map((m) => {
+              const kian = m.sender === "kian";
+              return (
+                <div key={m.id} style={{ alignSelf: kian ? "flex-end" : "flex-start", maxWidth: "85%", padding: "9px 12px", borderRadius: "8px", background: kian ? "rgba(227,30,36,0.12)" : "rgba(255,255,255,0.04)", border: `1px solid ${kian ? "rgba(227,30,36,0.25)" : "rgba(255,255,255,0.08)"}` }}>
+                  <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "3px" }}>{kian ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "مقدّم الطلب", en: "Applicant" })}</div>
+                  <div className="text-white/85" style={{ fontSize: "13px", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.body}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex gap-2 items-end" style={{ marginBottom: "18px" }}>
+          <textarea value={replyBody} onChange={(e) => setReplyBody(e.target.value)} rows={2} maxLength={4000}
+            placeholder={t({ ar: "رد عام يراه مقدّم الطلب...", en: "Public reply (visible to the applicant)..." })}
+            style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "9px 11px", color: "#fff", fontSize: "12.5px", fontFamily: "var(--sans)", outline: "none", resize: "vertical", lineHeight: 1.6, colorScheme: "dark" }} />
+          <button onClick={() => void sendReply()} disabled={busy || !replyBody.trim()} className="btn-red" style={{ justifyContent: "center", opacity: busy || !replyBody.trim() ? 0.5 : 1 }}><span>{t({ ar: "رد", en: "Reply" })}</span></button>
+        </div>
+
         {/* Internal notes */}
-        <div className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>{t({ ar: "ملاحظات داخلية", en: "Internal Notes" })}</div>
+        <div className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>{t({ ar: "ملاحظات داخلية (لا يراها المتقدّم)", en: "Internal Notes (not visible to applicant)" })}</div>
         {notes.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
             {notes.map((n) => (

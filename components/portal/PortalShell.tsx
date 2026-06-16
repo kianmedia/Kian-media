@@ -12,7 +12,8 @@ import { updateMyProfile, type EditableProfileFields } from "@/lib/portal/accoun
 import { unreadCount } from "@/lib/portal/notifications";
 import type { Profile } from "@/lib/portal/types";
 import { caps as deriveCaps, type Caps } from "@/lib/portal/roles";
-import { tabsForViewer } from "@/components/portal/nav";
+import { tabsForViewer, MY_OPPORTUNITIES_TAB } from "@/components/portal/nav";
+import { listMyOpportunityRequests } from "@/lib/opportunities";
 import AuthTabs from "@/components/portal/AuthTabs";
 import { BlockedScreen, InactiveBanner } from "@/components/portal/StatusScreens";
 
@@ -30,6 +31,8 @@ type PortalCtx = {
   profile: Profile;
   /** Role/capability flags (mirrors DB enforcement; UI gating only). */
   caps: Caps;
+  /** True when the logged-in email matches ≥1 opportunity request (shows "طلباتي"). */
+  hasMyOpportunities: boolean;
   /** account_status === 'inactive' → hide/disable every mutating control */
   readOnly: boolean;
   reload: () => Promise<void>;
@@ -53,6 +56,7 @@ export default function PortalShell({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [err, setErr] = useState("");
   const [unread, setUnread] = useState(0);
+  const [hasMyOpps, setHasMyOpps] = useState(false);
 
   const bootstrap = useCallback(async () => {
     setPhase("loading");
@@ -87,6 +91,14 @@ export default function PortalShell({ children }: { children: ReactNode }) {
 
     setProfile(p);
     setPhase("ready");
+
+    // Applicant tab: show "طلباتي" only if this email matches ≥1 opportunity
+    // request. Best-effort — before the applicant addendum is run the RPC errors,
+    // so the tab stays hidden (graceful). Staff use the admin Opportunities Center.
+    try {
+      const mo = await listMyOpportunityRequests();
+      setHasMyOpps(mo.ok && mo.data.length > 0);
+    } catch { setHasMyOpps(false); }
   }, []);
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
@@ -146,10 +158,10 @@ export default function PortalShell({ children }: { children: ReactNode }) {
   const p = profile!;
   const readOnly = p.account_status === "inactive";
   const cps = deriveCaps(p);
-  const tabs = tabsForViewer(p);
+  const tabs = [...tabsForViewer(p), ...(hasMyOpps ? [MY_OPPORTUNITIES_TAB] : [])];
 
   return (
-    <Ctx.Provider value={{ profile: p, caps: cps, readOnly, reload: bootstrap, signOut }}>
+    <Ctx.Provider value={{ profile: p, caps: cps, hasMyOpportunities: hasMyOpps, readOnly, reload: bootstrap, signOut }}>
       {readOnly && <InactiveBanner />}
 
       {/* ─── Tab bar ─── */}
