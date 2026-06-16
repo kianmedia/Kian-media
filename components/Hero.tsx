@@ -155,14 +155,35 @@ export default function Hero() {
           <a href="/quote-request" className="btn-ghost">
             <span>{t({ ar: "اطلب عرض سعر", en: "Request a Quote" })}</span>
           </a>
-          <a href="/opportunities" className="btn-ghost">
-            <span>{t({ ar: "انضم إلى كيان", en: "Join Kian" })}</span>
-          </a>
           <a href={wa} target="_blank" rel="noopener noreferrer" className="btn-wa">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
             <span>{t({ ar: "واتساب", en: "WhatsApp" })}</span>
           </a>
         </motion.div>
+
+        {/* Premium "Join Kian" CTA — Opportunities Center entry, visually distinct */}
+        <motion.a
+          variants={f(0.78)} initial="hidden" animate="show"
+          href="/opportunities"
+          className="group flex items-center gap-4 mx-auto mb-16 w-full"
+          style={{
+            maxWidth: "560px", padding: "16px 22px", borderRadius: "10px", textDecoration: "none",
+            background: "linear-gradient(120deg, rgba(227,30,36,0.22), rgba(227,30,36,0.06))",
+            border: "1px solid rgba(227,30,36,0.5)",
+            boxShadow: "0 0 0 1px rgba(227,30,36,0.15), 0 14px 44px rgba(227,30,36,0.28)",
+          }}
+        >
+          <span style={{ flexShrink: 0, width: "44px", height: "44px", borderRadius: "9px", background: "rgba(227,30,36,0.9)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 18px rgba(227,30,36,0.5)" }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+          </span>
+          <span style={{ flex: 1, minWidth: 0, textAlign: isAr ? "right" : "left" }}>
+            <span className="block text-white" style={{ fontSize: "17px", fontWeight: 700, lineHeight: 1.3 }}>{t({ ar: "انضم إلى كيان", en: "Join Kian" })}</span>
+            <span className="block" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.7)", marginTop: "2px" }}>{t({ ar: "فرص التوظيف والتدريب والتعاون والمواهب", en: "Jobs, training, collaboration & talent opportunities" })}</span>
+          </span>
+          <span aria-hidden="true" style={{ flexShrink: 0, color: "#fff", transition: "transform 0.25s" }} className="group-hover:translate-x-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ transform: isAr ? "scaleX(-1)" : "none" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+          </span>
+        </motion.a>
 
         {/* Stats — hairline grid (original Netflix-editorial style) */}
         <motion.div variants={f(0.84)} initial="hidden" animate="show" className="grid grid-cols-2 md:grid-cols-4 gap-px max-w-3xl mx-auto w-full" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.08)" }}>

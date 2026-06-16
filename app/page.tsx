@@ -19,12 +19,14 @@ import Footer       from "@/components/Footer";
 import Cursor       from "@/components/Cursor";
 import WaFloat      from "@/components/WaFloat";
 import Marquee      from "@/components/Marquee";
+import OpportunityPromo from "@/components/OpportunityPromo";
 
 export default function Home() {
   return (
     <I18nProvider>
       <Cursor />
       <WaFloat />
+      <OpportunityPromo />
       <Navbar />
       <main>
         <Hero />

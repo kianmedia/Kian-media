@@ -68,7 +68,8 @@ Add this branch to the existing `doPost(e)` in the Apps Script project, set
 (re-using the same `/exec` URL so no app change is needed):
 
 ```js
-const KIAN_ADMIN_EMAIL = "owner@kianmedia.com"; // <-- set the real Kian inbox
+// Comma-separated list = all recipients get the admin/no-To notifications.
+const KIAN_ADMIN_EMAIL = "kianalebtikar@gmail.com,manager@kianmedia.com,kianmediaweb@gmail.com";
 
 function doPost(e) {
   const data = JSON.parse(e.postData.contents);

@@ -12,7 +12,7 @@ import { adminListProfiles } from "@/lib/portal/admin";
 import type { Profile } from "@/lib/portal/types";
 import {
   listOpportunities, listOpportunityNotes, updateOpportunityStatus, updateOpportunityPriority,
-  addOpportunityNote, archiveOpportunityRequest, assignOpportunity,
+  addOpportunityNote, assignOpportunity,
   OPPORTUNITY_TYPES, OPP_STATUS_LABELS, OPP_STATUSES, OPP_PRIORITY_LABELS, OPP_PRIORITIES,
   oppTypeLabel, oppFieldLabel,
   type OpportunityRequest, type OpportunityNote,
@@ -52,6 +52,18 @@ export default function AdminOpportunities() {
   const selectStyle: React.CSSProperties = { background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "3px", padding: "9px 11px", fontSize: "12.5px", colorScheme: "dark", outline: "none" };
   const open = rows.find((r) => r.id === openId) || null;
 
+  // CSV export — client-side, from the currently-visible (RLS-scoped) rows only.
+  function exportCsv() {
+    const cols = ["request_number", "opportunity_type", "full_name", "email", "phone", "city", "status", "priority", "source", "created_at", "message"];
+    const cell = (v: unknown) => { const s = v == null ? "" : String(v); return `"${s.replace(/"/g, '""')}"`; };
+    const lines = [cols.join(","), ...rows.map((r) => cols.map((c) => cell((r as unknown as Record<string, unknown>)[c])).join(","))];
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "opportunities.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
       <div className="mb-7">
@@ -59,6 +71,9 @@ export default function AdminOpportunities() {
         <h1 className="editorial text-white" style={{ fontSize: "clamp(24px,4vw,34px)", lineHeight: 1.25 }}>{t({ ar: "طلبات الانضمام والتعاون", en: "Join & Collaboration Requests" })}</h1>
         <p className="text-white/45" style={{ fontSize: "12.5px", marginTop: "8px" }}>{t({ ar: "إدارة طلبات التوظيف والتدريب والتعاون والمواهب والشراكات.", en: "Manage job, training, collaboration, talent, and partnership requests." })}</p>
       </div>
+
+      {/* Stats + breakdowns (from the visible, RLS-scoped rows) */}
+      {phase === "ready" && rows.length > 0 && <StatsPanel rows={rows} onExport={exportCsv} />}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-6">
@@ -122,6 +137,70 @@ export default function AdminOpportunities() {
   );
 }
 
+function StatsPanel({ rows, onExport }: { rows: OpportunityRequest[]; onExport: () => void }) {
+  const { t, isAr } = useI18n();
+  const cnt = (s: string) => rows.filter((r) => r.status === s).length;
+  const cards = [
+    { ar: "الإجمالي", en: "Total", v: rows.length },
+    { ar: "جديد", en: "New", v: cnt("new") },
+    { ar: "قيد المراجعة", en: "Under review", v: cnt("under_review") },
+    { ar: "تم التواصل", en: "Contacted", v: cnt("contacted") },
+    { ar: "مقبول", en: "Accepted", v: cnt("accepted") },
+    { ar: "مرفوض", en: "Rejected", v: cnt("rejected") },
+    { ar: "مؤرشف", en: "Archived", v: cnt("archived") },
+  ];
+  const tally = (key: "opportunity_type" | "city") => {
+    const m = new Map<string, number>();
+    for (const r of rows) { const k = (r[key] || "").toString().trim(); if (k) m.set(k, (m.get(k) || 0) + 1); }
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  };
+  const byType = tally("opportunity_type"); const byCity = tally("city");
+  const highPriority = rows.filter((r) => r.priority === "high" || r.priority === "urgent");
+
+  return (
+    <div style={{ marginBottom: "24px" }}>
+      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "2px", textTransform: "uppercase", color: "rgba(227,30,36,0.85)", fontWeight: 600 }}>{t({ ar: "نظرة عامة", en: "Overview" })}</div>
+        <button onClick={onExport} className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", color: "rgba(255,255,255,0.8)", background: "none", border: "1px solid rgba(255,255,255,0.18)", padding: "8px 13px", borderRadius: "3px", cursor: "pointer" }}>
+          {t({ ar: "تصدير CSV", en: "Export CSV" })}
+        </button>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-4">
+        {cards.map((c) => (
+          <div key={c.en} style={{ padding: "12px 10px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", textAlign: "center" }}>
+            <div className="f-display" style={{ fontSize: "24px", color: "#E31E24", lineHeight: 1 }}>{c.v}</div>
+            <div className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.5)", marginTop: "5px" }}>{isAr ? c.ar : c.en}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Breakdown title={t({ ar: "حسب النوع", en: "By type" })} items={byType.map(([k, v]) => ({ label: isAr ? oppTypeLabel(k).ar : oppTypeLabel(k).en, v }))} />
+        <Breakdown title={t({ ar: "حسب المدينة", en: "By city" })} items={byCity.map(([k, v]) => ({ label: k, v }))} />
+        <Breakdown title={t({ ar: "أولوية عالية", en: "High priority" })} items={highPriority.slice(0, 6).map((r) => ({ label: `${r.full_name} · ${isAr ? oppTypeLabel(r.opportunity_type).ar : oppTypeLabel(r.opportunity_type).en}`, v: isAr ? (OPP_PRIORITY_LABELS[r.priority]?.ar || r.priority) : (OPP_PRIORITY_LABELS[r.priority]?.en || r.priority) }))} />
+      </div>
+    </div>
+  );
+}
+
+function Breakdown({ title, items }: { title: string; items: { label: string; v: string | number }[] }) {
+  const { t } = useI18n();
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "12px 14px" }}>
+      <div className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>{title}</div>
+      {items.length === 0 ? <p className="text-white/35" style={{ fontSize: "12px" }}>{t({ ar: "لا بيانات", en: "No data" })}</p> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+          {items.map((it, i) => (
+            <div key={i} className="flex items-center justify-between gap-2">
+              <span className="text-white/75" style={{ fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
+              <span className="f-sans" style={{ fontSize: "11px", color: "#E31E24", fontWeight: 600, flexShrink: 0 }}>{it.v}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetailModal({ req, staff, canAssign, onClose, onChanged }: { req: OpportunityRequest; staff: Profile[]; canAssign: boolean; onClose: () => void; onChanged: () => void }) {
   const { t, isAr } = useI18n();
   const [status, setStatus] = useState(req.status);
@@ -166,7 +245,8 @@ function DetailModal({ req, staff, canAssign, onClose, onChanged }: { req: Oppor
   }
   async function archive() {
     setBusy(true); setFlash(null);
-    const r = await archiveOpportunityRequest(req.id);
+    // Archive = move to the 'archived' status (stays visible/countable/filterable).
+    const r = await updateOpportunityStatus(req.id, "archived");
     setBusy(false);
     if (!r.ok || !r.data) { setFlash({ kind: "err", text: t({ ar: "تعذّر الأرشفة", en: "Archive failed" }) }); return; }
     onChanged(); onClose();

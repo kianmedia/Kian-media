@@ -11,6 +11,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import AdminDashboard from "@/components/portal/AdminDashboard";
 import { listNotifications } from "@/lib/portal/notifications";
 import { listMyQuotes } from "@/lib/portal/leads";
+import { listOpportunities } from "@/lib/opportunities";
 import type { NotificationRow, QuoteRequest } from "@/lib/portal/types";
 
 const LEVEL_LABEL = {
@@ -89,36 +90,51 @@ export default function OverviewPage() {
   );
 }
 
-// HR landing — Opportunities Center isn't built yet, so HR gets a safe, scoped
-// placeholder. HR has NO access to projects/quotes/offers/deliverables/financials
-// (DB-enforced). This shell is ready to wire to opportunity_requests later.
+// HR landing — a real Opportunities dashboard. HR reads opportunity_requests via
+// RLS (owner/manager/hr) and has NO access to projects/quotes/offers/deliverables/
+// financials (DB-enforced elsewhere).
 function HRHome({ name }: { name: string }) {
-  const { t } = useI18n();
+  const { t, isAr } = useI18n();
+  const [stats, setStats] = useState<{ total: number; nw: number; review: number } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const r = await listOpportunities();
+      if (!alive) return;
+      if (!r.ok) { setStats({ total: 0, nw: 0, review: 0 }); return; }
+      const rows = r.data;
+      setStats({ total: rows.length, nw: rows.filter((x) => x.status === "new").length, review: rows.filter((x) => x.status === "under_review").length });
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const cards = [
+    { ar: "إجمالي الطلبات", en: "Total requests", v: stats?.total },
+    { ar: "طلبات جديدة", en: "New", v: stats?.nw },
+    { ar: "قيد المراجعة", en: "Under review", v: stats?.review },
+  ];
+
   return (
     <div>
-      <div className="mb-10">
+      <div className="mb-8">
         <div className="eyebrow mb-4">{t({ ar: "الموارد البشرية", en: "Human Resources" })}</div>
-        <h1 className="editorial text-white" style={{ fontSize: "clamp(26px,4.5vw,40px)", lineHeight: 1.25 }}>
-          {t({ ar: "أهلاً، ", en: "Welcome, " })}{name}
-        </h1>
+        <h1 className="editorial text-white" style={{ fontSize: "clamp(26px,4.5vw,40px)", lineHeight: 1.25 }}>{t({ ar: "أهلاً، ", en: "Welcome, " })}{name}</h1>
+        <p className="text-white/50" style={{ fontSize: "13px", marginTop: "8px" }}>{t({ ar: "متابعة طلبات مركز الفرص — التوظيف والتدريب والمواهب والتعاون.", en: "Track Opportunities Center requests — jobs, training, talent, collaboration." })}</p>
       </div>
-      <div style={{ padding: "28px 24px", background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.14)", borderRadius: "6px" }}>
-        <h2 className="text-white" style={{ fontSize: "18px", fontWeight: 700, marginBottom: "10px" }}>
-          {t({ ar: "مركز الفرص قادم قريباً", en: "Opportunities Center — coming soon" })}
-        </h2>
-        <p className="text-white/55" style={{ fontSize: "14px", lineHeight: 1.9, maxWidth: "560px" }}>
-          {t({
-            ar: "ستتمكن هنا من إدارة طلبات التوظيف والتدريب والانضمام كمستقل وطلبات التعاون، مع ملاحظات المرشحين وحالة المتابعة — فور تفعيل مركز الفرص. لا تملك صلاحية الوصول لمشاريع العملاء أو البيانات المالية.",
-            en: "Here you'll manage job, training, freelancer, and cooperation requests with candidate notes and follow-up status — once the Opportunities Center is enabled. You have no access to client projects or financial data.",
-          })}
-        </p>
-        <ul className="f-sans" style={{ fontSize: "13px", color: "rgba(255,255,255,0.5)", lineHeight: 2, marginTop: "16px", listStyle: "none" }}>
-          <li>• {t({ ar: "طلبات التوظيف", en: "Job applications" })}</li>
-          <li>• {t({ ar: "طلبات التدريب", en: "Training requests" })}</li>
-          <li>• {t({ ar: "طلبات الانضمام كمستقل", en: "Freelancer applications" })}</li>
-          <li>• {t({ ar: "طلبات التعاون", en: "Cooperation requests" })}</li>
-        </ul>
+
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {cards.map((c) => (
+          <div key={c.en} style={{ padding: "18px 16px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", textAlign: "center" }}>
+            <div className="f-display" style={{ fontSize: "30px", color: "#E31E24", lineHeight: 1 }}>{c.v ?? "…"}</div>
+            <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)", marginTop: "6px" }}>{isAr ? c.ar : c.en}</div>
+          </div>
+        ))}
       </div>
+
+      <Link href="/client-portal/opportunities" className="btn-red" style={{ justifyContent: "center", textDecoration: "none" }}>
+        <span>{t({ ar: "فتح مركز الفرص", en: "Open Opportunities Center" })}</span>
+      </Link>
     </div>
   );
 }

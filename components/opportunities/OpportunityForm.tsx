@@ -5,12 +5,13 @@
 // honeypot anti-spam, consent, inline success/error (no alert()). On success it
 // emails Kian (opportunity_new) + the applicant (opportunity_ack) via portal_notify.
 // ════════════════════════════════════════════════════════════════════════
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { SHARED_FIELDS, submitOpportunityRequest, type OppType, type OppField } from "@/lib/opportunities";
 import { notifyOpportunityNew, notifyOpportunityAck } from "@/lib/portal/notifyEmail";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const WA_URL = "https://wa.me/966503422999";
 
 export default function OpportunityForm({ type, onBack }: { type: OppType; onBack: () => void }) {
   const { t, isAr } = useI18n();
@@ -21,6 +22,9 @@ export default function OpportunityForm({ type, onBack }: { type: OppType; onBac
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState<string | null>(null); // request number (or "")
+
+  // On success, bring the success panel into view (never scroll to other sections).
+  useEffect(() => { if (done !== null) window.scrollTo({ top: 0, behavior: "smooth" }); }, [done]);
 
   const set = (k: string, v: string) => setValues((p) => ({ ...p, [k]: v }));
 
@@ -43,6 +47,12 @@ export default function OpportunityForm({ type, onBack }: { type: OppType; onBac
     setBusy(true);
     const details: Record<string, string> = {};
     for (const f of type.fields) { const val = (values[f.key] || "").trim(); if (val) details[f.key] = val; }
+    // Source + UTM attribution (stored in details jsonb; no DB change needed).
+    details.source = "website_opportunities_center";
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      for (const k of ["utm_source", "utm_medium", "utm_campaign"]) { const u = p.get(k); if (u) details[k] = u; }
+    }
     const r = await submitOpportunityRequest({
       type: type.key,
       full_name: (values.full_name || "").trim(),
@@ -63,20 +73,28 @@ export default function OpportunityForm({ type, onBack }: { type: OppType; onBac
 
   if (done !== null) {
     return (
-      <div className="mx-auto text-center" style={{ maxWidth: "560px", padding: "30px 0 40px" }}>
+      <div className="mx-auto text-center" style={{ maxWidth: "560px", padding: "10px 0 40px" }}>
         <div style={{ width: "64px", height: "64px", margin: "0 auto 22px", borderRadius: "50%", background: "rgba(124,252,154,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#7CFC9A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
         </div>
         <h2 className="editorial text-white" style={{ fontSize: "24px", marginBottom: "14px" }}>{t({ ar: "تم الإرسال", en: "Submitted" })}</h2>
-        <p className="text-white/65" style={{ fontSize: "15px", lineHeight: 1.9, marginBottom: done ? "16px" : "26px" }}>
+        <p className="text-white/65" style={{ fontSize: "15px", lineHeight: 1.9, marginBottom: "18px" }}>
           {t({ ar: "تم استلام طلبك بنجاح. سيقوم فريق كيان بمراجعة الطلب والتواصل معك عند توفر فرصة مناسبة.", en: "Your request was received. The Kian team will review it and contact you when a suitable opportunity arises." })}
         </p>
         {done && (
-          <p className="f-sans" style={{ fontSize: "13px", color: "rgba(255,255,255,0.55)", marginBottom: "26px" }}>
-            {t({ ar: "رقم الطلب: ", en: "Request number: " })}<span style={{ direction: "ltr", unicodeBidi: "plaintext", color: "#fff", fontWeight: 600 }}>{done}</span>
-          </p>
+          <div style={{ display: "inline-block", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(227,30,36,0.35)", borderRadius: "6px", padding: "14px 22px", marginBottom: "12px" }}>
+            <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "1.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", marginBottom: "5px" }}>{t({ ar: "رقم الطلب", en: "Request Number" })}</div>
+            <div style={{ direction: "ltr", unicodeBidi: "plaintext", color: "#fff", fontWeight: 700, fontSize: "20px", letterSpacing: "1px" }}>{done}</div>
+          </div>
         )}
-        <button onClick={onBack} className="btn-red" style={{ justifyContent: "center" }}><span>{t({ ar: "إرسال طلب آخر", en: "Submit another request" })}</span></button>
+        {done && <p className="f-sans" style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)", marginBottom: "24px" }}>{t({ ar: "احتفظ برقم الطلب للمتابعة.", en: "Keep your request number for follow-up." })}</p>}
+        <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+          <a href={WA_URL} target="_blank" rel="noopener noreferrer" className="btn-wa" style={{ justifyContent: "center" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
+            <span>{t({ ar: "تواصل معنا عبر واتساب", en: "Contact us on WhatsApp" })}</span>
+          </a>
+          <button onClick={onBack} className="btn-ghost" style={{ justifyContent: "center" }}><span>{t({ ar: "إرسال طلب آخر", en: "Submit another request" })}</span></button>
+        </div>
       </div>
     );
   }
