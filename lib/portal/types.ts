@@ -253,3 +253,29 @@ export interface ProjectMessage extends SoftDeletable {
   body: string;
   created_at: string;
 }
+
+// ─── Staff assignment notes + invoices (staff_assignment_notifications_finance_ADDENDUM.sql) ───
+export interface AssignmentNote extends SoftDeletable {
+  id: string;
+  project_id: string;
+  staff_user_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+}
+
+export interface Invoice extends SoftDeletable {
+  id: string;
+  client_id: string | null;
+  user_id: string | null;
+  project_id: string | null;
+  zoho_invoice_id: string | null;
+  zoho_estimate_id: string | null;
+  number: string | null;
+  status: string | null;
+  amount: number | null;
+  currency: string | null;
+  url: string | null;
+  issued_at: string | null;
+  created_at: string;
+}

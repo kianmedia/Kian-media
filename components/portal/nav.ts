@@ -36,7 +36,7 @@ const SETS: Record<ViewRole, string[]> = {
   hr:          ["overview", "notifications", "profile"],
   readonly:    ["projects", "notifications", "profile"],
   finance:     ["invoices", "notifications", "profile"],
-  client:      ["overview", "projects", "quotes", "messages", "files", "offers", "notifications", "profile"],
+  client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "notifications", "profile"],
   lead:        ["overview", "quotes", "messages", "files", "offers", "notifications", "profile"],
 };
 

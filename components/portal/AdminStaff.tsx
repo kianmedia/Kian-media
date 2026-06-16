@@ -12,9 +12,10 @@ import {
   adminListProfiles, adminListProjects, adminSetStaffRole,
   adminAddProjectMember, adminRemoveProjectMember, adminListMembershipsForUser,
 } from "@/lib/portal/admin";
-import { notifyStaffAssigned } from "@/lib/portal/notifyEmail";
+import { notifyStaffAssigned, notifyAssignmentNote } from "@/lib/portal/notifyEmail";
+import { listAssignmentNotes, addAssignmentNote, removeAssignmentNote } from "@/lib/portal/assignments";
 import { STAFF_ROLE_LABELS, STAFF_ROLE_OPTIONS, PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
-import type { Profile, Project, ProjectMember, StaffRole, ProjectMemberRole } from "@/lib/portal/types";
+import type { Profile, Project, ProjectMember, StaffRole, ProjectMemberRole, AssignmentNote } from "@/lib/portal/types";
 
 const PROTECTED_EMAILS = ["kianalebtikar@gmail.com", "manager@kianmedia.com", "contact@kianmedia.com"];
 
@@ -125,6 +126,7 @@ function StaffAssign({ account, projects }: { account: Profile; projects: Projec
   const [role, setRole] = useState<ProjectMemberRole>("kian_editor");
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [notesFor, setNotesFor] = useState<string | null>(null);
 
   async function load() {
     const r = await adminListMembershipsForUser(account.id);
@@ -181,20 +183,103 @@ function StaffAssign({ account, projects }: { account: Profile; projects: Projec
       {phase === "ready" && members.length === 0 && <p className="text-white/45" style={{ fontSize: "12.5px" }}>{t({ ar: "لا مشاريع مكلّف بها بعد.", en: "No assigned projects yet." })}</p>}
       {phase === "ready" && members.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {members.map((m) => (
-            <div key={m.id} className="flex items-center justify-between gap-3" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "9px 12px" }}>
-              <div style={{ minWidth: 0 }}>
-                <span className="text-white" style={{ fontSize: "13px", fontWeight: 600 }}>{nameById.get(m.project_id) ?? t({ ar: "مشروع", en: "Project" })}</span>
-                <span className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginInlineStart: "8px" }}>{m.role}</span>
+          {members.map((m) => {
+            const projectName = nameById.get(m.project_id) ?? t({ ar: "مشروع", en: "Project" });
+            return (
+              <div key={m.id} style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "9px 12px" }}>
+                <div className="flex items-center justify-between gap-3">
+                  <div style={{ minWidth: 0 }}>
+                    <span className="text-white" style={{ fontSize: "13px", fontWeight: 600 }}>{projectName}</span>
+                    <span className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginInlineStart: "8px" }}>{m.role}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setNotesFor((c) => (c === m.id ? null : m.id))} className="f-sans" style={{ fontSize: "10.5px", color: notesFor === m.id ? "#fff" : "rgba(255,255,255,0.7)", background: "none", border: "1px solid rgba(255,255,255,0.18)", padding: "6px 11px", borderRadius: "3px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                      {t({ ar: "ملاحظات", en: "Notes" })}
+                    </button>
+                    <button onClick={() => void remove(m.project_id)} disabled={busy} className="f-sans" style={{ fontSize: "10.5px", color: "#ff8a8e", background: "none", border: "1px solid rgba(227,30,36,0.35)", padding: "6px 11px", borderRadius: "3px", cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+                      {t({ ar: "إلغاء التكليف", en: "Unassign" })}
+                    </button>
+                  </div>
+                </div>
+                {notesFor === m.id && <AssignmentNotes projectId={m.project_id} projectName={projectName} staff={account} />}
               </div>
-              <button onClick={() => void remove(m.project_id)} disabled={busy} className="f-sans" style={{ fontSize: "10.5px", color: "#ff8a8e", background: "none", border: "1px solid rgba(227,30,36,0.35)", padding: "6px 11px", borderRadius: "3px", cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-                {t({ ar: "إلغاء التكليف", en: "Unassign" })}
-              </button>
+            );
+          })}
+        </div>
+      )}
+      {flash && <div className="f-sans" style={{ fontSize: "12px", marginTop: "10px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
+    </div>
+  );
+}
+
+// Internal assignment notes for one (project, staff) pair. Admin/manager-only
+// write (add_assignment_note RPC); never visible to clients (RLS). Adding a note
+// emails the staff member via the existing portal_notify path.
+function AssignmentNotes({ projectId, projectName, staff }: { projectId: string; projectName: string; staff: Profile }) {
+  const { t } = useI18n();
+  const [notes, setNotes] = useState<AssignmentNote[]>([]);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  async function load() {
+    const r = await listAssignmentNotes(projectId, staff.id);
+    if (!r.ok) { setPhase("error"); return; }
+    setNotes(r.data); setPhase("ready");
+  }
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [projectId, staff.id]);
+
+  async function add() {
+    if (!body.trim()) return;
+    setBusy(true); setFlash(null);
+    const r = await addAssignmentNote({ projectId, staffUserId: staff.id, body: body.trim() });
+    setBusy(false);
+    if (!r.ok) { setFlash({ kind: "err", text: t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + r.error }); return; }
+    // Email the staff member (best-effort; never blocks).
+    void notifyAssignmentNote({ projectId, projectName, staffEmail: staff.email, staffName: staff.full_name, note: body.trim() });
+    setBody("");
+    setFlash({ kind: "ok", text: t({ ar: "تمت إضافة الملاحظة ✓ (سيصل إشعار للموظف)", en: "Note added ✓ (staff notified)" }) });
+    void load();
+  }
+
+  async function del(noteId: string) {
+    setBusy(true); setFlash(null);
+    const r = await removeAssignmentNote(noteId);
+    setBusy(false);
+    if (!r.ok || !r.data) { setFlash({ kind: "err", text: t({ ar: "تعذّر الحذف", en: "Delete failed" }) }); void load(); return; }
+    void load();
+  }
+
+  return (
+    <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px dashed rgba(255,255,255,0.1)" }}>
+      <div className="f-sans" style={{ fontSize: "9.5px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>
+        {t({ ar: "ملاحظات داخلية للموظف (لا تظهر للعميل)", en: "Internal staff notes (not visible to the client)" })}
+      </div>
+      {phase === "loading" && <p className="text-white/40" style={{ fontSize: "12px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}
+      {phase === "ready" && notes.length === 0 && <p className="text-white/40" style={{ fontSize: "12px" }}>{t({ ar: "لا ملاحظات بعد.", en: "No notes yet." })}</p>}
+      {phase === "ready" && notes.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+          {notes.map((n) => (
+            <div key={n.id} className="flex items-start justify-between gap-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "3px", padding: "8px 10px" }}>
+              <div style={{ minWidth: 0 }}>
+                <p className="text-white/85" style={{ fontSize: "12.5px", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{n.body}</p>
+                <span className="f-sans" style={{ fontSize: "9.5px", color: "rgba(255,255,255,0.35)", direction: "ltr", unicodeBidi: "plaintext" }}>{new Date(n.created_at).toLocaleDateString()} {new Date(n.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+              </div>
+              <button onClick={() => void del(n.id)} disabled={busy} className="f-sans" style={{ fontSize: "10px", color: "rgba(255,138,142,0.8)", background: "none", border: "none", cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>{t({ ar: "حذف", en: "Delete" })}</button>
             </div>
           ))}
         </div>
       )}
-      {flash && <div className="f-sans" style={{ fontSize: "12px", marginTop: "10px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
+      <div className="flex gap-2 items-end">
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2} maxLength={4000}
+          placeholder={t({ ar: "أضف ملاحظة/تعليمات للموظف...", en: "Add a note / instructions for the staff member..." })}
+          style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "9px 11px", color: "#fff", fontSize: "12.5px", fontFamily: "var(--sans)", outline: "none", resize: "vertical", lineHeight: 1.6, colorScheme: "dark" }} />
+        <button onClick={() => void add()} disabled={busy || !body.trim()} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.18)", padding: "9px 13px", borderRadius: "3px", cursor: busy || !body.trim() ? "default" : "pointer", opacity: !body.trim() ? 0.5 : 1, whiteSpace: "nowrap" }}>
+          {t({ ar: "إضافة", en: "Add" })}
+        </button>
+      </div>
+      {flash && <div className="f-sans" style={{ fontSize: "11.5px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
     </div>
   );
 }

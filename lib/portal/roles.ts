@@ -80,13 +80,12 @@ export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
 };
 
 /**
- * Roles SELECTABLE in the Staff role dropdown right now. Must match what the
- * deployed DB accepts (profiles.staff_role CHECK + admin_set_staff_role). finance
- * is intentionally EXCLUDED until docs/staff_assignment_notifications_finance_ADDENDUM.sql
- * is run (the DB rejects it today); add "finance" here once that addendum is live.
+ * Roles SELECTABLE in the Staff role dropdown. Must match what the deployed DB
+ * accepts (profiles.staff_role CHECK + admin_set_staff_role). finance is now
+ * included — the staff_assignment_notifications_finance_ADDENDUM.sql is live.
  */
 export const STAFF_ROLE_OPTIONS: StaffRole[] =
-  ["super_admin", "manager", "support", "editor", "sales", "hr", "readonly"];
+  ["super_admin", "manager", "support", "editor", "sales", "hr", "readonly", "finance"];
 
 /**
  * Project-assignment roles (project_members.role) staff are assigned with.
