@@ -11,7 +11,8 @@ import { getValidSession, getMyProfile, logout } from "@/lib/portal/auth";
 import { updateMyProfile, type EditableProfileFields } from "@/lib/portal/account";
 import { unreadCount } from "@/lib/portal/notifications";
 import type { Profile } from "@/lib/portal/types";
-import { tabsForRole } from "@/components/portal/nav";
+import { caps as deriveCaps, type Caps } from "@/lib/portal/roles";
+import { tabsForViewer } from "@/components/portal/nav";
 import AuthTabs from "@/components/portal/AuthTabs";
 import { BlockedScreen, InactiveBanner } from "@/components/portal/StatusScreens";
 
@@ -27,6 +28,8 @@ export function stashPendingProfile(email: string, fields: EditableProfileFields
 
 type PortalCtx = {
   profile: Profile;
+  /** Role/capability flags (mirrors DB enforcement; UI gating only). */
+  caps: Caps;
   /** account_status === 'inactive' → hide/disable every mutating control */
   readOnly: boolean;
   reload: () => Promise<void>;
@@ -142,10 +145,11 @@ export default function PortalShell({ children }: { children: ReactNode }) {
 
   const p = profile!;
   const readOnly = p.account_status === "inactive";
-  const tabs = tabsForRole(p.account_type);
+  const cps = deriveCaps(p);
+  const tabs = tabsForViewer(p);
 
   return (
-    <Ctx.Provider value={{ profile: p, readOnly, reload: bootstrap, signOut }}>
+    <Ctx.Provider value={{ profile: p, caps: cps, readOnly, reload: bootstrap, signOut }}>
       {readOnly && <InactiveBanner />}
 
       {/* ─── Tab bar ─── */}

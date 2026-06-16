@@ -21,14 +21,14 @@ const LEVEL_LABEL = {
 
 export default function OverviewPage() {
   const { t, isAr } = useI18n();
-  const { profile, readOnly } = usePortal();
+  const { profile, readOnly, caps } = usePortal();
 
   const isClient = profile.account_type === "client";
   const [recentNotifs, setRecentNotifs] = useState<NotificationRow[] | null>(null);
   const [recentQuotes, setRecentQuotes] = useState<QuoteRequest[] | null>(null);
 
   useEffect(() => {
-    if (profile.account_type === "admin") return;
+    if (!caps.isClientSide) return;   // client/lead only; staff/admin use other views
     let alive = true;
     (async () => {
       const [n, q] = await Promise.all([listNotifications(5), listMyQuotes()]);
@@ -37,9 +37,10 @@ export default function OverviewPage() {
       if (q.ok) setRecentQuotes(q.data.slice(0, 3));
     })();
     return () => { alive = false; };
-  }, [profile.account_type]);
+  }, [caps.isClientSide]);
 
-  if (profile.account_type === "admin") return <AdminDashboard />;
+  if (caps.isAdminArea) return <AdminDashboard />;
+  if (caps.isHr) return <HRHome name={profile.full_name || profile.email} />;
 
   return (
     <div>
@@ -83,6 +84,40 @@ export default function OverviewPage() {
           items={recentQuotes}
           render={(q) => ({ main: q.reference || (isAr ? "طلب" : "Request"), date: q.created_at, unread: false })}
         />
+      </div>
+    </div>
+  );
+}
+
+// HR landing — Opportunities Center isn't built yet, so HR gets a safe, scoped
+// placeholder. HR has NO access to projects/quotes/offers/deliverables/financials
+// (DB-enforced). This shell is ready to wire to opportunity_requests later.
+function HRHome({ name }: { name: string }) {
+  const { t } = useI18n();
+  return (
+    <div>
+      <div className="mb-10">
+        <div className="eyebrow mb-4">{t({ ar: "الموارد البشرية", en: "Human Resources" })}</div>
+        <h1 className="editorial text-white" style={{ fontSize: "clamp(26px,4.5vw,40px)", lineHeight: 1.25 }}>
+          {t({ ar: "أهلاً، ", en: "Welcome, " })}{name}
+        </h1>
+      </div>
+      <div style={{ padding: "28px 24px", background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.14)", borderRadius: "6px" }}>
+        <h2 className="text-white" style={{ fontSize: "18px", fontWeight: 700, marginBottom: "10px" }}>
+          {t({ ar: "مركز الفرص قادم قريباً", en: "Opportunities Center — coming soon" })}
+        </h2>
+        <p className="text-white/55" style={{ fontSize: "14px", lineHeight: 1.9, maxWidth: "560px" }}>
+          {t({
+            ar: "ستتمكن هنا من إدارة طلبات التوظيف والتدريب والانضمام كمستقل وطلبات التعاون، مع ملاحظات المرشحين وحالة المتابعة — فور تفعيل مركز الفرص. لا تملك صلاحية الوصول لمشاريع العملاء أو البيانات المالية.",
+            en: "Here you'll manage job, training, freelancer, and cooperation requests with candidate notes and follow-up status — once the Opportunities Center is enabled. You have no access to client projects or financial data.",
+          })}
+        </p>
+        <ul className="f-sans" style={{ fontSize: "13px", color: "rgba(255,255,255,0.5)", lineHeight: 2, marginTop: "16px", listStyle: "none" }}>
+          <li>• {t({ ar: "طلبات التوظيف", en: "Job applications" })}</li>
+          <li>• {t({ ar: "طلبات التدريب", en: "Training requests" })}</li>
+          <li>• {t({ ar: "طلبات الانضمام كمستقل", en: "Freelancer applications" })}</li>
+          <li>• {t({ ar: "طلبات التعاون", en: "Cooperation requests" })}</li>
+        </ul>
       </div>
     </div>
   );

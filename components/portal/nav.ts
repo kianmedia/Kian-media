@@ -1,41 +1,55 @@
 // ════════════════════════════════════════════════════════════════════════
-// Kian Portal — role-aware tab registry.
-// Labels differ by role: clients/leads see a client portal; admins see an
-// admin dashboard. Adding a future section = one entry + one route folder.
+// Kian Portal — role-aware tab registry. Tabs depend on the viewer's role:
+// owner/super_admin/manager see the admin area; editor/support/sales/hr/readonly
+// see scoped staff views; clients/leads see the client portal (unchanged). Data
+// access itself is RLS-enforced — tabs only shape the experience.
 // ════════════════════════════════════════════════════════════════════════
+import type { Profile } from "@/lib/portal/types";
+import { caps, type ViewRole } from "@/lib/portal/roles";
 
-import type { AccountType } from "@/lib/portal/types";
+export interface PortalTab { key: string; href: string; ar: string; en: string; }
 
-export interface PortalTab {
-  key: string;
-  href: string;
-  ar: string;
-  en: string;
-  /** Admin-specific overrides (fall back to ar/en when absent). */
-  adminAr?: string;
-  adminEn?: string;
-  roles: AccountType[];
-}
+interface TabDef { href: string; ar: string; en: string; adminAr?: string; adminEn?: string; }
 
-const TABS: PortalTab[] = [
-  { key: "overview",      href: "/client-portal",               ar: "نظرة عامة",   en: "Overview",      adminAr: "لوحة الإدارة",          adminEn: "Admin Dashboard", roles: ["lead", "client", "admin"] },
-  { key: "projects",      href: "/client-portal/projects",      ar: "مشاريعي",     en: "Projects",      adminAr: "المشاريع",              adminEn: "Projects",        roles: ["client", "admin"] },
-  { key: "quotes",        href: "/client-portal/quotes",        ar: "طلبات السعر", en: "Quotes",        adminAr: "طلبات عروض السعر",      adminEn: "Quote Requests",  roles: ["lead", "client", "admin"] },
-  { key: "messages",      href: "/client-portal/messages",      ar: "الرسائل",     en: "Messages",      adminAr: "رسائل العملاء",         adminEn: "Client Messages", roles: ["lead", "client", "admin"] },
-  { key: "files",         href: "/client-portal/files",         ar: "ملفاتي",      en: "My Files",      adminAr: "روابط وملفات العملاء",  adminEn: "Client Files",    roles: ["lead", "client", "admin"] },
-  { key: "accounts",      href: "/client-portal/accounts",      ar: "الحسابات",    en: "Accounts",      adminAr: "إدارة العملاء",         adminEn: "Accounts",        roles: ["admin"] },
-  { key: "offers",        href: "/client-portal/offers",        ar: "العروض",      en: "Offers",        roles: ["lead", "client"] },
-  { key: "notifications", href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications", roles: ["lead", "client", "admin"] },
-  { key: "profile",       href: "/client-portal/profile",       ar: "ملفي",        en: "Profile",       adminAr: "الإعدادات",             adminEn: "Settings",        roles: ["lead", "client", "admin"] },
-  // Reserved — uncomment + add route folder to activate:
-  // { key: "opportunities", href: "/client-portal/opportunities", ar: "مركز الفرص", en: "Opportunities", roles: ["lead", "client", "admin"] },
-];
+const REG: Record<string, TabDef> = {
+  overview:      { href: "/client-portal",               ar: "نظرة عامة",   en: "Overview",      adminAr: "لوحة الإدارة",         adminEn: "Admin Dashboard" },
+  projects:      { href: "/client-portal/projects",      ar: "مشاريعي",     en: "Projects",      adminAr: "المشاريع",             adminEn: "Projects" },
+  quotes:        { href: "/client-portal/quotes",        ar: "طلبات السعر", en: "Quotes",        adminAr: "طلبات عروض السعر",     adminEn: "Quote Requests" },
+  messages:      { href: "/client-portal/messages",      ar: "الرسائل",     en: "Messages",      adminAr: "رسائل العملاء",        adminEn: "Client Messages" },
+  files:         { href: "/client-portal/files",         ar: "ملفاتي",      en: "My Files",      adminAr: "روابط وملفات العملاء", adminEn: "Client Files" },
+  accounts:      { href: "/client-portal/accounts",      ar: "الحسابات",    en: "Accounts",      adminAr: "إدارة العملاء",        adminEn: "Accounts" },
+  staff:         { href: "/client-portal/staff",         ar: "الموظفون",    en: "Staff" },
+  offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
+  notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
+  profile:       { href: "/client-portal/profile",       ar: "ملفي",        en: "Profile",       adminAr: "الإعدادات",            adminEn: "Settings" },
+};
 
-/** Tabs for a role, with admin label overrides already resolved into ar/en. */
-export function tabsForRole(role: AccountType): PortalTab[] {
-  return TABS.filter((t) => t.roles.includes(role)).map((t) =>
-    role === "admin"
-      ? { ...t, ar: t.adminAr ?? t.ar, en: t.adminEn ?? t.en }
-      : t
-  );
+// Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
+const SETS: Record<ViewRole, string[]> = {
+  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "notifications", "profile"],
+  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "notifications", "profile"],
+  manager:     ["overview", "projects", "quotes", "messages", "files", "notifications", "profile"],
+  support:     ["messages", "files", "notifications", "profile"],
+  sales:       ["quotes", "notifications", "profile"],
+  editor:      ["projects", "notifications", "profile"],
+  hr:          ["overview", "notifications", "profile"],
+  readonly:    ["projects", "notifications", "profile"],
+  client:      ["overview", "projects", "quotes", "messages", "files", "offers", "notifications", "profile"],
+  lead:        ["overview", "quotes", "messages", "files", "offers", "notifications", "profile"],
+};
+
+/** Tabs for the viewer, with admin-area label overrides resolved. */
+export function tabsForViewer(p: Pick<Profile, "account_type" | "staff_role">): PortalTab[] {
+  const c = caps(p);
+  const useAdminLabels = c.isAdminArea;
+  const keys = SETS[c.view] ?? SETS.client;
+  return keys.map((k) => {
+    const r = REG[k];
+    return {
+      key: k,
+      href: r.href,
+      ar: useAdminLabels ? (r.adminAr ?? r.ar) : r.ar,
+      en: useAdminLabels ? (r.adminEn ?? r.en) : r.en,
+    };
+  });
 }

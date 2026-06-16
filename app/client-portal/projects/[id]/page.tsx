@@ -14,21 +14,25 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { getProject, listChat } from "@/lib/portal/projects";
 import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
-import { adminListClientsByIds } from "@/lib/portal/admin";
+import { adminListClientsByIds, adminListProjectMembers, adminListSenders, type SenderProfile } from "@/lib/portal/admin";
 import {
   TIMELINE_STEPS,
   computeShootingStatus, computeDeliveryStatus, computeReviewStatus, computeTimelineIndex,
 } from "@/components/portal/projectMeta";
+import { PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
+import EditorDeliverables from "@/components/portal/EditorDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
 import AdminProjectStage from "@/components/portal/AdminProjectStage";
-import type { Project, ProjectMessage, Deliverable, DeliverableReview as Review } from "@/lib/portal/types";
+import type { Project, ProjectMessage, Deliverable, DeliverableReview as Review, ProjectMember } from "@/lib/portal/types";
 
 export default function ProjectDetailPage() {
   const { t, isAr } = useI18n();
-  const { profile } = usePortal();
-  const isAdmin = profile.account_type === "admin";
+  const { profile, caps } = usePortal();
+  const isAdmin = profile.account_type === "admin";              // owner: full admin writes
+  // Staff who manage review deliverables via the staff-safe RPCs (never final_delivered):
+  const canEditDlv = caps.isEditor || caps.view === "manager" || caps.view === "super_admin";
   const params = useParams();
   const id = Array.isArray(params.id) ? params.id[0] : (params.id as string);
 
@@ -158,6 +162,13 @@ export default function ProjectDetailPage() {
         </Section>
       )}
 
+      {/* Assigned staff (admin area: owner/super_admin/manager) */}
+      {caps.isAdminArea && (
+        <Section title={t({ ar: "الطاقم المكلّف", en: "Assigned Staff" })}>
+          <AssignedStaff projectId={id} />
+        </Section>
+      )}
+
       {/* Details grid — computed from live deliverable/review data */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">
         <Detail label={t({ ar: "حالة التصوير", en: "Shooting Status" })} value={t(shooting)} />
@@ -165,21 +176,24 @@ export default function ProjectDetailPage() {
         <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={dlvReady ? t(review) : "…"} />
       </div>
 
-      {/* Deliverables — admin manages; client reviews (preview modal + approve/revise) */}
-      <Section title={isAdmin ? t({ ar: "إدارة مخرجات المراجعة", en: "Manage Review Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
+      {/* Deliverables — owner manages (full); editor/manager manage via staff RPCs
+          (no final delivery); everyone else reviews (preview modal + approve/revise). */}
+      <Section title={(isAdmin || canEditDlv) ? t({ ar: "إدارة مخرجات المراجعة", en: "Manage Review Deliverables" }) : t({ ar: "المراجعة", en: "Review" })}>
         {dlvPhase === "loading" ? (
           <p className="text-white/45" style={{ fontSize: "13.5px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>
         ) : dlvPhase === "error" ? (
           <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{t({ ar: "تعذّر تحميل المخرجات.", en: "Couldn't load deliverables." })}</div>
         ) : isAdmin ? (
           <AdminDeliverables projectId={id} projectName={p.project_name} clientEmail={clientEmail} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
+        ) : canEditDlv ? (
+          <EditorDeliverables projectId={id} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
         ) : (
           <DeliverableReview projectId={id} projectName={p.project_name} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
         )}
       </Section>
 
-      {/* Client notes & revision requests — admin only */}
-      {isAdmin && (
+      {/* Client notes & revision requests — owner + assigned editors/managers */}
+      {(isAdmin || canEditDlv) && (
         <Section title={t({ ar: "ملاحظات العميل وطلبات التعديل", en: "Client Notes & Revision Requests" })}>
           <AdminClientNotes deliverables={dlvs} reviews={reviews} loading={dlvPhase === "loading"} />
         </Section>
@@ -230,6 +244,51 @@ function Detail({ label, value }: { label: string; value: string }) {
     <div style={{ padding: "14px 16px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px" }}>
       <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "1.5px", color: "rgba(255,255,255,0.4)", textTransform: "uppercase", marginBottom: "6px" }}>{label}</div>
       <div className="text-white" style={{ fontSize: "14.5px", fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
+// Read-only list of Kian staff assigned to this project (kian_* members). Names
+// resolve from profiles when readable; assignment itself is done on the Staff page.
+function AssignedStaff({ projectId }: { projectId: string }) {
+  const { t, isAr } = useI18n();
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [rows, setRows] = useState<{ member: ProjectMember; name: string }[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const r = await adminListProjectMembers(projectId);
+      if (!alive) return;
+      if (!r.ok) { setPhase("error"); return; }
+      const kian = r.data.filter((m) => m.role.startsWith("kian_"));
+      let senders: Record<string, SenderProfile> = {};
+      if (kian.length) {
+        const s = await adminListSenders(kian.map((m) => m.user_id));
+        if (s.ok) senders = Object.fromEntries(s.data.map((p) => [p.id, p]));
+      }
+      if (!alive) return;
+      setRows(kian.map((m) => ({ member: m, name: senders[m.user_id]?.full_name || senders[m.user_id]?.email || m.user_id })));
+      setPhase("ready");
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+
+  if (phase === "loading") return <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>;
+  if (phase === "error") return <p className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{t({ ar: "تعذّر تحميل الطاقم.", en: "Couldn't load staff." })}</p>;
+  if (rows.length === 0) return <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "لا يوجد طاقم مكلّف بعد — كلّف من صفحة الموظفين.", en: "No staff assigned yet — assign from the Staff page." })}</p>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      {rows.map(({ member, name }) => {
+        const lbl = PROJECT_STAFF_ROLES.find((r) => r.key === member.role);
+        return (
+          <div key={member.id} className="flex items-center justify-between gap-3" style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "9px 12px" }}>
+            <span className="text-white" style={{ fontSize: "13px", fontWeight: 600, direction: name.includes("@") ? "ltr" : undefined }}>{name}</span>
+            <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>{lbl ? (isAr ? lbl.ar : lbl.en) : member.role}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

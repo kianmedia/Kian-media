@@ -9,6 +9,11 @@ export type AccountStatus  = "active" | "inactive" | "blocked";
 export type ClientLevel    = "prospect" | "active" | "vip";
 export type PreferredLang  = "ar" | "en";
 
+/** Staff tiers (profiles.staff_role; NULL = not staff). DB-enforced via RLS/RPCs
+ *  added in docs/staff_roles_task_assignment_RUNME.sql. */
+export type StaffRole =
+  | "super_admin" | "manager" | "support" | "editor" | "sales" | "hr" | "readonly";
+
 export type ProjectMemberRole =
   | "client_owner" | "client_member"
   | "kian_admin" | "kian_manager" | "kian_editor" | "kian_photographer" | "kian_viewer";
@@ -66,6 +71,7 @@ export interface Profile {
   account_type: AccountType;
   account_status: AccountStatus;
   client_level: ClientLevel;
+  staff_role: StaffRole | null;
   marketing_opt_in: boolean;
   created_at: string;
   updated_at: string;
