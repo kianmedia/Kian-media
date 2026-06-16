@@ -14,6 +14,7 @@ import type {
   AccountStatus, AccountType, ClientLevel, ClientRow, DeliverableStatus, DeliverableType,
   FileLink, InternalComment, InternalCommentCategory, MessageRow, NotificationType,
   Profile, Project, ProjectMember, ProjectMemberRole, ProjectMessage, ProjectStatus, QuoteRequest,
+  StaffRole,
 } from "@/lib/portal/types";
 
 /** Sender info shown in the admin inbox (subset of profiles). */
@@ -233,4 +234,47 @@ export function adminListMembershipsForUser(userId: string): Promise<Result<Proj
   return pget<ProjectMember[]>(
     `project_members?user_id=eq.${enc(userId)}&is_deleted=eq.false&select=*&order=created_at.desc`
   );
+}
+
+/** Active members of a project (assigned staff = the kian_* roles; filter in UI). */
+export function adminListProjectMembers(projectId: string): Promise<Result<ProjectMember[]>> {
+  return pget<ProjectMember[]>(
+    `project_members?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=created_at.asc`
+  );
+}
+
+// ─── Staff roles & task assignment (staff_roles_task_assignment RUNME RPCs) ──
+// admin_set_staff_role = owner-only (is_owner); staff_*_deliverable = assigned
+// editors (can_edit_project) and never set final_delivered (DB-enforced).
+
+export function adminSetStaffRole(input: { userId: string; role: StaffRole | null }): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_set_staff_role", { p_user: input.userId, p_role: input.role });
+}
+
+export function staffAddDeliverable(input: {
+  projectId: string; title: string; type?: DeliverableType;
+  previewUrl?: string; vimeoUrl?: string;
+  status?: Extract<DeliverableStatus, "draft" | "internal_review" | "client_review">;
+}): Promise<Result<string>> {
+  return prpc<string>("staff_add_deliverable", {
+    p_project: input.projectId,
+    p_title: input.title,
+    p_type: input.type ?? "video",
+    p_preview_url: input.previewUrl ?? null,
+    p_vimeo_url: input.vimeoUrl ?? null,
+    p_status: input.status ?? "client_review",
+  });
+}
+
+export function staffSetDeliverable(input: {
+  deliverableId: string;
+  status?: Extract<DeliverableStatus, "draft" | "internal_review" | "client_review" | "revision_requested" | "approved">;
+  previewUrl?: string; vimeoUrl?: string;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("staff_set_deliverable", {
+    p_dlv: input.deliverableId,
+    p_status: input.status ?? null,
+    p_preview_url: input.previewUrl ?? null,
+    p_vimeo_url: input.vimeoUrl ?? null,
+  });
 }

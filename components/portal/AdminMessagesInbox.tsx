@@ -20,7 +20,7 @@ interface Thread {
   awaitingReply: boolean;   // latest message is from the client
 }
 
-export default function AdminMessagesInbox() {
+export default function AdminMessagesInbox({ readOnly = false }: { readOnly?: boolean } = {}) {
   const { t, isAr } = useI18n();
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [rows, setRows] = useState<MessageRow[]>([]);
@@ -137,15 +137,21 @@ export default function AdminMessagesInbox() {
                         );
                       })}
                     </div>
-                    <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
-                      <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2}
-                        placeholder={t({ ar: "اكتب رداً للعميل...", en: "Write a reply to the client..." })}
-                        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void onReply(th.userId); }}
-                        style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "11px 13px", color: "#fff", fontSize: "13.5px", fontFamily: "var(--sans)", outline: "none", resize: "vertical", lineHeight: 1.6 }} />
-                      <button onClick={() => onReply(th.userId)} disabled={sending || !reply.trim()} className="btn-red" style={{ justifyContent: "center", opacity: sending || !reply.trim() ? 0.5 : 1, cursor: sending || !reply.trim() ? "default" : "pointer", whiteSpace: "nowrap" }}>
-                        <span>{sending ? "..." : t({ ar: "رد", en: "Reply" })}</span>
-                      </button>
-                    </div>
+                    {readOnly ? (
+                      <p className="f-sans" style={{ fontSize: "11.5px", color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>
+                        {t({ ar: "عرض فقط — الرد متاح للإدارة.", en: "View only — replying is available to admins." })}
+                      </p>
+                    ) : (
+                      <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
+                        <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2}
+                          placeholder={t({ ar: "اكتب رداً للعميل...", en: "Write a reply to the client..." })}
+                          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void onReply(th.userId); }}
+                          style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "11px 13px", color: "#fff", fontSize: "13.5px", fontFamily: "var(--sans)", outline: "none", resize: "vertical", lineHeight: 1.6 }} />
+                        <button onClick={() => onReply(th.userId)} disabled={sending || !reply.trim()} className="btn-red" style={{ justifyContent: "center", opacity: sending || !reply.trim() ? 0.5 : 1, cursor: sending || !reply.trim() ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                          <span>{sending ? "..." : t({ ar: "رد", en: "Reply" })}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

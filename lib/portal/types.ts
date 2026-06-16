@@ -9,6 +9,11 @@ export type AccountStatus  = "active" | "inactive" | "blocked";
 export type ClientLevel    = "prospect" | "active" | "vip";
 export type PreferredLang  = "ar" | "en";
 
+/** Staff tiers (profiles.staff_role; NULL = not staff). DB-enforced via RLS/RPCs
+ *  added in docs/staff_roles_task_assignment_RUNME.sql. */
+export type StaffRole =
+  | "super_admin" | "manager" | "support" | "editor" | "sales" | "hr" | "readonly" | "finance";
+
 export type ProjectMemberRole =
   | "client_owner" | "client_member"
   | "kian_admin" | "kian_manager" | "kian_editor" | "kian_photographer" | "kian_viewer";
@@ -66,6 +71,7 @@ export interface Profile {
   account_type: AccountType;
   account_status: AccountStatus;
   client_level: ClientLevel;
+  staff_role: StaffRole | null;
   marketing_opt_in: boolean;
   created_at: string;
   updated_at: string;
@@ -245,5 +251,31 @@ export interface ProjectMessage extends SoftDeletable {
   sender_id: string;
   sender_role: "client" | "admin";
   body: string;
+  created_at: string;
+}
+
+// ─── Staff assignment notes + invoices (staff_assignment_notifications_finance_ADDENDUM.sql) ───
+export interface AssignmentNote extends SoftDeletable {
+  id: string;
+  project_id: string;
+  staff_user_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+}
+
+export interface Invoice extends SoftDeletable {
+  id: string;
+  client_id: string | null;
+  user_id: string | null;
+  project_id: string | null;
+  zoho_invoice_id: string | null;
+  zoho_estimate_id: string | null;
+  number: string | null;
+  status: string | null;
+  amount: number | null;
+  currency: string | null;
+  url: string | null;
+  issued_at: string | null;
   created_at: string;
 }
