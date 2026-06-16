@@ -25,6 +25,8 @@ The browser POSTs a fire-and-forget event (`mode: "no-cors"`, opaque) with
 | `final_delivered` | admin browser | deliverable moved to `final_delivered` | the client (`To` field, resolved by the admin) |
 | `staff_assigned` | admin browser | a staff member is assigned to a project | the staff member (`To` field, resolved by the admin) |
 | `assignment_note` | admin browser | an assignment note is added (after the finance/notes addendum is run) | the assigned staff member (`To` field) |
+| `opportunity_new` | public (anon) opportunities page | a new opportunity request is submitted | Kian inbox (NO `To` → routed to `KIAN_ADMIN_EMAIL`) |
+| `opportunity_ack` | public (anon) opportunities page | a new opportunity request is submitted | the applicant (`To` field) |
 
 ### Payload keys
 
@@ -44,13 +46,18 @@ The browser POSTs a fire-and-forget event (`mode: "no-cors"`, opaque) with
 `assignment_note`: `_type=portal_notify`, `Event`, `Subject` ("ملاحظة جديدة على تكليفك - كيان"),
 `To`, `Staff Name`, `Project Name`, `Note`, `Message`, `Link`.
 
-`Link` is the portal deep-link (`<origin>/client-portal/projects/<id>`) — no secrets.
+`opportunity_new`: `_type=portal_notify`, `Event`, `Subject` ("طلب فرصة جديد - كيان"),
+`Opportunity Type`, `Applicant`, `Email`, `Phone`, `City`, `Note`, `Request Number`,
+`Message`, `Link` (→ `/client-portal/opportunities`). **No `To`** → goes to Kian.
 
-The Apps Script `doPost` `portal_notify` branch already mails `data.To` for any
-event that carries a `To` + `Subject` (review_ready/final_delivered). `staff_assigned`
-and `assignment_note` follow the same shape (`To` + `Subject` + `Message`/`Note`),
-so they are covered by the existing recipient-has-`To` branch — extend the body
-text if you want richer formatting (include `Role`/`Note`).
+`opportunity_ack`: `_type=portal_notify`, `Event`, `Subject` ("تم استلام طلبك - كيان"),
+`To` (applicant), `Applicant`, `Request Number`, `Message`.
+
+`Link` is a portal deep-link — no secrets.
+
+ROUTING RULE (generalized in the handler below): an event WITH a `To` goes to that
+recipient (client/staff/applicant); an event WITHOUT a `To` goes to `KIAN_ADMIN_EMAIL`
+(currently `review_update` and `opportunity_new`). This covers every event above.
 
 ---
 
@@ -67,36 +74,37 @@ function doPost(e) {
   const data = JSON.parse(e.postData.contents);
 
   if (data._type === "portal_notify") {
-    const link = data.Link ? ("\n\nرابط المشروع: " + data.Link) : "";
-    // review_update goes to Kian (admin); ALL other events carry a `To` recipient
-    // (client or staff): review_ready, final_delivered, staff_assigned, assignment_note.
-    if (data.Event === "review_update") {
-      const action = data.Action === "approved" ? "اعتماد" : "طلب تعديل";
-      MailApp.sendEmail(
-        KIAN_ADMIN_EMAIL,
-        data.Subject || "تحديث مراجعة من العميل - كيان",
-        "مشروع: " + data["Project Name"] +
-        "\nالمخرَج: " + data["Deliverable Title"] +
-        "\nالإجراء: " + action +
-        "\nالعميل: " + (data["Client Name"] || "") + " " + (data["Client Email"] || "") +
-        "\nملاحظة: " + (data.Note || "—") + link
-      );
-    } else if (data.To) {
-      // review_ready | final_delivered | staff_assigned | assignment_note
-      var body = "";
-      if (data["Project Name"])      body += "مشروع: " + data["Project Name"] + "\n";
-      if (data["Deliverable Title"]) body += "المخرَج: " + data["Deliverable Title"] + "\n";
-      if (data["Role"])              body += "الدور: " + data["Role"] + "\n";
-      body += "\n" + (data.Message || "");
-      if (data["Note"])              body += "\nملاحظة: " + data["Note"];
-      MailApp.sendEmail(data.To, data.Subject || "تحديث من كيان", body + link);
-    }
+    const link = data.Link ? ("\n\nرابط: " + data.Link) : "";
+    // Build a generic body from whichever fields are present.
+    var body = "";
+    if (data["Project Name"])      body += "مشروع: " + data["Project Name"] + "\n";
+    if (data["Deliverable Title"]) body += "المخرَج: " + data["Deliverable Title"] + "\n";
+    if (data["Opportunity Type"])  body += "نوع الفرصة: " + data["Opportunity Type"] + "\n";
+    if (data["Applicant"])         body += "مقدّم الطلب: " + data["Applicant"] + "\n";
+    if (data["Role"])              body += "الدور: " + data["Role"] + "\n";
+    if (data["Email"])             body += "البريد: " + data["Email"] + "\n";
+    if (data["Phone"])             body += "الجوال: " + data["Phone"] + "\n";
+    if (data["City"])              body += "المدينة: " + data["City"] + "\n";
+    if (data["Action"])            body += "الإجراء: " + (data.Action === "approved" ? "اعتماد" : "طلب تعديل") + "\n";
+    if (data["Client Name"] || data["Client Email"]) body += "العميل: " + (data["Client Name"] || "") + " " + (data["Client Email"] || "") + "\n";
+    if (data["Request Number"])    body += "رقم الطلب: " + data["Request Number"] + "\n";
+    body += "\n" + (data.Message || "");
+    if (data["Note"])              body += "\nملاحظة: " + data["Note"];
+
+    // ROUTING: events WITH a `To` go to that recipient (client/staff/applicant);
+    // events WITHOUT a `To` go to the Kian inbox (review_update, opportunity_new).
+    var to = data.To || KIAN_ADMIN_EMAIL;
+    MailApp.sendEmail(to, data.Subject || "تحديث من كيان", body + link);
     return ContentService.createTextOutput("ok");
   }
 
   // ... existing quote/meeting/upload handling stays unchanged ...
 }
 ```
+
+This single generic block replaces any earlier per-event version and covers all
+events: `review_ready`, `review_update`, `final_delivered`, `staff_assigned`,
+`assignment_note`, `opportunity_new`, `opportunity_ack`.
 
 ---
 

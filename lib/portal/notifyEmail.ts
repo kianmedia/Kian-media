@@ -160,3 +160,47 @@ export function notifyReviewUpdate(input: {
     Link: portalLink(input.projectId),
   });
 }
+
+/** Link to the admin/HR Opportunities Center. */
+function opportunitiesLink(): string {
+  if (typeof window === "undefined") return "";
+  return `${window.location.origin}/client-portal/opportunities`;
+}
+
+/**
+ * Kian/HR-facing "new opportunity request" email. Fired from the PUBLIC (anon)
+ * opportunities page on submit. No `To` → the Apps Script routes it to the
+ * configured Kian inbox (server-side), so no admin address is exposed in code.
+ */
+export function notifyOpportunityNew(input: {
+  type: string; fullName: string; email?: string | null; phone?: string | null;
+  city?: string | null; message?: string | null; requestNumber?: string | null;
+}): Promise<void> {
+  return postNotify({
+    Event: "opportunity_new",
+    Subject: "طلب فرصة جديد - كيان",
+    "Opportunity Type": input.type,
+    Applicant: input.fullName,
+    Email: input.email ?? "",
+    Phone: input.phone ?? "",
+    City: input.city ?? "",
+    Note: input.message ?? "",
+    "Request Number": input.requestNumber ?? "",
+    Message: "ورد طلب جديد في مركز الفرص.",
+    Link: opportunitiesLink(),
+  });
+}
+
+/** Applicant confirmation for an opportunity submission (recipient = applicant). */
+export function notifyOpportunityAck(input: {
+  toEmail: string; fullName: string; requestNumber?: string | null;
+}): Promise<void> {
+  return postNotify({
+    Event: "opportunity_ack",
+    Subject: "تم استلام طلبك - كيان",
+    To: input.toEmail,
+    Applicant: input.fullName,
+    "Request Number": input.requestNumber ?? "",
+    Message: "تم استلام طلبك بنجاح. سيقوم فريق كيان بمراجعته والتواصل معك عند توفر فرصة مناسبة.",
+  });
+}

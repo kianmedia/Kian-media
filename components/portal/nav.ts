@@ -19,6 +19,7 @@ const REG: Record<string, TabDef> = {
   files:         { href: "/client-portal/files",         ar: "ملفاتي",      en: "My Files",      adminAr: "روابط وملفات العملاء", adminEn: "Client Files" },
   accounts:      { href: "/client-portal/accounts",      ar: "الحسابات",    en: "Accounts",      adminAr: "إدارة العملاء",        adminEn: "Accounts" },
   staff:         { href: "/client-portal/staff",         ar: "الموظفون",    en: "Staff" },
+  opportunities: { href: "/client-portal/opportunities", ar: "مركز الفرص",  en: "Opportunities" },
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
@@ -27,13 +28,13 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "invoices", "notifications", "profile"],
-  manager:     ["overview", "projects", "quotes", "messages", "files", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "opportunities", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "opportunities", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "quotes", "messages", "files", "opportunities", "invoices", "notifications", "profile"],
   support:     ["messages", "files", "notifications", "profile"],
   sales:       ["quotes", "notifications", "profile"],
   editor:      ["projects", "notifications", "profile"],
-  hr:          ["overview", "notifications", "profile"],
+  hr:          ["overview", "opportunities", "notifications", "profile"],
   readonly:    ["projects", "notifications", "profile"],
   finance:     ["invoices", "notifications", "profile"],
   client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "notifications", "profile"],

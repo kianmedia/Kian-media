@@ -36,6 +36,7 @@ export interface Caps {
   canSupportComms: boolean;  // client messages — owner/manager/support (DB can_support)
   staffReadsAll: boolean;    // all projects/files — owner/manager/support/readonly
   canSeeInvoices: boolean;   // invoices/Zoho — owner/manager/finance (DB can_see_invoices, after addendum)
+  canSeeOpportunities: boolean; // Opportunities Center — owner/manager/hr (DB can_see_opportunities)
 }
 
 export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
@@ -63,6 +64,7 @@ export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
     canSupportComms: isOwner || view === "manager" || view === "support",
     staffReadsAll: isOwner || ["manager", "support", "readonly"].includes(view),
     canSeeInvoices: isOwner || view === "manager" || view === "finance",
+    canSeeOpportunities: isOwner || view === "manager" || view === "hr",
   };
 }
 
