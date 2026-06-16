@@ -9,8 +9,9 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { adminListProfiles, adminSetAccount, adminReplySupport } from "@/lib/portal/admin";
-import type { Profile, AccountStatus, AccountType, ClientLevel } from "@/lib/portal/types";
+import { adminListProfiles, adminSetAccount, adminReplySupport, adminListProjects } from "@/lib/portal/admin";
+import AccountLinking from "@/components/portal/AccountLinking";
+import type { Profile, AccountStatus, AccountType, ClientLevel, Project } from "@/lib/portal/types";
 
 const PROTECTED_EMAILS = ["kianalebtikar@gmail.com", "manager@kianmedia.com"];
 
@@ -37,6 +38,8 @@ export default function AdminAccounts() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [msgFor, setMsgFor] = useState<Profile | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [linkFor, setLinkFor] = useState<string | null>(null); // expanded linking panel
 
   async function load() {
     const r = await adminListProfiles();
@@ -44,7 +47,11 @@ export default function AdminAccounts() {
     setRows(r.data);
     setPhase("ready");
   }
-  useEffect(() => { void load(); }, []);
+  async function loadProjects() {
+    const r = await adminListProjects();
+    if (r.ok) setProjects(r.data);
+  }
+  useEffect(() => { void load(); void loadProjects(); }, []);
 
   async function patch(p: Profile, fields: { status?: AccountStatus; type?: AccountType; level?: ClientLevel }) {
     setSavingId(p.id); setFlash(null);
@@ -103,24 +110,40 @@ export default function AdminAccounts() {
                     {t({ ar: "حساب إدارة — لا يمكن تعديله من البوابة.", en: "Admin account — not editable from the portal." })}
                   </div>
                 ) : (
-                  <div className="flex flex-wrap items-end gap-3">
-                    <Ctrl label={t({ ar: "الحالة", en: "Status" })}>
-                      <Select value={p.account_status} disabled={savingId === p.id} onChange={(v) => patch(p, { status: v as AccountStatus })}
-                        opts={STATUS_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
-                    </Ctrl>
-                    <Ctrl label={t({ ar: "النوع", en: "Type" })}>
-                      <Select value={p.account_type} disabled={savingId === p.id} onChange={(v) => patch(p, { type: v as AccountType })}
-                        opts={TYPE_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
-                    </Ctrl>
-                    <Ctrl label={t({ ar: "المستوى", en: "Level" })}>
-                      <Select value={p.client_level} disabled={savingId === p.id} onChange={(v) => patch(p, { level: v as ClientLevel })}
-                        opts={LEVEL_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
-                    </Ctrl>
-                    <button onClick={() => setMsgFor(p)} className="f-sans"
-                      style={{ fontSize: "11px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.7)", background: "none", border: "1px solid rgba(255,255,255,0.15)", padding: "9px 14px", borderRadius: "3px", cursor: "pointer" }}>
-                      {t({ ar: "رسالة", en: "Message" })}
-                    </button>
-                  </div>
+                  <>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <Ctrl label={t({ ar: "الحالة", en: "Status" })}>
+                        <Select value={p.account_status} disabled={savingId === p.id} onChange={(v) => patch(p, { status: v as AccountStatus })}
+                          opts={STATUS_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
+                      </Ctrl>
+                      <Ctrl label={t({ ar: "النوع", en: "Type" })}>
+                        <Select value={p.account_type} disabled={savingId === p.id} onChange={(v) => patch(p, { type: v as AccountType })}
+                          opts={TYPE_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
+                      </Ctrl>
+                      <Ctrl label={t({ ar: "المستوى", en: "Level" })}>
+                        <Select value={p.client_level} disabled={savingId === p.id} onChange={(v) => patch(p, { level: v as ClientLevel })}
+                          opts={LEVEL_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
+                      </Ctrl>
+                      <button onClick={() => setMsgFor(p)} className="f-sans"
+                        style={{ fontSize: "11px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.7)", background: "none", border: "1px solid rgba(255,255,255,0.15)", padding: "9px 14px", borderRadius: "3px", cursor: "pointer" }}>
+                        {t({ ar: "رسالة", en: "Message" })}
+                      </button>
+                      <button onClick={() => setLinkFor((cur) => (cur === p.id ? null : p.id))} className="f-sans"
+                        style={{ fontSize: "11px", letterSpacing: "1px", textTransform: "uppercase", color: linkFor === p.id ? "#fff" : "rgba(255,255,255,0.7)", background: linkFor === p.id ? "rgba(227,30,36,0.14)" : "none", border: `1px solid ${linkFor === p.id ? "rgba(227,30,36,0.5)" : "rgba(255,255,255,0.15)"}`, padding: "9px 14px", borderRadius: "3px", cursor: "pointer" }}>
+                        {t({ ar: "ربط بالمشاريع", en: "Projects" })}
+                      </button>
+                    </div>
+                    {linkFor === p.id && (
+                      <AccountLinking
+                        account={p}
+                        projects={projects}
+                        isClient={p.account_type === "client"}
+                        convertBusy={savingId === p.id}
+                        onConvert={() => patch(p, { type: "client" })}
+                        onProjectsChanged={() => void loadProjects()}
+                      />
+                    )}
+                  </>
                 )}
                 {savingId === p.id && <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", marginTop: "8px" }}>{t({ ar: "جارٍ الحفظ...", en: "Saving..." })}</div>}
                 {flash && flash.id === p.id && <div className="f-sans" style={{ fontSize: "12px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}

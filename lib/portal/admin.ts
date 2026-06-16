@@ -13,7 +13,7 @@ import { pget, ppost, prpc, enc, currentUserId, type Result } from "@/lib/portal
 import type {
   AccountStatus, AccountType, ClientLevel, ClientRow, DeliverableStatus, DeliverableType,
   FileLink, InternalComment, InternalCommentCategory, MessageRow, NotificationType,
-  Profile, Project, ProjectMessage, ProjectStatus, QuoteRequest,
+  Profile, Project, ProjectMember, ProjectMemberRole, ProjectMessage, ProjectStatus, QuoteRequest,
 } from "@/lib/portal/types";
 
 /** Sender info shown in the admin inbox (subset of profiles). */
@@ -188,4 +188,49 @@ export function adminSetAccount(input: {
 /** Restore a soft-deleted record (admin-only; DB-enforced). */
 export function adminRestoreRecord(table: string, id: string): Promise<Result<boolean>> {
   return prpc<boolean>("restore_record", { p_table: table, p_id: id });
+}
+
+// ─── Client → project linking (client_project_linking_PROPOSAL.sql RPCs) ─────
+// All three are is_admin()-guarded SECURITY DEFINER RPCs — no table grants, no
+// service-role key. admin_create_project returns the new project id;
+// admin_add_project_member is idempotent (revives/updates an existing membership).
+
+export function adminCreateProject(input: {
+  title: string; clientId?: string | null; companyId?: string | null;
+  status?: ProjectStatus; notes?: string | null; shootingDate?: string | null;
+}): Promise<Result<string>> {
+  return prpc<string>("admin_create_project", {
+    p_title: input.title,
+    p_client: input.clientId ?? null,
+    p_company: input.companyId ?? null,
+    p_status: input.status ?? "request_received",
+    p_notes: input.notes ?? null,
+    p_shooting: input.shootingDate ?? null,
+  });
+}
+
+export function adminAddProjectMember(input: {
+  projectId: string; userId: string; role?: ProjectMemberRole;
+}): Promise<Result<string>> {
+  return prpc<string>("admin_add_project_member", {
+    p_project: input.projectId,
+    p_user: input.userId,
+    p_role: input.role ?? "client_owner",
+  });
+}
+
+export function adminRemoveProjectMember(input: {
+  projectId: string; userId: string;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_remove_project_member", {
+    p_project: input.projectId,
+    p_user: input.userId,
+  });
+}
+
+/** Active project memberships for one user (admin reads all via the members RLS). */
+export function adminListMembershipsForUser(userId: string): Promise<Result<ProjectMember[]>> {
+  return pget<ProjectMember[]>(
+    `project_members?user_id=eq.${enc(userId)}&is_deleted=eq.false&select=*&order=created_at.desc`
+  );
 }
