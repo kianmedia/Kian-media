@@ -20,19 +20,20 @@ interface Tile {
 export default function AdminDashboard() {
   const { t, isAr } = useI18n();
   const { profile } = usePortal();
-  const [counts, setCounts] = useState<{ newQuotes: number; clientMsgs: number; files: number; projects: number } | null>(null);
+  const [counts, setCounts] = useState<{ newQuotes: number; clientMsgs: number; files: number; projects: number; newOpps: number } | null>(null);
   const [recent, setRecent] = useState<NotificationRow[] | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [newQuotes, clientMsgs, files, projects] = await Promise.all([
+      const [newQuotes, clientMsgs, files, projects, newOpps] = await Promise.all([
         adminCount("quote_requests", "status=eq.new&is_deleted=eq.false"),
         adminCount("messages", "sender=eq.user&is_deleted=eq.false"),
         adminCount("file_links", "is_deleted=eq.false"),
         adminCount("projects", "is_deleted=eq.false"),
+        adminCount("opportunity_requests", "status=eq.new&is_deleted=eq.false"),
       ]);
-      if (alive) setCounts({ newQuotes, clientMsgs, files, projects });
+      if (alive) setCounts({ newQuotes, clientMsgs, files, projects, newOpps });
       const n = await listNotifications(8);
       if (alive) setRecent(n.ok ? n.data : []);
     })();
@@ -44,6 +45,7 @@ export default function AdminDashboard() {
     { href: "/client-portal/quotes",   ar: "طلبات عروض السعر",     en: "Quote Requests", count: counts?.newQuotes ?? null, descAr: "طلب جديد", descEn: "new", mode: "readonly" },
     { href: "/client-portal/messages", ar: "رسائل العملاء",        en: "Client Messages", count: counts?.clientMsgs ?? null, descAr: "رسالة من العملاء", descEn: "from clients", mode: "actionable" },
     { href: "/client-portal/files",    ar: "روابط وملفات العملاء", en: "Client Files", count: counts?.files ?? null, descAr: "رابط", descEn: "links", mode: "readonly" },
+    { href: "/client-portal/opportunities", ar: "مركز الفرص",      en: "Opportunities", count: counts?.newOpps ?? null, descAr: "طلب فرصة جديد", descEn: "new requests", mode: "actionable" },
     { href: "/client-portal/accounts", ar: "إدارة العملاء",        en: "Accounts", count: null, descAr: "الحسابات والصلاحيات", descEn: "accounts & status", mode: "actionable" },
     { href: "/client-portal/notifications", ar: "الإشعارات",       en: "Notifications", count: null, descAr: "آخر التحديثات", descEn: "latest updates", mode: "readonly" },
   ];

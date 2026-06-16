@@ -161,6 +161,30 @@ export default function Hero() {
           </a>
         </motion.div>
 
+        {/* Premium "Join Kian" CTA — Opportunities Center entry, visually distinct */}
+        <motion.a
+          variants={f(0.78)} initial="hidden" animate="show"
+          href="/opportunities"
+          className="group flex items-center gap-4 mx-auto mb-16 w-full"
+          style={{
+            maxWidth: "560px", padding: "16px 22px", borderRadius: "10px", textDecoration: "none",
+            background: "linear-gradient(120deg, rgba(227,30,36,0.22), rgba(227,30,36,0.06))",
+            border: "1px solid rgba(227,30,36,0.5)",
+            boxShadow: "0 0 0 1px rgba(227,30,36,0.15), 0 14px 44px rgba(227,30,36,0.28)",
+          }}
+        >
+          <span style={{ flexShrink: 0, width: "44px", height: "44px", borderRadius: "9px", background: "rgba(227,30,36,0.9)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 18px rgba(227,30,36,0.5)" }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+          </span>
+          <span style={{ flex: 1, minWidth: 0, textAlign: isAr ? "right" : "left" }}>
+            <span className="block text-white" style={{ fontSize: "17px", fontWeight: 700, lineHeight: 1.3 }}>{t({ ar: "انضم إلى كيان", en: "Join Kian" })}</span>
+            <span className="block" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.7)", marginTop: "2px" }}>{t({ ar: "فرص التوظيف والتدريب والتعاون والمواهب", en: "Jobs, training, collaboration & talent opportunities" })}</span>
+          </span>
+          <span aria-hidden="true" style={{ flexShrink: 0, color: "#fff", transition: "transform 0.25s" }} className="group-hover:translate-x-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ transform: isAr ? "scaleX(-1)" : "none" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+          </span>
+        </motion.a>
+
         {/* Stats — hairline grid (original Netflix-editorial style) */}
         <motion.div variants={f(0.84)} initial="hidden" animate="show" className="grid grid-cols-2 md:grid-cols-4 gap-px max-w-3xl mx-auto w-full" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.08)" }}>
           <div className="text-center py-6 px-4" style={{ background: "rgba(0,0,0,0.88)" }}>
