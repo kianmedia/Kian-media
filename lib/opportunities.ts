@@ -277,3 +277,6 @@ export function addOpportunityNote(requestId: string, body: string): Promise<Res
 export function archiveOpportunityRequest(requestId: string): Promise<Result<boolean>> {
   return prpc<boolean>("archive_opportunity_request", { p_request: requestId });
 }
+export function assignOpportunity(requestId: string, staffUserId: string | null): Promise<Result<boolean>> {
+  return prpc<boolean>("assign_opportunity", { p_request: requestId, p_staff: staffUserId });
+}

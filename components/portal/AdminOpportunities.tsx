@@ -7,9 +7,12 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
+import { adminListProfiles } from "@/lib/portal/admin";
+import type { Profile } from "@/lib/portal/types";
 import {
   listOpportunities, listOpportunityNotes, updateOpportunityStatus, updateOpportunityPriority,
-  addOpportunityNote, archiveOpportunityRequest,
+  addOpportunityNote, archiveOpportunityRequest, assignOpportunity,
   OPPORTUNITY_TYPES, OPP_STATUS_LABELS, OPP_STATUSES, OPP_PRIORITY_LABELS, OPP_PRIORITIES,
   oppTypeLabel, oppFieldLabel,
   type OpportunityRequest, type OpportunityNote,
@@ -19,11 +22,24 @@ const PRIORITY_COLOR: Record<string, string> = { low: "rgba(255,255,255,0.4)", n
 
 export default function AdminOpportunities() {
   const { t, isAr } = useI18n();
+  const { caps } = usePortal();
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [rows, setRows] = useState<OpportunityRequest[]>([]);
+  const [staff, setStaff] = useState<Profile[]>([]);
   const [fType, setFType] = useState(""); const [fStatus, setFStatus] = useState(""); const [fPriority, setFPriority] = useState("");
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
+
+  // Assignable staff list — only account_type=admin can read all profiles (RLS).
+  useEffect(() => {
+    if (!caps.canWriteAdmin) return;
+    let alive = true;
+    (async () => {
+      const r = await adminListProfiles();
+      if (alive && r.ok) setStaff(r.data.filter((p) => p.account_type === "admin" || p.staff_role));
+    })();
+    return () => { alive = false; };
+  }, [caps.canWriteAdmin]);
 
   async function load() {
     setPhase("loading");
@@ -101,15 +117,16 @@ export default function AdminOpportunities() {
         </div>
       )}
 
-      {open && <DetailModal req={open} onClose={() => setOpenId(null)} onChanged={load} />}
+      {open && <DetailModal req={open} staff={staff} canAssign={caps.canWriteAdmin} onClose={() => setOpenId(null)} onChanged={load} />}
     </div>
   );
 }
 
-function DetailModal({ req, onClose, onChanged }: { req: OpportunityRequest; onClose: () => void; onChanged: () => void }) {
+function DetailModal({ req, staff, canAssign, onClose, onChanged }: { req: OpportunityRequest; staff: Profile[]; canAssign: boolean; onClose: () => void; onChanged: () => void }) {
   const { t, isAr } = useI18n();
   const [status, setStatus] = useState(req.status);
   const [priority, setPriority] = useState(req.priority);
+  const [assignee, setAssignee] = useState(req.assigned_to ?? "");
   const [notes, setNotes] = useState<OpportunityNote[]>([]);
   const [noteBody, setNoteBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -131,6 +148,13 @@ function DetailModal({ req, onClose, onChanged }: { req: OpportunityRequest; onC
     setBusy(false);
     if (!r.ok || !r.data) { setFlash({ kind: "err", text: t({ ar: "تعذّر تحديث الأولوية", en: "Priority update failed" }) }); return; }
     setFlash({ kind: "ok", text: t({ ar: "تم تحديث الأولوية ✓", en: "Priority updated ✓" }) }); onChanged();
+  }
+  async function saveAssignee(uid: string) {
+    setAssignee(uid); setBusy(true); setFlash(null);
+    const r = await assignOpportunity(req.id, uid || null);
+    setBusy(false);
+    if (!r.ok || !r.data) { setFlash({ kind: "err", text: t({ ar: "تعذّر التكليف", en: "Assign failed" }) }); return; }
+    setFlash({ kind: "ok", text: t({ ar: "تم التكليف ✓", en: "Assigned ✓" }) }); onChanged();
   }
   async function addNote() {
     if (!noteBody.trim()) return;
@@ -206,6 +230,15 @@ function DetailModal({ req, onClose, onChanged }: { req: OpportunityRequest; onC
               {OPP_PRIORITIES.map((p) => <option key={p} value={p} style={{ background: "#0a0a0a" }}>{isAr ? OPP_PRIORITY_LABELS[p].ar : OPP_PRIORITY_LABELS[p].en}</option>)}
             </select>
           </div>
+          {canAssign && (
+            <div>
+              <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "التكليف إلى", en: "Assigned to" })}</div>
+              <select value={assignee} disabled={busy} onChange={(e) => void saveAssignee(e.target.value)} style={sel}>
+                <option value="" style={{ background: "#0a0a0a" }}>{t({ ar: "غير مكلّف", en: "Unassigned" })}</option>
+                {staff.map((s) => <option key={s.id} value={s.id} style={{ background: "#0a0a0a" }}>{s.full_name || s.email}</option>)}
+              </select>
+            </div>
+          )}
           <button onClick={() => void archive()} disabled={busy} className="f-sans" style={{ fontSize: "10.5px", color: "#ff8a8e", background: "none", border: "1px solid rgba(227,30,36,0.35)", padding: "9px 13px", borderRadius: "3px", cursor: busy ? "wait" : "pointer" }}>{t({ ar: "أرشفة", en: "Archive" })}</button>
         </div>
 
