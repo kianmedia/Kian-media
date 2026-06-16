@@ -23,6 +23,8 @@ The browser POSTs a fire-and-forget event (`mode: "no-cors"`, opaque) with
 | `review_ready` | admin browser | deliverable added with / moved to `client_review` | the client (`To` field, resolved by the admin from `clients.email`) |
 | `review_update` | client browser | client approves or requests revision | Kian admin address **configured inside the Apps Script** (never sent from the client) |
 | `final_delivered` | admin browser | deliverable moved to `final_delivered` | the client (`To` field, resolved by the admin) |
+| `staff_assigned` | admin browser | a staff member is assigned to a project | the staff member (`To` field, resolved by the admin) |
+| `assignment_note` | admin browser | an assignment note is added (after the finance/notes addendum is run) | the assigned staff member (`To` field) |
 
 ### Payload keys
 
@@ -36,7 +38,19 @@ The browser POSTs a fire-and-forget event (`mode: "no-cors"`, opaque) with
 `final_delivered`: `_type=portal_notify`, `Event`, `Subject` ("تم التسليم النهائي - كيان"),
 `To`, `Project Name`, `Deliverable Title`, `Message`, `Link`.
 
+`staff_assigned`: `_type=portal_notify`, `Event`, `Subject` ("تم تكليفك بمشروع - كيان"),
+`To`, `Staff Name`, `Project Name`, `Role`, `Note`, `Message`, `Link`.
+
+`assignment_note`: `_type=portal_notify`, `Event`, `Subject` ("ملاحظة جديدة على تكليفك - كيان"),
+`To`, `Staff Name`, `Project Name`, `Note`, `Message`, `Link`.
+
 `Link` is the portal deep-link (`<origin>/client-portal/projects/<id>`) — no secrets.
+
+The Apps Script `doPost` `portal_notify` branch already mails `data.To` for any
+event that carries a `To` + `Subject` (review_ready/final_delivered). `staff_assigned`
+and `assignment_note` follow the same shape (`To` + `Subject` + `Message`/`Note`),
+so they are covered by the existing recipient-has-`To` branch — extend the body
+text if you want richer formatting (include `Role`/`Note`).
 
 ---
 
@@ -54,15 +68,9 @@ function doPost(e) {
 
   if (data._type === "portal_notify") {
     const link = data.Link ? ("\n\nرابط المشروع: " + data.Link) : "";
-    if ((data.Event === "review_ready" || data.Event === "final_delivered") && data.To) {
-      MailApp.sendEmail(
-        data.To,
-        data.Subject || "تحديث من كيان",
-        "مشروع: " + data["Project Name"] +
-        "\nالمخرَج: " + data["Deliverable Title"] +
-        "\n\n" + (data.Message || "") + link
-      );
-    } else if (data.Event === "review_update") {
+    // review_update goes to Kian (admin); ALL other events carry a `To` recipient
+    // (client or staff): review_ready, final_delivered, staff_assigned, assignment_note.
+    if (data.Event === "review_update") {
       const action = data.Action === "approved" ? "اعتماد" : "طلب تعديل";
       MailApp.sendEmail(
         KIAN_ADMIN_EMAIL,
@@ -73,6 +81,15 @@ function doPost(e) {
         "\nالعميل: " + (data["Client Name"] || "") + " " + (data["Client Email"] || "") +
         "\nملاحظة: " + (data.Note || "—") + link
       );
+    } else if (data.To) {
+      // review_ready | final_delivered | staff_assigned | assignment_note
+      var body = "";
+      if (data["Project Name"])      body += "مشروع: " + data["Project Name"] + "\n";
+      if (data["Deliverable Title"]) body += "المخرَج: " + data["Deliverable Title"] + "\n";
+      if (data["Role"])              body += "الدور: " + data["Role"] + "\n";
+      body += "\n" + (data.Message || "");
+      if (data["Note"])              body += "\nملاحظة: " + data["Note"];
+      MailApp.sendEmail(data.To, data.Subject || "تحديث من كيان", body + link);
     }
     return ContentService.createTextOutput("ok");
   }

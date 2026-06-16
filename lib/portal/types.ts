@@ -12,7 +12,7 @@ export type PreferredLang  = "ar" | "en";
 /** Staff tiers (profiles.staff_role; NULL = not staff). DB-enforced via RLS/RPCs
  *  added in docs/staff_roles_task_assignment_RUNME.sql. */
 export type StaffRole =
-  | "super_admin" | "manager" | "support" | "editor" | "sales" | "hr" | "readonly";
+  | "super_admin" | "manager" | "support" | "editor" | "sales" | "hr" | "readonly" | "finance";
 
 export type ProjectMemberRole =
   | "client_owner" | "client_member"

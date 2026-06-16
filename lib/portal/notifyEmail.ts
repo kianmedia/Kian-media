@@ -84,6 +84,55 @@ export function notifyFinalDelivered(input: {
 }
 
 /**
+ * Staff-facing "you've been assigned to a project" email. Fired from the ADMIN's
+ * browser when a staff member is assigned to a project. The admin can read staff
+ * emails (profiles admin-all), so we include the recipient.
+ */
+export function notifyStaffAssigned(input: {
+  projectId: string;
+  projectName: string;
+  staffEmail?: string | null;
+  staffName?: string | null;
+  role: string;
+  note?: string | null;
+}): Promise<void> {
+  return postNotify({
+    Event: "staff_assigned",
+    Subject: "تم تكليفك بمشروع - كيان",
+    To: input.staffEmail ?? "",
+    "Staff Name": input.staffName ?? "",
+    "Project Name": input.projectName,
+    Role: input.role,
+    Note: input.note ?? "",
+    Message: "تم تكليفك بمشروع. فضلاً سجّل الدخول إلى البوابة لعرض التفاصيل.",
+    Link: portalLink(input.projectId),
+  });
+}
+
+/**
+ * Staff-facing "new assignment note" email. Fired from the ADMIN's browser when
+ * an assignment note is added (notes UI activates after the addendum runs).
+ */
+export function notifyAssignmentNote(input: {
+  projectId: string;
+  projectName: string;
+  staffEmail?: string | null;
+  staffName?: string | null;
+  note: string;
+}): Promise<void> {
+  return postNotify({
+    Event: "assignment_note",
+    Subject: "ملاحظة جديدة على تكليفك - كيان",
+    To: input.staffEmail ?? "",
+    "Staff Name": input.staffName ?? "",
+    "Project Name": input.projectName,
+    Note: input.note,
+    Message: "لديك ملاحظة جديدة من الإدارة على مشروعك المكلّف به.",
+    Link: portalLink(input.projectId),
+  });
+}
+
+/**
  * Kian/admin-facing "client review update" email. Fired from the CLIENT's
  * browser on approve / request-revision. We deliberately DO NOT send an admin
  * recipient from the client (clients can't read admin emails, and we won't leak

@@ -12,7 +12,8 @@ import {
   adminListProfiles, adminListProjects, adminSetStaffRole,
   adminAddProjectMember, adminRemoveProjectMember, adminListMembershipsForUser,
 } from "@/lib/portal/admin";
-import { STAFF_ROLE_LABELS, PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
+import { notifyStaffAssigned } from "@/lib/portal/notifyEmail";
+import { STAFF_ROLE_LABELS, STAFF_ROLE_OPTIONS, PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import type { Profile, Project, ProjectMember, StaffRole, ProjectMemberRole } from "@/lib/portal/types";
 
 const PROTECTED_EMAILS = ["kianalebtikar@gmail.com", "manager@kianmedia.com", "contact@kianmedia.com"];
@@ -93,7 +94,7 @@ export default function AdminStaff() {
                         className="f-sans"
                         style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "3px", padding: "8px 10px", fontSize: "12.5px", cursor: savingId === p.id ? "wait" : "pointer", colorScheme: "dark", outline: "none", opacity: protectedRow ? 0.5 : 1 }}>
                         <option value="" style={{ background: "#0a0a0a" }}>{t({ ar: "— ليس موظفاً —", en: "— not staff —" })}</option>
-                        {Object.entries(STAFF_ROLE_LABELS).map(([k, v]) => <option key={k} value={k} style={{ background: "#0a0a0a" }}>{isAr ? v.ar : v.en}</option>)}
+                        {STAFF_ROLE_OPTIONS.map((k) => <option key={k} value={k} style={{ background: "#0a0a0a" }}>{isAr ? STAFF_ROLE_LABELS[k].ar : STAFF_ROLE_LABELS[k].en}</option>)}
                       </select>
                     </div>
                     {caps.canWriteAdmin && (
@@ -139,11 +140,14 @@ function StaffAssign({ account, projects }: { account: Profile; projects: Projec
   async function assign() {
     if (!pick) return;
     setBusy(true); setFlash(null);
+    const projectName = nameById.get(pick) ?? "";
     const r = await adminAddProjectMember({ projectId: pick, userId: account.id, role });
     setBusy(false);
     if (!r.ok) { setFlash({ kind: "err", text: t({ ar: "تعذّر التكليف: ", en: "Assign failed: " }) + r.error }); return; }
+    // Email the staff member that they've been assigned (best-effort; never blocks).
+    void notifyStaffAssigned({ projectId: pick, projectName, staffEmail: account.email, staffName: account.full_name, role });
     setPick("");
-    setFlash({ kind: "ok", text: t({ ar: "تم التكليف ✓", en: "Assigned ✓" }) });
+    setFlash({ kind: "ok", text: t({ ar: "تم التكليف ✓ (سيصل إشعار للموظف)", en: "Assigned ✓ (staff notified)" }) });
     void load();
   }
   async function remove(projectId: string) {

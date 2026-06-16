@@ -35,6 +35,7 @@ export interface Caps {
   canSeeFinancials: boolean; // quotes/offers/pricing — owner/manager/sales (DB can_see_financials)
   canSupportComms: boolean;  // client messages — owner/manager/support (DB can_support)
   staffReadsAll: boolean;    // all projects/files — owner/manager/support/readonly
+  canSeeInvoices: boolean;   // invoices/Zoho — owner/manager/finance (DB can_see_invoices, after addendum)
 }
 
 export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
@@ -61,10 +62,12 @@ export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
     canSeeFinancials: isOwner || view === "manager" || view === "sales",
     canSupportComms: isOwner || view === "manager" || view === "support",
     staffReadsAll: isOwner || ["manager", "support", "readonly"].includes(view),
+    canSeeInvoices: isOwner || view === "manager" || view === "finance",
   };
 }
 
-/** Arabic/English label for a staff role (Staff Management UI). */
+/** Arabic/English label for a staff role (display — includes finance so an
+ *  already-assigned finance user renders correctly). */
 export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
   super_admin: { ar: "مالك", en: "Super Admin" },
   manager:     { ar: "مدير", en: "Manager" },
@@ -73,7 +76,17 @@ export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
   sales:       { ar: "مبيعات", en: "Sales" },
   hr:          { ar: "الموارد البشرية", en: "HR" },
   readonly:    { ar: "مشاهدة فقط", en: "Read-only" },
+  finance:     { ar: "المالية", en: "Finance" },
 };
+
+/**
+ * Roles SELECTABLE in the Staff role dropdown right now. Must match what the
+ * deployed DB accepts (profiles.staff_role CHECK + admin_set_staff_role). finance
+ * is intentionally EXCLUDED until docs/staff_assignment_notifications_finance_ADDENDUM.sql
+ * is run (the DB rejects it today); add "finance" here once that addendum is live.
+ */
+export const STAFF_ROLE_OPTIONS: StaffRole[] =
+  ["super_admin", "manager", "support", "editor", "sales", "hr", "readonly"];
 
 /**
  * Project-assignment roles (project_members.role) staff are assigned with.
