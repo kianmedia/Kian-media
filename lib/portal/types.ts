@@ -40,7 +40,8 @@ export type QuoteStatus =
 export type NotificationType =
   | "quote_request_new" | "message_new" | "file_link_new" | "project_note_new"
   | "deliverable_new" | "revision_requested" | "deliverable_approved"
-  | "deliverable_final_delivered" | "project_status_changed" | "opportunity_new";
+  | "deliverable_final_delivered" | "project_status_changed" | "opportunity_new"
+  | "whatsapp_new";
 
 export type OfferAudience = "all" | "leads" | "clients";
 export type InternalCommentCategory = "editor" | "production" | "budget" | "qa" | "general";
