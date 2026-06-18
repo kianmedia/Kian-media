@@ -353,9 +353,9 @@ begin
 end; $$;
 
 -- The ingest RPC is callable ONLY by the service_role (the server route's key).
-revoke execute on function public.whatsapp_ingest_message(text,text,text,text,text,text,text,jsonb,text,text,numeric)
+revoke execute on function public.whatsapp_ingest_message(text,text,text,text,text,text,text,jsonb,text,text,text,numeric)
   from public, anon, authenticated;
-grant execute on function public.whatsapp_ingest_message(text,text,text,text,text,text,text,jsonb,text,text,numeric)
+grant execute on function public.whatsapp_ingest_message(text,text,text,text,text,text,text,jsonb,text,text,text,numeric)
   to service_role;
 
 -- ─── 6) UI MUTATION RPCs (owner/manager triage; notes for any reader) ──────────
@@ -462,7 +462,7 @@ commit;
 --   drop function if exists public.wa_assign_conversation(uuid,uuid,text);
 --   drop function if exists public.wa_set_conversation(uuid,text,text,text,uuid,boolean,text);
 --   drop function if exists public.wa_is_triager();
---   drop function if exists public.whatsapp_ingest_message(text,text,text,text,text,text,text,jsonb,text,text,numeric);
+--   drop function if exists public.whatsapp_ingest_message(text,text,text,text,text,text,text,jsonb,text,text,text,numeric);
 --   drop function if exists public.wa_can_read(uuid,text,text);
 --   drop table if exists public.whatsapp_events cascade;
 --   drop table if exists public.whatsapp_internal_notes cascade;
