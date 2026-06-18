@@ -103,6 +103,29 @@ export function setSalesStage(conversationId: string, stage: WaSalesStage): Prom
   return prpc<boolean>("wa_set_sales_stage", { p_conversation: conversationId, p_stage: stage });
 }
 
+export type ZohoSyncResult =
+  | { ok: true; crmLeadId: string; action: string }
+  | { ok: false; error: string };
+
+/** Push this conversation's contact to Zoho CRM (upsert by phone), reflecting the
+ *  current sales_stage. Server route enforces auth (RLS) + holds all secrets. */
+export async function syncZoho(conversationId: string): Promise<ZohoSyncResult> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated" };
+  try {
+    const res = await fetch("/api/integrations/whatsapp/zoho-sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({ conversation_id: conversationId }),
+    });
+    const data = (await res.json()) as { ok?: boolean; crm_lead_id?: string; action?: string; error?: string };
+    if (!data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true, crmLeadId: data.crm_lead_id || "", action: data.action || "" };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 export type SendReplyResult = { ok: true; dryRun: boolean; messageId: string } | { ok: false; error: string };
 
 /**

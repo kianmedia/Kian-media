@@ -34,6 +34,7 @@ export interface WaConversation {
   linked_client_id: string | null;
   linked_project_id: string | null;
   crm_lead_id: string | null;
+  crm_synced_at: string | null;
   sales_stage: WaSalesStage;
   last_message_at: string | null;
   last_message_preview: string | null;

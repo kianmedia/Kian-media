@@ -127,11 +127,26 @@ export async function POST(req: Request) {
   // ── 5) Best-effort CRM sync (NEVER blocks ingest) ────────────────────────
   if (result.conversation_id && result.contact_id && result.message_inserted) {
     try {
-      await createOrUpdateZohoLeadFromWhatsApp(
-        { id: result.conversation_id, category: cls.category, ai_summary: cls.summary },
+      const zoho = await createOrUpdateZohoLeadFromWhatsApp(
+        {
+          id: result.conversation_id,
+          category: cls.category,
+          ai_summary: cls.summary,
+          // Only set Lead_Status on a brand-new conversation (stage 'new'); for an
+          // existing thread, omit it so we never overwrite the sales team's stage.
+          sales_stage: result.new_conversation ? "new" : undefined,
+        },
         { wa_id, phone: asStr(payload.phone), display_name: asStr(payload.display_name) },
         { body },
       );
+      if (zoho.ok) {
+        const wb = await rpcAsService("wa_set_crm_lead", {
+          p_contact_id: result.contact_id,
+          p_conversation_id: result.conversation_id,
+          p_crm_lead_id: zoho.crm_lead_id,
+        });
+        if (!wb.ok) console.error("[whatsapp/incoming] wa_set_crm_lead failed (ignored):", wb.error);
+      }
     } catch (e) {
       console.error("[whatsapp/incoming] zoho sync threw (ignored):", e);
     }

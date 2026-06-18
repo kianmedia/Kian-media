@@ -42,6 +42,41 @@ and test against a **test number first**. Until then, replies stay dry-run.
 
 ---
 
+## Phase 2 — Zoho CRM wiring (idempotent lead upsert-by-phone, .sa DC)
+
+- **Migration** `docs/whatsapp_zoho_phase2_RUNME.sql` (ADDITIVE, REVERSIBLE): adds
+  `crm_synced_at` to `whatsapp_contacts`/`whatsapp_conversations` + a **service-role-only**
+  RPC `wa_set_crm_lead` (writes the Zoho lead id back). `crm_lead_id` already existed.
+- **`lib/server/zoho.ts`**: real `.sa` integration — OAuth refresh (cached, uses the
+  token response's `api_domain`), **`/Leads/upsert` with `duplicate_check_fields:["Phone"]`**
+  (one Lead per phone — create or update, no duplicates), field mapping
+  (`Last_Name`, `Phone` as `+E.164`, `Lead_Source=WhatsApp`, `Description`,
+  `sales_stage→Lead_Status`). Auth header `Zoho-oauthtoken`. Never logs secrets.
+- **Ingest route**: on a new inbound message it upserts the lead and writes
+  `crm_lead_id` back — **non-blocking** (ingest returns `ok:true` even if Zoho fails/unset).
+- **Manual sync** `POST /api/integrations/whatsapp/zoho-sync` + a **“Sync to Zoho”**
+  button in the inbox; a sales-stage change also best-effort re-syncs `Lead_Status`.
+- Inbox shows the linked lead + last-sync time + an **Open lead in Zoho** link.
+
+### Manual steps for Phase 2
+1. **Checkpoint (أ):** review `docs/whatsapp_zoho_phase2_RUNME.sql`, then run it in Supabase.
+2. **Vercel env (server-only, none `NEXT_PUBLIC_`):** `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`,
+   `ZOHO_REFRESH_TOKEN` (all minted on the **.sa** DC at `accounts.zoho.sa`),
+   `ZOHO_ACCOUNTS_URL=https://accounts.zoho.sa`, `ZOHO_CRM_API_BASE=https://www.zohoapis.sa/crm/v5`.
+3. **In Zoho CRM (one-time):** make **Phone** a *unique* field (so upsert dedupes rather
+   than inserts duplicates); add `WhatsApp` to the `Lead_Source` picklist; verify the
+   `Lead_Status` picklist contains the mapped values (`Not Contacted`, `Attempted to Contact`,
+   `Contacted`, `Pre-Qualified`, `Contact in Future`, `Lost Lead`) — add custom ones
+   (`Quote Sent`, `Converted`) if you want exact stage parity.
+4. **Checkpoint (ج):** redeploy when ready. With `ZOHO_*` unset, everything is a safe no-op.
+
+### Phase 2 acceptance (Preview)
+- `ZOHO_*` unset → WhatsApp ingest still returns `ok:true`; no errors.
+- `ZOHO_*` set (test/sandbox CRM) → a WhatsApp message creates **one** Lead (source
+  WhatsApp); `crm_lead_id` + `crm_synced_at` populate on contact + conversation; a second
+  message from the same number **updates** (no duplicate); the inbox shows the lead link;
+  “Sync to Zoho” pushes the current sales stage as `Lead_Status`.
+
 ## Standing items you own (per phase, as we reach them)
 - **n8n:** export the live `Kian WhatsApp - LIVE Production` workflow as JSON so
   edits can be precise. The Meta webhook URL is never changed.

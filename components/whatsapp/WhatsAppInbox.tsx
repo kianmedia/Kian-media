@@ -15,7 +15,7 @@ import type { Profile } from "@/lib/portal/types";
 import {
   listConversations, listContactsByIds, listMessages, listNotes, listAssignments,
   listAssignableStaff, setConversation, assignConversation, addNote,
-  setSalesStage, sendReply,
+  setSalesStage, sendReply, syncZoho,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
@@ -82,6 +82,7 @@ export default function WhatsAppInbox() {
   const [noteDraft, setNoteDraft] = useState("");
   const [replyDraft, setReplyDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [syncingZoho, setSyncingZoho] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -198,6 +199,26 @@ export default function WhatsAppInbox() {
     if (!r.ok) { flash((isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error); return; }
     setConvs((prev) => prev.map((c) => (c.id === selected.id ? { ...c, sales_stage: stage } : c)));
     flash(isAr ? "تم تحديث مرحلة المبيعات" : "Sales stage updated");
+    // Best-effort: keep Zoho's Lead_Status in sync. No-op when Zoho is unconfigured.
+    void syncZoho(selected.id).then((z) => { if (z.ok) void loadDetail(selected.id); });
+  }
+
+  async function pushZoho() {
+    if (!selected) return;
+    setSyncingZoho(true);
+    const z = await syncZoho(selected.id);
+    setSyncingZoho(false);
+    if (!z.ok) {
+      flash(z.error === "zoho_not_configured"
+        ? (isAr ? "Zoho غير مُهيّأ بعد" : "Zoho not configured yet")
+        : (isAr ? "تعذّرت المزامنة: " : "Sync failed: ") + z.error);
+      return;
+    }
+    await loadDetail(selected.id);
+    setConvs((prev) => prev.map((c) => (c.id === selected.id ? { ...c, crm_lead_id: z.crmLeadId } : c)));
+    flash(z.action === "insert"
+      ? (isAr ? "أُنشئ عميل محتمل في Zoho" : "Lead created in Zoho")
+      : (isAr ? "حُدّث العميل في Zoho" : "Lead updated in Zoho"));
   }
 
   async function submitReply() {
@@ -350,6 +371,26 @@ export default function WhatsAppInbox() {
                   <Badge color="rgba(255,255,255,0.12)" dark text={isAr ? WA_CATEGORY_LABELS[selected.category].ar : WA_CATEGORY_LABELS[selected.category].en} />
                   <Badge color={PRIORITY_COLOR[selected.priority]} text={isAr ? WA_PRIORITY_LABELS[selected.priority].ar : WA_PRIORITY_LABELS[selected.priority].en} />
                 </div>
+              </div>
+
+              {/* CRM (Zoho) row */}
+              <div style={{ padding: "8px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+                <span style={{ color: "rgba(255,255,255,0.5)" }}>Zoho CRM:</span>
+                {selected.crm_lead_id ? (
+                  <>
+                    <a href={`https://crm.zoho.sa/crm/tab/Leads/${selected.crm_lead_id}`} target="_blank" rel="noopener noreferrer"
+                       style={{ color: "#3b82f6", textDecoration: "none" }}>
+                      {t({ ar: "فتح العميل في Zoho", en: "Open lead in Zoho" })} ↗
+                    </a>
+                    {selected.crm_synced_at && <span style={{ color: "rgba(255,255,255,0.4)" }}>· {t({ ar: "آخر مزامنة", en: "synced" })} {timeAgo(selected.crm_synced_at, isAr)}</span>}
+                  </>
+                ) : (
+                  <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "لم يُربط بعد", en: "not linked yet" })}</span>
+                )}
+                <button onClick={() => void pushZoho()} disabled={syncingZoho}
+                  style={{ ...btn("rgba(255,255,255,0.08)", syncingZoho), marginInlineStart: "auto", fontSize: 12, padding: "5px 10px" }}>
+                  {syncingZoho ? "…" : t({ ar: "مزامنة مع Zoho", en: "Sync to Zoho" })}
+                </button>
               </div>
 
               {/* Triage controls */}
