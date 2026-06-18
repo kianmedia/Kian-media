@@ -208,6 +208,20 @@ create policy wa_events_read on public.whatsapp_events
 -- performed by a SECURITY DEFINER function (runs as the table owner, bypassing
 -- RLS) or by the service_role ingest path. The anon/public keys can do nothing.
 
+-- ─── 3b) TABLE READ GRANTS (REQUIRED for the browser to read at all) ──────────
+-- RLS decides WHICH rows; this grant decides whether the `authenticated` role may
+-- touch the table at all. This Supabase project has no `alter default privileges`,
+-- so every readable table needs an explicit grant (same pattern as the existing
+-- opportunity_requests / assignment_notes / invoices tables). SELECT only — writes
+-- stay locked to the SECURITY DEFINER RPCs. `anon` is deliberately NOT granted, so
+-- logged-out/public visitors can read nothing.
+grant select on public.whatsapp_contacts        to authenticated;
+grant select on public.whatsapp_conversations    to authenticated;
+grant select on public.whatsapp_messages         to authenticated;
+grant select on public.whatsapp_assignments      to authenticated;
+grant select on public.whatsapp_internal_notes   to authenticated;
+grant select on public.whatsapp_events           to authenticated;
+
 -- ─── 4) NOTIFICATIONS — allow one new in-portal type ──────────────────────────
 -- Re-create the inline CHECK with the existing 10 values + 'whatsapp_new'.
 alter table public.notifications drop constraint if exists notifications_type_check;

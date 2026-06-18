@@ -111,7 +111,10 @@ export default function WhatsAppInbox() {
   // ── Load conversation list ────────────────────────────────────────────────
   const loadList = useCallback(async () => {
     const r = await listConversations({ status: fStatus, category: fCategory });
-    if (!r.ok) { setErr(r.error); return; }
+    // Surface read failures instead of silently rendering "0 conversations"
+    // (e.g. a missing table grant or RLS denial returns ok:false here).
+    if (!r.ok) { setErr(r.error); setConvs([]); return; }
+    setErr("");
     setConvs(r.data);
     const cr = await listContactsByIds(r.data.map((c) => c.contact_id));
     if (cr.ok) {
@@ -252,6 +255,13 @@ export default function WhatsAppInbox() {
           ))}
         </select>
       </div>
+
+      {/* Read-error banner — so a permission/RLS failure never hides behind "0 conversations" */}
+      {err && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 8, background: "rgba(227,30,36,0.10)", border: "1px solid rgba(227,30,36,0.4)", color: "#ffb4b7", fontSize: 13 }}>
+          ⚠️ {t({ ar: "تعذّر تحميل المحادثات: ", en: "Couldn't load conversations: " })}{err}
+        </div>
+      )}
 
       {/* Split view */}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 360px) 1fr", gap: 16, alignItems: "start" }}>
