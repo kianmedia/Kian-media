@@ -15,6 +15,7 @@ if (typeof window !== "undefined") {
 
 const SUPABASE_URL = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 /** True when the server can talk to Supabase with elevated privileges. */
 export function adminConfigured(): boolean {
@@ -53,6 +54,44 @@ export async function rpcAsService<T>(fn: string, args: Record<string, unknown>)
   let body: unknown = null;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
 
+  if (!res.ok) {
+    const msg = (body && typeof body === "object" && "message" in (body as Record<string, unknown>))
+      ? String((body as Record<string, unknown>).message)
+      : `HTTP ${res.status}`;
+    return { ok: false, error: msg, status: res.status };
+  }
+  return { ok: true, data: body as T };
+}
+
+/**
+ * Call a Postgres function via PostgREST RPC AS THE LOGGED-IN USER (their JWT),
+ * so RLS + the function's internal role guards apply exactly as in the browser.
+ * The anon key is the public apikey; `bearer` is the user's access token. This
+ * never uses the service-role key — authorization is enforced by the database.
+ */
+export async function rpcAsUser<T>(fn: string, args: Record<string, unknown>, bearer: string): Promise<AdminResult<T>> {
+  if (SUPABASE_URL.length === 0 || ANON_KEY.length === 0) {
+    return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  }
+  if (!bearer) return { ok: false, error: "missing_bearer", status: 401 };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: {
+        apikey: ANON_KEY,
+        Authorization: `Bearer ${bearer}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+      cache: "no-store",
+    });
+  } catch (e) {
+    return { ok: false, error: String(e), status: 502 };
+  }
+  const text = await res.text();
+  let body: unknown = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
   if (!res.ok) {
     const msg = (body && typeof body === "object" && "message" in (body as Record<string, unknown>))
       ? String((body as Record<string, unknown>).message)

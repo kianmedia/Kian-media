@@ -7,9 +7,10 @@
 // wa_add_note) — there is NO table write-grant and NO service-role key here.
 // ════════════════════════════════════════════════════════════════════════
 import { pget, prpc, enc, type Result } from "@/lib/portal/client";
+import { getValidSession } from "@/lib/portalAuth";
 import type {
   WaConversation, WaContact, WaMessage, WaAssignment, WaInternalNote,
-  WaStatus,
+  WaStatus, WaSalesStage,
 } from "@/lib/whatsapp/types";
 import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 import type { Profile } from "@/lib/portal/types";
@@ -96,4 +97,32 @@ export function assignConversation(input: {
 
 export function addNote(conversationId: string, note: string): Promise<Result<string>> {
   return prpc<string>("wa_add_note", { p_conversation: conversationId, p_note: note });
+}
+
+export function setSalesStage(conversationId: string, stage: WaSalesStage): Promise<Result<boolean>> {
+  return prpc<boolean>("wa_set_sales_stage", { p_conversation: conversationId, p_stage: stage });
+}
+
+export type SendReplyResult = { ok: true; dryRun: boolean; messageId: string } | { ok: false; error: string };
+
+/**
+ * Reply from the portal. Posts to the server-only send route with the logged-in
+ * user's access token; the route records the message (DB-authorized) and only
+ * actually contacts WhatsApp when WHATSAPP_SEND_ENABLED=true (else dry-run).
+ */
+export async function sendReply(conversationId: string, body: string): Promise<SendReplyResult> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated" };
+  try {
+    const res = await fetch("/api/integrations/whatsapp/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({ conversation_id: conversationId, body }),
+    });
+    const data = (await res.json()) as { ok?: boolean; dry_run?: boolean; message_id?: string; error?: string };
+    if (!res.ok || !data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true, dryRun: !!data.dry_run, messageId: data.message_id || "" };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 }

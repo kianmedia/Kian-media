@@ -15,12 +15,14 @@ import type { Profile } from "@/lib/portal/types";
 import {
   listConversations, listContactsByIds, listMessages, listNotes, listAssignments,
   listAssignableStaff, setConversation, assignConversation, addNote,
+  setSalesStage, sendReply,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
   WA_STATUS_ORDER, WA_CATEGORY_ORDER, WA_PRIORITY_ORDER,
+  WA_SALES_STAGE_LABELS, WA_SALES_STAGE_ORDER,
   type WaConversation, type WaContact, type WaMessage, type WaInternalNote,
-  type WaAssignment, type WaStatus,
+  type WaAssignment, type WaStatus, type WaSalesStage,
 } from "@/lib/whatsapp/types";
 import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 
@@ -78,6 +80,8 @@ export default function WhatsAppInbox() {
   const [assignments, setAssignments] = useState<WaAssignment[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
+  const [replyDraft, setReplyDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -184,6 +188,29 @@ export default function WhatsAppInbox() {
     if (!r.ok) { flash((isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error); return; }
     setConvs((prev) => prev.map((c) => (c.id === selected.id ? { ...c, ...patch } : c)));
     flash(isAr ? "تم الحفظ" : "Saved");
+  }
+
+  async function patchSalesStage(stage: WaSalesStage) {
+    if (!selected) return;
+    setBusy(true);
+    const r = await setSalesStage(selected.id, stage);
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error); return; }
+    setConvs((prev) => prev.map((c) => (c.id === selected.id ? { ...c, sales_stage: stage } : c)));
+    flash(isAr ? "تم تحديث مرحلة المبيعات" : "Sales stage updated");
+  }
+
+  async function submitReply() {
+    if (!selected || !replyDraft.trim()) return;
+    setSending(true);
+    const r = await sendReply(selected.id, replyDraft.trim());
+    setSending(false);
+    if (!r.ok) { flash((isAr ? "تعذّر الإرسال: " : "Send failed: ") + r.error); return; }
+    setReplyDraft("");
+    await loadDetail(selected.id);
+    flash(r.dryRun
+      ? (isAr ? "سُجّلت الرسالة (وضع تجريبي — لم تُرسل)" : "Recorded (dry-run — not sent)")
+      : (isAr ? "أُرسلت الرسالة" : "Sent"));
   }
 
   async function changeAssignee(assignedTo: string | null) {
@@ -344,6 +371,10 @@ export default function WhatsAppInbox() {
                     <Select value={selected.assigned_to || ""} disabled={busy} onChange={(v) => changeAssignee(v || null)}
                       options={[{ value: "", label: t({ ar: "— غير مُسندة —", en: "— Unassigned —" }) }, ...staff.map((s) => ({ value: s.id, label: staffName(s) }))]} />
                   </Field>
+                  <Field label={t({ ar: "مرحلة المبيعات", en: "Sales stage" })}>
+                    <Select value={selected.sales_stage} disabled={busy} onChange={(v) => patchSalesStage(v as WaSalesStage)}
+                      options={WA_SALES_STAGE_ORDER.map((s) => ({ value: s, label: isAr ? WA_SALES_STAGE_LABELS[s].ar : WA_SALES_STAGE_LABELS[s].en }))} />
+                  </Field>
                 </div>
               ) : (
                 selected.assigned_to && (
@@ -366,18 +397,30 @@ export default function WhatsAppInbox() {
                       </div>
                       <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 3, textAlign: incoming ? (isAr ? "right" : "left") : (isAr ? "left" : "right") }}>
                         {timeAgo(m.sent_at || m.created_at, isAr)}
+                        {!incoming && m.status === "dry_run" && <span style={{ color: "rgba(245,158,11,0.9)" }}>{isAr ? " · تجريبي" : " · dry-run"}</span>}
+                        {!incoming && m.status === "failed" && <span style={{ color: "#ffb4b7" }}>{isAr ? " · فشل" : " · failed"}</span>}
+                        {!incoming && m.status === "sent" && <span style={{ color: ACCENT }}>{isAr ? " · أُرسلت" : " · sent"}</span>}
                       </div>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Disabled reply box (Phase 1: sending NOT enabled) */}
+              {/* Reply box — records the message; actual WhatsApp send is gated by
+                  WHATSAPP_SEND_ENABLED on the server (dry-run until enabled). */}
               <div style={{ padding: "12px 18px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                <textarea disabled rows={2} placeholder={t({ ar: "سيتم تفعيل الرد من البوابة بعد مراجعة واجهة إرسال واتساب.", en: "Reply from portal will be enabled after WhatsApp send API review." })}
-                  style={{ width: "100%", background: "rgba(255,255,255,0.03)", border: "1px dashed rgba(255,255,255,0.14)", borderRadius: 8, padding: "10px 12px", color: "rgba(255,255,255,0.4)", fontSize: 13, resize: "none", cursor: "not-allowed" }} />
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginTop: 4 }}>
-                  🔒 {t({ ar: "الإرسال معطّل في المرحلة 1 — للقراءة والتوجيه فقط.", en: "Sending is disabled in Phase 1 — read & route only." })}
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                  <textarea rows={2} value={replyDraft} disabled={sending}
+                    onChange={(e) => setReplyDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submitReply(); }}
+                    placeholder={t({ ar: "اكتب رداً… (Ctrl/⌘+Enter للإرسال)", en: "Write a reply… (Ctrl/⌘+Enter to send)" })}
+                    style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, padding: "10px 12px", color: "#fff", fontSize: 13, resize: "none" }} />
+                  <button onClick={() => void submitReply()} disabled={sending || !replyDraft.trim()} style={btn(ACCENT, sending || !replyDraft.trim())}>
+                    {sending ? "…" : t({ ar: "إرسال", en: "Send" })}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: "rgba(245,158,11,0.9)", marginTop: 4 }}>
+                  🧪 {t({ ar: "وضع تجريبي (dry-run): يُسجَّل الرد في المحادثة ولا يُرسَل فعلياً حتى اعتماد الإرسال المباشر.", en: "Dry-run: the reply is recorded in the thread but not actually sent until live sending is approved." })}
                 </div>
               </div>
 

@@ -6,6 +6,11 @@ import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 export type WaStatus = "new" | "open" | "pending" | "assigned" | "closed" | "spam";
 export type WaDirection = "incoming" | "outgoing" | "internal_note";
 
+/** Sales pipeline stage (whatsapp_conversations.sales_stage) — mirrors Zoho stages. */
+export type WaSalesStage =
+  | "new" | "collecting" | "quote_requested" | "awaiting_sales_review"
+  | "quote_sent" | "follow_up" | "converted" | "rejected";
+
 export interface WaContact {
   id: string;
   wa_id: string;
@@ -29,6 +34,7 @@ export interface WaConversation {
   linked_client_id: string | null;
   linked_project_id: string | null;
   crm_lead_id: string | null;
+  sales_stage: WaSalesStage;
   last_message_at: string | null;
   last_message_preview: string | null;
   ai_summary: string | null;
@@ -96,6 +102,21 @@ export const WA_PRIORITY_LABELS: Record<WaPriority, { ar: string; en: string }> 
   high:   { ar: "عالية",  en: "High" },
   urgent: { ar: "عاجلة",  en: "Urgent" },
 };
+
+export const WA_SALES_STAGE_LABELS: Record<WaSalesStage, { ar: string; en: string }> = {
+  new:                   { ar: "جديد",              en: "New" },
+  collecting:            { ar: "جمع البيانات",       en: "Collecting" },
+  quote_requested:       { ar: "طلب عرض سعر",        en: "Quote Requested" },
+  awaiting_sales_review: { ar: "بانتظار المبيعات",   en: "Awaiting Sales" },
+  quote_sent:            { ar: "أُرسل العرض",         en: "Quote Sent" },
+  follow_up:             { ar: "متابعة",             en: "Follow-up" },
+  converted:             { ar: "تم التحويل",          en: "Converted" },
+  rejected:              { ar: "مرفوض",              en: "Rejected" },
+};
+export const WA_SALES_STAGE_ORDER: WaSalesStage[] = [
+  "new", "collecting", "quote_requested", "awaiting_sales_review",
+  "quote_sent", "follow_up", "converted", "rejected",
+];
 
 export const WA_STATUS_ORDER: WaStatus[] = ["new", "open", "assigned", "pending", "closed", "spam"];
 export const WA_CATEGORY_ORDER: WaCategory[] = [
