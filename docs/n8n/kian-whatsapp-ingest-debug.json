@@ -1,0 +1,68 @@
+{
+  "name": "Kian WhatsApp - Ingest DEBUG",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-360, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fixed, known-good test payload. Lets you isolate the integration from\n// WhatsApp/Meta entirely. Change message_id between runs to test fresh inserts;\n// keep it the same to test idempotency (duplicate must NOT create a 2nd row).\nreturn [{\n  json: {\n    wa_id: '9665000000001',\n    phone: '9665000000001',\n    display_name: 'Ingest Debug User',\n    message_id: 'wamid.DEBUG-0001',\n    message_type: 'text',\n    body: 'كم سعر باقة التصوير؟',\n    timestamp: '1718600000',\n    raw_payload: { source: 'n8n-debug', note: 'fixed test payload' }\n  }\n}];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Fixed Test Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-140, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.kianmedia.com/api/integrations/whatsapp/incoming",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "x-kian-ingest-secret", "value": "={{ $env.N8N_WHATSAPP_INGEST_SECRET }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": { "response": { "neverError": true, "fullResponse": true } }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Kian Portal Inbox",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [120, 300],
+      "alwaysOutputData": true,
+      "onError": "stopWorkflow",
+      "notes": "TESTING: stopWorkflow + neverError:false-equivalent so you SEE the status & body. After confirmed working in production, set onError = continueRegularOutput (non-blocking)."
+    },
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Inspect Response",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [360, 300],
+      "notes": "Open this node's input to read statusCode + body. Expect 200 and { ok:true, message_inserted:true } on first run, { duplicate:true } on a repeat of the same message_id."
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Fixed Test Payload", "type": "main", "index": 0 }]] },
+    "Fixed Test Payload": { "main": [[{ "node": "Kian Portal Inbox", "type": "main", "index": 0 }]] },
+    "Kian Portal Inbox": { "main": [[{ "node": "Inspect Response", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

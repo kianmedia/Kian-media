@@ -37,7 +37,7 @@ function routeFor(n: NotificationRow): string | null {
     case "deliverable":    return "/client-portal/projects";   // exact project needs a resolve → section
     case "project_note":   return "/client-portal/projects";
     case "opportunity":    return "/client-portal/opportunities";
-    case "whatsapp_conversation": return id ? `/admin/whatsapp?conversation=${id}` : "/admin/whatsapp";
+    case "whatsapp_conversation": return id ? `/client-portal/admin/whatsapp?conversation=${id}` : "/client-portal/admin/whatsapp";
     default:               return null;
   }
 }
