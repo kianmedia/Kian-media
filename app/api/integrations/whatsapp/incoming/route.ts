@@ -24,6 +24,13 @@ import { NextResponse } from "next/server";
 import { rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { classifyWhatsAppMessage } from "@/lib/whatsapp/classify";
 import { createOrUpdateZohoLeadFromWhatsApp } from "@/lib/server/zoho";
+import { sendWhatsAppAlertEmail, emailAlertsEnabled } from "@/lib/server/notifyEmail";
+import { buildConversationDescription } from "@/lib/server/zohoDescription";
+import type { SummaryMessage } from "@/lib/whatsapp/summary";
+import { routeDepartments } from "@/lib/whatsapp/route";
+import { sendInternalAlerts, internalAlertsEnabled } from "@/lib/server/whatsappInternalAlert";
+import { detectPriceIntent } from "@/lib/whatsapp/intent";
+import { maybeAutoSendQuoteLink, autoQuoteEnabled } from "@/lib/server/autoQuoteLink";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +53,16 @@ interface IngestResult {
   message_inserted?: boolean;
   new_conversation?: boolean;
   duplicate?: boolean;
+  crm_lead_id?: string | null;
+}
+
+/** Classifier category → routing department (mirrors the ingest RPC mapping). */
+function departmentFor(category: string): string {
+  if (category === "sales" || category === "pricing_request") return "sales_marketing";
+  if (category === "finance") return "finance";
+  if (category === "project_support") return "support";
+  if (category === "job_request" || category === "training_request" || category === "supplier_request") return "hr";
+  return "unassigned";
 }
 
 const asStr = (v: unknown): string | null =>
@@ -127,13 +144,156 @@ export async function POST(req: Request) {
   // ── 5) Best-effort CRM sync (NEVER blocks ingest) ────────────────────────
   if (result.conversation_id && result.contact_id && result.message_inserted) {
     try {
-      await createOrUpdateZohoLeadFromWhatsApp(
-        { id: result.conversation_id, category: cls.category, ai_summary: cls.summary },
+      // Build a structured Arabic Description from the FULL recent conversation
+      // (not just this message). The service-role ingest path reads history via a
+      // SECURITY DEFINER RPC (service_role has no direct SELECT on the tables);
+      // the RPC re-reads AFTER ingest saved this message and falls back to the
+      // contact's messages if the conversation shows ≤1. Same builder as manual.
+      const convId = result.conversation_id;
+      const contactId = result.contact_id;
+      const recentR = await rpcAsService<{ sales_stage?: string; messages?: SummaryMessage[]; count?: number; fallback?: string }>(
+        "wa_recent_messages",
+        { p_conversation_id: convId, p_contact_id: contactId, p_limit: 50 },
+      );
+      const recent = recentR.ok ? recentR.data : null;
+      if (!recentR.ok) console.error("[whatsapp/incoming] wa_recent_messages failed (ignored):", recentR.error);
+      const description = await buildConversationDescription({
+        conversationId: convId,
+        contactId,
+        displayName: asStr(payload.display_name),
+        phone: asStr(payload.phone),
+        waId: wa_id,
+        salesStage: recent?.sales_stage ?? (result.new_conversation ? "new" : undefined),
+        source: "auto",
+        latestBody: body,
+        fetchMessages: async () => recent?.messages ?? null,
+      });
+
+      const zoho = await createOrUpdateZohoLeadFromWhatsApp(
+        {
+          id: result.conversation_id,
+          category: cls.category,
+          ai_summary: cls.summary,
+          description,
+          // Known lead id → update directly (prevents duplicate Leads on repeats).
+          crm_lead_id: result.crm_lead_id ?? null,
+          // Only set Lead_Status on a brand-new conversation (stage 'new'); for an
+          // existing thread, omit it so we never overwrite the sales team's stage.
+          sales_stage: result.new_conversation ? "new" : undefined,
+        },
         { wa_id, phone: asStr(payload.phone), display_name: asStr(payload.display_name) },
         { body },
       );
+      if (zoho.ok) {
+        const wb = await rpcAsService("wa_set_crm_lead", {
+          p_contact_id: result.contact_id,
+          p_conversation_id: result.conversation_id,
+          p_crm_lead_id: zoho.crm_lead_id,
+        });
+        if (!wb.ok) console.error("[whatsapp/incoming] wa_set_crm_lead failed (ignored):", wb.error);
+      }
     } catch (e) {
       console.error("[whatsapp/incoming] zoho sync threw (ignored):", e);
+    }
+  }
+
+  // ── 5a) Department routing — re-route on EVERY message (NEVER blocks) ─────
+  // Accumulates the message's departments into routed_departments so a later
+  // finance message on a sales conversation becomes visible to Finance, without
+  // removing it from Sales. The ingest RPC already notified the primary dept +
+  // managers; wa_route_message notifies only ADDITIONAL departments.
+  if (result.conversation_id && result.message_inserted) {
+    try {
+      const decision = routeDepartments(cls.category, body ?? "");
+      const notifiedPrimary = departmentFor(cls.category); // what the ingest RPC notified
+      const rr = await rpcAsService<{ routed_departments?: string[]; previous_department?: string }>(
+        "wa_route_message",
+        {
+          p_conversation: result.conversation_id,
+          p_departments: decision.departments,
+          p_primary: decision.primary,
+          p_reason: decision.reason,
+          p_notified: notifiedPrimary,
+        },
+      );
+      const preview = (body || `[${message_type}]`).slice(0, 120).replace(/\s+/g, " ");
+      console.log(
+        `[whatsapp/incoming] whatsapp_routing_decision conversation_id=${result.conversation_id} ` +
+        `contact_id=${result.contact_id} previous_department=${rr.ok ? (rr.data.previous_department ?? "-") : "?"} ` +
+        `routed_department=${decision.primary} routed_departments=${JSON.stringify(rr.ok ? (rr.data.routed_departments ?? decision.departments) : decision.departments)} ` +
+        `routing_reason=${decision.reason} message_preview="${preview}"`,
+      );
+      if (!rr.ok) console.error("[whatsapp/incoming] wa_route_message failed (ignored):", rr.error);
+    } catch (e) {
+      console.error("[whatsapp/incoming] routing threw (ignored):", e);
+    }
+  }
+
+  // ── 5b) Department-scoped email alert (gated; NEVER blocks ingest) ────────
+  // Recipients resolved via a SECURITY DEFINER RPC (service_role cannot SELECT
+  // profiles directly) → owner/admin/manager + routed-department staff + assignee.
+  if (result.conversation_id && result.message_inserted && emailAlertsEnabled()) {
+    try {
+      const decision = routeDepartments(cls.category, body ?? "");
+      console.log(`[whatsapp/incoming] whatsapp_email_alert_queued conversation_id=${result.conversation_id} departments=${JSON.stringify(decision.departments)}`);
+      const recipsR = await rpcAsService<string[]>("wa_alert_recipients", {
+        p_conversation: result.conversation_id,
+        p_departments: decision.departments,
+      });
+      const recipients = recipsR.ok && Array.isArray(recipsR.data) ? recipsR.data : [];
+      console.log(`[whatsapp/incoming] whatsapp_email_alert_recipients_resolved conversation_id=${result.conversation_id} count=${recipients.length}`);
+      if (recipients.length > 0) {
+        await sendWhatsAppAlertEmail({
+          recipients,
+          contactName: asStr(payload.display_name) || wa_id,
+          phone: asStr(payload.phone) || wa_id,
+          preview: (body || `[${message_type}]`).slice(0, 160),
+          departments: decision.departments,
+          priority: cls.priority,
+          conversationId: result.conversation_id,
+          zohoLeadId: result.crm_lead_id ?? null,
+        });
+        console.log(`[whatsapp/incoming] whatsapp_email_alert_sent conversation_id=${result.conversation_id} recipients=${recipients.length}`);
+      } else if (!recipsR.ok) {
+        console.error("[whatsapp/incoming] whatsapp_email_alert_failed_non_blocking wa_alert_recipients:", recipsR.error);
+      }
+    } catch (e) {
+      console.error("[whatsapp/incoming] whatsapp_email_alert_failed_non_blocking:", e);
+    }
+  }
+
+  // ── 5c) Internal WhatsApp staff alerts (gated OFF; NEVER blocks ingest) ───
+  if (result.conversation_id && result.message_inserted && internalAlertsEnabled()) {
+    try {
+      const decision = routeDepartments(cls.category, body ?? "");
+      const base = (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
+      await sendInternalAlerts({
+        conversationId: result.conversation_id,
+        contactId: result.contact_id ?? null,
+        departments: decision.departments,
+        customerName: asStr(payload.display_name) || wa_id,
+        customerPhone: asStr(payload.phone) || wa_id,
+        preview: (body || `[${message_type}]`).slice(0, 160),
+        conversationLink: `${base}/client-portal/admin/whatsapp?conversation=${result.conversation_id}`,
+      });
+    } catch (e) {
+      console.error("[whatsapp/incoming] internal alert threw (ignored):", e);
+    }
+  }
+
+  // ── 5d) Auto quote-link reply on price intent (gated OFF; NEVER blocks) ───
+  if (result.conversation_id && result.message_inserted && autoQuoteEnabled()) {
+    try {
+      const kw = detectPriceIntent(body);
+      if (kw) {
+        await maybeAutoSendQuoteLink({
+          conversationId: result.conversation_id,
+          phone: asStr(payload.phone) || wa_id,
+          keyword: kw,
+        });
+      }
+    } catch (e) {
+      console.error("[whatsapp/incoming] auto quote-link threw (ignored):", e);
     }
   }
 

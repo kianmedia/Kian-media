@@ -49,7 +49,9 @@ function sectionLabel(n: NotificationRow): { ar: string; en: string } | null {
     case "message":       return { ar: "فتح الرسائل", en: "Open Messages" };
     case "file_link":     return { ar: "فتح الملفات", en: "Open Files" };
     case "opportunity":   return { ar: "فتح مركز الفرص", en: "Open Opportunities" };
-    case "whatsapp_conversation": return { ar: "فتح المحادثة", en: "Open Conversation" };
+    case "whatsapp_conversation": return n.entity_id
+      ? { ar: "فتح المحادثة", en: "Open Conversation" }
+      : { ar: "فتح صندوق واتساب", en: "Open WhatsApp Inbox" };
     default:              return null;
   }
 }
