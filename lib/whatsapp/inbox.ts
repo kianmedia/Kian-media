@@ -119,6 +119,18 @@ export function addNote(conversationId: string, note: string): Promise<Result<st
   return prpc<string>("wa_add_note", { p_conversation: conversationId, p_note: note });
 }
 
+/** Whether real WhatsApp sending is active (server reads WHATSAPP_SEND_ENABLED +
+ *  credentials). Drives whether the inbox shows the dry-run banner. */
+export async function getSendStatus(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/integrations/whatsapp/send", { method: "GET" });
+    const data = (await res.json()) as { send_enabled?: boolean };
+    return !!data.send_enabled;
+  } catch {
+    return false;
+  }
+}
+
 export function setSalesStage(conversationId: string, stage: WaSalesStage): Promise<Result<boolean>> {
   return prpc<boolean>("wa_set_sales_stage", { p_conversation: conversationId, p_stage: stage });
 }

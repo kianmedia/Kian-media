@@ -16,6 +16,7 @@ import {
   listConversations, listContactsByIds, listMessages, listNotes, listAssignments,
   listAssignableStaff, setConversation, assignConversation, addNote,
   setSalesStage, sendReply, syncZoho, setDepartment, markRead, getConversation,
+  getSendStatus,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
@@ -94,6 +95,7 @@ export default function WhatsAppInbox() {
   const [replyDraft, setReplyDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [syncingZoho, setSyncingZoho] = useState(false);
+  const [sendEnabled, setSendEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -148,6 +150,7 @@ export default function WhatsAppInbox() {
   useEffect(() => {
     if (phase !== "ready") return;
     void loadList();
+    void getSendStatus().then(setSendEnabled);
     if (canTriage) listAssignableStaff().then((r) => { if (r.ok) setStaff(r.data); });
   }, [phase, loadList, canTriage]);
 
@@ -559,9 +562,15 @@ export default function WhatsAppInbox() {
                     {sending ? "…" : t({ ar: "إرسال", en: "Send" })}
                   </button>
                 </div>
-                <div style={{ fontSize: 11, color: "rgba(245,158,11,0.9)", marginTop: 4 }}>
-                  🧪 {t({ ar: "وضع تجريبي (dry-run): يُسجَّل الرد في المحادثة ولا يُرسَل فعلياً حتى اعتماد الإرسال المباشر.", en: "Dry-run: the reply is recorded in the thread but not actually sent until live sending is approved." })}
-                </div>
+                {sendEnabled ? (
+                  <div style={{ fontSize: 11, color: ACCENT, marginTop: 4 }}>
+                    🟢 {t({ ar: "الإرسال المباشر مُفعّل — سيصل الرد إلى واتساب.", en: "Live sending is on — replies are delivered to WhatsApp." })}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: "rgba(245,158,11,0.9)", marginTop: 4 }}>
+                    🧪 {t({ ar: "وضع تجريبي (dry-run): يُسجَّل الرد في المحادثة ولا يُرسَل فعلياً حتى اعتماد الإرسال المباشر.", en: "Dry-run: the reply is recorded in the thread but not actually sent until live sending is approved." })}
+                  </div>
+                )}
               </div>
 
               {/* Internal notes + assignment history */}

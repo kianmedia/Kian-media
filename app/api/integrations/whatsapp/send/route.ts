@@ -58,6 +58,12 @@ async function recipientFor(conversationId: string, bearer: string): Promise<{ t
   }
 }
 
+// Lightweight status for the UI: whether real sending is active (enabled + creds).
+// Returns ONLY a boolean — never the token or any secret.
+export async function GET() {
+  return NextResponse.json({ ok: true, send_enabled: sendConfigured() }, { status: 200 });
+}
+
 export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
   const bearer = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
