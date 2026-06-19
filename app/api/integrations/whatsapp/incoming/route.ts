@@ -25,7 +25,8 @@ import { rpcAsService, adminConfigured, selectAsService } from "@/lib/server/sup
 import { classifyWhatsAppMessage } from "@/lib/whatsapp/classify";
 import { createOrUpdateZohoLeadFromWhatsApp } from "@/lib/server/zoho";
 import { sendWhatsAppAlertEmail, emailAlertsEnabled } from "@/lib/server/notifyEmail";
-import { buildZohoDescription, type SummaryMessage } from "@/lib/whatsapp/summary";
+import { buildConversationDescription } from "@/lib/server/zohoDescription";
+import type { SummaryMessage } from "@/lib/whatsapp/summary";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -140,20 +141,22 @@ export async function POST(req: Request) {
   if (result.conversation_id && result.contact_id && result.message_inserted) {
     try {
       // Build a structured Arabic Description from the FULL recent conversation
-      // (not just this message) so the Zoho Lead is useful for sales.
+      // (not just this message) — SAME helper the manual "Sync to Zoho" uses.
+      // Messages are re-read AFTER the ingest RPC saved this message.
       const convId = result.conversation_id;
-      const [msgsR, convR] = await Promise.all([
-        selectAsService<SummaryMessage[]>(`whatsapp_messages?conversation_id=eq.${convId}&select=body,direction,created_at&order=created_at.desc&limit=50`),
-        selectAsService<Array<{ sales_stage?: string }>>(`whatsapp_conversations?id=eq.${convId}&select=sales_stage&limit=1`),
-      ]);
-      const base = (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
-      const description = buildZohoDescription({
+      const stageR = await selectAsService<Array<{ sales_stage?: string }>>(`whatsapp_conversations?id=eq.${convId}&select=sales_stage&limit=1`);
+      const description = await buildConversationDescription({
+        conversationId: convId,
         displayName: asStr(payload.display_name),
         phone: asStr(payload.phone),
         waId: wa_id,
-        salesStage: convR.ok ? convR.data[0]?.sales_stage : (result.new_conversation ? "new" : undefined),
-        conversationLink: `${base}/client-portal/admin/whatsapp?conversation=${convId}`,
-        messages: msgsR.ok ? msgsR.data : [{ body, direction: "incoming", created_at: new Date(0).toISOString() }],
+        salesStage: stageR.ok ? stageR.data[0]?.sales_stage : (result.new_conversation ? "new" : undefined),
+        source: "auto",
+        latestBody: body,
+        fetchMessages: async () => {
+          const r = await selectAsService<SummaryMessage[]>(`whatsapp_messages?conversation_id=eq.${convId}&select=body,direction,created_at&order=created_at.desc&limit=50`);
+          return r.ok ? r.data : null;
+        },
       });
 
       const zoho = await createOrUpdateZohoLeadFromWhatsApp(
