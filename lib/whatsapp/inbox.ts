@@ -119,15 +119,31 @@ export function addNote(conversationId: string, note: string): Promise<Result<st
   return prpc<string>("wa_add_note", { p_conversation: conversationId, p_note: note });
 }
 
-/** Whether real WhatsApp sending is active (server reads WHATSAPP_SEND_ENABLED +
- *  credentials). Drives whether the inbox shows the dry-run banner. */
-export async function getSendStatus(): Promise<boolean> {
+export interface SendDiagnostic {
+  sendEnabled: boolean;
+  flagEnabled: boolean;
+  tokenPresent: boolean;
+  phoneIdPresent: boolean;
+  apiVersion: string;
+  allowlistCount: number;
+}
+
+/** Server diagnostic (no secrets): whether real WhatsApp sending is active +
+ *  presence booleans. Drives the dry-run banner and the ops diagnostic line. */
+export async function getSendStatus(): Promise<SendDiagnostic> {
   try {
     const res = await fetch("/api/integrations/whatsapp/send", { method: "GET" });
-    const data = (await res.json()) as { send_enabled?: boolean };
-    return !!data.send_enabled;
+    const d = (await res.json()) as {
+      send_enabled?: boolean; flag_enabled?: boolean; token_present?: boolean;
+      phone_id_present?: boolean; api_version?: string; allowlist_count?: number;
+    };
+    return {
+      sendEnabled: !!d.send_enabled, flagEnabled: !!d.flag_enabled,
+      tokenPresent: !!d.token_present, phoneIdPresent: !!d.phone_id_present,
+      apiVersion: d.api_version || "", allowlistCount: d.allowlist_count || 0,
+    };
   } catch {
-    return false;
+    return { sendEnabled: false, flagEnabled: false, tokenPresent: false, phoneIdPresent: false, apiVersion: "", allowlistCount: 0 };
   }
 }
 

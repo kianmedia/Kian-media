@@ -238,6 +238,7 @@ export async function POST(req: Request) {
         p_departments: decision.departments,
       });
       const recipients = recipsR.ok && Array.isArray(recipsR.data) ? recipsR.data : [];
+      console.log(`[whatsapp/incoming] whatsapp_email_alert_recipients_resolved conversation_id=${result.conversation_id} count=${recipients.length}`);
       if (recipients.length > 0) {
         await sendWhatsAppAlertEmail({
           recipients,
@@ -247,6 +248,7 @@ export async function POST(req: Request) {
           departments: decision.departments,
           priority: cls.priority,
           conversationId: result.conversation_id,
+          zohoLeadId: result.crm_lead_id ?? null,
         });
         console.log(`[whatsapp/incoming] whatsapp_email_alert_sent conversation_id=${result.conversation_id} recipients=${recipients.length}`);
       } else if (!recipsR.ok) {

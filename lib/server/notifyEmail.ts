@@ -42,6 +42,7 @@ export interface WhatsAppEmailInput {
   departments: string[];
   priority?: string;
   conversationId: string;
+  zohoLeadId?: string | null;
 }
 
 /** Fire-and-forget department-scoped email alert. Never throws. */
@@ -66,6 +67,7 @@ export async function sendWhatsAppAlertEmail(input: WhatsAppEmailInput): Promise
         Department: input.departments.join(", "),
         Priority: input.priority ?? "",
         Preview: input.preview,
+        "Zoho Lead": input.zohoLeadId ? `https://crm.zoho.sa/crm/tab/Leads/${input.zohoLeadId}` : "",
         Message: "وردت رسالة واتساب جديدة. افتح المحادثة في البوابة.",
         Link: link,
       }),

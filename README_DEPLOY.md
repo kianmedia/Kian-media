@@ -145,6 +145,38 @@ category-based policies, drops the new columns/RPCs/table), and revert the commi
 ### Still to build (next turns): D internal WhatsApp alerts, E AI agent (gated),
 F quote-request linking, G Zoho Books draft-only, H dashboard, I full deploy docs.
 
+## Phase 1+2+4 — send-state UI, email completion, in-portal alerts (no migration)
+
+- **Phase 1:** the inbox reads `GET /api/integrations/whatsapp/send` (returns
+  `send_enabled` + presence booleans `token_present`/`phone_id_present`/`api_version`
+  /`allowlist_count` — **no secret values**). Dry-run banner shows only when sending
+  is off (`وضع تجريبي: الرد يسجل في المحادثة ولا يرسل فعليًا`); a green "live" note when on.
+- **Phase 2:** the email alert now includes the **Zoho Lead link** and logs
+  `whatsapp_email_alert_recipients_resolved`. (Recipients already resolved via the
+  `wa_alert_recipients` RPC — owner/admin/manager + routed-department staff + assignee.)
+- **Phase 4:** a 🔔/🔕 toggle (per-user, localStorage) enables an in-portal **sound**
+  + **desktop notification** on a new message; an in-app toast fires for everyone.
+  Alerts only trigger for conversations the viewer can see (RLS), so finance only
+  hears finance-routed messages, etc. A header **unread total** badge is shown.
+  (No schema change — uses the existing `unread_count` + polling.)
+
+### Remaining program (each its own approved batch; all ship gated OFF)
+- **Phase 5 — quote-request linking:** additive migration (link columns on
+  `quote_requests`) + `/quote-request?source=whatsapp&conversation=…` + inbox
+  buttons + admin display + conversation card.
+- **Phase 3 — internal WhatsApp staff alerts:** settings UI + gated send path +
+  audit + Meta template text (`WHATSAPP_INTERNAL_ALERTS_ENABLED`, allowlist).
+- **Phase 6 — start new conversation:** template registry + form + gated template
+  send (`WHATSAPP_START_CONVERSATION_ENABLED`/`WHATSAPP_TEMPLATE_SEND_ENABLED`).
+- **Phase 7 — AI agent (gated):** provider abstraction + prompt/policy + draft-only
+  suggestions UI + escalation (`AI_AGENT_ENABLED=false`, `AI_DRAFT_ONLY=true`).
+- **Phase 8 — SLA/ops:** SLA timers, mentions, extra statuses, manual routed-dept add/remove.
+- **Phase 9 — dashboard:** widgets + filters (read-only).
+- **Phase 10 — production docs:** full migration order, prod env, launch checklist,
+  token-rotation, n8n export.
+
+Each migration-bearing phase will be presented as a RUNME file for your approval (guardrail #8).
+
 ## Standing items you own (per phase, as we reach them)
 - **n8n:** export the live `Kian WhatsApp - LIVE Production` workflow as JSON so
   edits can be precise. The Meta webhook URL is never changed.

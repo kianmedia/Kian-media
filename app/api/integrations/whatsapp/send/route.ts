@@ -58,10 +58,18 @@ async function recipientFor(conversationId: string, bearer: string): Promise<{ t
   }
 }
 
-// Lightweight status for the UI: whether real sending is active (enabled + creds).
-// Returns ONLY a boolean — never the token or any secret.
+// Lightweight diagnostic for the UI: whether real sending is active, plus
+// PRESENCE booleans only (never the token or any secret value).
 export async function GET() {
-  return NextResponse.json({ ok: true, send_enabled: sendConfigured() }, { status: 200 });
+  return NextResponse.json({
+    ok: true,
+    send_enabled: sendConfigured(),
+    flag_enabled: process.env.WHATSAPP_SEND_ENABLED === "true",
+    token_present: !!process.env.WHATSAPP_ACCESS_TOKEN,
+    phone_id_present: !!process.env.WHATSAPP_PHONE_NUMBER_ID,
+    api_version: process.env.WHATSAPP_API_VERSION || "v21.0",
+    allowlist_count: (process.env.WHATSAPP_SEND_TEST_ALLOWLIST || "").split(",").map((s) => s.trim()).filter(Boolean).length,
+  }, { status: 200 });
 }
 
 export async function POST(req: Request) {

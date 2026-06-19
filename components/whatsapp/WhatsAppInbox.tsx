@@ -6,7 +6,7 @@
 // this UI only gates the page (plain client/lead → access denied) and shows
 // triage controls to owner/manager. Sending is DISABLED in Phase 1.
 // ════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { getValidSession, getMyProfile, currentUserId } from "@/lib/portal/auth";
@@ -16,7 +16,7 @@ import {
   listConversations, listContactsByIds, listMessages, listNotes, listAssignments,
   listAssignableStaff, setConversation, assignConversation, addNote,
   setSalesStage, sendReply, syncZoho, setDepartment, markRead, getConversation,
-  getSendStatus,
+  getSendStatus, type SendDiagnostic,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
@@ -65,6 +65,33 @@ function staffName(s: Staff): string {
   return s.full_name || s.email || s.id.slice(0, 8);
 }
 
+const ALERTS_LS = "kian_wa_alerts";
+
+/** Short in-browser beep (WebAudio; no asset). Best-effort. */
+function playBeep() {
+  try {
+    const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+    const ctx = new Ctx();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = "sine"; o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.28);
+    o.start(); o.stop(ctx.currentTime + 0.3);
+    o.onended = () => ctx.close();
+  } catch { /* no audio context — ignore */ }
+}
+
+function desktopNotify(title: string, body: string) {
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body });
+    }
+  } catch { /* ignore */ }
+}
+
 export default function WhatsAppInbox() {
   const { t, isAr } = useI18n();
   const params = useSearchParams();
@@ -95,7 +122,8 @@ export default function WhatsAppInbox() {
   const [replyDraft, setReplyDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [syncingZoho, setSyncingZoho] = useState(false);
-  const [sendEnabled, setSendEnabled] = useState(false);
+  const [sendDiag, setSendDiag] = useState<SendDiagnostic | null>(null);
+  const [alertsOn, setAlertsOn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -107,6 +135,20 @@ export default function WhatsAppInbox() {
   const myId = currentUserId();
 
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2600); };
+  const unreadBaselineRef = useRef<number | null>(null);
+
+  // Sound/desktop alert preference (per-user, localStorage).
+  useEffect(() => {
+    try { setAlertsOn(localStorage.getItem(ALERTS_LS) === "1"); } catch {}
+  }, []);
+  function toggleAlerts() {
+    const next = !alertsOn;
+    setAlertsOn(next);
+    try { localStorage.setItem(ALERTS_LS, next ? "1" : "0"); } catch {}
+    if (next && "Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+  }
 
   // ── Bootstrap auth ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -150,7 +192,7 @@ export default function WhatsAppInbox() {
   useEffect(() => {
     if (phase !== "ready") return;
     void loadList();
-    void getSendStatus().then(setSendEnabled);
+    void getSendStatus().then(setSendDiag);
     if (canTriage) listAssignableStaff().then((r) => { if (r.ok) setStaff(r.data); });
   }, [phase, loadList, canTriage]);
 
@@ -216,6 +258,27 @@ export default function WhatsAppInbox() {
       return hay.includes(q);
     });
   }, [convs, contacts, search]);
+
+  // Unread total across conversations the viewer can see (RLS-filtered), and a
+  // real-time alert when it rises (a new incoming message arrived). Throttled to
+  // one alert per poll cycle; silent on first load.
+  const unreadTotal = useMemo(() => convs.reduce((n, c) => n + (c.unread_count || 0), 0), [convs]);
+  useEffect(() => {
+    if (phase !== "ready") return;
+    const base = unreadBaselineRef.current;
+    unreadBaselineRef.current = unreadTotal;
+    if (base !== null && unreadTotal > base) {
+      flash(t({ ar: "رسالة واتساب جديدة", en: "New WhatsApp message" }));
+      if (alertsOn) {
+        playBeep();
+        desktopNotify(
+          t({ ar: "رسالة واتساب جديدة", en: "New WhatsApp message" }),
+          t({ ar: "لديك رسالة جديدة في صندوق واتساب", en: "New message in the WhatsApp inbox" }),
+        );
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unreadTotal, phase]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   async function patchConv(patch: { status?: WaStatus; category?: WaCategory; priority?: WaPriority }) {
@@ -334,7 +397,16 @@ export default function WhatsAppInbox() {
         <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>
           {visible.length} {t({ ar: "محادثة", en: "conversations" })}
         </span>
-        <button onClick={() => void loadList()} style={{ ...btn("rgba(255,255,255,0.08)"), marginInlineStart: "auto" }}>
+        {unreadTotal > 0 && (
+          <span style={{ fontSize: 11, fontWeight: 700, background: ACCENT, color: "#04210f", borderRadius: 10, padding: "2px 8px" }}>
+            {unreadTotal} {t({ ar: "غير مقروء", en: "unread" })}
+          </span>
+        )}
+        <button onClick={toggleAlerts} title={t({ ar: "تنبيهات صوتية", en: "Sound alerts" })}
+          style={{ ...btn(alertsOn ? "rgba(37,211,102,0.18)" : "rgba(255,255,255,0.08)"), marginInlineStart: "auto", fontSize: 14, padding: "7px 12px" }}>
+          {alertsOn ? "🔔" : "🔕"}
+        </button>
+        <button onClick={() => void loadList()} style={btn("rgba(255,255,255,0.08)")}>
           ↻ {t({ ar: "تحديث", en: "Refresh" })}
         </button>
       </header>
@@ -562,13 +634,14 @@ export default function WhatsAppInbox() {
                     {sending ? "…" : t({ ar: "إرسال", en: "Send" })}
                   </button>
                 </div>
-                {sendEnabled ? (
+                {sendDiag?.sendEnabled ? (
                   <div style={{ fontSize: 11, color: ACCENT, marginTop: 4 }}>
                     🟢 {t({ ar: "الإرسال المباشر مُفعّل — سيصل الرد إلى واتساب.", en: "Live sending is on — replies are delivered to WhatsApp." })}
+                    {sendDiag.allowlistCount > 0 && <span style={{ color: "rgba(255,255,255,0.45)" }}>{t({ ar: " (محصور بقائمة اختبار)", en: " (restricted to test allowlist)" })}</span>}
                   </div>
                 ) : (
                   <div style={{ fontSize: 11, color: "rgba(245,158,11,0.9)", marginTop: 4 }}>
-                    🧪 {t({ ar: "وضع تجريبي (dry-run): يُسجَّل الرد في المحادثة ولا يُرسَل فعلياً حتى اعتماد الإرسال المباشر.", en: "Dry-run: the reply is recorded in the thread but not actually sent until live sending is approved." })}
+                    🧪 {t({ ar: "وضع تجريبي: الرد يسجل في المحادثة ولا يرسل فعليًا", en: "Dry-run: the reply is recorded in the thread and not actually sent." })}
                   </div>
                 )}
               </div>
