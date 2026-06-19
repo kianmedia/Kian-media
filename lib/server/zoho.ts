@@ -39,6 +39,8 @@ export interface ZohoContactInput { wa_id: string; phone: string | null; display
 export interface ZohoConversationInput {
   id: string; category: string; ai_summary: string | null;
   sales_stage?: string;
+  /** Pre-built structured Arabic summary → becomes the Zoho Description. */
+  description?: string | null;
   /** When known, we update this lead directly (no search) — strongest dedupe. */
   crm_lead_id?: string | null;
 }
@@ -119,7 +121,9 @@ function buildRecord(c: ZohoConversationInput, ct: ZohoContactInput, m: ZohoMess
     Last_Name: ct.display_name || ct.wa_id,
     Phone: normalizePhone(ct.wa_id, ct.phone),
     Lead_Source: "WhatsApp",
-    Description: c.ai_summary || m.body || "",
+    // Prefer the structured, full-conversation Arabic summary; fall back to the
+    // rule-based ai_summary / latest body only when no summary was supplied.
+    Description: (c.description && c.description.trim()) || c.ai_summary || m.body || "",
   };
   const status = mapStageToLeadStatus(c.sales_stage);
   if (status) record.Lead_Status = status;

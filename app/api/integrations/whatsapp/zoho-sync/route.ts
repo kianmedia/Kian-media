@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import { rpcAsService } from "@/lib/server/supabaseAdmin";
 import { createOrUpdateZohoLeadFromWhatsApp, zohoConfigured } from "@/lib/server/zoho";
+import { buildZohoDescription, type SummaryMessage } from "@/lib/whatsapp/summary";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,8 +61,23 @@ export async function POST(req: Request) {
   const ct = cts?.[0];
   if (!ct?.wa_id) return NextResponse.json({ ok: false, error: "contact_not_found" }, { status: 404 });
 
+  // Build the structured Arabic Description from the FULL recent conversation.
+  const msgs = await getRows<SummaryMessage>(
+    `whatsapp_messages?conversation_id=eq.${encodeURIComponent(conversationId)}&select=body,direction,created_at&order=created_at.desc&limit=50`,
+    bearer,
+  );
+  const base = (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
+  const description = buildZohoDescription({
+    displayName: ct.display_name ?? null,
+    phone: ct.phone ?? null,
+    waId: ct.wa_id,
+    salesStage: conv.sales_stage,
+    conversationLink: `${base}/client-portal/admin/whatsapp?conversation=${conversationId}`,
+    messages: msgs ?? [],
+  });
+
   const zoho = await createOrUpdateZohoLeadFromWhatsApp(
-    { id: conversationId, category: conv.category ?? "unknown", ai_summary: conv.ai_summary ?? null, sales_stage: conv.sales_stage, crm_lead_id: conv.crm_lead_id ?? null },
+    { id: conversationId, category: conv.category ?? "unknown", ai_summary: conv.ai_summary ?? null, sales_stage: conv.sales_stage, description, crm_lead_id: conv.crm_lead_id ?? null },
     { wa_id: ct.wa_id, phone: ct.phone ?? null, display_name: ct.display_name ?? null },
     { body: conv.last_message_preview ?? null },
   );
