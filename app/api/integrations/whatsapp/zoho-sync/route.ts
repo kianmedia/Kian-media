@@ -66,6 +66,7 @@ export async function POST(req: Request) {
   // SAME helper the automatic ingest path uses (only the message reader differs).
   const description = await buildConversationDescription({
     conversationId,
+    contactId: conv.contact_id,
     displayName: ct.display_name ?? null,
     phone: ct.phone ?? null,
     waId: ct.wa_id,

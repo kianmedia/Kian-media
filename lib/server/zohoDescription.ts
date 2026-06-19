@@ -15,6 +15,7 @@ if (typeof window !== "undefined") {
 
 export interface BuildDescriptionOpts {
   conversationId: string;
+  contactId?: string | null;
   displayName: string | null;
   phone: string | null;
   waId: string;
@@ -32,16 +33,17 @@ export interface BuildDescriptionOpts {
  * fails it still includes the latest message so the block is never empty.
  */
 export async function buildConversationDescription(o: BuildDescriptionOpts): Promise<string> {
-  let messages: SummaryMessage[] = [];
+  let fetched: SummaryMessage[] = [];
   try {
-    messages = (await o.fetchMessages()) ?? [];
+    fetched = (await o.fetchMessages()) ?? [];
   } catch {
-    messages = [];
+    fetched = [];
   }
-  // Guarantee at least the just-received message (covers a rare read lag).
-  if (messages.length === 0) {
-    messages = [{ body: o.latestBody, direction: "incoming", created_at: new Date().toISOString() }];
-  }
+  // Guarantee at least the just-received message (covers a rare empty read), but
+  // NEVER discard fetched history.
+  const messages = fetched.length > 0
+    ? fetched
+    : [{ body: o.latestBody, direction: "incoming", created_at: new Date().toISOString() }];
 
   const base = (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
   const description = buildZohoDescription({
@@ -55,6 +57,12 @@ export async function buildConversationDescription(o: BuildDescriptionOpts): Pro
 
   const tag = o.source === "auto" ? "zoho_auto_summary_built" : "zoho_manual_summary_built";
   const preview = description.slice(0, 120).replace(/\s+/g, " ");
-  console.log(`[zoho] ${tag} description_source=structured_summary msgs=${messages.length} desc="${preview}"`);
+  console.log(
+    `[zoho] ${tag} conversation_id=${o.conversationId} contact_id=${o.contactId ?? "-"} ` +
+    `messages_count=${messages.length} description_source=structured_summary desc="${preview}"`,
+  );
+  if (o.source === "auto" && messages.length <= 1) {
+    console.warn(`[zoho] zoho_auto_history_thin conversation_id=${o.conversationId} contact_id=${o.contactId ?? "-"} messages_count=${messages.length} (expected more — check wa_recent_messages RPC / migration)`);
+  }
   return description;
 }

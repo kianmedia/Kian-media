@@ -141,22 +141,28 @@ export async function POST(req: Request) {
   if (result.conversation_id && result.contact_id && result.message_inserted) {
     try {
       // Build a structured Arabic Description from the FULL recent conversation
-      // (not just this message) — SAME helper the manual "Sync to Zoho" uses.
-      // Messages are re-read AFTER the ingest RPC saved this message.
+      // (not just this message). The service-role ingest path reads history via a
+      // SECURITY DEFINER RPC (service_role has no direct SELECT on the tables);
+      // the RPC re-reads AFTER ingest saved this message and falls back to the
+      // contact's messages if the conversation shows ≤1. Same builder as manual.
       const convId = result.conversation_id;
-      const stageR = await selectAsService<Array<{ sales_stage?: string }>>(`whatsapp_conversations?id=eq.${convId}&select=sales_stage&limit=1`);
+      const contactId = result.contact_id;
+      const recentR = await rpcAsService<{ sales_stage?: string; messages?: SummaryMessage[]; count?: number; fallback?: string }>(
+        "wa_recent_messages",
+        { p_conversation_id: convId, p_contact_id: contactId, p_limit: 50 },
+      );
+      const recent = recentR.ok ? recentR.data : null;
+      if (!recentR.ok) console.error("[whatsapp/incoming] wa_recent_messages failed (ignored):", recentR.error);
       const description = await buildConversationDescription({
         conversationId: convId,
+        contactId,
         displayName: asStr(payload.display_name),
         phone: asStr(payload.phone),
         waId: wa_id,
-        salesStage: stageR.ok ? stageR.data[0]?.sales_stage : (result.new_conversation ? "new" : undefined),
+        salesStage: recent?.sales_stage ?? (result.new_conversation ? "new" : undefined),
         source: "auto",
         latestBody: body,
-        fetchMessages: async () => {
-          const r = await selectAsService<SummaryMessage[]>(`whatsapp_messages?conversation_id=eq.${convId}&select=body,direction,created_at&order=created_at.desc&limit=50`);
-          return r.ok ? r.data : null;
-        },
+        fetchMessages: async () => recent?.messages ?? null,
       });
 
       const zoho = await createOrUpdateZohoLeadFromWhatsApp(
