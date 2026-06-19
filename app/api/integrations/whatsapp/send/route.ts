@@ -72,6 +72,8 @@ export async function GET() {
     start_conversation_enabled: process.env.WHATSAPP_START_CONVERSATION_ENABLED === "true",
     template_send_enabled: process.env.WHATSAPP_TEMPLATE_SEND_ENABLED === "true",
     internal_alerts_enabled: process.env.WHATSAPP_INTERNAL_ALERTS_ENABLED === "true",
+    books_estimates_enabled: process.env.ZOHO_BOOKS_ESTIMATES_ENABLED === "true",
+    books_configured: !!process.env.ZOHO_BOOKS_ORGANIZATION_ID && !!process.env.ZOHO_REFRESH_TOKEN,
   }, { status: 200 });
 }
 

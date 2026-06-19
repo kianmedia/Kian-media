@@ -83,6 +83,30 @@ export async function selectAsService<T>(query: string): Promise<AdminResult<T>>
   return { ok: true, data: body as T };
 }
 
+/** Read rows via PostgREST AS THE LOGGED-IN USER (their JWT) — RLS applies, so the
+ *  query only returns rows that user may see. Used to confirm a staff member can
+ *  actually read a quote row before acting on it server-side. */
+export async function selectAsUser<T>(query: string, bearer: string): Promise<AdminResult<T>> {
+  if (SUPABASE_URL.length === 0 || ANON_KEY.length === 0) {
+    return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  }
+  if (!bearer) return { ok: false, error: "missing_bearer", status: 401 };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, {
+      headers: { apikey: ANON_KEY, Authorization: `Bearer ${bearer}` },
+      cache: "no-store",
+    });
+  } catch (e) {
+    return { ok: false, error: String(e), status: 502 };
+  }
+  const text = await res.text();
+  let body: unknown = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, status: res.status };
+  return { ok: true, data: body as T };
+}
+
 /**
  * Call a Postgres function via PostgREST RPC AS THE LOGGED-IN USER (their JWT),
  * so RLS + the function's internal role guards apply exactly as in the browser.

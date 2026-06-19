@@ -17,13 +17,14 @@ import {
   listAssignableStaff, setConversation, assignConversation, addNote,
   setSalesStage, sendReply, syncZoho, setDepartment, markRead, getConversation,
   getSendStatus, type SendDiagnostic,
-  listQuoteRequests, createQuoteRequest, startConversation, getMyAlert, setMyAlert,
+  listQuoteRequests, createQuoteRequest, updateQuoteRequest, findOpenQuoteRequest,
+  createBooksEstimate, startConversation, getMyAlert, setMyAlert, type QuoteFields,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
   WA_STATUS_ORDER, WA_CATEGORY_ORDER, WA_PRIORITY_ORDER,
   WA_SALES_STAGE_LABELS, WA_SALES_STAGE_ORDER,
-  WA_DEPARTMENT_LABELS, WA_DEPARTMENT_ORDER, WA_QUOTE_STATUS_LABELS,
+  WA_DEPARTMENT_LABELS, WA_DEPARTMENT_ORDER, WA_QUOTE_STATUS_LABELS, WA_BOOKS_ESTIMATE_STATUS_LABELS,
   type WaConversation, type WaContact, type WaMessage, type WaInternalNote,
   type WaAssignment, type WaStatus, type WaSalesStage, type WaDepartment,
   type WaQuoteRequest, type WaQuoteStatus,
@@ -40,6 +41,22 @@ const RED = "#E31E24";
 // so also honor an explicit NEXT_PUBLIC_WA_DEBUG=1 flag to surface logs there.
 const WA_DEBUG =
   process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_WA_DEBUG === "1";
+const waLog = (...a: unknown[]) => { if (WA_DEBUG) console.log("[WA]", ...a); };
+
+// Quote create/edit modal form (strings; mapped to QuoteFields on save).
+interface QuoteForm {
+  fullName: string; company: string; email: string; phone: string; services: string; city: string;
+  preferredDate: string; budgetRange: string; priority: string; leadSource: string; duration: string;
+  category: string; assignedDepartment: string; message: string; internalNotes: string;
+}
+const EMPTY_QUOTE_FORM: QuoteForm = {
+  fullName: "", company: "", email: "", phone: "", services: "", city: "", preferredDate: "",
+  budgetRange: "", priority: "", leadSource: "", duration: "", category: "", assignedDepartment: "",
+  message: "", internalNotes: "",
+};
+interface BookLine { name: string; description: string; quantity: string; rate: string; }
+// Plain string[] (for comparing against a possibly-null status) — mirrors WA_QUOTE_OPEN_STATUSES.
+const WA_QUOTE_OPEN_STATUSES_C: string[] = ["new", "in_review", "draft"];
 
 const FILTER_SELECT: React.CSSProperties = {
   background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
@@ -133,6 +150,20 @@ export default function WhatsAppInbox() {
   const [alertsOn, setAlertsOn] = useState(false);
   const [quotes, setQuotes] = useState<WaQuoteRequest[]>([]);
   const [quotesError, setQuotesError] = useState<string | null>(null);
+  // Create/edit quote modal
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [quoteSaving, setQuoteSaving] = useState(false);
+  const [quoteEditId, setQuoteEditId] = useState<string | null>(null); // null → create
+  const [quoteForm, setQuoteForm] = useState<QuoteForm>(EMPTY_QUOTE_FORM);
+  // Zoho Books estimate review modal
+  const [booksOpen, setBooksOpen] = useState(false);
+  const [booksSaving, setBooksSaving] = useState(false);
+  const [booksQuote, setBooksQuote] = useState<WaQuoteRequest | null>(null);
+  const [booksLines, setBooksLines] = useState<BookLine[]>([]);
+  const [booksVat, setBooksVat] = useState("15");
+  const [booksDiscount, setBooksDiscount] = useState("");
+  const [booksNotes, setBooksNotes] = useState("");
+  const [booksTerms, setBooksTerms] = useState("");
   const [startOpen, setStartOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [startForm, setStartForm] = useState({ phone: "", name: "", company: "", department: "sales_marketing", reason: "", template: "welcome_followup_ar", variables: "" });
@@ -360,19 +391,100 @@ export default function WhatsAppInbox() {
     const origin = typeof window !== "undefined" ? window.location.origin : "https://www.kianmedia.com";
     return `${origin}/quote-request?source=whatsapp&conversation=${selected.id}`;
   }
-  async function createQuote() {
-    if (!selected) return;
-    setBusy(true);
-    const r = await createQuoteRequest({
-      conversationId: selected.id,
-      fullName: selectedContact?.display_name ?? undefined,
-      category: selected.category,
-    });
-    setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر إنشاء الطلب: " : "Create failed: ") + r.error); return; }
-    await loadDetail(selected.id);
-    flash(isAr ? "أُنشئ طلب عرض سعر" : "Quote request created");
+  // Build the modal form from an existing quote (edit) or the conversation (create).
+  function quoteFormFromQuote(q: WaQuoteRequest): QuoteForm {
+    return {
+      fullName: q.full_name ?? "", company: q.company ?? "", email: q.email ?? "", phone: q.phone ?? "",
+      services: (q.services ?? []).join("، "), city: q.city ?? "", preferredDate: (q.preferred_date ?? "").slice(0, 10),
+      budgetRange: q.budget_range ?? "", priority: q.priority ?? "", leadSource: q.lead_source ?? "",
+      duration: q.duration ?? "", category: q.category ?? "", assignedDepartment: q.assigned_department ?? "",
+      message: q.message ?? "", internalNotes: q.internal_notes ?? "",
+    };
   }
+  function quoteFormFromConversation(): QuoteForm {
+    return {
+      ...EMPTY_QUOTE_FORM,
+      fullName: selectedContact?.display_name ?? "",
+      phone: selectedContact?.phone ?? selectedContact?.wa_id ?? "",
+      category: selected?.category ?? "",
+      assignedDepartment: selected?.assigned_department ?? "",
+      priority: selected?.priority ?? "",
+    };
+  }
+  // "إنشاء طلب عرض سعر": open the existing OPEN request for editing, else a prefilled create.
+  async function openQuoteModal(forceNew = false) {
+    if (!selected) return;
+    if (!forceNew) {
+      const existing = await findOpenQuoteRequest(selected.id);
+      if (existing) { setQuoteEditId(existing.id); setQuoteForm(quoteFormFromQuote(existing)); setQuoteOpen(true); return; }
+    }
+    setQuoteEditId(null); setQuoteForm(quoteFormFromConversation()); setQuoteOpen(true);
+  }
+  // Edit one specific quote card.
+  function editQuote(q: WaQuoteRequest) {
+    setQuoteEditId(q.id); setQuoteForm(quoteFormFromQuote(q)); setQuoteOpen(true);
+  }
+  // "إنشاء طلب جديد آخر": explicit confirmation before a second request.
+  function startAnotherQuote() {
+    if (!window.confirm(isAr
+      ? "سيتم إنشاء طلب عرض سعر جديد منفصل لهذه المحادثة. متابعة؟"
+      : "This creates a separate NEW quote request for this conversation. Continue?")) return;
+    void openQuoteModal(true);
+  }
+  async function saveQuote() {
+    if (!selected) return;
+    const fields: QuoteFields = {
+      fullName: quoteForm.fullName, company: quoteForm.company, email: quoteForm.email, phone: quoteForm.phone,
+      services: quoteForm.services.split(/[،,]/).map((s) => s.trim()).filter(Boolean),
+      city: quoteForm.city, preferredDate: quoteForm.preferredDate || null, message: quoteForm.message,
+      category: quoteForm.category, budgetRange: quoteForm.budgetRange, leadSource: quoteForm.leadSource,
+      priority: quoteForm.priority, duration: quoteForm.duration, internalNotes: quoteForm.internalNotes,
+      assignedDepartment: quoteForm.assignedDepartment,
+    };
+    setQuoteSaving(true);
+    const r = quoteEditId
+      ? await updateQuoteRequest({ quoteId: quoteEditId, ...fields })
+      : await createQuoteRequest({ conversationId: selected.id, ...fields });
+    setQuoteSaving(false);
+    waLog("quote save", { edit: quoteEditId, ok: r.ok, err: r.ok ? undefined : r.error });
+    if (!r.ok) { flash((isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error); return; }
+    setQuoteOpen(false);
+    await loadDetail(selected.id);
+    flash(quoteEditId ? (isAr ? "حُفظ الطلب" : "Quote saved") : (isAr ? "أُنشئ طلب عرض سعر" : "Quote request created"));
+  }
+
+  // ── Zoho Books estimate (draft-only, gated) ──────────────────────────────
+  function openBooksModal(q: WaQuoteRequest) {
+    setBooksQuote(q);
+    const lines: BookLine[] = (q.services ?? []).filter(Boolean).map((s) => ({ name: s, description: "", quantity: "1", rate: "" }));
+    setBooksLines(lines.length ? lines : [{ name: "", description: "", quantity: "1", rate: "" }]);
+    setBooksVat("15"); setBooksDiscount(""); setBooksNotes(q.message ?? ""); setBooksTerms("");
+    setBooksOpen(true);
+  }
+  async function saveBooksEstimate() {
+    if (!booksQuote) return;
+    const lineItems = booksLines
+      .map((l) => ({ name: l.name.trim(), description: l.description.trim() || undefined, quantity: Number(l.quantity) || 1, rate: Number(l.rate) || 0 }))
+      .filter((l) => l.name);
+    if (lineItems.length === 0) { flash(isAr ? "أضف بندًا واحدًا على الأقل" : "Add at least one line item"); return; }
+    setBooksSaving(true);
+    const r = await createBooksEstimate({
+      quoteId: booksQuote.id, lineItems, vatPercent: Number(booksVat) || 0,
+      discountPercent: Number(booksDiscount) || 0, notes: booksNotes, terms: booksTerms,
+    });
+    setBooksSaving(false);
+    waLog("books estimate", { ok: r.ok, status: r.ok ? r.status : r.status, err: r.ok ? undefined : r.error });
+    if (!r.ok) {
+      flash(r.status === "disabled" ? (isAr ? "ميزة Zoho Books غير مفعّلة" : "Zoho Books feature is disabled")
+        : r.status === "forbidden" ? (isAr ? "لا تملك صلاحية إنشاء التقدير" : "Not permitted to create estimate")
+        : (isAr ? "تعذّر إنشاء التقدير: " : "Estimate failed: ") + r.error);
+      return;
+    }
+    setBooksOpen(false);
+    if (selected) await loadDetail(selected.id);
+    flash(isAr ? "أُنشئت مسودة تقدير في Zoho Books" : "Draft estimate created in Zoho Books");
+  }
+
   async function copyQuoteLink() {
     try { await navigator.clipboard.writeText(quoteLink()); flash(isAr ? "نُسخ الرابط" : "Link copied"); }
     catch { flash(isAr ? "تعذّر النسخ" : "Copy failed"); }
@@ -629,14 +741,14 @@ export default function WhatsAppInbox() {
                 </div>
               </div>
 
-              {/* CRM (Zoho) row */}
+              {/* CRM (Zoho) row — CRM is the CUSTOMER/LEAD record only (NOT the estimate). */}
               <div style={{ padding: "8px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
-                <span style={{ color: "rgba(255,255,255,0.5)" }}>Zoho CRM:</span>
+                <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "العميل في Zoho CRM:", en: "Customer in Zoho CRM:" })}</span>
                 {selected.crm_lead_id ? (
                   <>
                     <a href={`https://crm.zoho.sa/crm/tab/Leads/${selected.crm_lead_id}`} target="_blank" rel="noopener noreferrer"
                        style={{ color: "#3b82f6", textDecoration: "none" }}>
-                      {t({ ar: "فتح العميل في Zoho", en: "Open lead in Zoho" })} ↗
+                      {t({ ar: "فتح العميل في Zoho CRM", en: "Open customer in Zoho CRM" })} ↗
                     </a>
                     {selected.crm_synced_at && <span style={{ color: "rgba(255,255,255,0.4)" }}>· {t({ ar: "آخر مزامنة", en: "synced" })} {timeAgo(selected.crm_synced_at, isAr)}</span>}
                   </>
@@ -654,16 +766,22 @@ export default function WhatsAppInbox() {
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "طلبات عرض السعر", en: "Quote requests" })} ({quotes.length})</span>
                   <span style={{ display: "inline-flex", gap: 6, marginInlineStart: "auto", flexWrap: "wrap" }}>
-                    <button onClick={() => void createQuote()} disabled={busy}
-                      style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
+                    <button onClick={() => void openQuoteModal(false)} disabled={busy}
+                      style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
                       {t({ ar: "إنشاء طلب عرض سعر", en: "Create quote request" })}
                     </button>
+                    {quotes.some((q) => WA_QUOTE_OPEN_STATUSES_C.includes(q.status ?? "")) && (
+                      <button onClick={() => startAnotherQuote()} disabled={busy}
+                        style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
+                        {t({ ar: "إنشاء طلب جديد آخر", en: "New separate request" })}
+                      </button>
+                    )}
                     <button onClick={() => void copyQuoteLink()}
                       style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
                       {t({ ar: "نسخ رابط الطلب", en: "Copy link" })}
                     </button>
                     <button onClick={() => void sendQuoteLink()} disabled={busy}
-                      style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
+                      style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
                       {t({ ar: "إرسال رابط الطلب", en: "Send link" })}
                     </button>
                   </span>
@@ -674,7 +792,13 @@ export default function WhatsAppInbox() {
                   </span>
                 )}
                 {!quotesError && quotes.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "لا توجد طلبات مرتبطة بهذه المحادثة.", en: "No quote requests linked to this conversation." })}</span>}
-                {quotes.map((q) => <QuoteCard key={q.id} q={q} isAr={isAr} t={t} />)}
+                {quotes.map((q) => (
+                  <QuoteCard key={q.id} q={q} isAr={isAr} t={t}
+                    booksEnabled={!!sendDiag?.booksEstimatesEnabled}
+                    canCreateEstimate={!!caps?.canCreateBooksEstimate}
+                    onEdit={() => editQuote(q)}
+                    onBooks={() => openBooksModal(q)} />
+                ))}
               </div>
 
               {/* Triage controls */}
@@ -880,6 +1004,111 @@ export default function WhatsAppInbox() {
         </Overlay>
       )}
 
+      {/* Create / edit quote-request modal (Part 1) */}
+      {quoteOpen && (
+        <Overlay onClose={() => setQuoteOpen(false)}>
+          <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>
+            {quoteEditId ? t({ ar: "تعديل طلب عرض السعر", en: "Edit quote request" }) : t({ ar: "إنشاء طلب عرض سعر", en: "Create quote request" })}
+          </h3>
+          <p style={{ margin: "0 0 14px", fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+            {t({ ar: "املأ بيانات الطلب الحقيقية. لن يُنشأ طلب فارغ.", en: "Enter the real request details. No empty request is created." })}
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label={t({ ar: "اسم العميل", en: "Customer name" })}><Input value={quoteForm.fullName} onChange={(v) => setQuoteForm({ ...quoteForm, fullName: v })} /></Field>
+            <Field label={t({ ar: "الشركة", en: "Company" })}><Input value={quoteForm.company} onChange={(v) => setQuoteForm({ ...quoteForm, company: v })} /></Field>
+            <Field label={t({ ar: "البريد الإلكتروني", en: "Email" })}><Input type="email" value={quoteForm.email} onChange={(v) => setQuoteForm({ ...quoteForm, email: v })} /></Field>
+            <Field label={t({ ar: "الجوال", en: "Phone" })}><Input value={quoteForm.phone} onChange={(v) => setQuoteForm({ ...quoteForm, phone: v })} /></Field>
+            <Field label={t({ ar: "المدينة", en: "City" })}><Input value={quoteForm.city} onChange={(v) => setQuoteForm({ ...quoteForm, city: v })} /></Field>
+            <Field label={t({ ar: "تاريخ المشروع", en: "Project date" })}><Input type="date" value={quoteForm.preferredDate} onChange={(v) => setQuoteForm({ ...quoteForm, preferredDate: v })} /></Field>
+            <Field label={t({ ar: "الميزانية", en: "Budget" })}><Input value={quoteForm.budgetRange} onChange={(v) => setQuoteForm({ ...quoteForm, budgetRange: v })} /></Field>
+            <Field label={t({ ar: "الأولوية", en: "Priority" })}><Input value={quoteForm.priority} onChange={(v) => setQuoteForm({ ...quoteForm, priority: v })} /></Field>
+            <Field label={t({ ar: "المصدر", en: "Lead source" })}><Input value={quoteForm.leadSource} onChange={(v) => setQuoteForm({ ...quoteForm, leadSource: v })} /></Field>
+            <Field label={t({ ar: "المدة/الطاقم", en: "Duration / crew" })}><Input value={quoteForm.duration} onChange={(v) => setQuoteForm({ ...quoteForm, duration: v })} /></Field>
+            <Field label={t({ ar: "التصنيف", en: "Category" })}>
+              <Select value={quoteForm.category} onChange={(v) => setQuoteForm({ ...quoteForm, category: v })}
+                options={[{ value: "", label: "—" }, ...WA_CATEGORY_ORDER.map((c) => ({ value: c, label: isAr ? WA_CATEGORY_LABELS[c].ar : WA_CATEGORY_LABELS[c].en }))]} />
+            </Field>
+            <Field label={t({ ar: "القسم", en: "Department" })}>
+              <Select value={quoteForm.assignedDepartment} onChange={(v) => setQuoteForm({ ...quoteForm, assignedDepartment: v })}
+                options={[{ value: "", label: "—" }, ...WA_DEPARTMENT_ORDER.map((d) => ({ value: d, label: isAr ? WA_DEPARTMENT_LABELS[d].ar : WA_DEPARTMENT_LABELS[d].en }))]} />
+            </Field>
+          </div>
+          <div style={{ marginTop: 10 }}><Field label={t({ ar: "الخدمات المطلوبة (افصل بفاصلة)", en: "Services (comma-separated)" })}><Input value={quoteForm.services} onChange={(v) => setQuoteForm({ ...quoteForm, services: v })} placeholder={t({ ar: "تصوير، مونتاج", en: "Filming, Editing" })} /></Field></div>
+          <div style={{ marginTop: 10 }}><Field label={t({ ar: "التفاصيل / الملاحظات", en: "Details / notes" })}><TextArea value={quoteForm.message} onChange={(v) => setQuoteForm({ ...quoteForm, message: v })} /></Field></div>
+          <div style={{ marginTop: 10 }}><Field label={t({ ar: "ملاحظات داخلية", en: "Internal notes" })}><TextArea value={quoteForm.internalNotes} onChange={(v) => setQuoteForm({ ...quoteForm, internalNotes: v })} /></Field></div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => setQuoteOpen(false)} style={btn("rgba(255,255,255,0.08)")}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+            <button onClick={() => void saveQuote()} disabled={quoteSaving} style={btn(ACCENT, quoteSaving)}>
+              {quoteSaving ? "…" : t({ ar: "حفظ", en: "Save" })}
+            </button>
+          </div>
+        </Overlay>
+      )}
+
+      {/* Zoho Books DRAFT estimate review modal (Part 5) */}
+      {booksOpen && booksQuote && (
+        <Overlay onClose={() => setBooksOpen(false)}>
+          <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>{t({ ar: "تحضير مسودة تقدير — Zoho Books", en: "Prepare draft estimate — Zoho Books" })}</h3>
+          <p style={{ margin: "0 0 12px", fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+            {t({ ar: "مسودة فقط — لا تُرسل للعميل ولا تُنشأ فاتورة.", en: "Draft only — not sent to the customer, no invoice is created." })}
+          </p>
+          {!sendDiag?.booksEstimatesEnabled && (
+            <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)", fontSize: 12, color: "rgba(255,220,160,0.95)" }}>
+              {t({ ar: "🔒 ميزة Zoho Books غير مفعّلة — فعّل ZOHO_BOOKS_ESTIMATES_ENABLED لإنشاء المسودة.", en: "🔒 Zoho Books is disabled — enable ZOHO_BOOKS_ESTIMATES_ENABLED to create the draft." })}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", marginBottom: 8 }}>
+            {t({ ar: "العميل", en: "Customer" })}: <strong>{booksQuote.full_name || booksQuote.phone || "—"}</strong>
+            {booksQuote.company ? ` · ${booksQuote.company}` : ""}{booksQuote.city ? ` · ${booksQuote.city}` : ""}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>
+              <span style={{ flex: 3 }}>{t({ ar: "البند", en: "Item" })}</span>
+              <span style={{ flex: 1 }}>{t({ ar: "الكمية", en: "Qty" })}</span>
+              <span style={{ flex: 1.4 }}>{t({ ar: "السعر", en: "Rate" })}</span>
+              <span style={{ width: 24 }} />
+            </div>
+            {booksLines.map((l, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span style={{ flex: 3 }}><Input value={l.name} onChange={(v) => setBooksLines(booksLines.map((x, j) => j === i ? { ...x, name: v } : x))} placeholder={t({ ar: "اسم الخدمة", en: "Service name" })} /></span>
+                <span style={{ flex: 1 }}><Input value={l.quantity} onChange={(v) => setBooksLines(booksLines.map((x, j) => j === i ? { ...x, quantity: v } : x))} /></span>
+                <span style={{ flex: 1.4 }}><Input value={l.rate} onChange={(v) => setBooksLines(booksLines.map((x, j) => j === i ? { ...x, rate: v } : x))} placeholder="0.00" /></span>
+                <button onClick={() => setBooksLines(booksLines.filter((_, j) => j !== i))} style={{ ...btn("rgba(255,255,255,0.08)"), padding: "6px 8px", fontSize: 12, width: 24 }}>×</button>
+              </div>
+            ))}
+            <button onClick={() => setBooksLines([...booksLines, { name: "", description: "", quantity: "1", rate: "" }])}
+              style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px", alignSelf: "flex-start" }}>
+              + {t({ ar: "إضافة بند", en: "Add line" })}
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+            <Field label={t({ ar: "ضريبة القيمة المضافة %", en: "VAT %" })}><Input value={booksVat} onChange={setBooksVat} /></Field>
+            <Field label={t({ ar: "خصم %", en: "Discount %" })}><Input value={booksDiscount} onChange={setBooksDiscount} /></Field>
+          </div>
+          {(() => {
+            const sub = booksLines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0);
+            const disc = sub * (Number(booksDiscount) || 0) / 100;
+            const vat = (sub - disc) * (Number(booksVat) || 0) / 100;
+            return (
+              <div style={{ marginTop: 10, fontSize: 12, color: "rgba(255,255,255,0.7)", textAlign: isAr ? "left" : "right" }}>
+                {t({ ar: "الإجمالي التقديري", en: "Estimated total" })}: <strong>{(sub - disc + vat).toFixed(2)} SAR</strong>
+                <span style={{ color: "rgba(255,255,255,0.4)" }}> ({t({ ar: "للمراجعة فقط — Zoho هو المصدر النهائي", en: "preview only — Zoho is the source of truth" })})</span>
+              </div>
+            );
+          })()}
+          <div style={{ marginTop: 10 }}><Field label={t({ ar: "ملاحظات", en: "Notes" })}><TextArea value={booksNotes} onChange={setBooksNotes} /></Field></div>
+          <div style={{ marginTop: 10 }}><Field label={t({ ar: "الشروط", en: "Terms" })}><TextArea value={booksTerms} onChange={setBooksTerms} /></Field></div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => setBooksOpen(false)} style={btn("rgba(255,255,255,0.08)")}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+            <button onClick={() => void saveBooksEstimate()} disabled={booksSaving || !sendDiag?.booksEstimatesEnabled || !caps?.canCreateBooksEstimate}
+              title={!caps?.canCreateBooksEstimate ? t({ ar: "للمالك/المدير/المالية فقط", en: "Owner/manager/finance only" }) : ""}
+              style={btn(ACCENT, booksSaving || !sendDiag?.booksEstimatesEnabled || !caps?.canCreateBooksEstimate)}>
+              {booksSaving ? "…" : t({ ar: "إنشاء مسودة في Zoho Books", en: "Create draft in Zoho Books" })}
+            </button>
+          </div>
+        </Overlay>
+      )}
+
       {toast && (
         <div style={{ position: "fixed", insetInlineEnd: 20, bottom: 20, background: "rgba(0,0,0,0.9)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 10, padding: "10px 16px", fontSize: 13, zIndex: 50 }}>
           {toast}
@@ -931,10 +1160,16 @@ function Select({ value, options, onChange, disabled }: { value: string; options
 function btn(bg: string, disabled = false): React.CSSProperties {
   return { display: "inline-block", fontSize: 13, fontWeight: 600, padding: "8px 14px", borderRadius: 8, border: "none", cursor: disabled ? "not-allowed" : "pointer", background: bg, color: "#fff", opacity: disabled ? 0.5 : 1, textDecoration: "none" };
 }
-function Input({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+function Input({ value, onChange, placeholder, type }: { value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
   return (
-    <input value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+    <input value={value} placeholder={placeholder} type={type || "text"} onChange={(e) => onChange(e.target.value)}
       style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 7, padding: "8px 10px", color: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box" }} />
+  );
+}
+function TextArea({ value, onChange, placeholder, rows }: { value: string; onChange: (v: string) => void; placeholder?: string; rows?: number }) {
+  return (
+    <textarea value={value} placeholder={placeholder} rows={rows || 2} onChange={(e) => onChange(e.target.value)}
+      style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 7, padding: "8px 10px", color: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
   );
 }
 function Overlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
@@ -950,21 +1185,26 @@ function Overlay({ children, onClose }: { children: React.ReactNode; onClose: ()
 }
 
 // Quote-request card — renders from the REAL whatsapp_quote_requests schema with
-// safe fallbacks for every nullable column, so existing rows (with null
-// category/budget/services/external_request_id) still render and never crash.
-function QuoteCard({ q, isAr, t }: { q: WaQuoteRequest; isAr: boolean; t: (s: { ar: string; en: string }) => string }) {
+// safe fallbacks for every nullable column (existing rows with null fields still
+// render and never crash). CRM (customer/lead) and Books (estimate) are SEPARATE.
+function QuoteCard({ q, isAr, t, booksEnabled, canCreateEstimate, onEdit, onBooks }: {
+  q: WaQuoteRequest; isAr: boolean; t: (s: { ar: string; en: string }) => string;
+  booksEnabled: boolean; canCreateEstimate: boolean; onEdit: () => void; onBooks: () => void;
+}) {
   const NA = t({ ar: "غير محدد", en: "Unspecified" });
   const requestNo = (q.external_request_id && q.external_request_id.trim()) || `#${q.id.slice(0, 8)}`;
   const customer = q.full_name || q.phone || "—";
   const servicesText = Array.isArray(q.services) && q.services.length > 0 ? q.services.join("، ") : NA;
-  const categoryText = q.category || NA;
-  const budgetText = q.budget_range || NA;
-  const cityText = q.city || NA;
   const statusKey = q.status as WaQuoteStatus | null;
   const statusLabel = statusKey && WA_QUOTE_STATUS_LABELS[statusKey]
     ? (isAr ? WA_QUOTE_STATUS_LABELS[statusKey].ar : WA_QUOTE_STATUS_LABELS[statusKey].en)
     : (q.status || NA);
+  const sourceText = q.source ? (q.source === "whatsapp" ? t({ ar: "واتساب", en: "WhatsApp" }) : q.source) : null;
   const dateText = q.created_at ? timeAgo(q.created_at, isAr) : "";
+  const estStatusKey = (q.zoho_books_estimate_status || "").toLowerCase();
+  const estStatusLabel = WA_BOOKS_ESTIMATE_STATUS_LABELS[estStatusKey]
+    ? (isAr ? WA_BOOKS_ESTIMATE_STATUS_LABELS[estStatusKey].ar : WA_BOOKS_ESTIMATE_STATUS_LABELS[estStatusKey].en)
+    : (q.zoho_books_estimate_status || "");
   const cell = (label: string, value: string) => (
     <span style={{ display: "inline-flex", gap: 4, alignItems: "baseline" }}>
       <span style={{ color: "rgba(255,255,255,0.4)" }}>{label}:</span>
@@ -972,26 +1212,58 @@ function QuoteCard({ q, isAr, t }: { q: WaQuoteRequest; isAr: boolean; t: (s: { 
     </span>
   );
   return (
-    <div style={{ background: "rgba(59,130,246,0.10)", border: "1px solid rgba(59,130,246,0.28)", borderRadius: 10, padding: "9px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ background: "rgba(59,130,246,0.10)", border: "1px solid rgba(59,130,246,0.28)", borderRadius: 10, padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{requestNo}</span>
         <strong style={{ fontSize: 13 }}>{customer}</strong>
         <Badge color="rgba(255,255,255,0.12)" dark text={statusLabel} />
-        {dateText && <span style={{ color: "rgba(255,255,255,0.4)", marginInlineStart: "auto" }}>{dateText}</span>}
+        <span style={{ display: "inline-flex", gap: 6, marginInlineStart: "auto", alignItems: "center" }}>
+          {dateText && <span style={{ color: "rgba(255,255,255,0.4)" }}>{dateText}</span>}
+          <button onClick={onEdit} style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 11, padding: "3px 8px" }}>{t({ ar: "تعديل", en: "Edit" })}</button>
+        </span>
       </div>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         {q.phone && cell(t({ ar: "الجوال", en: "Phone" }), q.phone)}
+        {q.company && cell(t({ ar: "الشركة", en: "Company" }), q.company)}
+        {q.email && cell(t({ ar: "البريد", en: "Email" }), q.email)}
         {cell(t({ ar: "الخدمات", en: "Services" }), servicesText)}
-        {cell(t({ ar: "التصنيف", en: "Category" }), categoryText)}
-        {cell(t({ ar: "الميزانية", en: "Budget" }), budgetText)}
-        {cell(t({ ar: "المدينة", en: "City" }), cityText)}
+        {cell(t({ ar: "المدينة", en: "City" }), q.city || NA)}
+        {cell(t({ ar: "التاريخ", en: "Date" }), (q.preferred_date || "").slice(0, 10) || NA)}
+        {cell(t({ ar: "الميزانية", en: "Budget" }), q.budget_range || NA)}
+        {q.priority && cell(t({ ar: "الأولوية", en: "Priority" }), q.priority)}
+        {sourceText && cell(t({ ar: "المصدر", en: "Source" }), sourceText)}
       </div>
-      {(q.source || q.crm_lead_id) && (
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          {q.source && <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "المصدر", en: "Source" })}: {q.source === "whatsapp" ? "WhatsApp" : q.source}</span>}
-          {q.crm_lead_id && <a href={`https://crm.zoho.sa/crm/tab/Leads/${q.crm_lead_id}`} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>Zoho ↗</a>}
-        </div>
-      )}
+      {q.message && <div style={{ color: "rgba(255,255,255,0.65)", fontStyle: "italic" }}>“{q.message.slice(0, 160)}{q.message.length > 160 ? "…" : ""}”</div>}
+
+      {/* Two clearly-separated destinations: CRM = customer/lead, Books = estimate. */}
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 6 }}>
+        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+          <span style={{ color: "rgba(255,255,255,0.4)" }}>Zoho CRM:</span>
+          {q.crm_lead_id
+            ? <a href={`https://crm.zoho.sa/crm/tab/Leads/${q.crm_lead_id}`} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>{t({ ar: "فتح العميل في Zoho CRM", en: "Open customer in Zoho CRM" })} ↗</a>
+            : <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "العميل غير مربوط", en: "customer not linked" })}</span>}
+        </span>
+        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+          <span style={{ color: "rgba(255,255,255,0.4)" }}>Zoho Books:</span>
+          {q.zoho_books_estimate_id ? (
+            <>
+              {q.zoho_books_estimate_url
+                ? <a href={q.zoho_books_estimate_url} target="_blank" rel="noopener noreferrer" style={{ color: "#22c55e", textDecoration: "none" }}>{t({ ar: "فتح التقدير في Zoho Books", en: "Open estimate in Zoho Books" })} ↗</a>
+                : <span style={{ color: "#22c55e" }}>{t({ ar: "التقدير", en: "Estimate" })}</span>}
+              {q.zoho_books_estimate_number && <span style={{ color: "rgba(255,255,255,0.6)" }}>#{q.zoho_books_estimate_number}</span>}
+              {estStatusLabel && <Badge color="rgba(34,197,94,0.18)" text={estStatusLabel} />}
+              {q.zoho_books_estimate_total != null && <span style={{ color: "rgba(255,255,255,0.6)" }}>{q.zoho_books_estimate_total} {q.zoho_books_estimate_currency || "SAR"}</span>}
+            </>
+          ) : (
+            <button onClick={onBooks}
+              title={booksEnabled ? "" : t({ ar: "مقفل — فعّل ZOHO_BOOKS_ESTIMATES_ENABLED", en: "Locked — enable ZOHO_BOOKS_ESTIMATES_ENABLED" })}
+              disabled={!canCreateEstimate}
+              style={{ ...btn(booksEnabled && canCreateEstimate ? "rgba(34,197,94,0.20)" : "rgba(255,255,255,0.08)"), fontSize: 11, padding: "3px 9px", opacity: canCreateEstimate ? 1 : 0.55 }}>
+              {booksEnabled ? "" : "🔒 "}{t({ ar: "إنشاء مسودة تقدير", en: "Create draft estimate" })}
+            </button>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

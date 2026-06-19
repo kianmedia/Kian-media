@@ -145,12 +145,24 @@ function Form() {
     try {
       const qp = new URLSearchParams(window.location.search);
       if (qp.get("source") === "whatsapp" && qp.get("conversation")) {
+        // Enrich the services list with the chosen add-ons + the "Other" free text,
+        // and build a human-readable duration from shooting days / crew.
+        const addons = (["Drone", "Editing", "Voice Over", "Motion Graphics"] as const)
+          .filter((k) => opts[k]).map((k) => (isAr ? { Drone: "تصوير درون", Editing: "مونتاج", "Voice Over": "تعليق صوتي", "Motion Graphics": "موشن جرافيك" }[k] : k));
+        const otherSvc = services.includes("Other") && f["Other Service"] ? [f["Other Service"]] : [];
+        const servicesOut = [...serviceLabels.split(isAr ? "، " : ", ").filter(Boolean), ...addons, ...otherSvc];
+        const durationParts = [
+          f["Shooting Days"] ? (isAr ? `${f["Shooting Days"]} يوم تصوير` : `${f["Shooting Days"]} shooting days`) : "",
+          f["Crew"] ? (isAr ? `طاقم: ${f["Crew"]}` : `Crew: ${f["Crew"]}`) : "",
+        ].filter(Boolean).join(isAr ? " · " : " · ");
         void fetch("/api/integrations/whatsapp/quote-request", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             conversation_id: qp.get("conversation"),
             full_name: f["Full Name"], phone: f["Mobile"], city: f["City"],
-            services, message: f["Description"], reference: ref, budget: budgetLabel,
+            services: servicesOut, message: f["Description"], reference: ref, budget: budgetLabel,
+            company: f["Company"], email: f["Email"], lead_source: leadLabel, priority: priorityLabel,
+            duration: durationParts, preferred_date: f["Delivery Date"],
           }),
         }).catch(() => {});
       }

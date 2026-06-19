@@ -82,7 +82,12 @@ export interface WaInternalNote {
   created_at: string;
 }
 
-export type WaQuoteStatus = "new" | "in_review" | "quoted" | "accepted" | "rejected" | "archived";
+export type WaQuoteStatus =
+  | "new" | "in_review" | "quoted" | "accepted" | "rejected" | "archived"
+  | "draft" | "approved" | "sent" | "converted" | "cancelled";
+/** Statuses that count as an OPEN (still-actionable) quote request — drives the
+ *  find-or-edit-existing behaviour so repeated clicks don't create duplicates. */
+export const WA_QUOTE_OPEN_STATUSES: WaQuoteStatus[] = ["new", "in_review", "draft"];
 
 export interface WaQuoteRequest {
   id: string;
@@ -104,17 +109,48 @@ export interface WaQuoteRequest {
   status: WaQuoteStatus | null;
   crm_lead_id: string | null;
   source: string | null;
+  // Full quote detail (additive — docs/whatsapp_quote_books_fix_RUNME.sql).
+  email: string | null;
+  priority: string | null;
+  lead_source: string | null;
+  duration: string | null;
+  assigned_department: string | null;
+  internal_notes: string | null;
+  // Zoho Books estimate (the financial quote — distinct from the CRM lead).
+  zoho_books_estimate_id: string | null;
+  zoho_books_estimate_number: string | null;
+  zoho_books_estimate_url: string | null;
+  zoho_books_estimate_status: string | null;
+  zoho_books_estimate_total: number | null;
+  zoho_books_estimate_currency: string | null;
+  zoho_books_estimate_created_by: string | null;
+  zoho_books_estimate_created_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export const WA_QUOTE_STATUS_LABELS: Record<WaQuoteStatus, { ar: string; en: string }> = {
-  new:       { ar: "جديد",       en: "New" },
+  new:       { ar: "جديد",        en: "New" },
   in_review: { ar: "قيد المراجعة", en: "In review" },
-  quoted:    { ar: "تم التسعير",  en: "Quoted" },
-  accepted:  { ar: "مقبول",      en: "Accepted" },
-  rejected:  { ar: "مرفوض",      en: "Rejected" },
-  archived:  { ar: "مؤرشف",      en: "Archived" },
+  quoted:    { ar: "تم التسعير",   en: "Quoted" },
+  accepted:  { ar: "مقبول",       en: "Accepted" },
+  rejected:  { ar: "مرفوض",       en: "Rejected" },
+  archived:  { ar: "مؤرشف",       en: "Archived" },
+  draft:     { ar: "مسودة",       en: "Draft" },
+  approved:  { ar: "معتمد",       en: "Approved" },
+  sent:      { ar: "مُرسل",        en: "Sent" },
+  converted: { ar: "تم التحويل",   en: "Converted" },
+  cancelled: { ar: "ملغي",        en: "Cancelled" },
+};
+
+/** Zoho Books estimate lifecycle status → Arabic. Books returns lowercase. */
+export const WA_BOOKS_ESTIMATE_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
+  draft:    { ar: "مسودة",  en: "Draft" },
+  sent:     { ar: "مُرسل",   en: "Sent" },
+  invoiced: { ar: "مفوتر",  en: "Invoiced" },
+  accepted: { ar: "مقبول",  en: "Accepted" },
+  declined: { ar: "مرفوض",  en: "Declined" },
+  expired:  { ar: "منتهٍ",   en: "Expired" },
 };
 
 // ─── Bilingual labels (AR/EN) for the filter chips + badges ───

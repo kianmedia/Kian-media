@@ -129,6 +129,8 @@ export interface SendDiagnostic {
   startConversationEnabled: boolean;
   templateSendEnabled: boolean;
   internalAlertsEnabled: boolean;
+  booksEstimatesEnabled: boolean;
+  booksConfigured: boolean;
 }
 
 /** Server diagnostic (no secrets): whether real WhatsApp sending is active +
@@ -140,6 +142,7 @@ export async function getSendStatus(): Promise<SendDiagnostic> {
       send_enabled?: boolean; flag_enabled?: boolean; token_present?: boolean;
       phone_id_present?: boolean; api_version?: string; allowlist_count?: number;
       start_conversation_enabled?: boolean; template_send_enabled?: boolean; internal_alerts_enabled?: boolean;
+      books_estimates_enabled?: boolean; books_configured?: boolean;
     };
     return {
       sendEnabled: !!d.send_enabled, flagEnabled: !!d.flag_enabled,
@@ -148,9 +151,11 @@ export async function getSendStatus(): Promise<SendDiagnostic> {
       startConversationEnabled: !!d.start_conversation_enabled,
       templateSendEnabled: !!d.template_send_enabled,
       internalAlertsEnabled: !!d.internal_alerts_enabled,
+      booksEstimatesEnabled: !!d.books_estimates_enabled,
+      booksConfigured: !!d.books_configured,
     };
   } catch {
-    return { sendEnabled: false, flagEnabled: false, tokenPresent: false, phoneIdPresent: false, apiVersion: "", allowlistCount: 0, startConversationEnabled: false, templateSendEnabled: false, internalAlertsEnabled: false };
+    return { sendEnabled: false, flagEnabled: false, tokenPresent: false, phoneIdPresent: false, apiVersion: "", allowlistCount: 0, startConversationEnabled: false, templateSendEnabled: false, internalAlertsEnabled: false, booksEstimatesEnabled: false, booksConfigured: false };
   }
 }
 
@@ -159,15 +164,71 @@ export function listQuoteRequests(conversationId: string): Promise<Result<WaQuot
   return pget<WaQuoteRequest[]>(`whatsapp_quote_requests?whatsapp_conversation_id=eq.${enc(conversationId)}&select=*&order=created_at.desc`);
 }
 
-export function createQuoteRequest(input: {
-  conversationId: string; fullName?: string; company?: string; services?: string[];
+/** The editable quote fields shared by the create + edit modal. */
+export interface QuoteFields {
+  fullName?: string; company?: string; email?: string; phone?: string; services?: string[];
   city?: string; preferredDate?: string | null; message?: string; category?: string;
-}): Promise<Result<string>> {
-  return prpc<string>("wa_create_quote_request", {
-    p_conversation: input.conversationId, p_full_name: input.fullName ?? null, p_company: input.company ?? null,
-    p_services: input.services ?? [], p_city: input.city ?? null, p_preferred_date: input.preferredDate ?? null,
-    p_message: input.message ?? null, p_category: input.category ?? null,
+  budgetRange?: string; leadSource?: string; priority?: string; duration?: string;
+  internalNotes?: string; assignedDepartment?: string;
+}
+
+function quoteArgs(f: QuoteFields): Record<string, unknown> {
+  return {
+    p_full_name: f.fullName ?? null, p_company: f.company ?? null, p_phone: f.phone ?? null,
+    p_services: f.services ?? [], p_city: f.city ?? null, p_preferred_date: f.preferredDate || null,
+    p_message: f.message ?? null, p_category: f.category ?? null, p_email: f.email ?? null,
+    p_budget_range: f.budgetRange ?? null, p_lead_source: f.leadSource ?? null, p_priority: f.priority ?? null,
+    p_duration: f.duration ?? null, p_internal_notes: f.internalNotes ?? null,
+    p_assigned_department: f.assignedDepartment ?? null,
+  };
+}
+
+export function createQuoteRequest(input: { conversationId: string } & QuoteFields): Promise<Result<string>> {
+  return prpc<string>("wa_create_quote_request", { p_conversation: input.conversationId, ...quoteArgs(input) });
+}
+
+export function updateQuoteRequest(input: { quoteId: string; status?: string } & QuoteFields): Promise<Result<boolean>> {
+  return prpc<boolean>("wa_update_quote_request", {
+    p_quote_id: input.quoteId, ...quoteArgs(input), p_status: input.status ?? null,
   });
+}
+
+/** Newest still-open (new/in_review/draft) request for a conversation, or null. */
+export async function findOpenQuoteRequest(conversationId: string): Promise<WaQuoteRequest | null> {
+  const r = await listQuoteRequests(conversationId);
+  if (!r.ok) return null;
+  return r.data.find((q) => ["new", "in_review", "draft"].includes(q.status ?? "")) ?? null;
+}
+
+// ─── Zoho Books estimate (gated, draft-only — Part 5) ──────────────────────
+export type BooksEstimateResult =
+  | { ok: true; status: string; estimateId?: string; estimateNumber?: string; estimateUrl?: string }
+  | { ok: false; error: string; status?: string };
+
+/** Ask the server to create a DRAFT Zoho Books estimate for a quote request. The
+ *  server enforces the feature flag + draft-only + create permission; secrets stay
+ *  server-only. Returns a status: disabled | blocked | created | failed. */
+export async function createBooksEstimate(input: {
+  quoteId: string; lineItems: { name: string; description?: string; quantity: number; rate: number }[];
+  vatPercent?: number; discountPercent?: number; notes?: string; terms?: string;
+}): Promise<BooksEstimateResult> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated" };
+  try {
+    const res = await fetch("/api/integrations/whatsapp/books-estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({
+        quote_id: input.quoteId, line_items: input.lineItems, vat_percent: input.vatPercent,
+        discount_percent: input.discountPercent, notes: input.notes, terms: input.terms,
+      }),
+    });
+    const d = (await res.json()) as { ok?: boolean; status?: string; estimate_id?: string; estimate_number?: string; estimate_url?: string; error?: string };
+    if (!res.ok || !d.ok) return { ok: false, error: d.error || `HTTP ${res.status}`, status: d.status };
+    return { ok: true, status: d.status || "created", estimateId: d.estimate_id, estimateNumber: d.estimate_number, estimateUrl: d.estimate_url };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 }
 
 // ─── Staff WhatsApp alert settings (Part 1) ────────────────────────────────

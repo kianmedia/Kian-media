@@ -37,6 +37,8 @@ export interface Caps {
   staffReadsAll: boolean;    // all projects/files — owner/manager/support/readonly
   canSeeInvoices: boolean;   // invoices/Zoho — owner/manager/finance (DB can_see_invoices, after addendum)
   canSeeOpportunities: boolean; // Opportunities Center — owner/manager/hr (DB can_see_opportunities)
+  canCreateBooksEstimate: boolean; // create a Zoho Books DRAFT estimate — owner/manager/finance (DB wa_can_create_books_estimate)
+  canPrepareBooksEstimate: boolean; // prepare estimate details (no Zoho call) — owner/manager/sales/finance
 }
 
 export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
@@ -65,6 +67,10 @@ export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
     staffReadsAll: isOwner || ["manager", "support", "readonly"].includes(view),
     canSeeInvoices: isOwner || view === "manager" || view === "finance",
     canSeeOpportunities: isOwner || view === "manager" || view === "hr",
+    // CREATE a Books estimate (hits Zoho): owner/manager/finance — mirrors DB wa_can_create_books_estimate().
+    canCreateBooksEstimate: isOwner || view === "manager" || view === "finance",
+    // PREPARE estimate details (no Zoho call): owner/manager/sales/finance.
+    canPrepareBooksEstimate: isOwner || view === "manager" || view === "sales" || view === "finance",
   };
 }
 

@@ -198,6 +198,38 @@ The `GET /api/integrations/whatsapp/send` diagnostic now also reports
 3. Staff set their alert numbers in the inbox (⚙️). Nothing sends while the flags are off.
 4. To pilot: enable one flag at a time with its allowlist set to a single test number.
 
+## Quote flow + Zoho Books draft estimates (gated OFF)
+
+Migration: **`docs/whatsapp_quote_books_fix_RUNME.sql`** (additive + reversible; **not auto-run**;
+**run it BEFORE deploying** the updated route/page/inbox — the widened RPCs replace the prior
+8-arg versions). Depends on `whatsapp_ops_batch_RUNME.sql` + `whatsapp_quote_request_schema_fix_RUNME.sql`.
+
+- **Create modal (no empty cards):** `إنشاء طلب عرض سعر` opens a prefilled create/edit modal
+  (name/company/email/phone/services/city/date/budget/priority/source/duration/category/department/
+  details/internal notes). Repeated clicks **edit the open request** (status new/in_review/draft);
+  a separate request needs `إنشاء طلب جديد آخر` with a confirm. RPCs `wa_create_quote_request`
+  (widened) / `wa_update_quote_request` (new), both triager-guarded.
+- **Public link-back (full mapping):** `/quote-request?source=whatsapp&conversation=…` now mirrors
+  every field (reference/company/email/lead source/priority/duration/project date/services+add-ons/
+  budget/city/details) into `wa_link_quote_request_public`. Sheets submit unchanged; best-effort;
+  the customer never sees an error (route always 200).
+- **Card:** Arabic labels; shows services/category/budget/city/date/details/priority/status/source;
+  **separates** `فتح العميل في Zoho CRM` (lead) from a distinct **Zoho Books** estimate area.
+- **Zoho Books draft estimate (`ZOHO_BOOKS_ESTIMATES_ENABLED=false`):** `إنشاء مسودة تقدير` →
+  review modal (line-item editor, VAT, discount, notes, terms). `POST /api/integrations/whatsapp/
+  books-estimate` is triple-gated: feature flag (soft no-op when off) + `wa_can_create_books_estimate`
+  (owner/admin/finance/manager; **sales = prepare-only**) + RLS visibility. Creates a **DRAFT estimate
+  only** — never sends/emails, **never creates an invoice**. Writes id/number/url/status/total/currency
+  back via `wa_set_books_estimate` (service_role). Every attempt audited in `whatsapp_books_estimate_audit`.
+
+### Manual steps (quote + Books)
+1. **Checkpoint (أ):** run `docs/whatsapp_quote_books_fix_RUNME.sql` in Supabase, **then** deploy.
+2. Books stays OFF. To pilot in Preview only: set `ZOHO_BOOKS_ESTIMATES_ENABLED=true`,
+   `ZOHO_BOOKS_ORGANIZATION_ID`, and ensure the shared `ZOHO_*` refresh token has
+   `ZohoBooks.estimates.CREATE` + `ZohoBooks.contacts.*` scope. `ZOHO_BOOKS_ESTIMATE_DRAFT_ONLY`
+   stays `true`. Optional `ZOHO_BOOKS_VAT_TAX_ID` to apply a configured VAT tax id.
+3. Debug logs: set `NEXT_PUBLIC_WA_DEBUG=1` (Preview) to log conversation id + quote count + errors.
+
 ## Phase 1+2+4 — send-state UI, email completion, in-portal alerts (no migration)
 
 - **Phase 1:** the inbox reads `GET /api/integrations/whatsapp/send` (returns
