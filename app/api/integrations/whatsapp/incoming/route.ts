@@ -29,6 +29,8 @@ import { buildConversationDescription } from "@/lib/server/zohoDescription";
 import type { SummaryMessage } from "@/lib/whatsapp/summary";
 import { routeDepartments } from "@/lib/whatsapp/route";
 import { sendInternalAlerts, internalAlertsEnabled } from "@/lib/server/whatsappInternalAlert";
+import { detectPriceIntent } from "@/lib/whatsapp/intent";
+import { maybeAutoSendQuoteLink, autoQuoteEnabled } from "@/lib/server/autoQuoteLink";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -276,6 +278,22 @@ export async function POST(req: Request) {
       });
     } catch (e) {
       console.error("[whatsapp/incoming] internal alert threw (ignored):", e);
+    }
+  }
+
+  // ── 5d) Auto quote-link reply on price intent (gated OFF; NEVER blocks) ───
+  if (result.conversation_id && result.message_inserted && autoQuoteEnabled()) {
+    try {
+      const kw = detectPriceIntent(body);
+      if (kw) {
+        await maybeAutoSendQuoteLink({
+          conversationId: result.conversation_id,
+          phone: asStr(payload.phone) || wa_id,
+          keyword: kw,
+        });
+      }
+    } catch (e) {
+      console.error("[whatsapp/incoming] auto quote-link threw (ignored):", e);
     }
   }
 

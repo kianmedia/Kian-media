@@ -69,6 +69,22 @@ Variables: 1 = customer name · 2 = customer phone · 3 = routed department · 4
 
 ---
 
+## Customer quote-received confirmation template (Part 4)
+
+### `quote_request_received_ar`  — category: UTILITY
+```
+تم استلام طلب عرض السعر بنجاح. رقم طلبك: {{1}}. سيقوم فريق كيان بمراجعة الطلب والتواصل معك قريبًا.
+```
+Variables: 1 = request number.
+
+> Only needed when the customer is OUTSIDE the 24h session window. Right after a
+> customer submits the form from a WhatsApp conversation the session is open, so the
+> portal sends the same text as a free-form message (gated by
+> `QUOTE_REQUEST_CUSTOMER_WHATSAPP_CONFIRM_ENABLED` + allowlist). Submit this template
+> only if you later want to confirm to customers whose session has closed.
+
+---
+
 ## Approval steps
 1. Create each template above in WhatsApp Manager with the exact name/category/`ar` language.
 2. Wait for Meta approval (usually minutes–hours; UTILITY is fastest).

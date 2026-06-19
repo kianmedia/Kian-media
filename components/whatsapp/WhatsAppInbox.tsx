@@ -386,10 +386,19 @@ export default function WhatsAppInbox() {
       : (isAr ? "حُدّث العميل في Zoho" : "Lead updated in Zoho"));
   }
 
-  function quoteLink(): string {
+  // Build a quote-request link in one of three modes (Part 2):
+  //   update → edits an exact quote; new → forces a fresh quote; auto → legacy dedup.
+  function quoteLink(mode: "auto" | "new" | "update" = "auto", quoteId?: string): string {
     if (!selected) return "";
     const origin = typeof window !== "undefined" ? window.location.origin : "https://www.kianmedia.com";
-    return `${origin}/quote-request?source=whatsapp&conversation=${selected.id}`;
+    let url = `${origin}/quote-request?source=whatsapp&conversation=${selected.id}`;
+    if (mode === "update" && quoteId) url += `&quote=${quoteId}&mode=update`;
+    else if (mode === "new") url += `&mode=new`;
+    return url;
+  }
+  // Newest still-open quote on the current conversation (drives the "current quote" links).
+  function openQuoteOnScreen(): WaQuoteRequest | undefined {
+    return quotes.find((q) => WA_QUOTE_OPEN_STATUSES_C.includes(q.status ?? ""));
   }
   // Build the modal form from an existing quote (edit) or the conversation (create).
   function quoteFormFromQuote(q: WaQuoteRequest): QuoteForm {
@@ -433,6 +442,10 @@ export default function WhatsAppInbox() {
   }
   async function saveQuote() {
     if (!selected) return;
+    // Email + city are required (mirrors the public form).
+    if (!quoteForm.email.trim()) { flash(isAr ? "الرجاء إدخال البريد الإلكتروني" : "Email is required"); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(quoteForm.email.trim())) { flash(isAr ? "البريد الإلكتروني غير صحيح" : "Invalid email"); return; }
+    if (!quoteForm.city.trim()) { flash(isAr ? "الرجاء إدخال المدينة" : "City is required"); return; }
     const fields: QuoteFields = {
       fullName: quoteForm.fullName, company: quoteForm.company, email: quoteForm.email, phone: quoteForm.phone,
       services: quoteForm.services.split(/[،,]/).map((s) => s.trim()).filter(Boolean),
@@ -485,13 +498,14 @@ export default function WhatsAppInbox() {
     flash(isAr ? "أُنشئت مسودة تقدير في Zoho Books" : "Draft estimate created in Zoho Books");
   }
 
-  async function copyQuoteLink() {
-    try { await navigator.clipboard.writeText(quoteLink()); flash(isAr ? "نُسخ الرابط" : "Link copied"); }
+  async function copyLink(url: string) {
+    if (!url) return;
+    try { await navigator.clipboard.writeText(url); flash(isAr ? "نُسخ الرابط" : "Link copied"); }
     catch { flash(isAr ? "تعذّر النسخ" : "Copy failed"); }
   }
-  async function sendQuoteLink() {
-    if (!selected) return;
-    const body = (isAr ? "لإكمال عرض السعر يرجى تعبئة النموذج: " : "To complete your quote please fill the form: ") + quoteLink();
+  async function sendLink(url: string) {
+    if (!selected || !url) return;
+    const body = (isAr ? "لإكمال عرض السعر يرجى تعبئة النموذج: " : "To complete your quote please fill the form: ") + url;
     await submitReply(body);
   }
 
@@ -770,21 +784,37 @@ export default function WhatsAppInbox() {
                       style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
                       {t({ ar: "إنشاء طلب عرض سعر", en: "Create quote request" })}
                     </button>
-                    {quotes.some((q) => WA_QUOTE_OPEN_STATUSES_C.includes(q.status ?? "")) && (
+                    {openQuoteOnScreen() && (
                       <button onClick={() => startAnotherQuote()} disabled={busy}
                         style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
                         {t({ ar: "إنشاء طلب جديد آخر", en: "New separate request" })}
                       </button>
                     )}
-                    <button onClick={() => void copyQuoteLink()}
-                      style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
-                      {t({ ar: "نسخ رابط الطلب", en: "Copy link" })}
-                    </button>
-                    <button onClick={() => void sendQuoteLink()} disabled={busy}
-                      style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
-                      {t({ ar: "إرسال رابط الطلب", en: "Send link" })}
-                    </button>
                   </span>
+                </div>
+                {/* Link modes (Part 2): update the current open quote, or create a new one. */}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  {openQuoteOnScreen() ? (
+                    <>
+                      <button onClick={() => void copyLink(quoteLink("update", openQuoteOnScreen()!.id))}
+                        style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
+                        {t({ ar: "نسخ رابط الطلب الحالي", en: "Copy current-quote link" })}
+                      </button>
+                      <button onClick={() => void sendLink(quoteLink("update", openQuoteOnScreen()!.id))} disabled={busy}
+                        style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
+                        {t({ ar: "إرسال رابط الطلب الحالي", en: "Send current-quote link" })}
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={() => void copyLink(quoteLink("auto"))}
+                      style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
+                      {t({ ar: "نسخ رابط الطلب", en: "Copy quote link" })}
+                    </button>
+                  )}
+                  <button onClick={() => void copyLink(quoteLink("new"))}
+                    style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
+                    {t({ ar: "إنشاء رابط طلب جديد", en: "New-quote link" })}
+                  </button>
                 </div>
                 {quotesError && (
                   <span style={{ color: "#ffb4b7" }}>

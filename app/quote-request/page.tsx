@@ -96,8 +96,23 @@ function Form() {
       alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
       return;
     }
-    if (f["Email"] && !isValidEmail(f["Email"])) {
+    // Email is now REQUIRED + format-validated.
+    if (!f["Email"].trim()) {
+      alert(isAr ? "الرجاء إدخال البريد الإلكتروني" : "Please enter your email address");
+      return;
+    }
+    if (!isValidEmail(f["Email"])) {
       alert(isAr ? "البريد الإلكتروني غير صحيح" : "Invalid email address");
+      return;
+    }
+    // City is now REQUIRED.
+    if (!f["City"].trim()) {
+      alert(isAr ? "الرجاء إدخال المدينة" : "Please enter your city");
+      return;
+    }
+    // Budget range is REQUIRED for an accurate quote.
+    if (!f["Budget"].trim()) {
+      alert(isAr ? "الرجاء اختيار نطاق الميزانية" : "Please select a budget range");
       return;
     }
     setSending(true);
@@ -155,6 +170,10 @@ function Form() {
           f["Shooting Days"] ? (isAr ? `${f["Shooting Days"]} يوم تصوير` : `${f["Shooting Days"]} shooting days`) : "",
           f["Crew"] ? (isAr ? `طاقم: ${f["Crew"]}` : `Crew: ${f["Crew"]}`) : "",
         ].filter(Boolean).join(isAr ? " · " : " · ");
+        // Link mode (Part 2): mode=new forces a fresh quote; quote=<id>&mode=update
+        // updates that exact quote; otherwise legacy "auto" reuses the open request.
+        const modeParam = qp.get("mode");
+        const mode = modeParam === "new" || modeParam === "update" ? modeParam : "auto";
         void fetch("/api/integrations/whatsapp/quote-request", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -163,6 +182,7 @@ function Form() {
             services: servicesOut, message: f["Description"], reference: ref, budget: budgetLabel,
             company: f["Company"], email: f["Email"], lead_source: leadLabel, priority: priorityLabel,
             duration: durationParts, preferred_date: f["Delivery Date"],
+            mode, quote_id: qp.get("quote") || "",
           }),
         }).catch(() => {});
       }
@@ -183,9 +203,9 @@ function Form() {
       </Row>
       <Row>
         <div><Label htmlFor="mo" required>{t({ ar: "رقم الجوال", en: "Mobile Number" })}</Label><TextField id="mo" type="tel" dir="ltr" value={f["Mobile"]} onChange={(v) => set("Mobile", v)} required /></div>
-        <div><Label htmlFor="em">{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} /></div>
+        <div><Label htmlFor="em" required>{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} required /></div>
       </Row>
-      <div><Label htmlFor="ci">{t({ ar: "المدينة", en: "City" })}</Label><TextField id="ci" value={f["City"]} onChange={(v) => set("City", v)} /></div>
+      <div><Label htmlFor="ci" required>{t({ ar: "المدينة", en: "City" })}</Label><TextField id="ci" value={f["City"]} onChange={(v) => set("City", v)} required /></div>
 
       {/* Multi-select services */}
       <div>
@@ -237,7 +257,7 @@ function Form() {
         </div>
       </div>
 
-      <div><Label htmlFor="bd">{t({ ar: "نطاق الميزانية", en: "Budget Range" })}</Label>
+      <div><Label htmlFor="bd" required>{t({ ar: "نطاق الميزانية", en: "Budget Range" })}</Label>
         <SelectField id="bd" value={f["Budget"]} onChange={(v) => set("Budget", v)} options={BUDGETS.map((b) => ({ value: b.en, label: isAr ? b.ar : b.en }))} /></div>
       <Row>
         <div><Label htmlFor="pr">{t({ ar: "أولوية المشروع", en: "Project Priority" })}</Label>
