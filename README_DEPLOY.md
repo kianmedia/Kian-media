@@ -77,6 +77,41 @@ and test against a **test number first**. Until then, replies stay dry-run.
   message from the same number **updates** (no duplicate); the inbox shows the lead link;
   “Sync to Zoho” pushes the current sales stage as `Lead_Status`.
 
+## Inbox hardening — routing, dept visibility, dedup, notifications, email
+
+- **Migration** `docs/whatsapp_routing_phase2b_RUNME.sql` (ADDITIVE, REVERSIBLE):
+  `assigned_department` + `unread_count` on conversations; dept-aware RLS
+  (`wa_can_read_dept` + recreated SELECT policies); `wa_set_department`,
+  `wa_mark_read` RPCs; ingest RPC now routes by department, counts unread, sends
+  dept-scoped notifications with a message preview, and returns `crm_lead_id`;
+  `whatsapp_staff_alert_settings` table + `wa_set_staff_alert` (future staff WA alerts).
+- **Zoho duplicate fix** (`lib/server/zoho.ts`): known `crm_lead_id` → update by id;
+  else **search** Phone+Mobile across variants (`+966…`, `966…`, `05…`, raw) → update
+  if found, else create. No reliance on `/upsert`. Logs: `zoho_existing_lead_found`,
+  `zoho_lead_created`, `zoho_lead_updated`, `zoho_duplicate_prevented`,
+  `zoho_sync_skipped`, `zoho_sync_failed_non_blocking`. Still non-blocking.
+- **Visible tab** “WhatsApp Inbox / صندوق واتساب” → `/client-portal/admin/whatsapp`
+  for owner/admin/manager/sales/support/hr/finance only (clients never see it).
+- **Notifications** now open the exact conversation (the inbox resolves a deep-linked
+  `?conversation=<id>` even if it's outside the current filter); fallback opens the inbox.
+- **Inbox UI**: department / sales-stage / priority / assignee / unread filters, unread
+  badges, department control, Zoho linked/not-linked badge.
+- **Email alerts** (`lib/server/notifyEmail.ts`): department-scoped, **gated**
+  (`WHATSAPP_EMAIL_ALERTS_ENABLED`, default false), reuses the Apps Script channel,
+  non-blocking.
+
+### Manual steps
+1. **Checkpoint (أ):** review + run `docs/whatsapp_routing_phase2b_RUNME.sql` in Supabase.
+2. (Optional) Email alerts: set `WHATSAPP_EMAIL_ALERTS_ENABLED=true` **and** extend the
+   Apps Script `doPost` to handle `Event:"whatsapp_new"` (recipients arrive in `To`).
+3. Staff WhatsApp alerts stay OFF (`WHATSAPP_STAFF_ALERTS_ENABLED=false`) — schema only.
+4. Marketing staff: assign them `staff_role='sales'` (the sales_marketing department) —
+   there is no separate `marketing` role yet.
+
+### Rollback
+Run the ROLLBACK block in `docs/whatsapp_routing_phase2b_RUNME.sql` (restores the
+category-based policies, drops the new columns/RPCs/table), and revert the commit.
+
 ## Standing items you own (per phase, as we reach them)
 - **n8n:** export the live `Kian WhatsApp - LIVE Production` workflow as JSON so
   edits can be precise. The Meta webhook URL is never changed.

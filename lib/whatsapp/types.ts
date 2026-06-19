@@ -11,6 +11,10 @@ export type WaSalesStage =
   | "new" | "collecting" | "quote_requested" | "awaiting_sales_review"
   | "quote_sent" | "follow_up" | "converted" | "rejected";
 
+/** Routing department (whatsapp_conversations.assigned_department). */
+export type WaDepartment =
+  | "sales_marketing" | "finance" | "support" | "hr" | "operations" | "owner_admin" | "unassigned";
+
 export interface WaContact {
   id: string;
   wa_id: string;
@@ -36,6 +40,8 @@ export interface WaConversation {
   crm_lead_id: string | null;
   crm_synced_at: string | null;
   sales_stage: WaSalesStage;
+  assigned_department: WaDepartment;
+  unread_count: number;
   last_message_at: string | null;
   last_message_preview: string | null;
   ai_summary: string | null;
@@ -117,6 +123,19 @@ export const WA_SALES_STAGE_LABELS: Record<WaSalesStage, { ar: string; en: strin
 export const WA_SALES_STAGE_ORDER: WaSalesStage[] = [
   "new", "collecting", "quote_requested", "awaiting_sales_review",
   "quote_sent", "follow_up", "converted", "rejected",
+];
+
+export const WA_DEPARTMENT_LABELS: Record<WaDepartment, { ar: string; en: string }> = {
+  sales_marketing: { ar: "المبيعات والتسويق", en: "Sales & Marketing" },
+  finance:         { ar: "المالية",           en: "Finance" },
+  support:         { ar: "الدعم",             en: "Support" },
+  hr:              { ar: "الموارد البشرية",    en: "HR" },
+  operations:      { ar: "العمليات",          en: "Operations" },
+  owner_admin:     { ar: "الإدارة",           en: "Owner / Admin" },
+  unassigned:      { ar: "غير محدّد",         en: "Unassigned" },
+};
+export const WA_DEPARTMENT_ORDER: WaDepartment[] = [
+  "sales_marketing", "finance", "support", "hr", "operations", "owner_admin", "unassigned",
 ];
 
 export const WA_STATUS_ORDER: WaStatus[] = ["new", "open", "assigned", "pending", "closed", "spam"];

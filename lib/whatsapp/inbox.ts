@@ -10,7 +10,7 @@ import { pget, prpc, enc, type Result } from "@/lib/portal/client";
 import { getValidSession } from "@/lib/portalAuth";
 import type {
   WaConversation, WaContact, WaMessage, WaAssignment, WaInternalNote,
-  WaStatus, WaSalesStage,
+  WaStatus, WaSalesStage, WaDepartment,
 } from "@/lib/whatsapp/types";
 import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 import type { Profile } from "@/lib/portal/types";
@@ -18,6 +18,11 @@ import type { Profile } from "@/lib/portal/types";
 export interface WaListFilters {
   status?: WaStatus | "";
   category?: WaCategory | "";
+  department?: WaDepartment | "";
+  salesStage?: WaSalesStage | "";
+  priority?: WaPriority | "";
+  assignedTo?: string | "";      // user id, or "__me__" handled by the caller
+  unreadOnly?: boolean;
   search?: string;
 }
 
@@ -26,7 +31,20 @@ export function listConversations(filters: WaListFilters = {}, limit = 200): Pro
   const parts = ["select=*", "order=last_message_at.desc.nullslast", `limit=${limit}`];
   if (filters.status) parts.push(`status=eq.${enc(filters.status)}`);
   if (filters.category) parts.push(`category=eq.${enc(filters.category)}`);
+  if (filters.department) parts.push(`assigned_department=eq.${enc(filters.department)}`);
+  if (filters.salesStage) parts.push(`sales_stage=eq.${enc(filters.salesStage)}`);
+  if (filters.priority) parts.push(`priority=eq.${enc(filters.priority)}`);
+  if (filters.assignedTo) parts.push(`assigned_to=eq.${enc(filters.assignedTo)}`);
+  if (filters.unreadOnly) parts.push(`unread_count=gt.0`);
   return pget<WaConversation[]>(`whatsapp_conversations?${parts.join("&")}`);
+}
+
+/** One conversation by id (RLS-filtered) — used to resolve a deep-linked
+ *  ?conversation=<id> that isn't in the current filtered list. */
+export async function getConversation(id: string): Promise<Result<WaConversation | null>> {
+  const r = await pget<WaConversation[]>(`whatsapp_conversations?id=eq.${enc(id)}&select=*&limit=1`);
+  if (!r.ok) return r;
+  return { ok: true, data: r.data[0] ?? null };
 }
 
 /** Resolve contacts for a set of conversation.contact_id values. */
@@ -101,6 +119,14 @@ export function addNote(conversationId: string, note: string): Promise<Result<st
 
 export function setSalesStage(conversationId: string, stage: WaSalesStage): Promise<Result<boolean>> {
   return prpc<boolean>("wa_set_sales_stage", { p_conversation: conversationId, p_stage: stage });
+}
+
+export function setDepartment(conversationId: string, department: WaDepartment): Promise<Result<boolean>> {
+  return prpc<boolean>("wa_set_department", { p_conversation: conversationId, p_department: department });
+}
+
+export function markRead(conversationId: string): Promise<Result<boolean>> {
+  return prpc<boolean>("wa_mark_read", { p_conversation: conversationId });
 }
 
 export type ZohoSyncResult =

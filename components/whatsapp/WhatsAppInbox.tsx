@@ -15,14 +15,15 @@ import type { Profile } from "@/lib/portal/types";
 import {
   listConversations, listContactsByIds, listMessages, listNotes, listAssignments,
   listAssignableStaff, setConversation, assignConversation, addNote,
-  setSalesStage, sendReply, syncZoho,
+  setSalesStage, sendReply, syncZoho, setDepartment, markRead, getConversation,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
   WA_STATUS_ORDER, WA_CATEGORY_ORDER, WA_PRIORITY_ORDER,
   WA_SALES_STAGE_LABELS, WA_SALES_STAGE_ORDER,
+  WA_DEPARTMENT_LABELS, WA_DEPARTMENT_ORDER,
   type WaConversation, type WaContact, type WaMessage, type WaInternalNote,
-  type WaAssignment, type WaStatus, type WaSalesStage,
+  type WaAssignment, type WaStatus, type WaSalesStage, type WaDepartment,
 } from "@/lib/whatsapp/types";
 import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 
@@ -31,6 +32,11 @@ type Phase = "loading" | "auth" | "denied" | "error" | "ready";
 
 const ACCENT = "#25D366"; // WhatsApp green for in-tool accents
 const RED = "#E31E24";
+
+const FILTER_SELECT: React.CSSProperties = {
+  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 8, padding: "9px 12px", color: "#fff", fontSize: 13,
+};
 
 const STATUS_COLOR: Record<WaStatus, string> = {
   new: "#E31E24", open: "#25D366", assigned: "#3b82f6",
@@ -72,6 +78,11 @@ export default function WhatsAppInbox() {
 
   const [fStatus, setFStatus] = useState<WaStatus | "">("");
   const [fCategory, setFCategory] = useState<WaCategory | "">("");
+  const [fDepartment, setFDepartment] = useState<WaDepartment | "">("");
+  const [fSalesStage, setFSalesStage] = useState<WaSalesStage | "">("");
+  const [fPriority, setFPriority] = useState<WaPriority | "">("");
+  const [fAssigned, setFAssigned] = useState<string>("");   // user id | "__me__"
+  const [fUnread, setFUnread] = useState(false);
   const [search, setSearch] = useState("");
 
   const [selId, setSelId] = useState<string | null>(null);
@@ -115,7 +126,12 @@ export default function WhatsAppInbox() {
 
   // ── Load conversation list ────────────────────────────────────────────────
   const loadList = useCallback(async () => {
-    const r = await listConversations({ status: fStatus, category: fCategory });
+    const r = await listConversations({
+      status: fStatus, category: fCategory, department: fDepartment,
+      salesStage: fSalesStage, priority: fPriority,
+      assignedTo: fAssigned === "__me__" ? (myId ?? "") : fAssigned,
+      unreadOnly: fUnread,
+    });
     // Surface read failures instead of silently rendering "0 conversations"
     // (e.g. a missing table grant or RLS denial returns ok:false here).
     if (!r.ok) { setErr(r.error); setConvs([]); return; }
@@ -127,7 +143,7 @@ export default function WhatsAppInbox() {
       for (const ct of cr.data) map[ct.id] = ct;
       setContacts(map);
     }
-  }, [fStatus, fCategory]);
+  }, [fStatus, fCategory, fDepartment, fSalesStage, fPriority, fAssigned, fUnread, myId]);
 
   useEffect(() => {
     if (phase !== "ready") return;
@@ -162,6 +178,24 @@ export default function WhatsAppInbox() {
   useEffect(() => {
     if (!selId) { setMessages([]); setNotes([]); setAssignments([]); return; }
     void loadDetail(selId);
+    // Resolve a deep-linked conversation that isn't in the current (filtered)
+    // list — so notification links ALWAYS open the thread, not a blank panel.
+    if (!convs.some((c) => c.id === selId)) {
+      void getConversation(selId).then((r) => {
+        if (r.ok && r.data) {
+          const row = r.data;
+          setConvs((prev) => (prev.some((c) => c.id === row.id) ? prev : [row, ...prev]));
+          listContactsByIds([row.contact_id]).then((cr) => {
+            if (cr.ok && cr.data[0]) setContacts((prev) => ({ ...prev, [cr.data[0].id]: cr.data[0] }));
+          });
+        }
+      });
+    }
+    // Mark the conversation read on open.
+    void markRead(selId).then((r) => {
+      if (r.ok) setConvs((prev) => prev.map((c) => (c.id === selId ? { ...c, unread_count: 0 } : c)));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selId, loadDetail]);
 
   const selected = useMemo(() => convs.find((c) => c.id === selId) || null, [convs, selId]);
@@ -201,6 +235,16 @@ export default function WhatsAppInbox() {
     flash(isAr ? "تم تحديث مرحلة المبيعات" : "Sales stage updated");
     // Best-effort: keep Zoho's Lead_Status in sync. No-op when Zoho is unconfigured.
     void syncZoho(selected.id).then((z) => { if (z.ok) void loadDetail(selected.id); });
+  }
+
+  async function patchDepartment(dept: WaDepartment) {
+    if (!selected) return;
+    setBusy(true);
+    const r = await setDepartment(selected.id, dept);
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error); return; }
+    setConvs((prev) => prev.map((c) => (c.id === selected.id ? { ...c, assigned_department: dept } : c)));
+    flash(isAr ? "تم تحديث القسم" : "Department updated");
   }
 
   async function pushZoho() {
@@ -302,6 +346,30 @@ export default function WhatsAppInbox() {
             <option key={c} value={c}>{isAr ? WA_CATEGORY_LABELS[c].ar : WA_CATEGORY_LABELS[c].en}</option>
           ))}
         </select>
+        <select value={fDepartment} onChange={(e) => setFDepartment(e.target.value as WaDepartment | "")} style={FILTER_SELECT}>
+          <option value="">{t({ ar: "كل الأقسام", en: "All departments" })}</option>
+          {WA_DEPARTMENT_ORDER.map((d) => (
+            <option key={d} value={d}>{isAr ? WA_DEPARTMENT_LABELS[d].ar : WA_DEPARTMENT_LABELS[d].en}</option>
+          ))}
+        </select>
+        <select value={fSalesStage} onChange={(e) => setFSalesStage(e.target.value as WaSalesStage | "")} style={FILTER_SELECT}>
+          <option value="">{t({ ar: "كل المراحل", en: "All stages" })}</option>
+          {WA_SALES_STAGE_ORDER.map((s) => (
+            <option key={s} value={s}>{isAr ? WA_SALES_STAGE_LABELS[s].ar : WA_SALES_STAGE_LABELS[s].en}</option>
+          ))}
+        </select>
+        <select value={fPriority} onChange={(e) => setFPriority(e.target.value as WaPriority | "")} style={FILTER_SELECT}>
+          <option value="">{t({ ar: "كل الأولويات", en: "All priorities" })}</option>
+          {WA_PRIORITY_ORDER.map((p) => (
+            <option key={p} value={p}>{isAr ? WA_PRIORITY_LABELS[p].ar : WA_PRIORITY_LABELS[p].en}</option>
+          ))}
+        </select>
+        <select value={fAssigned} onChange={(e) => setFAssigned(e.target.value)} style={FILTER_SELECT}>
+          <option value="">{t({ ar: "كل المسؤولين", en: "All assignees" })}</option>
+          <option value="__me__">{t({ ar: "المُسندة إليّ", en: "Assigned to me" })}</option>
+          {staff.map((s) => <option key={s.id} value={s.id}>{staffName(s)}</option>)}
+        </select>
+        <Chip active={fUnread} color={ACCENT} onClick={() => setFUnread((v) => !v)} label={t({ ar: "غير المقروءة", en: "Unread" })} />
       </div>
 
       {/* Read-error banner — so a permission/RLS failure never hides behind "0 conversations" */}
@@ -327,20 +395,24 @@ export default function WhatsAppInbox() {
               <button key={c.id} onClick={() => setSelId(c.id)}
                 style={{ display: "block", width: "100%", textAlign: isAr ? "right" : "left", padding: "12px 14px", border: "none", borderBottom: "1px solid rgba(255,255,255,0.06)", background: active ? "rgba(37,211,102,0.10)" : "transparent", cursor: "pointer", color: "#fff" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-                  <span style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <span style={{ fontWeight: c.unread_count > 0 ? 700 : 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {c.unread_count > 0 && <span style={{ display: "inline-block", minWidth: 18, textAlign: "center", background: ACCENT, color: "#04210f", borderRadius: 9, fontSize: 10, fontWeight: 700, padding: "1px 5px", marginInlineEnd: 6 }}>{c.unread_count}</span>}
                     {ct?.display_name || ct?.phone || ct?.wa_id || "—"}
                   </span>
                   <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", whiteSpace: "nowrap" }}>{timeAgo(c.last_message_at, isAr)}</span>
                 </div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)", margin: "3px 0 6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div style={{ fontSize: 12, color: c.unread_count > 0 ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.55)", margin: "3px 0 6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {c.last_message_preview || "—"}
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <Badge color={STATUS_COLOR[c.status]} text={isAr ? WA_STATUS_LABELS[c.status].ar : WA_STATUS_LABELS[c.status].en} />
-                  <Badge color="rgba(255,255,255,0.12)" dark text={isAr ? WA_CATEGORY_LABELS[c.category].ar : WA_CATEGORY_LABELS[c.category].en} />
+                  {c.assigned_department !== "unassigned" && (
+                    <Badge color="rgba(59,130,246,0.18)" dark text={isAr ? WA_DEPARTMENT_LABELS[c.assigned_department].ar : WA_DEPARTMENT_LABELS[c.assigned_department].en} />
+                  )}
                   {(c.priority === "high" || c.priority === "urgent") && (
                     <Badge color={PRIORITY_COLOR[c.priority]} text={isAr ? WA_PRIORITY_LABELS[c.priority].ar : WA_PRIORITY_LABELS[c.priority].en} />
                   )}
+                  <Badge color={c.crm_lead_id ? "rgba(37,211,102,0.18)" : "rgba(255,255,255,0.08)"} dark text={c.crm_lead_id ? (isAr ? "Zoho ✓" : "Zoho ✓") : (isAr ? "بدون Zoho" : "No Zoho")} />
                 </div>
               </button>
             );
@@ -415,6 +487,10 @@ export default function WhatsAppInbox() {
                   <Field label={t({ ar: "مرحلة المبيعات", en: "Sales stage" })}>
                     <Select value={selected.sales_stage} disabled={busy} onChange={(v) => patchSalesStage(v as WaSalesStage)}
                       options={WA_SALES_STAGE_ORDER.map((s) => ({ value: s, label: isAr ? WA_SALES_STAGE_LABELS[s].ar : WA_SALES_STAGE_LABELS[s].en }))} />
+                  </Field>
+                  <Field label={t({ ar: "القسم", en: "Department" })}>
+                    <Select value={selected.assigned_department} disabled={busy} onChange={(v) => patchDepartment(v as WaDepartment)}
+                      options={WA_DEPARTMENT_ORDER.map((d) => ({ value: d, label: isAr ? WA_DEPARTMENT_LABELS[d].ar : WA_DEPARTMENT_LABELS[d].en }))} />
                   </Field>
                 </div>
               ) : (

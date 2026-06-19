@@ -21,9 +21,10 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { NextResponse } from "next/server";
-import { rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { rpcAsService, adminConfigured, selectAsService } from "@/lib/server/supabaseAdmin";
 import { classifyWhatsAppMessage } from "@/lib/whatsapp/classify";
 import { createOrUpdateZohoLeadFromWhatsApp } from "@/lib/server/zoho";
+import { sendWhatsAppAlertEmail, emailAlertsEnabled } from "@/lib/server/notifyEmail";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +47,16 @@ interface IngestResult {
   message_inserted?: boolean;
   new_conversation?: boolean;
   duplicate?: boolean;
+  crm_lead_id?: string | null;
+}
+
+/** Classifier category → routing department (mirrors the ingest RPC mapping). */
+function departmentFor(category: string): string {
+  if (category === "sales" || category === "pricing_request") return "sales_marketing";
+  if (category === "finance") return "finance";
+  if (category === "project_support") return "support";
+  if (category === "job_request" || category === "training_request" || category === "supplier_request") return "hr";
+  return "unassigned";
 }
 
 const asStr = (v: unknown): string | null =>
@@ -132,6 +143,8 @@ export async function POST(req: Request) {
           id: result.conversation_id,
           category: cls.category,
           ai_summary: cls.summary,
+          // Known lead id → update directly (prevents duplicate Leads on repeats).
+          crm_lead_id: result.crm_lead_id ?? null,
           // Only set Lead_Status on a brand-new conversation (stage 'new'); for an
           // existing thread, omit it so we never overwrite the sales team's stage.
           sales_stage: result.new_conversation ? "new" : undefined,
@@ -149,6 +162,35 @@ export async function POST(req: Request) {
       }
     } catch (e) {
       console.error("[whatsapp/incoming] zoho sync threw (ignored):", e);
+    }
+  }
+
+  // ── 5b) Department-scoped email alert (gated; NEVER blocks ingest) ────────
+  if (result.conversation_id && result.message_inserted && emailAlertsEnabled()) {
+    try {
+      const dept = departmentFor(cls.category);
+      // owner/admin/manager + the relevant department team only.
+      const roleList = ["manager", "super_admin"];
+      const deptRole = dept === "sales_marketing" ? "sales"
+        : dept === "finance" ? "finance"
+        : dept === "support" ? "support"
+        : dept === "hr" ? "hr"
+        : dept === "operations" ? "editor" : null;
+      if (deptRole) roleList.push(deptRole);
+      const filter = `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(${roleList.join(",")}))`;
+      const recips = await selectAsService<Array<{ email: string }>>(filter);
+      if (recips.ok) {
+        await sendWhatsAppAlertEmail({
+          recipients: recips.data.map((r) => r.email),
+          contactName: asStr(payload.display_name) || wa_id,
+          phone: asStr(payload.phone) || wa_id,
+          preview: (body || `[${message_type}]`).slice(0, 160),
+          department: dept,
+          conversationId: result.conversation_id,
+        });
+      }
+    } catch (e) {
+      console.error("[whatsapp/incoming] email alert threw (ignored):", e);
     }
   }
 

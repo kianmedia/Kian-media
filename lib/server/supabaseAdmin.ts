@@ -63,6 +63,26 @@ export async function rpcAsService<T>(fn: string, args: Record<string, unknown>)
   return { ok: true, data: body as T };
 }
 
+/** Read rows via PostgREST as the service_role (bypasses RLS). Server-only.
+ *  Use sparingly and never return service-role data straight to a client. */
+export async function selectAsService<T>(query: string): Promise<AdminResult<T>> {
+  if (!adminConfigured()) return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      cache: "no-store",
+    });
+  } catch (e) {
+    return { ok: false, error: String(e), status: 502 };
+  }
+  const text = await res.text();
+  let body: unknown = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, status: res.status };
+  return { ok: true, data: body as T };
+}
+
 /**
  * Call a Postgres function via PostgREST RPC AS THE LOGGED-IN USER (their JWT),
  * so RLS + the function's internal role guards apply exactly as in the browser.

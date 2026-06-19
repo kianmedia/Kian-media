@@ -46,8 +46,8 @@ export async function POST(req: Request) {
   if (!zohoConfigured()) return NextResponse.json({ ok: false, error: "zoho_not_configured" }, { status: 200 });
 
   // Read the conversation AS THE USER → RLS authorizes. Empty ⇒ not allowed.
-  const convs = await getRows<{ contact_id?: string; category?: string; ai_summary?: string | null; sales_stage?: string; last_message_preview?: string | null }>(
-    `whatsapp_conversations?id=eq.${encodeURIComponent(conversationId)}&select=contact_id,category,ai_summary,sales_stage,last_message_preview`,
+  const convs = await getRows<{ contact_id?: string; category?: string; ai_summary?: string | null; sales_stage?: string; last_message_preview?: string | null; crm_lead_id?: string | null }>(
+    `whatsapp_conversations?id=eq.${encodeURIComponent(conversationId)}&select=contact_id,category,ai_summary,sales_stage,last_message_preview,crm_lead_id`,
     bearer,
   );
   const conv = convs?.[0];
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
   if (!ct?.wa_id) return NextResponse.json({ ok: false, error: "contact_not_found" }, { status: 404 });
 
   const zoho = await createOrUpdateZohoLeadFromWhatsApp(
-    { id: conversationId, category: conv.category ?? "unknown", ai_summary: conv.ai_summary ?? null, sales_stage: conv.sales_stage },
+    { id: conversationId, category: conv.category ?? "unknown", ai_summary: conv.ai_summary ?? null, sales_stage: conv.sales_stage, crm_lead_id: conv.crm_lead_id ?? null },
     { wa_id: ct.wa_id, phone: ct.phone ?? null, display_name: ct.display_name ?? null },
     { body: conv.last_message_preview ?? null },
   );
