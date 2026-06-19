@@ -154,7 +154,10 @@ export async function syncZoho(conversationId: string): Promise<ZohoSyncResult> 
   }
 }
 
-export type SendReplyResult = { ok: true; dryRun: boolean; messageId: string } | { ok: false; error: string };
+export type SendReplyStatus = "dry_run" | "sent" | "blocked" | "failed";
+export type SendReplyResult =
+  | { ok: true; status: SendReplyStatus; dryRun: boolean; messageId: string }
+  | { ok: false; error: string };
 
 /**
  * Reply from the portal. Posts to the server-only send route with the logged-in
@@ -170,9 +173,9 @@ export async function sendReply(conversationId: string, body: string): Promise<S
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
       body: JSON.stringify({ conversation_id: conversationId, body }),
     });
-    const data = (await res.json()) as { ok?: boolean; dry_run?: boolean; message_id?: string; error?: string };
+    const data = (await res.json()) as { ok?: boolean; dry_run?: boolean; status?: string; message_id?: string; error?: string };
     if (!res.ok || !data.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
-    return { ok: true, dryRun: !!data.dry_run, messageId: data.message_id || "" };
+    return { ok: true, status: (data.status as SendReplyStatus) || (data.dry_run ? "dry_run" : "sent"), dryRun: !!data.dry_run, messageId: data.message_id || "" };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

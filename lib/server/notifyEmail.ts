@@ -35,11 +35,12 @@ function publicBase(): string {
 }
 
 export interface WhatsAppEmailInput {
-  recipients: string[];           // owner/admin/manager + department team only
+  recipients: string[];           // owner/admin/manager + routed-department team + assignee
   contactName: string;
   phone: string;
   preview: string;
-  department: string;
+  departments: string[];
+  priority?: string;
   conversationId: string;
 }
 
@@ -62,7 +63,8 @@ export async function sendWhatsAppAlertEmail(input: WhatsAppEmailInput): Promise
         To: to.join(","),
         "Contact Name": input.contactName,
         Phone: input.phone,
-        Department: input.department,
+        Department: input.departments.join(", "),
+        Priority: input.priority ?? "",
         Preview: input.preview,
         Message: "وردت رسالة واتساب جديدة. افتح المحادثة في البوابة.",
         Link: link,

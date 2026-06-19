@@ -265,17 +265,27 @@ export default function WhatsAppInbox() {
       : (isAr ? "حُدّث العميل في Zoho" : "Lead updated in Zoho"));
   }
 
-  async function submitReply() {
-    if (!selected || !replyDraft.trim()) return;
+  async function submitReply(textOverride?: string) {
+    const text = (textOverride ?? replyDraft).trim();
+    if (!selected || !text) return;
     setSending(true);
-    const r = await sendReply(selected.id, replyDraft.trim());
+    const r = await sendReply(selected.id, text);
     setSending(false);
-    if (!r.ok) { flash((isAr ? "تعذّر الإرسال: " : "Send failed: ") + r.error); return; }
-    setReplyDraft("");
+    if (!r.ok) {
+      // The outgoing message is preserved server-side; keep the draft so the user can retry.
+      flash((isAr ? "تعذّر الإرسال: " : "Send failed: ") + r.error);
+      await loadDetail(selected.id);
+      return;
+    }
+    if (!textOverride) setReplyDraft("");
     await loadDetail(selected.id);
-    flash(r.dryRun
-      ? (isAr ? "سُجّلت الرسالة (وضع تجريبي — لم تُرسل)" : "Recorded (dry-run — not sent)")
-      : (isAr ? "أُرسلت الرسالة" : "Sent"));
+    const msg: Record<string, { ar: string; en: string }> = {
+      dry_run: { ar: "وضع تجريبي: تم تسجيل الرد ولم يُرسل فعليًا", en: "Dry-run: reply recorded, not actually sent" },
+      sent:    { ar: "أُرسلت الرسالة", en: "Sent" },
+      blocked: { ar: "محظور: الرقم غير مُدرج في قائمة الاختبار", en: "Blocked: number not in the test allowlist" },
+      failed:  { ar: "فشل الإرسال — احفظ المحاولة وأعد المحاولة", en: "Send failed — recorded; you can retry" },
+    };
+    flash(isAr ? msg[r.status].ar : msg[r.status].en);
   }
 
   async function changeAssignee(assignedTo: string | null) {
@@ -521,7 +531,15 @@ export default function WhatsAppInbox() {
                         {timeAgo(m.sent_at || m.created_at, isAr)}
                         {!incoming && m.status === "dry_run" && <span style={{ color: "rgba(245,158,11,0.9)" }}>{isAr ? " · تجريبي" : " · dry-run"}</span>}
                         {!incoming && m.status === "failed" && <span style={{ color: "#ffb4b7" }}>{isAr ? " · فشل" : " · failed"}</span>}
+                        {!incoming && m.status === "blocked" && <span style={{ color: "rgba(147,51,234,0.9)" }}>{isAr ? " · محظور" : " · blocked"}</span>}
+                        {!incoming && m.status === "queued" && <span style={{ color: "rgba(255,255,255,0.5)" }}>{isAr ? " · قيد الإرسال" : " · sending"}</span>}
                         {!incoming && m.status === "sent" && <span style={{ color: ACCENT }}>{isAr ? " · أُرسلت" : " · sent"}</span>}
+                        {!incoming && m.status === "failed" && m.body && (
+                          <button onClick={() => void submitReply(m.body!)} disabled={sending}
+                            style={{ marginInlineStart: 6, background: "none", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: 10, padding: 0 }}>
+                            ↻ {isAr ? "إعادة المحاولة" : "Retry"}
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

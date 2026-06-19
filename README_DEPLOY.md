@@ -112,6 +112,39 @@ and test against a **test number first**. Until then, replies stay dry-run.
 Run the ROLLBACK block in `docs/whatsapp_routing_phase2b_RUNME.sql` (restores the
 category-based policies, drops the new columns/RPCs/table), and revert the commit.
 
+## Phase A+B+C — stabilize, safe replies, email alerts
+
+- **Migration** `docs/whatsapp_phaseABC_RUNME.sql` (ADDITIVE): `whatsapp_send_audit`
+  table + `wa_record_send_audit` RPC (audits every reply attempt) and
+  `wa_alert_recipients` RPC (resolves email recipients as a `SECURITY DEFINER`
+  function — fixes the `service_role`-cannot-`SELECT`-`profiles` issue).
+- **Phase B — replies:** the send route now (1) defaults to dry-run, (2) when
+  live, BLOCKS any recipient not in `WHATSAPP_SEND_TEST_ALLOWLIST` (when set),
+  (3) audits every attempt (dry_run/sent/failed/blocked), (4) the inbox shows the
+  status tag + a **Retry** button on failed sends and the exact dry-run notice
+  `وضع تجريبي: تم تسجيل الرد ولم يُرسل فعليًا`.
+- **Phase C — email:** new incoming message emails owner/admin/manager + routed-
+  department staff + the assignee only (via `wa_alert_recipients`); content has
+  name/phone/preview/departments/priority/link; gated by `WHATSAPP_EMAIL_ALERTS_ENABLED`
+  (default false); non-blocking. Logs: `whatsapp_email_alert_queued/sent/failed_non_blocking`.
+- **Phase A — regression tests:** `scripts/whatsapp-routing.test.ts`. Run:
+  ```
+  node_modules/.bin/tsc lib/whatsapp/classify.ts lib/whatsapp/route.ts lib/whatsapp/summary.ts \
+    scripts/whatsapp-routing.test.ts --outDir /tmp/kian-test --module commonjs --target es2019 \
+    --skipLibCheck --moduleResolution node && node /tmp/kian-test/scripts/whatsapp-routing.test.js
+  ```
+
+### Manual steps (A+B+C)
+1. **Checkpoint (أ):** run `docs/whatsapp_phaseABC_RUNME.sql` in Supabase (after the
+   earlier migrations — it depends on `wa_can_read_dept` / `wa_can_read_routed`).
+2. Real replies stay OFF: keep `WHATSAPP_SEND_ENABLED=false`. To test real sends to a
+   single number: set `WHATSAPP_SEND_ENABLED=true` **and** `WHATSAPP_SEND_TEST_ALLOWLIST=<digits>`.
+3. Email alerts: optional, set `WHATSAPP_EMAIL_ALERTS_ENABLED=true` + extend the Apps
+   Script `doPost` for `Event:"whatsapp_new"`.
+
+### Still to build (next turns): D internal WhatsApp alerts, E AI agent (gated),
+F quote-request linking, G Zoho Books draft-only, H dashboard, I full deploy docs.
+
 ## Standing items you own (per phase, as we reach them)
 - **n8n:** export the live `Kian WhatsApp - LIVE Production` workflow as JSON so
   edits can be precise. The Meta webhook URL is never changed.

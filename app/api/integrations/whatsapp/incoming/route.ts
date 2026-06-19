@@ -21,7 +21,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { NextResponse } from "next/server";
-import { rpcAsService, adminConfigured, selectAsService } from "@/lib/server/supabaseAdmin";
+import { rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { classifyWhatsAppMessage } from "@/lib/whatsapp/classify";
 import { createOrUpdateZohoLeadFromWhatsApp } from "@/lib/server/zoho";
 import { sendWhatsAppAlertEmail, emailAlertsEnabled } from "@/lib/server/notifyEmail";
@@ -227,31 +227,33 @@ export async function POST(req: Request) {
   }
 
   // ── 5b) Department-scoped email alert (gated; NEVER blocks ingest) ────────
+  // Recipients resolved via a SECURITY DEFINER RPC (service_role cannot SELECT
+  // profiles directly) → owner/admin/manager + routed-department staff + assignee.
   if (result.conversation_id && result.message_inserted && emailAlertsEnabled()) {
     try {
-      const dept = departmentFor(cls.category);
-      // owner/admin/manager + the relevant department team only.
-      const roleList = ["manager", "super_admin"];
-      const deptRole = dept === "sales_marketing" ? "sales"
-        : dept === "finance" ? "finance"
-        : dept === "support" ? "support"
-        : dept === "hr" ? "hr"
-        : dept === "operations" ? "editor" : null;
-      if (deptRole) roleList.push(deptRole);
-      const filter = `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(${roleList.join(",")}))`;
-      const recips = await selectAsService<Array<{ email: string }>>(filter);
-      if (recips.ok) {
+      const decision = routeDepartments(cls.category, body ?? "");
+      console.log(`[whatsapp/incoming] whatsapp_email_alert_queued conversation_id=${result.conversation_id} departments=${JSON.stringify(decision.departments)}`);
+      const recipsR = await rpcAsService<string[]>("wa_alert_recipients", {
+        p_conversation: result.conversation_id,
+        p_departments: decision.departments,
+      });
+      const recipients = recipsR.ok && Array.isArray(recipsR.data) ? recipsR.data : [];
+      if (recipients.length > 0) {
         await sendWhatsAppAlertEmail({
-          recipients: recips.data.map((r) => r.email),
+          recipients,
           contactName: asStr(payload.display_name) || wa_id,
           phone: asStr(payload.phone) || wa_id,
           preview: (body || `[${message_type}]`).slice(0, 160),
-          department: dept,
+          departments: decision.departments,
+          priority: cls.priority,
           conversationId: result.conversation_id,
         });
+        console.log(`[whatsapp/incoming] whatsapp_email_alert_sent conversation_id=${result.conversation_id} recipients=${recipients.length}`);
+      } else if (!recipsR.ok) {
+        console.error("[whatsapp/incoming] whatsapp_email_alert_failed_non_blocking wa_alert_recipients:", recipsR.error);
       }
     } catch (e) {
-      console.error("[whatsapp/incoming] email alert threw (ignored):", e);
+      console.error("[whatsapp/incoming] whatsapp_email_alert_failed_non_blocking:", e);
     }
   }
 
