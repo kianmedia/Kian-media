@@ -27,6 +27,7 @@ import { createOrUpdateZohoLeadFromWhatsApp } from "@/lib/server/zoho";
 import { sendWhatsAppAlertEmail, emailAlertsEnabled } from "@/lib/server/notifyEmail";
 import { buildConversationDescription } from "@/lib/server/zohoDescription";
 import type { SummaryMessage } from "@/lib/whatsapp/summary";
+import { routeDepartments } from "@/lib/whatsapp/route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -190,6 +191,38 @@ export async function POST(req: Request) {
       }
     } catch (e) {
       console.error("[whatsapp/incoming] zoho sync threw (ignored):", e);
+    }
+  }
+
+  // ── 5a) Department routing — re-route on EVERY message (NEVER blocks) ─────
+  // Accumulates the message's departments into routed_departments so a later
+  // finance message on a sales conversation becomes visible to Finance, without
+  // removing it from Sales. The ingest RPC already notified the primary dept +
+  // managers; wa_route_message notifies only ADDITIONAL departments.
+  if (result.conversation_id && result.message_inserted) {
+    try {
+      const decision = routeDepartments(cls.category, body ?? "");
+      const notifiedPrimary = departmentFor(cls.category); // what the ingest RPC notified
+      const rr = await rpcAsService<{ routed_departments?: string[]; previous_department?: string }>(
+        "wa_route_message",
+        {
+          p_conversation: result.conversation_id,
+          p_departments: decision.departments,
+          p_primary: decision.primary,
+          p_reason: decision.reason,
+          p_notified: notifiedPrimary,
+        },
+      );
+      const preview = (body || `[${message_type}]`).slice(0, 120).replace(/\s+/g, " ");
+      console.log(
+        `[whatsapp/incoming] whatsapp_routing_decision conversation_id=${result.conversation_id} ` +
+        `contact_id=${result.contact_id} previous_department=${rr.ok ? (rr.data.previous_department ?? "-") : "?"} ` +
+        `routed_department=${decision.primary} routed_departments=${JSON.stringify(rr.ok ? (rr.data.routed_departments ?? decision.departments) : decision.departments)} ` +
+        `routing_reason=${decision.reason} message_preview="${preview}"`,
+      );
+      if (!rr.ok) console.error("[whatsapp/incoming] wa_route_message failed (ignored):", rr.error);
+    } catch (e) {
+      console.error("[whatsapp/incoming] routing threw (ignored):", e);
     }
   }
 

@@ -409,6 +409,11 @@ export default function WhatsAppInbox() {
                   {c.assigned_department !== "unassigned" && (
                     <Badge color="rgba(59,130,246,0.18)" dark text={isAr ? WA_DEPARTMENT_LABELS[c.assigned_department].ar : WA_DEPARTMENT_LABELS[c.assigned_department].en} />
                   )}
+                  {(c.routed_departments || [])
+                    .filter((d) => d !== c.assigned_department && d !== "unassigned")
+                    .map((d) => (
+                      <Badge key={d} color="rgba(59,130,246,0.10)" dark text={`+ ${isAr ? WA_DEPARTMENT_LABELS[d].ar : WA_DEPARTMENT_LABELS[d].en}`} />
+                    ))}
                   {(c.priority === "high" || c.priority === "urgent") && (
                     <Badge color={PRIORITY_COLOR[c.priority]} text={isAr ? WA_PRIORITY_LABELS[c.priority].ar : WA_PRIORITY_LABELS[c.priority].en} />
                   )}

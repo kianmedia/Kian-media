@@ -41,6 +41,7 @@ export interface WaConversation {
   crm_synced_at: string | null;
   sales_stage: WaSalesStage;
   assigned_department: WaDepartment;
+  routed_departments: WaDepartment[];
   unread_count: number;
   last_message_at: string | null;
   last_message_preview: string | null;

@@ -31,7 +31,9 @@ export function listConversations(filters: WaListFilters = {}, limit = 200): Pro
   const parts = ["select=*", "order=last_message_at.desc.nullslast", `limit=${limit}`];
   if (filters.status) parts.push(`status=eq.${enc(filters.status)}`);
   if (filters.category) parts.push(`category=eq.${enc(filters.category)}`);
-  if (filters.department) parts.push(`assigned_department=eq.${enc(filters.department)}`);
+  // Department filter matches the primary OR any routed department, so a sales
+  // conversation that later got a finance message shows under the Finance filter.
+  if (filters.department) parts.push(`or=(assigned_department.eq.${enc(filters.department)},routed_departments.cs.{${enc(filters.department)}})`);
   if (filters.salesStage) parts.push(`sales_stage=eq.${enc(filters.salesStage)}`);
   if (filters.priority) parts.push(`priority=eq.${enc(filters.priority)}`);
   if (filters.assignedTo) parts.push(`assigned_to=eq.${enc(filters.assignedTo)}`);
