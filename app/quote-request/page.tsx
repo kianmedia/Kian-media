@@ -139,6 +139,23 @@ function Form() {
       "Priority": priorityLabel,
       "Language": isAr ? "AR" : "EN",
     });
+
+    // WhatsApp link-back: ONLY when the form was opened from a conversation
+    // (?source=whatsapp&conversation=<id>). Best-effort; never blocks the user.
+    try {
+      const qp = new URLSearchParams(window.location.search);
+      if (qp.get("source") === "whatsapp" && qp.get("conversation")) {
+        void fetch("/api/integrations/whatsapp/quote-request", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversation_id: qp.get("conversation"),
+            full_name: f["Full Name"], phone: f["Mobile"], city: f["City"],
+            services, message: f["Description"],
+          }),
+        }).catch(() => {});
+      }
+    } catch { /* ignore */ }
+
     setSending(false);
     setReference(ref);
     setSent(true);

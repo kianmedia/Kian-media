@@ -17,6 +17,7 @@ import {
   listAssignableStaff, setConversation, assignConversation, addNote,
   setSalesStage, sendReply, syncZoho, setDepartment, markRead, getConversation,
   getSendStatus, type SendDiagnostic,
+  listQuoteRequests, createQuoteRequest, startConversation, getMyAlert, setMyAlert,
 } from "@/lib/whatsapp/inbox";
 import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
@@ -24,7 +25,7 @@ import {
   WA_SALES_STAGE_LABELS, WA_SALES_STAGE_ORDER,
   WA_DEPARTMENT_LABELS, WA_DEPARTMENT_ORDER,
   type WaConversation, type WaContact, type WaMessage, type WaInternalNote,
-  type WaAssignment, type WaStatus, type WaSalesStage, type WaDepartment,
+  type WaAssignment, type WaStatus, type WaSalesStage, type WaDepartment, type WaQuoteRequest,
 } from "@/lib/whatsapp/types";
 import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 
@@ -124,6 +125,13 @@ export default function WhatsAppInbox() {
   const [syncingZoho, setSyncingZoho] = useState(false);
   const [sendDiag, setSendDiag] = useState<SendDiagnostic | null>(null);
   const [alertsOn, setAlertsOn] = useState(false);
+  const [quotes, setQuotes] = useState<WaQuoteRequest[]>([]);
+  const [startOpen, setStartOpen] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [startForm, setStartForm] = useState({ phone: "", name: "", company: "", department: "sales_marketing", reason: "", template: "welcome_followup_ar", variables: "" });
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertPhone, setAlertPhone] = useState("");
+  const [alertEnabled, setAlertEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -213,10 +221,11 @@ export default function WhatsAppInbox() {
   // ── Load detail for the selected conversation ─────────────────────────────
   const loadDetail = useCallback(async (id: string) => {
     setDetailLoading(true);
-    const [m, n, a] = await Promise.all([listMessages(id), listNotes(id), listAssignments(id)]);
+    const [m, n, a, q] = await Promise.all([listMessages(id), listNotes(id), listAssignments(id), listQuoteRequests(id)]);
     if (m.ok) setMessages(m.data);
     if (n.ok) setNotes(n.data);
     if (a.ok) setAssignments(a.data);
+    if (q.ok) setQuotes(q.data);
     setDetailLoading(false);
   }, []);
 
@@ -331,6 +340,68 @@ export default function WhatsAppInbox() {
       : (isAr ? "حُدّث العميل في Zoho" : "Lead updated in Zoho"));
   }
 
+  function quoteLink(): string {
+    if (!selected) return "";
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://www.kianmedia.com";
+    return `${origin}/quote-request?source=whatsapp&conversation=${selected.id}`;
+  }
+  async function createQuote() {
+    if (!selected) return;
+    setBusy(true);
+    const r = await createQuoteRequest({
+      conversationId: selected.id,
+      fullName: selectedContact?.display_name ?? undefined,
+      category: selected.category,
+    });
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر إنشاء الطلب: " : "Create failed: ") + r.error); return; }
+    await loadDetail(selected.id);
+    flash(isAr ? "أُنشئ طلب عرض سعر" : "Quote request created");
+  }
+  async function copyQuoteLink() {
+    try { await navigator.clipboard.writeText(quoteLink()); flash(isAr ? "نُسخ الرابط" : "Link copied"); }
+    catch { flash(isAr ? "تعذّر النسخ" : "Copy failed"); }
+  }
+  async function sendQuoteLink() {
+    if (!selected) return;
+    const body = (isAr ? "لإكمال عرض السعر يرجى تعبئة النموذج: " : "To complete your quote please fill the form: ") + quoteLink();
+    await submitReply(body);
+  }
+
+  async function doStartConversation() {
+    setStarting(true);
+    const vars = startForm.variables.split("|").map((v) => v.trim()).filter(Boolean);
+    const r = await startConversation({
+      phone: startForm.phone, name: startForm.name, company: startForm.company,
+      department: startForm.department, reason: startForm.reason, template: startForm.template, variables: vars,
+      preview: `[${startForm.template}] ${startForm.name}`.trim(),
+    });
+    setStarting(false);
+    if (!r.ok) { flash((isAr ? "تعذّر البدء: " : "Failed: ") + r.error); return; }
+    setStartOpen(false);
+    setStartForm({ phone: "", name: "", company: "", department: "sales_marketing", reason: "", template: "welcome_followup_ar", variables: "" });
+    flash(r.status === "sent" ? (isAr ? "أُرسل القالب وبدأت المحادثة" : "Template sent, conversation started")
+      : r.status === "blocked" ? (isAr ? "محظور: الرقم خارج قائمة الاختبار" : "Blocked: number not in allowlist")
+      : (isAr ? "وضع تجريبي: أُنشئت المحادثة ولم يُرسل القالب" : "Dry-run: conversation created, template not sent"));
+    void loadList();
+    if (r.conversationId) setSelId(r.conversationId);
+  }
+
+  async function openAlertSettings() {
+    const s = await getMyAlert();
+    setAlertPhone(s.whatsapp_alert_phone || "");
+    setAlertEnabled(!!s.whatsapp_alert_enabled);
+    setAlertOpen(true);
+  }
+  async function saveAlert() {
+    setBusy(true);
+    const r = await setMyAlert(alertPhone.trim(), alertEnabled);
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error); return; }
+    setAlertOpen(false);
+    flash(isAr ? "حُفظت إعدادات التنبيه" : "Alert settings saved");
+  }
+
   async function submitReply(textOverride?: string) {
     const text = (textOverride ?? replyDraft).trim();
     if (!selected || !text) return;
@@ -402,8 +473,16 @@ export default function WhatsAppInbox() {
             {unreadTotal} {t({ ar: "غير مقروء", en: "unread" })}
           </span>
         )}
+        <button
+          onClick={() => sendDiag?.startConversationEnabled ? setStartOpen(true) : flash(t({ ar: "الميزة مقفلة — فعّل WHATSAPP_START_CONVERSATION_ENABLED", en: "Locked — enable WHATSAPP_START_CONVERSATION_ENABLED" }))}
+          title={sendDiag?.startConversationEnabled ? "" : t({ ar: "مقفل", en: "Locked" })}
+          style={{ ...btn(sendDiag?.startConversationEnabled ? ACCENT : "rgba(255,255,255,0.08)"), marginInlineStart: "auto", opacity: sendDiag?.startConversationEnabled ? 1 : 0.6 }}>
+          {sendDiag?.startConversationEnabled ? "＋ " : "🔒 "}{t({ ar: "بدء محادثة جديدة", en: "Start conversation" })}
+        </button>
+        <button onClick={() => void openAlertSettings()} title={t({ ar: "إعدادات تنبيه واتساب", en: "WhatsApp alert settings" })}
+          style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 14, padding: "7px 12px" }}>⚙️</button>
         <button onClick={toggleAlerts} title={t({ ar: "تنبيهات صوتية", en: "Sound alerts" })}
-          style={{ ...btn(alertsOn ? "rgba(37,211,102,0.18)" : "rgba(255,255,255,0.08)"), marginInlineStart: "auto", fontSize: 14, padding: "7px 12px" }}>
+          style={{ ...btn(alertsOn ? "rgba(37,211,102,0.18)" : "rgba(255,255,255,0.08)"), fontSize: 14, padding: "7px 12px" }}>
           {alertsOn ? "🔔" : "🔕"}
         </button>
         <button onClick={() => void loadList()} style={btn("rgba(255,255,255,0.08)")}>
@@ -555,6 +634,35 @@ export default function WhatsAppInbox() {
                 </button>
               </div>
 
+              {/* Quote-request row (Part 2) */}
+              <div style={{ padding: "8px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+                <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "طلب عرض سعر:", en: "Quote request:" })}</span>
+                {quotes.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "لا يوجد", en: "none" })}</span>}
+                {quotes.map((q) => (
+                  <span key={q.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 8, padding: "3px 8px" }}>
+                    <strong>{q.full_name || q.phone || "—"}</strong>
+                    {q.services?.length > 0 && <span style={{ color: "rgba(255,255,255,0.6)" }}>· {q.services.join(", ")}</span>}
+                    <Badge color="rgba(255,255,255,0.12)" dark text={q.status} />
+                    {q.source && <span style={{ color: "rgba(255,255,255,0.4)" }}>· {q.source === "whatsapp" ? "WhatsApp" : q.source}</span>}
+                    {q.crm_lead_id && <a href={`https://crm.zoho.sa/crm/tab/Leads/${q.crm_lead_id}`} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>Zoho ↗</a>}
+                  </span>
+                ))}
+                <span style={{ display: "inline-flex", gap: 6, marginInlineStart: "auto", flexWrap: "wrap" }}>
+                  <button onClick={() => void createQuote()} disabled={busy}
+                    style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
+                    {t({ ar: "إنشاء طلب عرض سعر", en: "Create quote request" })}
+                  </button>
+                  <button onClick={() => void copyQuoteLink()}
+                    style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
+                    {t({ ar: "نسخ رابط الطلب", en: "Copy link" })}
+                  </button>
+                  <button onClick={() => void sendQuoteLink()} disabled={busy}
+                    style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
+                    {t({ ar: "إرسال رابط الطلب", en: "Send link" })}
+                  </button>
+                </span>
+              </div>
+
               {/* Triage controls */}
               {canTriage ? (
                 <div style={{ padding: "10px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -688,6 +796,76 @@ export default function WhatsAppInbox() {
         </div>
       </div>
 
+      {/* Start-conversation modal (Part 3) */}
+      {startOpen && (
+        <Overlay onClose={() => setStartOpen(false)}>
+          <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>{t({ ar: "بدء محادثة جديدة", en: "Start new conversation" })}</h3>
+          <p style={{ margin: "0 0 14px", fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+            {t({ ar: "تُرسل قالبًا معتمدًا فقط. الأرقام الجديدة تتطلب قالبًا (لا رسائل حرة).", en: "Sends an approved template only. New numbers require a template (no free-form)." })}
+          </p>
+          {!sendDiag?.templateSendEnabled && (
+            <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)", fontSize: 12, color: "rgba(255,220,160,0.95)" }}>
+              {t({ ar: "🔒 إرسال القوالب معطّل — ستُنشأ المحادثة فقط (وضع تجريبي).", en: "🔒 Template sending disabled — conversation will be created only (dry-run)." })}
+            </div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label={t({ ar: "رقم الهاتف (بصيغة دولية)", en: "Phone (international)" })}>
+              <Input value={startForm.phone} onChange={(v) => setStartForm({ ...startForm, phone: v })} placeholder="9665XXXXXXXX" />
+            </Field>
+            <Field label={t({ ar: "الاسم", en: "Name" })}>
+              <Input value={startForm.name} onChange={(v) => setStartForm({ ...startForm, name: v })} />
+            </Field>
+            <Field label={t({ ar: "الشركة (اختياري)", en: "Company (optional)" })}>
+              <Input value={startForm.company} onChange={(v) => setStartForm({ ...startForm, company: v })} />
+            </Field>
+            <Field label={t({ ar: "القسم", en: "Department" })}>
+              <Select value={startForm.department} onChange={(v) => setStartForm({ ...startForm, department: v })}
+                options={WA_DEPARTMENT_ORDER.filter((d) => d !== "unassigned").map((d) => ({ value: d, label: isAr ? WA_DEPARTMENT_LABELS[d].ar : WA_DEPARTMENT_LABELS[d].en }))} />
+            </Field>
+            <Field label={t({ ar: "القالب", en: "Template" })}>
+              <Select value={startForm.template} onChange={(v) => setStartForm({ ...startForm, template: v })}
+                options={START_TEMPLATES.map((tpl) => ({ value: tpl.name, label: isAr ? tpl.ar : tpl.en }))} />
+            </Field>
+            <Field label={t({ ar: "متغيّرات القالب (افصل بـ |)", en: "Template variables (split by |)" })}>
+              <Input value={startForm.variables} onChange={(v) => setStartForm({ ...startForm, variables: v })} placeholder={t({ ar: "مثال: أحمد | عرض سعر", en: "e.g. Ahmed | quote" })} />
+            </Field>
+            <Field label={t({ ar: "السبب (داخلي)", en: "Reason (internal)" })}>
+              <Input value={startForm.reason} onChange={(v) => setStartForm({ ...startForm, reason: v })} />
+            </Field>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => setStartOpen(false)} style={btn("rgba(255,255,255,0.08)")}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+            <button onClick={() => void doStartConversation()} disabled={starting || !startForm.phone.trim()}
+              style={btn(ACCENT, starting || !startForm.phone.trim())}>
+              {starting ? "…" : sendDiag?.templateSendEnabled ? t({ ar: "إرسال القالب وبدء المحادثة", en: "Send template & start" }) : t({ ar: "إنشاء المحادثة (تجريبي)", en: "Create (dry-run)" })}
+            </button>
+          </div>
+        </Overlay>
+      )}
+
+      {/* Alert-settings modal (Part 1) */}
+      {alertOpen && (
+        <Overlay onClose={() => setAlertOpen(false)}>
+          <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>{t({ ar: "إعدادات تنبيه واتساب", en: "WhatsApp alert settings" })}</h3>
+          <p style={{ margin: "0 0 14px", fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+            {t({ ar: "رقم واتساب الذي تصلك عليه تنبيهات المحادثات المسندة إليك/إلى قسمك. لا يُرسل شيء حتى يُفعّل المسؤول الميزة.", en: "Your WhatsApp number for alerts on conversations assigned to you / your department. Nothing is sent until an admin enables the feature." })}
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label={t({ ar: "رقم التنبيه (بصيغة دولية)", en: "Alert phone (international)" })}>
+              <Input value={alertPhone} onChange={setAlertPhone} placeholder="9665XXXXXXXX" />
+            </Field>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={alertEnabled} onChange={(e) => setAlertEnabled(e.target.checked)} />
+              {t({ ar: "تفعيل تنبيهاتي على واتساب", en: "Enable my WhatsApp alerts" })}
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => setAlertOpen(false)} style={btn("rgba(255,255,255,0.08)")}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+            <button onClick={() => void saveAlert()} disabled={busy} style={btn(ACCENT, busy)}>{busy ? "…" : t({ ar: "حفظ", en: "Save" })}</button>
+          </div>
+        </Overlay>
+      )}
+
       {toast && (
         <div style={{ position: "fixed", insetInlineEnd: 20, bottom: 20, background: "rgba(0,0,0,0.9)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 10, padding: "10px 16px", fontSize: 13, zIndex: 50 }}>
           {toast}
@@ -696,6 +874,15 @@ export default function WhatsAppInbox() {
     </div>
   );
 }
+
+// Start-conversation approved-template registry (mirrors docs/whatsapp_templates.md).
+const START_TEMPLATES: { name: string; ar: string; en: string }[] = [
+  { name: "welcome_followup_ar",        ar: "ترحيب ومتابعة",        en: "Welcome & follow-up" },
+  { name: "quote_followup_ar",          ar: "متابعة عرض سعر",        en: "Quote follow-up" },
+  { name: "appointment_confirmation_ar", ar: "تأكيد موعد",           en: "Appointment confirmation" },
+  { name: "invoice_followup_ar",        ar: "متابعة فاتورة",         en: "Invoice follow-up" },
+  { name: "hr_followup_ar",             ar: "متابعة موارد بشرية",     en: "HR follow-up" },
+];
 
 // ─── Small presentational helpers ──────────────────────────────────────────
 function Centered({ children }: { children: React.ReactNode }) {
@@ -729,4 +916,21 @@ function Select({ value, options, onChange, disabled }: { value: string; options
 }
 function btn(bg: string, disabled = false): React.CSSProperties {
   return { display: "inline-block", fontSize: 13, fontWeight: 600, padding: "8px 14px", borderRadius: 8, border: "none", cursor: disabled ? "not-allowed" : "pointer", background: bg, color: "#fff", opacity: disabled ? 0.5 : 1, textDecoration: "none" };
+}
+function Input({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <input value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+      style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 7, padding: "8px 10px", color: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box" }} />
+  );
+}
+function Overlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: "#15171c", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14, padding: 22, width: "min(440px, 100%)", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        {children}
+      </div>
+    </div>
+  );
 }

@@ -142,8 +142,61 @@ category-based policies, drops the new columns/RPCs/table), and revert the commi
 3. Email alerts: optional, set `WHATSAPP_EMAIL_ALERTS_ENABLED=true` + extend the Apps
    Script `doPost` for `Event:"whatsapp_new"`.
 
-### Still to build (next turns): D internal WhatsApp alerts, E AI agent (gated),
-F quote-request linking, G Zoho Books draft-only, H dashboard, I full deploy docs.
+### Still to build (next turns): E AI agent (gated), G Zoho Books draft-only,
+H dashboard, I full deploy docs.
+
+## Ops batch — internal alerts + quote linking + start-conversation (gated OFF)
+
+One additive migration: **`docs/whatsapp_ops_batch_RUNME.sql`** (review, then run in
+Supabase → SQL Editor; rollback block at the bottom). It depends on the inbox, routing
+phase 2b (`wa_can_read_dept`, `whatsapp_staff_alert_settings`, `wa_set_staff_alert`,
+`wa_is_triager`), and multi-dept (`wa_can_read_routed`, `routed_departments`) migrations.
+
+**Part 1 — Internal WhatsApp staff alerts (`WHATSAPP_INTERNAL_ALERTS_ENABLED=false`)**
+- New `whatsapp_internal_alert_audit` + RPCs `wa_internal_alert_recipients` /
+  `wa_log_internal_alert` (service_role). Recipients = active staff who enabled alerts
+  **and** set a number, restricted to owner/admin/manager **+** the assignee **+**
+  routed-department staff (by `staff_role`). Unrelated employees never receive alerts.
+- Each staff member sets their number in the inbox header → **⚙️ alert settings**.
+- Server sender `lib/server/whatsappInternalAlert.ts` runs from the incoming webhook
+  (block 5c), **non-blocking**. Sends the approved `internal_alert_ar` template only.
+  OFF by default; with creds but no allowlist match → `blocked`; no creds → `skipped`.
+  Restrict with `WHATSAPP_INTERNAL_ALERTS_TEST_ALLOWLIST=<digits,…>`.
+
+**Part 2 — Quote-request linking (no new flag)**
+- New `whatsapp_quote_requests` table (separate from the portal `quote_requests`, which
+  is `user_id NOT NULL` and can't hold anon WhatsApp leads). RLS = whoever can read the
+  conversation. RPCs `wa_create_quote_request` (staff, in-inbox) and
+  `wa_link_quote_request_public` (service_role, customer self-submit; dedupes by reusing
+  the open `new` request). Both `notify()` sales/marketing + owner/admin/manager (+finance).
+- Inbox conversation row: **إنشاء طلب عرض سعر / نسخ رابط الطلب / إرسال رابط الطلب**.
+  Link format `/quote-request?source=whatsapp&conversation=<id>`. The public quote form
+  best-effort POSTs to `/api/integrations/whatsapp/quote-request` after the Sheets
+  submit — link-back never blocks or errors the customer (route always returns 200).
+  Linked quotes show as a card (name/services/status/source/Zoho ↗) in the conversation.
+
+**Part 3 — Start new conversation (`WHATSAPP_START_CONVERSATION_ENABLED=false`)**
+- Inbox header **بدء محادثة جديدة** button — locked (🔒) until the flag is `true`.
+- Modal collects phone/name/company/department/template/variables/reason. Brand-new
+  numbers **require** an approved template (no free-form). Templates registry:
+  `welcome_followup_ar`, `quote_followup_ar`, `appointment_confirmation_ar`,
+  `invoice_followup_ar`, `hr_followup_ar` (see `docs/whatsapp_templates.md`).
+- `POST /api/integrations/whatsapp/start-conversation` → RPC `wa_start_conversation`
+  (triager-only) creates/attaches contact+conversation (dedupe by `wa_id`) and records
+  the template message. The template is **actually sent only** when
+  `WHATSAPP_TEMPLATE_SEND_ENABLED=true` **and** creds present **and** the number is on
+  `WHATSAPP_TEMPLATE_TEST_ALLOWLIST` (if set). Otherwise **dry-run** (created, not sent).
+  All attempts audited in `whatsapp_template_audit` (skipped/dry_run/sent/failed/blocked).
+
+The `GET /api/integrations/whatsapp/send` diagnostic now also reports
+`start_conversation_enabled`, `template_send_enabled`, `internal_alerts_enabled`
+(booleans only). `WHATSAPP_SEND_ENABLED` behavior is unchanged.
+
+### Manual steps (ops batch)
+1. **Checkpoint (أ):** run `docs/whatsapp_ops_batch_RUNME.sql` in Supabase.
+2. Submit the 6 templates in `docs/whatsapp_templates.md` to Meta for approval.
+3. Staff set their alert numbers in the inbox (⚙️). Nothing sends while the flags are off.
+4. To pilot: enable one flag at a time with its allowlist set to a single test number.
 
 ## Phase 1+2+4 — send-state UI, email completion, in-portal alerts (no migration)
 

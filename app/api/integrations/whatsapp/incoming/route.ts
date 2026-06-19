@@ -28,6 +28,7 @@ import { sendWhatsAppAlertEmail, emailAlertsEnabled } from "@/lib/server/notifyE
 import { buildConversationDescription } from "@/lib/server/zohoDescription";
 import type { SummaryMessage } from "@/lib/whatsapp/summary";
 import { routeDepartments } from "@/lib/whatsapp/route";
+import { sendInternalAlerts, internalAlertsEnabled } from "@/lib/server/whatsappInternalAlert";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -256,6 +257,25 @@ export async function POST(req: Request) {
       }
     } catch (e) {
       console.error("[whatsapp/incoming] whatsapp_email_alert_failed_non_blocking:", e);
+    }
+  }
+
+  // ── 5c) Internal WhatsApp staff alerts (gated OFF; NEVER blocks ingest) ───
+  if (result.conversation_id && result.message_inserted && internalAlertsEnabled()) {
+    try {
+      const decision = routeDepartments(cls.category, body ?? "");
+      const base = (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
+      await sendInternalAlerts({
+        conversationId: result.conversation_id,
+        contactId: result.contact_id ?? null,
+        departments: decision.departments,
+        customerName: asStr(payload.display_name) || wa_id,
+        customerPhone: asStr(payload.phone) || wa_id,
+        preview: (body || `[${message_type}]`).slice(0, 160),
+        conversationLink: `${base}/client-portal/admin/whatsapp?conversation=${result.conversation_id}`,
+      });
+    } catch (e) {
+      console.error("[whatsapp/incoming] internal alert threw (ignored):", e);
     }
   }
 

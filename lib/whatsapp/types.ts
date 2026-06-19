@@ -82,6 +82,28 @@ export interface WaInternalNote {
   created_at: string;
 }
 
+export type WaQuoteStatus = "new" | "in_review" | "quoted" | "accepted" | "rejected" | "archived";
+
+export interface WaQuoteRequest {
+  id: string;
+  whatsapp_conversation_id: string;
+  whatsapp_contact_id: string | null;
+  phone: string | null;
+  full_name: string | null;
+  company: string | null;
+  services: string[];
+  category: string | null;
+  city: string | null;
+  preferred_date: string | null;
+  message: string | null;
+  budget_range: string | null;
+  status: WaQuoteStatus;
+  crm_lead_id: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Bilingual labels (AR/EN) for the filter chips + badges ───
 export const WA_STATUS_LABELS: Record<WaStatus, { ar: string; en: string }> = {
   new:      { ar: "جديدة",   en: "New" },

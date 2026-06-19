@@ -69,6 +69,9 @@ export async function GET() {
     phone_id_present: !!process.env.WHATSAPP_PHONE_NUMBER_ID,
     api_version: process.env.WHATSAPP_API_VERSION || "v21.0",
     allowlist_count: (process.env.WHATSAPP_SEND_TEST_ALLOWLIST || "").split(",").map((s) => s.trim()).filter(Boolean).length,
+    start_conversation_enabled: process.env.WHATSAPP_START_CONVERSATION_ENABLED === "true",
+    template_send_enabled: process.env.WHATSAPP_TEMPLATE_SEND_ENABLED === "true",
+    internal_alerts_enabled: process.env.WHATSAPP_INTERNAL_ALERTS_ENABLED === "true",
   }, { status: 200 });
 }
 
