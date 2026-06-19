@@ -1,0 +1,148 @@
+{
+  "name": "Kian WhatsApp - Portal Inbox TEST",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kian-whatsapp-TEST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-520, 320],
+      "webhookId": "kian-whatsapp-test",
+      "notes": "TEST webhook (separate path). Meta still points at PRODUCTION — do NOT change the Meta webhook URL. To exercise this flow, POST a sample Meta message payload to this test URL, or just use the DEBUG workflow for the integration itself."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-real-msg",
+              "leftValue": "={{ (($json.body || $json).entry || [])[0]?.changes?.[0]?.value?.messages?.[0]?.id || '' }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-000000000002",
+      "name": "IF Real WhatsApp Message",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-300, 320],
+      "notes": "TRUE = an actual inbound user message (has messages[0].id). FALSE = status callbacks (delivered/read) → just acknowledge 200."
+    },
+    {
+      "parameters": {},
+      "id": "b2000000-0000-4000-8000-000000000003",
+      "name": "Meta Auto-Reply (YOUR existing node)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-60, 180],
+      "notes": "PLACEHOLDER — replace with your EXISTING WhatsApp Cloud API send node (the one that already works). Do not change its credential/token. Branch A must keep working unchanged."
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "OK", "options": {} },
+      "id": "b2000000-0000-4000-8000-000000000004",
+      "name": "Respond 200 (message)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [200, 180],
+      "notes": "Returns 200 to Meta. Keep this fast — Meta retries (and re-sends the same message_id) if it does not get a 200 quickly."
+    },
+    {
+      "parameters": {},
+      "id": "b2000000-0000-4000-8000-000000000005",
+      "name": "Google Sheets Append (YOUR existing node)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-60, 420],
+      "notes": "PLACEHOLDER — replace with your EXISTING Google Sheets append node (unchanged). Branch B continues: Sheets → Build Inbox Payload → Kian Portal Inbox."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a clean, normalised payload for the Kian Portal Inbox API.\n// Reads from the WEBHOOK node (not the Sheets node) and is SAFE against missing\n// fields, non-text message types, and Meta status callbacks. Emits one item per\n// real message; emits NOTHING for status events (so the HTTP node won't fire).\nconst root = $('Webhook').first().json;\nconst payload = root.body ?? root;              // n8n may nest the POST body under .body\nconst changes = (payload?.entry || []).flatMap(e => e?.changes || []);\nconst out = [];\nfor (const ch of changes) {\n  const value = ch?.value || {};\n  const contact = (value.contacts || [])[0] || {};\n  for (const m of (value.messages || [])) {\n    if (!m || !m.id) continue;                  // skip anything without a message id\n    const type = m.type || 'text';\n    let body = '';\n    if (type === 'text') body = m.text?.body || '';\n    else if (type === 'button') body = m.button?.text || '';\n    else if (type === 'interactive') body = m.interactive?.list_reply?.title || m.interactive?.button_reply?.title || '';\n    else if (m.caption) body = m.caption;       // image/video/document captions\n    out.push({ json: {\n      wa_id:        contact.wa_id || m.from || '',\n      phone:        m.from || contact.wa_id || '',\n      display_name: contact.profile?.name || '',\n      message_id:   m.id,\n      message_type: type,\n      body:         body,\n      timestamp:    m.timestamp || '',\n      raw_payload:  payload\n    }});\n  }\n}\nreturn out;"
+      },
+      "id": "b2000000-0000-4000-8000-000000000006",
+      "name": "Build Inbox Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 420],
+      "notes": "The robustness fix. Isolates fragile field extraction here so the HTTP node body is trivial and always valid."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.kianmedia.com/api/integrations/whatsapp/incoming",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "x-kian-ingest-secret", "value": "={{ $env.N8N_WHATSAPP_INGEST_SECRET }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": { "response": { "neverError": false, "fullResponse": true } }
+        }
+      },
+      "id": "b2000000-0000-4000-8000-000000000007",
+      "name": "Kian Portal Inbox",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 420],
+      "alwaysOutputData": true,
+      "onError": "stopWorkflow",
+      "notes": "WHILE TESTING: onError = stopWorkflow so failures are visible. AFTER confirmed working: change onError to continueRegularOutput so a portal outage never blocks the auto-reply (Branch A is independent anyway)."
+    },
+    {
+      "parameters": {},
+      "id": "b2000000-0000-4000-8000-000000000008",
+      "name": "Inbox Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [680, 420],
+      "notes": "Expect 200 { ok:true, message_inserted:true } first time; { duplicate:true } on a repeated message_id."
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "OK", "options": {} },
+      "id": "b2000000-0000-4000-8000-000000000009",
+      "name": "Respond 200 (ignored)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [-60, 560],
+      "notes": "Status callbacks (delivered/read) still need a 200 so Meta stops retrying."
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "IF Real WhatsApp Message", "type": "main", "index": 0 }]] },
+    "IF Real WhatsApp Message": {
+      "main": [
+        [
+          { "node": "Meta Auto-Reply (YOUR existing node)", "type": "main", "index": 0 },
+          { "node": "Google Sheets Append (YOUR existing node)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Respond 200 (ignored)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Meta Auto-Reply (YOUR existing node)": { "main": [[{ "node": "Respond 200 (message)", "type": "main", "index": 0 }]] },
+    "Google Sheets Append (YOUR existing node)": { "main": [[{ "node": "Build Inbox Payload", "type": "main", "index": 0 }]] },
+    "Build Inbox Payload": { "main": [[{ "node": "Kian Portal Inbox", "type": "main", "index": 0 }]] },
+    "Kian Portal Inbox": { "main": [[{ "node": "Inbox Result", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
