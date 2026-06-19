@@ -23,9 +23,10 @@ import {
   WA_STATUS_LABELS, WA_CATEGORY_LABELS, WA_PRIORITY_LABELS,
   WA_STATUS_ORDER, WA_CATEGORY_ORDER, WA_PRIORITY_ORDER,
   WA_SALES_STAGE_LABELS, WA_SALES_STAGE_ORDER,
-  WA_DEPARTMENT_LABELS, WA_DEPARTMENT_ORDER,
+  WA_DEPARTMENT_LABELS, WA_DEPARTMENT_ORDER, WA_QUOTE_STATUS_LABELS,
   type WaConversation, type WaContact, type WaMessage, type WaInternalNote,
-  type WaAssignment, type WaStatus, type WaSalesStage, type WaDepartment, type WaQuoteRequest,
+  type WaAssignment, type WaStatus, type WaSalesStage, type WaDepartment,
+  type WaQuoteRequest, type WaQuoteStatus,
 } from "@/lib/whatsapp/types";
 import type { WaCategory, WaPriority } from "@/lib/whatsapp/classify";
 
@@ -34,6 +35,11 @@ type Phase = "loading" | "auth" | "denied" | "error" | "ready";
 
 const ACCENT = "#25D366"; // WhatsApp green for in-tool accents
 const RED = "#E31E24";
+
+// Preview/dev-only diagnostics. NODE_ENV is "production" on Vercel Preview builds,
+// so also honor an explicit NEXT_PUBLIC_WA_DEBUG=1 flag to surface logs there.
+const WA_DEBUG =
+  process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_WA_DEBUG === "1";
 
 const FILTER_SELECT: React.CSSProperties = {
   background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
@@ -126,6 +132,7 @@ export default function WhatsAppInbox() {
   const [sendDiag, setSendDiag] = useState<SendDiagnostic | null>(null);
   const [alertsOn, setAlertsOn] = useState(false);
   const [quotes, setQuotes] = useState<WaQuoteRequest[]>([]);
+  const [quotesError, setQuotesError] = useState<string | null>(null);
   const [startOpen, setStartOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [startForm, setStartForm] = useState({ phone: "", name: "", company: "", department: "sales_marketing", reason: "", template: "welcome_followup_ar", variables: "" });
@@ -225,12 +232,20 @@ export default function WhatsAppInbox() {
     if (m.ok) setMessages(m.data);
     if (n.ok) setNotes(n.data);
     if (a.ok) setAssignments(a.data);
-    if (q.ok) setQuotes(q.data);
+    // Always set quotes (reset to [] on error) so a failed/empty load never leaves
+    // stale cards from a previously-opened conversation.
+    setQuotes(q.ok ? q.data : []);
+    setQuotesError(q.ok ? null : q.error);
+    if (WA_DEBUG) {
+      // Preview/dev diagnostics: conversation id + returned count + any query error.
+      console.log(`[WA quotes] conversation=${id} ok=${q.ok} count=${q.ok ? q.data.length : "ERR"}`,
+        q.ok ? "" : `error=${q.error}`);
+    }
     setDetailLoading(false);
   }, []);
 
   useEffect(() => {
-    if (!selId) { setMessages([]); setNotes([]); setAssignments([]); return; }
+    if (!selId) { setMessages([]); setNotes([]); setAssignments([]); setQuotes([]); setQuotesError(null); return; }
     void loadDetail(selId);
     // Resolve a deep-linked conversation that isn't in the current (filtered)
     // list — so notification links ALWAYS open the thread, not a blank panel.
@@ -634,33 +649,32 @@ export default function WhatsAppInbox() {
                 </button>
               </div>
 
-              {/* Quote-request row (Part 2) */}
-              <div style={{ padding: "8px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
-                <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "طلب عرض سعر:", en: "Quote request:" })}</span>
-                {quotes.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "لا يوجد", en: "none" })}</span>}
-                {quotes.map((q) => (
-                  <span key={q.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 8, padding: "3px 8px" }}>
-                    <strong>{q.full_name || q.phone || "—"}</strong>
-                    {q.services?.length > 0 && <span style={{ color: "rgba(255,255,255,0.6)" }}>· {q.services.join(", ")}</span>}
-                    <Badge color="rgba(255,255,255,0.12)" dark text={q.status} />
-                    {q.source && <span style={{ color: "rgba(255,255,255,0.4)" }}>· {q.source === "whatsapp" ? "WhatsApp" : q.source}</span>}
-                    {q.crm_lead_id && <a href={`https://crm.zoho.sa/crm/tab/Leads/${q.crm_lead_id}`} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>Zoho ↗</a>}
+              {/* Quote-request section (Part 2) */}
+              <div style={{ padding: "10px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "طلبات عرض السعر", en: "Quote requests" })} ({quotes.length})</span>
+                  <span style={{ display: "inline-flex", gap: 6, marginInlineStart: "auto", flexWrap: "wrap" }}>
+                    <button onClick={() => void createQuote()} disabled={busy}
+                      style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
+                      {t({ ar: "إنشاء طلب عرض سعر", en: "Create quote request" })}
+                    </button>
+                    <button onClick={() => void copyQuoteLink()}
+                      style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
+                      {t({ ar: "نسخ رابط الطلب", en: "Copy link" })}
+                    </button>
+                    <button onClick={() => void sendQuoteLink()} disabled={busy}
+                      style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
+                      {t({ ar: "إرسال رابط الطلب", en: "Send link" })}
+                    </button>
                   </span>
-                ))}
-                <span style={{ display: "inline-flex", gap: 6, marginInlineStart: "auto", flexWrap: "wrap" }}>
-                  <button onClick={() => void createQuote()} disabled={busy}
-                    style={{ ...btn("rgba(255,255,255,0.08)", busy), fontSize: 12, padding: "5px 10px" }}>
-                    {t({ ar: "إنشاء طلب عرض سعر", en: "Create quote request" })}
-                  </button>
-                  <button onClick={() => void copyQuoteLink()}
-                    style={{ ...btn("rgba(255,255,255,0.08)"), fontSize: 12, padding: "5px 10px" }}>
-                    {t({ ar: "نسخ رابط الطلب", en: "Copy link" })}
-                  </button>
-                  <button onClick={() => void sendQuoteLink()} disabled={busy}
-                    style={{ ...btn(ACCENT, busy), fontSize: 12, padding: "5px 10px" }}>
-                    {t({ ar: "إرسال رابط الطلب", en: "Send link" })}
-                  </button>
-                </span>
+                </div>
+                {quotesError && (
+                  <span style={{ color: "#ffb4b7" }}>
+                    {t({ ar: "تعذّر تحميل طلبات عرض السعر", en: "Couldn't load quote requests" })} ({quotesError})
+                  </span>
+                )}
+                {!quotesError && quotes.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "لا توجد طلبات مرتبطة بهذه المحادثة.", en: "No quote requests linked to this conversation." })}</span>}
+                {quotes.map((q) => <QuoteCard key={q.id} q={q} isAr={isAr} t={t} />)}
               </div>
 
               {/* Triage controls */}
@@ -931,6 +945,53 @@ function Overlay({ children, onClose }: { children: React.ReactNode; onClose: ()
         style={{ background: "#15171c", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14, padding: 22, width: "min(440px, 100%)", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
         {children}
       </div>
+    </div>
+  );
+}
+
+// Quote-request card — renders from the REAL whatsapp_quote_requests schema with
+// safe fallbacks for every nullable column, so existing rows (with null
+// category/budget/services/external_request_id) still render and never crash.
+function QuoteCard({ q, isAr, t }: { q: WaQuoteRequest; isAr: boolean; t: (s: { ar: string; en: string }) => string }) {
+  const NA = t({ ar: "غير محدد", en: "Unspecified" });
+  const requestNo = (q.external_request_id && q.external_request_id.trim()) || `#${q.id.slice(0, 8)}`;
+  const customer = q.full_name || q.phone || "—";
+  const servicesText = Array.isArray(q.services) && q.services.length > 0 ? q.services.join("، ") : NA;
+  const categoryText = q.category || NA;
+  const budgetText = q.budget_range || NA;
+  const cityText = q.city || NA;
+  const statusKey = q.status as WaQuoteStatus | null;
+  const statusLabel = statusKey && WA_QUOTE_STATUS_LABELS[statusKey]
+    ? (isAr ? WA_QUOTE_STATUS_LABELS[statusKey].ar : WA_QUOTE_STATUS_LABELS[statusKey].en)
+    : (q.status || NA);
+  const dateText = q.created_at ? timeAgo(q.created_at, isAr) : "";
+  const cell = (label: string, value: string) => (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "baseline" }}>
+      <span style={{ color: "rgba(255,255,255,0.4)" }}>{label}:</span>
+      <span style={{ color: "rgba(255,255,255,0.85)" }}>{value}</span>
+    </span>
+  );
+  return (
+    <div style={{ background: "rgba(59,130,246,0.10)", border: "1px solid rgba(59,130,246,0.28)", borderRadius: 10, padding: "9px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{requestNo}</span>
+        <strong style={{ fontSize: 13 }}>{customer}</strong>
+        <Badge color="rgba(255,255,255,0.12)" dark text={statusLabel} />
+        {dateText && <span style={{ color: "rgba(255,255,255,0.4)", marginInlineStart: "auto" }}>{dateText}</span>}
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        {q.phone && cell(t({ ar: "الجوال", en: "Phone" }), q.phone)}
+        {cell(t({ ar: "الخدمات", en: "Services" }), servicesText)}
+        {cell(t({ ar: "التصنيف", en: "Category" }), categoryText)}
+        {cell(t({ ar: "الميزانية", en: "Budget" }), budgetText)}
+        {cell(t({ ar: "المدينة", en: "City" }), cityText)}
+      </div>
+      {(q.source || q.crm_lead_id) && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          {q.source && <span style={{ color: "rgba(255,255,255,0.4)" }}>{t({ ar: "المصدر", en: "Source" })}: {q.source === "whatsapp" ? "WhatsApp" : q.source}</span>}
+          {q.crm_lead_id && <a href={`https://crm.zoho.sa/crm/tab/Leads/${q.crm_lead_id}`} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>Zoho ↗</a>}
+        </div>
+      )}
     </div>
   );
 }

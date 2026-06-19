@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 const asStr = (v: unknown) => (typeof v === "string" ? v : "");
 
 export async function POST(req: Request) {
-  let b: { conversation_id?: unknown; full_name?: unknown; phone?: unknown; services?: unknown; city?: unknown; message?: unknown };
+  let b: { conversation_id?: unknown; full_name?: unknown; phone?: unknown; services?: unknown; city?: unknown; message?: unknown; reference?: unknown; budget?: unknown };
   try { b = await req.json(); } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
 
   const conversationId = asStr(b.conversation_id);
@@ -33,6 +33,10 @@ export async function POST(req: Request) {
     p_services: services,
     p_city: asStr(b.city),
     p_message: asStr(b.message),
+    // The public quote form's Sheets reference → human-friendly request number.
+    p_external_request_id: asStr(b.reference),
+    // Budget label the customer already picked on the form (column exists; just unpopulated for link-backs).
+    p_budget_range: asStr(b.budget),
   });
   if (!r.ok) {
     // not_found_or_forbidden / bad conversation → 200 with ok:false so the public

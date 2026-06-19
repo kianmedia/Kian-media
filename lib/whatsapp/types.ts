@@ -86,23 +86,36 @@ export type WaQuoteStatus = "new" | "in_review" | "quoted" | "accepted" | "rejec
 
 export interface WaQuoteRequest {
   id: string;
+  /** Human-friendly request number (e.g. the Sheets reference). Added additively
+   *  via docs/whatsapp_quote_request_schema_fix_RUNME.sql; null on older rows. */
+  external_request_id: string | null;
   whatsapp_conversation_id: string;
   whatsapp_contact_id: string | null;
   phone: string | null;
   full_name: string | null;
   company: string | null;
-  services: string[];
+  // `services` may be null on legacy rows even though the column defaults to '{}'.
+  services: string[] | null;
   category: string | null;
   city: string | null;
   preferred_date: string | null;
   message: string | null;
   budget_range: string | null;
-  status: WaQuoteStatus;
+  status: WaQuoteStatus | null;
   crm_lead_id: string | null;
-  source: string;
+  source: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export const WA_QUOTE_STATUS_LABELS: Record<WaQuoteStatus, { ar: string; en: string }> = {
+  new:       { ar: "جديد",       en: "New" },
+  in_review: { ar: "قيد المراجعة", en: "In review" },
+  quoted:    { ar: "تم التسعير",  en: "Quoted" },
+  accepted:  { ar: "مقبول",      en: "Accepted" },
+  rejected:  { ar: "مرفوض",      en: "Rejected" },
+  archived:  { ar: "مؤرشف",      en: "Archived" },
+};
 
 // ─── Bilingual labels (AR/EN) for the filter chips + badges ───
 export const WA_STATUS_LABELS: Record<WaStatus, { ar: string; en: string }> = {
