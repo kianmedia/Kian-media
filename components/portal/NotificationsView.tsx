@@ -23,6 +23,7 @@ const TYPE_LABEL: Record<NotificationType, { ar: string; en: string }> = {
   deliverable_final_delivered: { ar: "تسليم نهائي",  en: "Final Delivered" },
   project_status_changed:      { ar: "تحديث حالة المشروع", en: "Project Status" },
   opportunity_new:             { ar: "طلب فرصة جديد", en: "New Opportunity" },
+  whatsapp_new:                { ar: "رسالة واتساب", en: "WhatsApp" },
 };
 
 /** Where a notification links to, from entity_type/entity_id (exact when possible). */
@@ -36,6 +37,7 @@ function routeFor(n: NotificationRow): string | null {
     case "deliverable":    return "/client-portal/projects";   // exact project needs a resolve → section
     case "project_note":   return "/client-portal/projects";
     case "opportunity":    return "/client-portal/opportunities";
+    case "whatsapp_conversation": return id ? `/client-portal/admin/whatsapp?conversation=${id}` : "/client-portal/admin/whatsapp";
     default:               return null;
   }
 }
@@ -47,6 +49,9 @@ function sectionLabel(n: NotificationRow): { ar: string; en: string } | null {
     case "message":       return { ar: "فتح الرسائل", en: "Open Messages" };
     case "file_link":     return { ar: "فتح الملفات", en: "Open Files" };
     case "opportunity":   return { ar: "فتح مركز الفرص", en: "Open Opportunities" };
+    case "whatsapp_conversation": return n.entity_id
+      ? { ar: "فتح المحادثة", en: "Open Conversation" }
+      : { ar: "فتح صندوق واتساب", en: "Open WhatsApp Inbox" };
     default:              return null;
   }
 }
