@@ -9,7 +9,7 @@ import Counter from "@/components/Counter";
  * Self-contained; place anywhere in the homepage (e.g. after <About/> or <Portfolio/>).
  */
 const STATS = [
-  { to: 20,   suffix: "+", ar: "سنة خبرة",       en: "Years of Experience" },
+  { to: 10,   suffix: "+", ar: "سنة خبرة",       en: "Years of Experience" },
   { to: 4000, suffix: "+", ar: "إنتاج مكتمل",     en: "Productions Delivered" },
   { to: 2000, suffix: "+", ar: "عميل",            en: "Clients Served" },
   { to: 13,   suffix: "",  ar: "منطقة في المملكة", en: "Regions Across KSA" },
