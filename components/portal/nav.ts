@@ -13,6 +13,7 @@ interface TabDef { href: string; ar: string; en: string; adminAr?: string; admin
 
 const REG: Record<string, TabDef> = {
   overview:      { href: "/client-portal",               ar: "نظرة عامة",   en: "Overview",      adminAr: "لوحة الإدارة",         adminEn: "Admin Dashboard" },
+  explore:       { href: "/client-portal/explore",       ar: "أدوات المشروع", en: "Project Tools" },
   projects:      { href: "/client-portal/projects",      ar: "مشاريعي",     en: "Projects",      adminAr: "المشاريع",             adminEn: "Projects" },
   quotes:        { href: "/client-portal/quotes",        ar: "طلبات السعر", en: "Quotes",        adminAr: "طلبات عروض السعر",     adminEn: "Quote Requests" },
   messages:      { href: "/client-portal/messages",      ar: "الرسائل",     en: "Messages",      adminAr: "رسائل العملاء",        adminEn: "Client Messages" },
@@ -38,8 +39,8 @@ const SETS: Record<ViewRole, string[]> = {
   hr:          ["overview", "whatsapp", "opportunities", "notifications", "profile"],
   readonly:    ["projects", "notifications", "profile"],
   finance:     ["invoices", "whatsapp", "notifications", "profile"],
-  client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "notifications", "profile"],
-  lead:        ["overview", "quotes", "messages", "files", "offers", "notifications", "profile"],
+  client:      ["overview", "explore", "projects", "quotes", "messages", "files", "invoices", "offers", "notifications", "profile"],
+  lead:        ["overview", "explore", "quotes", "messages", "files", "offers", "notifications", "profile"],
 };
 
 /** Applicant tab — appended by PortalShell only when the logged-in email matches
