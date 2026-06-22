@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  listQuotes, getQuoteItems, listQuoteRevisions, listQuoteClients,
+  listQuotes, getQuote, getQuoteItems, listQuoteRevisions, listQuoteClients,
   createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility,
   listPendingQuoteRequests, convertQuoteRequest, createEstimateFromRequest, syncEstimate, approveQuote,
   type QuoteItemInput, type PendingQuoteRequest,
@@ -66,13 +66,26 @@ export default function AdminQuotesManager() {
     setEditItems((p) => ({ ...p, [quoteId]: it.ok && it.data.length ? it.data.map((x) => ({ title: x.title, description: x.description ?? "", quantity: x.quantity, unit_price: x.unit_price })) : [emptyItem()] }));
   }
 
-  // Open the formal quote already linked to a request (fixes the "Open quote" button).
-  async function openLinkedQuote(reqId: string) {
-    const q = quotes.find((x) => x.quote_request_id === reqId);
-    if (!q) { flash(t({ ar: "لم يُعثر على العرض المرتبط — جرّب التحديث.", en: "Linked quote not found — try refreshing." })); await reload(); return; }
-    setOpenId(q.id);
-    await loadEditItems(q.id);
-    if (typeof document !== "undefined") document.getElementById(`quote-${q.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  function scrollToQuote(id: string) {
+    if (typeof document === "undefined") return;
+    // Defer so the row (and its expanded state) has rendered.
+    window.setTimeout(() => document.getElementById(`quote-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+  }
+
+  // Open the formal quote linked to a request. Uses the RPC's linked_quote_id (not a
+  // client-side guess); if that quote isn't in the loaded list, fetch + inject it.
+  async function openLinkedQuote(pr: PendingQuoteRequest) {
+    const qid = pr.linked_quote_id || quotes.find((x) => x.quote_request_id === pr.id)?.id || null;
+    if (!qid) { flash(t({ ar: "لا يوجد عرض مرتبط بهذا الطلب.", en: "No quote is linked to this request." })); return; }
+    if (!quotes.some((x) => x.id === qid)) {
+      const r = await getQuote(qid);
+      if (!r.ok || !r.data) { flash(t({ ar: "تعذّر فتح العرض المرتبط — جرّب التحديث.", en: "Couldn't open the linked quote — try refreshing." })); await reload(); return; }
+      const fetched = r.data;
+      setQuotes((prev) => (prev.some((x) => x.id === fetched.id) ? prev : [fetched, ...prev]));
+    }
+    setOpenId(qid);
+    await loadEditItems(qid);
+    scrollToQuote(qid);
   }
 
   // Create a DRAFT Zoho estimate from the request; fall back to a LOCAL draft if Zoho is off.
@@ -82,7 +95,7 @@ export default function AdminQuotesManager() {
     if (r.ok) {
       setBusy(false);
       await reload();
-      if (r.quoteId) { setOpenId(r.quoteId); await loadEditItems(r.quoteId); }
+      if (r.quoteId) { setOpenId(r.quoteId); await loadEditItems(r.quoteId); scrollToQuote(r.quoteId); }
       flash(t({ ar: `أُنشئت مسودة تقدير في Zoho (${r.estimateNumber || ""}). راجع الأسعار واعتمدها.`, en: `Draft estimate created in Zoho (${r.estimateNumber || ""}). Review prices, then approve.` }));
       return;
     }
@@ -92,7 +105,7 @@ export default function AdminQuotesManager() {
       setBusy(false);
       if (!c.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + c.error); return; }
       await reload();
-      setOpenId(c.data.id); await loadEditItems(c.data.id);
+      setOpenId(c.data.id); await loadEditItems(c.data.id); scrollToQuote(c.data.id);
       flash(t({ ar: "Zoho غير مهيأ — أُنشئ عرض محلي مؤقت. أضف الأسعار، وفعّل Zoho لاحقًا للمصدر الرسمي.", en: "Zoho not configured — created a local draft. Add prices; enable Zoho later for the official source." }));
       return;
     }
@@ -176,8 +189,8 @@ export default function AdminQuotesManager() {
                 {pr.email && <span style={{ color: "rgba(255,255,255,0.45)" }}>{pr.email}</span>}
                 {pr.city && <span style={{ color: "rgba(255,255,255,0.45)" }}>· {pr.city}</span>}
                 <span style={{ marginInlineStart: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
-                  {pr.has_quote && <span style={{ fontSize: 10, color: "#25D366" }}>{t({ ar: "مرتبط بعرض", en: "linked" })}</span>}
-                  <button onClick={() => pr.has_quote ? void openLinkedQuote(pr.id) : void createEstimate(pr.id)} disabled={busy} style={btn(pr.has_quote ? "rgba(255,255,255,0.10)" : "#E31E24", busy)}>
+                  {pr.has_quote && <span style={{ fontSize: 10, color: "#25D366" }}>{t({ ar: "مرتبط", en: "linked" })} {pr.estimate_number || pr.quote_number || ""}</span>}
+                  <button onClick={() => pr.has_quote ? void openLinkedQuote(pr) : void createEstimate(pr.id)} disabled={busy} style={btn(pr.has_quote ? "rgba(255,255,255,0.10)" : "#E31E24", busy)}>
                     {pr.has_quote ? t({ ar: "فتح العرض", en: "Open quote" }) : t({ ar: "إنشاء تقدير من هذا الطلب", en: "Create estimate from this request" })}
                   </button>
                 </span>

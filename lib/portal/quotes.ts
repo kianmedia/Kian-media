@@ -13,6 +13,13 @@ import type { Quote, QuoteItem, QuoteRevisionRequest } from "@/lib/portal/types"
 export function listQuotes(): Promise<Result<Quote[]>> {
   return pget<Quote[]>(`quotes?is_deleted=eq.false&select=*&order=created_at.desc`);
 }
+/** Fetch a single quote by id (RLS-scoped) — used to open a linked quote that
+ *  isn't in the currently-loaded list. */
+export async function getQuote(quoteId: string): Promise<Result<Quote | null>> {
+  const r = await pget<Quote[]>(`quotes?id=eq.${enc(quoteId)}&select=*&limit=1`);
+  if (!r.ok) return r;
+  return { ok: true, data: r.data[0] ?? null };
+}
 export function getQuoteItems(quoteId: string): Promise<Result<QuoteItem[]>> {
   return pget<QuoteItem[]>(`quote_items?quote_id=eq.${enc(quoteId)}&select=*&order=position.asc`);
 }
@@ -49,6 +56,8 @@ export function createQuote(input: {
 export interface PendingQuoteRequest {
   id: string; reference: string | null; services: string[]; email: string | null;
   city: string | null; budget_range: string | null; status: string; created_at: string; has_quote: boolean;
+  linked_quote_id: string | null; quote_number: string | null;
+  zoho_estimate_id: string | null; estimate_number: string | null; estimate_url: string | null;
 }
 export function listPendingQuoteRequests(): Promise<Result<PendingQuoteRequest[]>> {
   return prpc<PendingQuoteRequest[]>("list_pending_quote_requests", {});
