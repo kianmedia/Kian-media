@@ -280,6 +280,8 @@ export interface Invoice extends SoftDeletable {
   due_date: string | null;
   pdf_url: string | null;
   public_portal_visible: boolean;
+  zoho_customer_id?: string | null;
+  source?: string | null; // 'zoho' | 'manual'
   created_at: string;
   // Legacy columns from the finance-addendum PROPOSAL (optional; may be absent).
   user_id?: string | null;
@@ -308,6 +310,7 @@ export interface QuoteItem {
 export interface Quote {
   id: string;
   quote_number: string | null;
+  title: string | null;
   client_id: string | null;
   lead_id: string | null;
   project_id: string | null;

@@ -43,5 +43,15 @@ Run on **Preview only**. DB-backed items require `docs/portal_quotes_invoices_RU
 - ⏳ Public/anon cannot read quotes/invoices (no anon grant)
 - ⏳ `select`-only grants; every write rejected unless via the RPCs (price tamper impossible)
 
+## Corrective patch (run docs/portal_quotes_invoices_fix_RUNME.sql first)
+- ⏳ Admin quotes screen lists **quote requests awaiting pricing**; "Create formal quote from this request" creates a quote **linked to quote_requests.id**, prefilled (title from services, notes from description), client resolved by membership→email; clicking again opens the same linked draft (no duplicate)
+- ⏳ A logged-in user with the **same email** as a quote request sees the resulting quote once it's visible
+- ⏳ Empty/zero quote (SAR 0.00, no items) **cannot** be set to sent/accepted or made visible — server raises `empty_or_zero_quote` and the admin sees a clear message; the client never sees it (RLS requires total>0 + items)
+- ⏳ The pre-existing SAR 0.00 test quote is now **hidden from the client** until real line items are added
+- ⏳ Invoices: "Sync from Zoho by customer email" with **Zoho env missing → clear setup message** (no failure)
+- ⏳ With Zoho configured: sync **reads** invoices for that email and stores read-only records (zoho_invoice_id/customer_id/number/status/currency/subtotal/vat/total/due_date/pdf_url); **no invoice is created/sent/voided in Zoho**
+- ⏳ Client sees a Zoho-synced invoice **read-only**; manual creation is clearly labeled "fallback"; rows show a Zoho/Manual badge
+- ✅ `/api/integrations/zoho/sync-invoices` → 401 without auth; 403 if not owner/finance; never calls Zoho without a permitted user
+
 ## Mobile / RTL
 - ✅/⏳ Arabic RTL + English LTR correct; tables/totals readable on mobile; empty states professional

@@ -7,7 +7,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listInvoices, createInvoiceDisplay, setInvoiceVisibility } from "@/lib/portal/finance";
+import { listInvoices, createInvoiceDisplay, setInvoiceVisibility, syncZohoInvoices } from "@/lib/portal/finance";
 import { listQuoteClients } from "@/lib/portal/quotes";
 import type { Invoice } from "@/lib/portal/types";
 
@@ -21,8 +21,12 @@ export default function AdminInvoicesManager() {
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2800); };
+  const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3600); };
   const [f, setF] = useState({ clientId: "", invoiceNumber: "", status: "sent", subtotal: "", vat: "", total: "", dueDate: "", pdfUrl: "", zohoInvoiceId: "", visible: true });
+  // Zoho sync
+  const [syncEmail, setSyncEmail] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [zohoMsg, setZohoMsg] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const [inv, c] = await Promise.all([listInvoices(), listQuoteClients()]);
@@ -51,16 +55,45 @@ export default function AdminInvoicesManager() {
     if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
     await reload();
   }
+  async function syncZoho() {
+    if (!syncEmail.trim()) { flash(t({ ar: "أدخل بريد العميل", en: "Enter the customer email" })); return; }
+    setSyncing(true); setZohoMsg(null);
+    const r = await syncZohoInvoices(syncEmail.trim());
+    setSyncing(false);
+    if (!r.ok && r.configured === false) {
+      setZohoMsg(t({ ar: "Zoho Books غير مهيأ بعد. أضف متغيرات البيئة (ZOHO_CLIENT_ID / SECRET / REFRESH_TOKEN / ORGANIZATION_ID / API_BASE_URL / ACCOUNTS_BASE_URL) ثم أعد المحاولة.", en: "Zoho Books isn't configured yet. Add the env vars (ZOHO_CLIENT_ID / SECRET / REFRESH_TOKEN / ORGANIZATION_ID / API_BASE_URL / ACCOUNTS_BASE_URL) and retry." }));
+      return;
+    }
+    if (!r.ok) { flash((isAr ? "تعذّر المزامنة: " : "Sync failed: ") + r.reason); return; }
+    await reload();
+    flash(!r.customerFound
+      ? t({ ar: "لا يوجد عميل بهذا البريد في Zoho.", en: "No Zoho customer found for that email." })
+      : t({ ar: `تمت مزامنة ${r.synced} فاتورة من Zoho (للعرض فقط).`, en: `Synced ${r.synced} invoice(s) from Zoho (read-only).` }));
+  }
 
   const inp: React.CSSProperties = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 7, padding: "8px 10px", color: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
   const btn = (bg: string, disabled = false): React.CSSProperties => ({ fontSize: 12.5, fontWeight: 600, padding: "7px 13px", borderRadius: 8, border: "none", cursor: disabled ? "not-allowed" : "pointer", background: bg, color: "#fff", opacity: disabled ? 0.5 : 1 });
 
   return (
     <div style={{ marginTop: 24 }}>
+      {/* Primary flow: pull official invoices from Zoho Books (read-only) */}
+      <div style={{ background: "rgba(37,211,102,0.06)", border: "1px solid rgba(37,211,102,0.22)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+        <strong style={{ color: "#fff", fontSize: 13 }}>{t({ ar: "مزامنة الفواتير من Zoho Books بالبريد", en: "Sync invoices from Zoho by customer email" })}</strong>
+        <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 11.5, margin: "6px 0 12px" }}>
+          {t({ ar: "يُقرأ من Zoho Books فقط — لا يُنشئ أو يرسل أو يلغي أي فاتورة. الفواتير الرسمية تبقى مصدرها Zoho Books.", en: "Reads from Zoho Books only — never creates, sends, or voids an invoice. Zoho Books stays the source of official invoices." })}
+        </p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input value={syncEmail} onChange={(e) => setSyncEmail(e.target.value)} placeholder={t({ ar: "بريد العميل", en: "Customer email" })} style={{ ...inp, maxWidth: 280 }} />
+          <button onClick={() => void syncZoho()} disabled={syncing} style={btn("#25D366", syncing)}>{syncing ? "…" : t({ ar: "مزامنة", en: "Sync" })}</button>
+        </div>
+        {zohoMsg && <p style={{ color: "rgba(255,220,160,0.95)", fontSize: 12, marginTop: 10, lineHeight: 1.7 }}>{zohoMsg}</p>}
+      </div>
+
+      {/* Fallback: manual display record */}
       <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
-        <strong style={{ color: "#fff", fontSize: 13 }}>{t({ ar: "إضافة فاتورة (عرض فقط)", en: "Add invoice display record" })}</strong>
+        <strong style={{ color: "#fff", fontSize: 13 }}>{t({ ar: "سجل فاتورة يدوي (احتياطي)", en: "Manual display record / fallback" })}</strong>
         <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 11.5, margin: "6px 0 12px" }}>
-          {t({ ar: "الفواتير الرسمية تُصدر من Zoho Books فقط. هذه نسخة للعرض داخل البوابة.", en: "Official invoices are issued only in Zoho Books. This is a read-only record for the portal." })}
+          {t({ ar: "استخدمه فقط عند تعذّر المزامنة من Zoho. للعرض داخل البوابة فقط — لا يُصدر فاتورة رسمية.", en: "Use only when Zoho sync isn't available. Read-only portal record — does not issue an official invoice." })}
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
           <select value={f.clientId} onChange={(e) => setF({ ...f, clientId: e.target.value })} style={inp}>
@@ -90,6 +123,7 @@ export default function AdminInvoicesManager() {
         {rows.map((r) => (
           <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "11px 14px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, fontSize: 12.5 }}>
             <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.invoice_number || r.id.slice(0, 8)}</strong>
+            <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: r.source === "zoho" ? "rgba(37,211,102,0.16)" : "rgba(255,255,255,0.08)", color: r.source === "zoho" ? "#25D366" : "rgba(255,255,255,0.5)" }}>{r.source === "zoho" ? "Zoho" : t({ ar: "يدوي", en: "Manual" })}</span>
             <span style={{ color: "rgba(255,255,255,0.6)" }}>{r.status}</span>
             {r.due_date && <span style={{ color: "rgba(255,255,255,0.45)" }}>{t({ ar: "الاستحقاق", en: "due" })} {r.due_date}</span>}
             {r.pdf_url && <a href={r.pdf_url} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>PDF ↗</a>}

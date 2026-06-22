@@ -35,13 +35,25 @@ export function listQuoteClients(): Promise<Result<{ client_id: string; label: s
 }
 export function createQuote(input: {
   clientId: string; projectId?: string | null; quoteRequestId?: string | null;
-  validUntil?: string | null; currency?: string; vatRate?: number; notes?: string;
+  validUntil?: string | null; currency?: string; vatRate?: number; notes?: string; title?: string;
 }): Promise<Result<{ id: string; quote_number: string }>> {
   return prpc<{ id: string; quote_number: string }>("create_quote", {
     p_client: input.clientId, p_project: input.projectId ?? null, p_quote_request: input.quoteRequestId ?? null,
     p_valid_until: input.validUntil ?? null, p_currency: input.currency ?? "SAR",
-    p_vat_rate: input.vatRate ?? 15, p_notes: input.notes ?? null,
+    p_vat_rate: input.vatRate ?? 15, p_notes: input.notes ?? null, p_title: input.title ?? null,
   });
+}
+
+// ─── Convert an existing quote_request into a formal (priced) quote ───
+export interface PendingQuoteRequest {
+  id: string; reference: string | null; services: string[]; email: string | null;
+  city: string | null; budget_range: string | null; status: string; created_at: string; has_quote: boolean;
+}
+export function listPendingQuoteRequests(): Promise<Result<PendingQuoteRequest[]>> {
+  return prpc<PendingQuoteRequest[]>("list_pending_quote_requests", {});
+}
+export function convertQuoteRequest(requestId: string): Promise<Result<{ id: string; quote_number: string; reused?: boolean }>> {
+  return prpc<{ id: string; quote_number: string; reused?: boolean }>("convert_quote_request", { p_request: requestId });
 }
 export function setQuoteItems(quoteId: string, items: QuoteItemInput[]): Promise<Result<boolean>> {
   return prpc<boolean>("set_quote_items", { p_quote: quoteId, p_items: items });

@@ -50,6 +50,11 @@ export default function InvoicesPage() {
         <h1 className="editorial text-white" style={{ fontSize: "clamp(24px,4vw,34px)", lineHeight: 1.25 }}>
           {t({ ar: "الفواتير", en: "Invoices" })}
         </h1>
+        {!manage && (
+          <p className="text-white/50" style={{ fontSize: "13px", marginTop: "10px", lineHeight: 1.8, maxWidth: 560 }}>
+            {t({ ar: "الفواتير الرسمية تُصدر عبر Zoho Books وتُعرض هنا للقراءة فقط.", en: "Official invoices are issued via Zoho Books and shown here read-only." })}
+          </p>
+        )}
       </div>
 
       {manage ? (
@@ -65,8 +70,8 @@ export default function InvoicesPage() {
               </h2>
               <p className="text-white/55" style={{ fontSize: "14px", lineHeight: 1.9, maxWidth: "560px" }}>
                 {t({
-                  ar: "ستظهر فواتيرك هنا فور اعتمادها من فريق كيان. الفواتير الرسمية تُصدر عبر Zoho Books.",
-                  en: "Your invoices appear here once approved by Kian's team. Official invoices are issued via Zoho Books.",
+                  ar: "ستظهر فواتيرك هنا بعد إصدارها من Zoho Books واعتمادها من فريق كيان.",
+                  en: "Your invoices will appear here after they are issued from Zoho Books and made available by Kian's team.",
                 })}
               </p>
             </div>

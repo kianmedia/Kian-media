@@ -10,7 +10,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
   listQuotes, getQuoteItems, listQuoteRevisions, listQuoteClients,
-  createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility, type QuoteItemInput,
+  createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility,
+  listPendingQuoteRequests, convertQuoteRequest, type QuoteItemInput, type PendingQuoteRequest,
 } from "@/lib/portal/quotes";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteRevisionRequest } from "@/lib/portal/types";
 
@@ -22,6 +23,7 @@ export default function AdminQuotesManager() {
   const { t, isAr } = useI18n();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [clients, setClients] = useState<{ client_id: string; label: string }[]>([]);
+  const [pending, setPending] = useState<PendingQuoteRequest[]>([]);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [openId, setOpenId] = useState<string | null>(null);
   const [editItems, setEditItems] = useState<Record<string, QuoteItemInput[]>>({});
@@ -31,12 +33,13 @@ export default function AdminQuotesManager() {
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2800); };
 
   // Create form
-  const [cf, setCf] = useState({ clientId: "", validUntil: "", notes: "", vatRate: "15" });
+  const [cf, setCf] = useState({ clientId: "", title: "", validUntil: "", notes: "", vatRate: "15" });
 
   const reload = useCallback(async () => {
-    const [q, c] = await Promise.all([listQuotes(), listQuoteClients()]);
+    const [q, c, pr] = await Promise.all([listQuotes(), listQuoteClients(), listPendingQuoteRequests()]);
     setQuotes(q.ok ? q.data : []);
     setClients(c.ok ? c.data : []);
+    setPending(pr.ok ? pr.data : []);
     setPhase(q.ok ? "ready" : "error");
   }, []);
   useEffect(() => { void reload(); }, [reload]);
@@ -44,14 +47,29 @@ export default function AdminQuotesManager() {
   async function doCreate() {
     if (!cf.clientId) { flash(t({ ar: "اختر العميل", en: "Pick a client" })); return; }
     setBusy(true);
-    const r = await createQuote({ clientId: cf.clientId, validUntil: cf.validUntil || null, notes: cf.notes, vatRate: Number(cf.vatRate) || 15 });
+    const r = await createQuote({ clientId: cf.clientId, title: cf.title, validUntil: cf.validUntil || null, notes: cf.notes, vatRate: Number(cf.vatRate) || 15 });
     setBusy(false);
     if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
-    setCf({ clientId: "", validUntil: "", notes: "", vatRate: "15" });
+    setCf({ clientId: "", title: "", validUntil: "", notes: "", vatRate: "15" });
     await reload();
     setOpenId(r.data.id);
     setEditItems((p) => ({ ...p, [r.data.id]: [emptyItem()] }));
     flash(t({ ar: "أُنشئ العرض، أضف البنود.", en: "Quote created — add line items." }));
+  }
+
+  // Convert an existing intake request into a formal (priced) quote — prefilled + linked.
+  async function convert(reqId: string) {
+    setBusy(true);
+    const r = await convertQuoteRequest(reqId);
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر التحويل: " : "Convert failed: ") + r.error); return; }
+    await reload();
+    setOpenId(r.data.id);
+    if (!editItems[r.data.id]) {
+      const it = await getQuoteItems(r.data.id);
+      setEditItems((p) => ({ ...p, [r.data.id]: it.ok && it.data.length ? it.data.map((x) => ({ title: x.title, description: x.description ?? "", quantity: x.quantity, unit_price: x.unit_price })) : [emptyItem()] }));
+    }
+    flash(r.data.reused ? t({ ar: "فُتح العرض المرتبط بهذا الطلب.", en: "Opened the quote already linked to this request." }) : t({ ar: "أُنشئ عرض سعر من الطلب — أضف الأسعار.", en: "Formal quote created from the request — add prices." }));
   }
 
   async function expand(id: string) {
@@ -76,14 +94,21 @@ export default function AdminQuotesManager() {
     await reload();
     flash(t({ ar: "حُفظت البنود وحُسبت الإجماليات.", en: "Items saved & totals computed." }));
   }
+  const emptyOrZero = (q: Quote) => (q.total <= 0); // server also enforces (items + total>0)
+  const guardMsg = () => t({ ar: "أضف بنودًا بإجمالي أكبر من صفر قبل الإرسال أو الإظهار.", en: "Add line items with a total greater than zero before sending or showing." });
+
   async function status(id: string, s: string) {
+    const q = quotes.find((x) => x.id === id);
+    if ((s === "sent" || s === "accepted") && q && emptyOrZero(q)) { flash(guardMsg()); return; }
     setBusy(true); const r = await setQuoteStatus(id, s); setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    if (!r.ok) { flash(r.error === "empty_or_zero_quote" ? guardMsg() : ((isAr ? "تعذّر: " : "Failed: ") + r.error)); return; }
     await reload(); flash(t({ ar: "حُدّثت الحالة.", en: "Status updated." }));
   }
   async function visibility(id: string, v: boolean) {
+    const q = quotes.find((x) => x.id === id);
+    if (v && q && emptyOrZero(q)) { flash(guardMsg()); return; }
     setBusy(true); const r = await setQuoteVisibility(id, v); setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    if (!r.ok) { flash(r.error === "empty_or_zero_quote" ? guardMsg() : ((isAr ? "تعذّر: " : "Failed: ") + r.error)); return; }
     await reload();
   }
 
@@ -94,7 +119,30 @@ export default function AdminQuotesManager() {
     <div style={{ marginTop: 36 }}>
       <div className="eyebrow mb-3">{t({ ar: "إدارة عروض الأسعار", en: "Manage Quotes" })}</div>
 
-      {/* Create */}
+      {/* Quote requests awaiting pricing → convert to a formal quote */}
+      {pending.length > 0 && (
+        <div style={{ background: "rgba(227,30,36,0.06)", border: "1px solid rgba(227,30,36,0.22)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+          <strong style={{ color: "#fff", fontSize: 13 }}>{t({ ar: "طلبات عروض سعر بانتظار التسعير", en: "Quote requests awaiting pricing" })} ({pending.length})</strong>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+            {pending.map((pr) => (
+              <div key={pr.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "9px 12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, fontSize: 12.5 }}>
+                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace" }}>{pr.reference || pr.id.slice(0, 8)}</strong>
+                {(pr.services?.length ?? 0) > 0 && <span style={{ color: "rgba(255,255,255,0.7)" }}>{pr.services.join("، ")}</span>}
+                {pr.email && <span style={{ color: "rgba(255,255,255,0.45)" }}>{pr.email}</span>}
+                {pr.city && <span style={{ color: "rgba(255,255,255,0.45)" }}>· {pr.city}</span>}
+                <span style={{ marginInlineStart: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
+                  {pr.has_quote && <span style={{ fontSize: 10, color: "#25D366" }}>{t({ ar: "مرتبط بعرض", en: "linked" })}</span>}
+                  <button onClick={() => void convert(pr.id)} disabled={busy} style={btn(pr.has_quote ? "rgba(255,255,255,0.10)" : "#E31E24", busy)}>
+                    {pr.has_quote ? t({ ar: "فتح العرض", en: "Open quote" }) : t({ ar: "إنشاء عرض سعر من هذا الطلب", en: "Create formal quote" })}
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Create blank */}
       <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
         <strong style={{ color: "#fff", fontSize: 13 }}>{t({ ar: "إنشاء عرض سعر جديد", en: "New quote" })}</strong>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10, marginTop: 12 }}>
@@ -102,6 +150,7 @@ export default function AdminQuotesManager() {
             <option value="">{t({ ar: "— اختر العميل —", en: "— Select client —" })}</option>
             {clients.map((c) => <option key={c.client_id} value={c.client_id}>{c.label}</option>)}
           </select>
+          <input value={cf.title} onChange={(e) => setCf({ ...cf, title: e.target.value })} placeholder={t({ ar: "عنوان العرض/المشروع", en: "Quote / project title" })} style={inp} />
           <input type="date" value={cf.validUntil} onChange={(e) => setCf({ ...cf, validUntil: e.target.value })} style={inp} />
           <input value={cf.vatRate} onChange={(e) => setCf({ ...cf, vatRate: e.target.value })} placeholder={t({ ar: "ضريبة %", en: "VAT %" })} style={inp} />
           <input value={cf.notes} onChange={(e) => setCf({ ...cf, notes: e.target.value })} placeholder={t({ ar: "ملاحظات", en: "Notes" })} style={inp} />
@@ -122,6 +171,8 @@ export default function AdminQuotesManager() {
             <div key={q.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, overflow: "hidden" }}>
               <button onClick={() => void expand(q.id)} style={{ width: "100%", textAlign: isAr ? "right" : "left", background: "transparent", border: "none", cursor: "pointer", padding: "12px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.quote_number || q.id.slice(0, 8)}</strong>
+                {q.title && <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12.5 }}>{q.title}</span>}
+                {q.quote_request_id && <span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>🔗 {t({ ar: "من طلب", en: "from request" })}</span>}
                 <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 6, background: "rgba(227,30,36,0.16)", color: "#ff9ea1" }}>{t(st)}</span>
                 <span style={{ fontSize: 11, color: q.public_portal_visible ? "#25D366" : "rgba(255,255,255,0.4)" }}>{q.public_portal_visible ? t({ ar: "👁 ظاهر للعميل", en: "👁 visible" }) : t({ ar: "مخفي", en: "hidden" })}</span>
                 <span style={{ marginInlineStart: "auto", color: "#fff", fontWeight: 700 }}>{money(q.total, q.currency)}</span>

@@ -63,7 +63,10 @@ export default function ClientQuotesList() {
 
   return (
     <div style={{ marginTop: 36 }}>
-      <div className="eyebrow mb-3">{t({ ar: "عروض الأسعار الرسمية", en: "Official Quotes" })}</div>
+      <div className="eyebrow mb-1">{t({ ar: "عروض الأسعار الرسمية", en: "Official Quotes" })}</div>
+      <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 12.5, margin: "0 0 14px", lineHeight: 1.7 }}>
+        {t({ ar: "عروض الأسعار الجاهزة للمراجعة من فريق كيان (تختلف عن طلباتك أعلاه).", en: "Priced quotes ready for your review (distinct from your requests above)." })}
+      </p>
 
       {phase === "loading" && <p className="text-white/45" style={{ fontSize: 13.5 }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}
 
@@ -85,6 +88,7 @@ export default function ClientQuotesList() {
             <div key={q.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, overflow: "hidden" }}>
               <button onClick={() => void toggle(q.id)} style={{ width: "100%", textAlign: isAr ? "right" : "left", background: "transparent", border: "none", cursor: "pointer", padding: "13px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.quote_number || q.id.slice(0, 8)}</strong>
+                {q.title && <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12.5 }}>{q.title}</span>}
                 <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 6, background: "rgba(227,30,36,0.16)", color: "#ff9ea1" }}>{t(st)}</span>
                 {q.valid_until && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{t({ ar: "صالح حتى", en: "valid until" })} {q.valid_until}</span>}
                 <span style={{ marginInlineStart: "auto", color: "#fff", fontWeight: 700 }}>{money(q.total, q.currency)}</span>
