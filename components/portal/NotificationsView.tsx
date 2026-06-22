@@ -24,6 +24,10 @@ const TYPE_LABEL: Record<NotificationType, { ar: string; en: string }> = {
   project_status_changed:      { ar: "تحديث حالة المشروع", en: "Project Status" },
   opportunity_new:             { ar: "طلب فرصة جديد", en: "New Opportunity" },
   whatsapp_new:                { ar: "رسالة واتساب", en: "WhatsApp" },
+  quote_sent:                  { ar: "عرض سعر جاهز", en: "Quote Ready" },
+  quote_accepted:              { ar: "قبول عرض سعر", en: "Quote Accepted" },
+  quote_revision_requested:    { ar: "طلب تعديل عرض", en: "Quote Revision" },
+  invoice_visible:             { ar: "فاتورة متاحة", en: "Invoice Available" },
 };
 
 /** Where a notification links to, from entity_type/entity_id (exact when possible). */
@@ -32,6 +36,8 @@ function routeFor(n: NotificationRow): string | null {
   switch (n.entity_type) {
     case "project":        return id ? `/client-portal/projects/${id}` : "/client-portal/projects";
     case "quote_request":  return id ? `/client-portal/quotes?open=${id}` : "/client-portal/quotes";
+    case "quote":          return "/client-portal/quotes";
+    case "invoice":        return "/client-portal/invoices";
     case "message":        return "/client-portal/messages";
     case "file_link":      return "/client-portal/files";
     case "deliverable":    return "/client-portal/projects";   // exact project needs a resolve → section
@@ -46,6 +52,8 @@ function sectionLabel(n: NotificationRow): { ar: string; en: string } | null {
   switch (n.entity_type) {
     case "project": case "deliverable": case "project_note": return { ar: "فتح المشروع", en: "Open Project" };
     case "quote_request": return { ar: "فتح الطلب", en: "Open Request" };
+    case "quote":         return { ar: "فتح عروض الأسعار", en: "Open Quotes" };
+    case "invoice":       return { ar: "فتح الفواتير", en: "Open Invoices" };
     case "message":       return { ar: "فتح الرسائل", en: "Open Messages" };
     case "file_link":     return { ar: "فتح الملفات", en: "Open Files" };
     case "opportunity":   return { ar: "فتح مركز الفرص", en: "Open Opportunities" };

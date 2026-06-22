@@ -41,7 +41,8 @@ export type NotificationType =
   | "quote_request_new" | "message_new" | "file_link_new" | "project_note_new"
   | "deliverable_new" | "revision_requested" | "deliverable_approved"
   | "deliverable_final_delivered" | "project_status_changed" | "opportunity_new"
-  | "whatsapp_new";
+  | "whatsapp_new"
+  | "quote_sent" | "quote_accepted" | "quote_revision_requested" | "invoice_visible";
 
 export type OfferAudience = "all" | "leads" | "clients";
 export type InternalCommentCategory = "editor" | "production" | "budget" | "qa" | "general";
@@ -267,16 +268,79 @@ export interface AssignmentNote extends SoftDeletable {
 
 export interface Invoice extends SoftDeletable {
   id: string;
-  client_id: string | null;
-  user_id: string | null;
-  project_id: string | null;
+  invoice_number: string | null;
   zoho_invoice_id: string | null;
-  zoho_estimate_id: string | null;
-  number: string | null;
+  client_id: string | null;
+  project_id: string | null;
   status: string | null;
-  amount: number | null;
   currency: string | null;
-  url: string | null;
-  issued_at: string | null;
+  subtotal: number | null;
+  vat: number | null;
+  total: number | null;
+  due_date: string | null;
+  pdf_url: string | null;
+  public_portal_visible: boolean;
+  created_at: string;
+  // Legacy columns from the finance-addendum PROPOSAL (optional; may be absent).
+  user_id?: string | null;
+  zoho_estimate_id?: string | null;
+  number?: string | null;
+  amount?: number | null;
+  url?: string | null;
+  issued_at?: string | null;
+}
+
+// ─── Formal (priced) quotes — distinct from the lightweight quote_requests ───
+export type FormalQuoteStatus =
+  | "draft" | "internal_review" | "approved" | "sent" | "accepted" | "rejected" | "expired";
+
+export interface QuoteItem {
+  id: string;
+  quote_id: string;
+  title: string;
+  description: string | null;
+  quantity: number;
+  unit_price: number;
+  total: number;
+  position: number;
+}
+
+export interface Quote {
+  id: string;
+  quote_number: string | null;
+  client_id: string | null;
+  lead_id: string | null;
+  project_id: string | null;
+  quote_request_id: string | null;
+  status: FormalQuoteStatus;
+  currency: string;
+  subtotal: number;
+  vat: number;
+  total: number;
+  vat_rate: number;
+  valid_until: string | null;
+  notes: string | null;
+  created_by: string | null;
+  approved_by: string | null;
+  public_portal_visible: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QuoteRevisionRequest {
+  id: string;
+  quote_id: string;
+  author_id: string | null;
+  note: string;
   created_at: string;
 }
+
+export const FORMAL_QUOTE_STATUS_LABELS: Record<FormalQuoteStatus, { ar: string; en: string }> = {
+  draft:           { ar: "مسودة",         en: "Draft" },
+  internal_review: { ar: "مراجعة داخلية",  en: "Internal review" },
+  approved:        { ar: "معتمد",         en: "Approved" },
+  sent:            { ar: "مُرسل",          en: "Sent" },
+  accepted:        { ar: "مقبول",         en: "Accepted" },
+  rejected:        { ar: "مرفوض",         en: "Rejected" },
+  expired:         { ar: "منتهٍ",          en: "Expired" },
+};
