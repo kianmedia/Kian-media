@@ -17,11 +17,15 @@
 begin;
 
 -- ════════ 1) Widen the notifications type CHECK (preserve ALL existing values) ═
+-- LIVE set = the 9 base (phase0) + 'opportunity_new' + 'whatsapp_new'
+-- (whatsapp_inbox_RUNME.sql:228). We add 'project_brief_new' + 'portal_request_new'.
+-- The list below MUST stay a superset of every value already in the table, or the
+-- re-add fails on existing rows (e.g. existing 'whatsapp_new' notifications).
 alter table public.notifications drop constraint if exists notifications_type_check;
 alter table public.notifications add constraint notifications_type_check check (type in (
   'quote_request_new','message_new','file_link_new','project_note_new',
   'deliverable_new','revision_requested','deliverable_approved',
-  'deliverable_final_delivered','project_status_changed','opportunity_new',
+  'deliverable_final_delivered','project_status_changed','opportunity_new','whatsapp_new',
   'project_brief_new','portal_request_new'));
 
 -- ════════ 2) project_briefs ══════════════════════════════════════════════════
@@ -134,7 +138,7 @@ commit;
 --   alter table public.notifications add constraint notifications_type_check check (type in (
 --     'quote_request_new','message_new','file_link_new','project_note_new',
 --     'deliverable_new','revision_requested','deliverable_approved',
---     'deliverable_final_delivered','project_status_changed','opportunity_new'));
+--     'deliverable_final_delivered','project_status_changed','opportunity_new','whatsapp_new'));
 --   -- drop table if exists public.portal_requests cascade;
 --   -- drop table if exists public.project_briefs cascade;
 -- commit;
