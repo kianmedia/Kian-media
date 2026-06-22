@@ -6,6 +6,7 @@
 // prices. Mirrors docs/portal_quotes_invoices_RUNME.sql.
 // ════════════════════════════════════════════════════════════════════════
 import { pget, prpc, enc, type Result } from "@/lib/portal/client";
+import { getValidSession } from "@/lib/portalAuth";
 import type { Quote, QuoteItem, QuoteRevisionRequest } from "@/lib/portal/types";
 
 // ─── Reads (RLS-scoped) ───
@@ -54,6 +55,58 @@ export function listPendingQuoteRequests(): Promise<Result<PendingQuoteRequest[]
 }
 export function convertQuoteRequest(requestId: string): Promise<Result<{ id: string; quote_number: string; reused?: boolean }>> {
   return prpc<{ id: string; quote_number: string; reused?: boolean }>("convert_quote_request", { p_request: requestId });
+}
+
+// ─── Zoho Books estimates (source of truth for official quotes) ─────────────
+export type EstimateAdminResult =
+  | { ok: true; configured: true; quoteId?: string | null; estimateNumber?: string; total?: number; zohoStatus?: string | null }
+  | { ok: false; configured: boolean; reason: string };
+
+async function postEstimateAdmin(body: Record<string, unknown>): Promise<EstimateAdminResult> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, configured: true, reason: "not_authenticated" };
+  try {
+    const res = await fetch("/api/integrations/zoho/estimate-admin", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify(body),
+    });
+    const d = (await res.json()) as { ok?: boolean; configured?: boolean; reason?: string; error?: string; quote_id?: string; estimate_number?: string; total?: number; zoho_status?: string | null };
+    if (!d.ok) return { ok: false, configured: d.configured !== false, reason: d.reason || d.error || `HTTP ${res.status}` };
+    return { ok: true, configured: true, quoteId: d.quote_id ?? null, estimateNumber: d.estimate_number, total: d.total, zohoStatus: d.zoho_status ?? null };
+  } catch (e) { return { ok: false, configured: true, reason: String(e) }; }
+}
+
+/** Create a DRAFT Zoho estimate from an intake quote_request (admin). */
+export function createEstimateFromRequest(requestId: string): Promise<EstimateAdminResult> {
+  return postEstimateAdmin({ action: "create", quote_request_id: requestId });
+}
+/** Re-read an estimate from Zoho into the local mirror (admin). */
+export function syncEstimate(quoteId: string, zohoEstimateId: string): Promise<EstimateAdminResult> {
+  return postEstimateAdmin({ action: "sync", quote_id: quoteId, zoho_estimate_id: zohoEstimateId });
+}
+/** Approve a quote for client visibility (+ mark sent in Zoho if linked) (admin). */
+export function approveQuote(quoteId: string, zohoEstimateId?: string | null): Promise<EstimateAdminResult> {
+  return postEstimateAdmin({ action: "approve", quote_id: quoteId, zoho_estimate_id: zohoEstimateId ?? "" });
+}
+
+/** Client accept / decline (+ Zoho status sync). */
+export async function respondToQuote(quoteId: string, response: "accepted" | "declined", note: string, zohoEstimateId?: string | null): Promise<Result<boolean>> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated", status: 401 };
+  try {
+    const res = await fetch("/api/integrations/zoho/estimate-respond", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({ quote_id: quoteId, response, note, zoho_estimate_id: zohoEstimateId ?? "" }),
+    });
+    const d = (await res.json()) as { ok?: boolean; error?: string };
+    if (!res.ok || !d.ok) return { ok: false, error: d.error || `HTTP ${res.status}`, status: res.status };
+    return { ok: true, data: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** Best-effort: link this user's email-matched quotes to their client context. */
+export function promoteByEmail(): Promise<Result<{ recognized: boolean; linked: number; has_client: boolean }>> {
+  return prpc<{ recognized: boolean; linked: number; has_client: boolean }>("promote_and_link_by_email", {});
 }
 export function setQuoteItems(quoteId: string, items: QuoteItemInput[]): Promise<Result<boolean>> {
   return prpc<boolean>("set_quote_items", { p_quote: quoteId, p_items: items });

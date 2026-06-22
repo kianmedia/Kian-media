@@ -53,5 +53,16 @@ Run on **Preview only**. DB-backed items require `docs/portal_quotes_invoices_RU
 - ⏳ Client sees a Zoho-synced invoice **read-only**; manual creation is clearly labeled "fallback"; rows show a Zoho/Manual badge
 - ✅ `/api/integrations/zoho/sync-invoices` → 401 without auth; 403 if not owner/finance; never calls Zoho without a permitted user
 
+## Zoho Estimates architecture patch (run docs/portal_zoho_estimates_RUNME.sql first)
+- ⏳ **Open quote** button on a linked request expands the linked formal quote (scrolls to it) and errors clearly if not found — works for both local and Zoho-linked quotes
+- ⏳ quote_request → **Create estimate from this request**: with Zoho configured, creates/links a Zoho contact (by email) + a DRAFT Zoho estimate (suggested line items, price = "requires pricing review") + mirrors it locally (source=zoho); with Zoho NOT configured, falls back to a local draft + shows a clear message
+- ⏳ Draft estimate (zero-total placeholder prices) is **NOT visible to the client**; admin edits prices in Zoho → "Re-sync from Zoho" pulls the new totals/line items
+- ⏳ **Admin approval** ("Approve & show to client") exposes the estimate to the client (public_portal_visible) + marks it "sent" in Zoho if linked + notifies the client; blocked if total<=0
+- ⏳ **Same-email**: a visitor/lead who signs up with the email of an existing quote/estimate sees it in /client-portal/quotes (email-match RLS; no risky client-row creation); `promote_and_link_by_email` links it to their client context if they have one
+- ⏳ Client **Accept** / **Decline** (+ optional note): updates local client_response + status and, if Zoho configured + linked, calls the Zoho estimate status endpoint; admin is notified; **no invoice is created**
+- ⏳ Client never sees a zero/empty estimate; can only accept/decline their own (client_id OR verified email)
+- ⏳ Zoho estimate PDF: client sees a clear "official PDF available from Kian on request" note (no usable public link in this foundation); admin gets "Open in Zoho ↗"
+- ✅ Zoho **not configured** → routes return `{configured:false}` with a setup message; no crash; 401 without auth; 403 if not owner/sales/finance
+
 ## Mobile / RTL
 - ✅/⏳ Arabic RTL + English LTR correct; tables/totals readable on mobile; empty states professional

@@ -11,7 +11,8 @@ import { useI18n } from "@/lib/i18n";
 import {
   listQuotes, getQuoteItems, listQuoteRevisions, listQuoteClients,
   createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility,
-  listPendingQuoteRequests, convertQuoteRequest, type QuoteItemInput, type PendingQuoteRequest,
+  listPendingQuoteRequests, convertQuoteRequest, createEstimateFromRequest, syncEstimate, approveQuote,
+  type QuoteItemInput, type PendingQuoteRequest,
 } from "@/lib/portal/quotes";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteRevisionRequest } from "@/lib/portal/types";
 
@@ -31,6 +32,8 @@ export default function AdminQuotesManager() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2800); };
+  const emptyOrZero = (q: Quote) => (q.total <= 0); // server also enforces (items + total>0)
+  const guardMsg = () => t({ ar: "أضف بنودًا بإجمالي أكبر من صفر قبل الإرسال أو الإظهار.", en: "Add line items with a total greater than zero before sending or showing." });
 
   // Create form
   const [cf, setCf] = useState({ clientId: "", title: "", validUntil: "", notes: "", vatRate: "15" });
@@ -57,19 +60,63 @@ export default function AdminQuotesManager() {
     flash(t({ ar: "أُنشئ العرض، أضف البنود.", en: "Quote created — add line items." }));
   }
 
-  // Convert an existing intake request into a formal (priced) quote — prefilled + linked.
-  async function convert(reqId: string) {
+  async function loadEditItems(quoteId: string) {
+    if (editItems[quoteId]) return;
+    const it = await getQuoteItems(quoteId);
+    setEditItems((p) => ({ ...p, [quoteId]: it.ok && it.data.length ? it.data.map((x) => ({ title: x.title, description: x.description ?? "", quantity: x.quantity, unit_price: x.unit_price })) : [emptyItem()] }));
+  }
+
+  // Open the formal quote already linked to a request (fixes the "Open quote" button).
+  async function openLinkedQuote(reqId: string) {
+    const q = quotes.find((x) => x.quote_request_id === reqId);
+    if (!q) { flash(t({ ar: "لم يُعثر على العرض المرتبط — جرّب التحديث.", en: "Linked quote not found — try refreshing." })); await reload(); return; }
+    setOpenId(q.id);
+    await loadEditItems(q.id);
+    if (typeof document !== "undefined") document.getElementById(`quote-${q.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  // Create a DRAFT Zoho estimate from the request; fall back to a LOCAL draft if Zoho is off.
+  async function createEstimate(reqId: string) {
     setBusy(true);
-    const r = await convertQuoteRequest(reqId);
-    setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر التحويل: " : "Convert failed: ") + r.error); return; }
-    await reload();
-    setOpenId(r.data.id);
-    if (!editItems[r.data.id]) {
-      const it = await getQuoteItems(r.data.id);
-      setEditItems((p) => ({ ...p, [r.data.id]: it.ok && it.data.length ? it.data.map((x) => ({ title: x.title, description: x.description ?? "", quantity: x.quantity, unit_price: x.unit_price })) : [emptyItem()] }));
+    const r = await createEstimateFromRequest(reqId);
+    if (r.ok) {
+      setBusy(false);
+      await reload();
+      if (r.quoteId) { setOpenId(r.quoteId); await loadEditItems(r.quoteId); }
+      flash(t({ ar: `أُنشئت مسودة تقدير في Zoho (${r.estimateNumber || ""}). راجع الأسعار واعتمدها.`, en: `Draft estimate created in Zoho (${r.estimateNumber || ""}). Review prices, then approve.` }));
+      return;
     }
-    flash(r.data.reused ? t({ ar: "فُتح العرض المرتبط بهذا الطلب.", en: "Opened the quote already linked to this request." }) : t({ ar: "أُنشئ عرض سعر من الطلب — أضف الأسعار.", en: "Formal quote created from the request — add prices." }));
+    if (r.configured === false) {
+      // Zoho not configured → local fallback so the admin can still work.
+      const c = await convertQuoteRequest(reqId);
+      setBusy(false);
+      if (!c.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + c.error); return; }
+      await reload();
+      setOpenId(c.data.id); await loadEditItems(c.data.id);
+      flash(t({ ar: "Zoho غير مهيأ — أُنشئ عرض محلي مؤقت. أضف الأسعار، وفعّل Zoho لاحقًا للمصدر الرسمي.", en: "Zoho not configured — created a local draft. Add prices; enable Zoho later for the official source." }));
+      return;
+    }
+    setBusy(false);
+    flash((isAr ? "تعذّر إنشاء التقدير: " : "Estimate failed: ") + r.reason);
+  }
+
+  async function approve(q: Quote) {
+    if (q.total <= 0) { flash(guardMsg()); return; }
+    setBusy(true);
+    const r = await approveQuote(q.id, q.zoho_estimate_id);
+    setBusy(false);
+    if (!r.ok) { flash(r.reason === "empty_or_zero_quote" ? guardMsg() : ((isAr ? "تعذّر: " : "Failed: ") + r.reason)); return; }
+    await reload();
+    flash(t({ ar: "اعتُمد العرض وأصبح ظاهرًا للعميل.", en: "Approved — now visible to the client." }));
+  }
+  async function resync(q: Quote) {
+    if (!q.zoho_estimate_id) return;
+    setBusy(true);
+    const r = await syncEstimate(q.id, q.zoho_estimate_id);
+    setBusy(false);
+    if (!r.ok) { flash(r.configured === false ? t({ ar: "Zoho غير مهيأ.", en: "Zoho not configured." }) : ((isAr ? "تعذّر: " : "Failed: ") + r.reason)); return; }
+    await reload();
+    flash(t({ ar: "تمت إعادة المزامنة من Zoho.", en: "Re-synced from Zoho." }));
   }
 
   async function expand(id: string) {
@@ -94,8 +141,6 @@ export default function AdminQuotesManager() {
     await reload();
     flash(t({ ar: "حُفظت البنود وحُسبت الإجماليات.", en: "Items saved & totals computed." }));
   }
-  const emptyOrZero = (q: Quote) => (q.total <= 0); // server also enforces (items + total>0)
-  const guardMsg = () => t({ ar: "أضف بنودًا بإجمالي أكبر من صفر قبل الإرسال أو الإظهار.", en: "Add line items with a total greater than zero before sending or showing." });
 
   async function status(id: string, s: string) {
     const q = quotes.find((x) => x.id === id);
@@ -132,8 +177,8 @@ export default function AdminQuotesManager() {
                 {pr.city && <span style={{ color: "rgba(255,255,255,0.45)" }}>· {pr.city}</span>}
                 <span style={{ marginInlineStart: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
                   {pr.has_quote && <span style={{ fontSize: 10, color: "#25D366" }}>{t({ ar: "مرتبط بعرض", en: "linked" })}</span>}
-                  <button onClick={() => void convert(pr.id)} disabled={busy} style={btn(pr.has_quote ? "rgba(255,255,255,0.10)" : "#E31E24", busy)}>
-                    {pr.has_quote ? t({ ar: "فتح العرض", en: "Open quote" }) : t({ ar: "إنشاء عرض سعر من هذا الطلب", en: "Create formal quote" })}
+                  <button onClick={() => pr.has_quote ? void openLinkedQuote(pr.id) : void createEstimate(pr.id)} disabled={busy} style={btn(pr.has_quote ? "rgba(255,255,255,0.10)" : "#E31E24", busy)}>
+                    {pr.has_quote ? t({ ar: "فتح العرض", en: "Open quote" }) : t({ ar: "إنشاء تقدير من هذا الطلب", en: "Create estimate from this request" })}
                   </button>
                 </span>
               </div>
@@ -168,12 +213,14 @@ export default function AdminQuotesManager() {
           const open = openId === q.id;
           const rows = editItems[q.id] || [];
           return (
-            <div key={q.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, overflow: "hidden" }}>
+            <div key={q.id} id={`quote-${q.id}`} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${open ? "rgba(227,30,36,0.4)" : "rgba(255,255,255,0.09)"}`, borderRadius: 10, overflow: "hidden" }}>
               <button onClick={() => void expand(q.id)} style={{ width: "100%", textAlign: isAr ? "right" : "left", background: "transparent", border: "none", cursor: "pointer", padding: "12px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.quote_number || q.id.slice(0, 8)}</strong>
+                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.estimate_number || q.quote_number || q.id.slice(0, 8)}</strong>
+                <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: q.source === "zoho" ? "rgba(37,211,102,0.16)" : "rgba(255,255,255,0.08)", color: q.source === "zoho" ? "#25D366" : "rgba(255,255,255,0.5)" }}>{q.source === "zoho" ? "Zoho" : t({ ar: "محلي", en: "Local" })}</span>
                 {q.title && <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12.5 }}>{q.title}</span>}
                 {q.quote_request_id && <span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>🔗 {t({ ar: "من طلب", en: "from request" })}</span>}
                 <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 6, background: "rgba(227,30,36,0.16)", color: "#ff9ea1" }}>{t(st)}</span>
+                {q.client_response && q.client_response !== "pending" && <span style={{ fontSize: 10, color: q.client_response === "accepted" ? "#25D366" : "#ff9ea1" }}>{q.client_response === "accepted" ? t({ ar: "✓ قبله العميل", en: "✓ accepted" }) : t({ ar: "✗ رفضه العميل", en: "✗ declined" })}</span>}
                 <span style={{ fontSize: 11, color: q.public_portal_visible ? "#25D366" : "rgba(255,255,255,0.4)" }}>{q.public_portal_visible ? t({ ar: "👁 ظاهر للعميل", en: "👁 visible" }) : t({ ar: "مخفي", en: "hidden" })}</span>
                 <span style={{ marginInlineStart: "auto", color: "#fff", fontWeight: 700 }}>{money(q.total, q.currency)}</span>
                 <span style={{ color: "rgba(255,255,255,0.4)" }}>{open ? "▲" : "▼"}</span>
@@ -207,7 +254,28 @@ export default function AdminQuotesManager() {
                     <button onClick={() => void visibility(q.id, !q.public_portal_visible)} disabled={busy} style={btn(q.public_portal_visible ? "rgba(255,255,255,0.10)" : "#25D366", busy)}>
                       {q.public_portal_visible ? t({ ar: "إخفاء عن العميل", en: "Hide from client" }) : t({ ar: "إظهار للعميل", en: "Show to client" })}
                     </button>
-                    <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>{t({ ar: "الإرسال يُظهر العرض ويُنبّه العميل تلقائيًا", en: "'Sent' reveals the quote + notifies the client" })}</span>
+                  </div>
+
+                  {/* Approve / Zoho actions */}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+                    <button onClick={() => void approve(q)} disabled={busy} style={btn("#E31E24", busy)}>
+                      {t({ ar: "اعتماد وإظهار للعميل", en: "Approve & show to client" })}
+                    </button>
+                    {q.source === "zoho" && q.zoho_estimate_id && (
+                      <button onClick={() => void resync(q)} disabled={busy} style={btn("rgba(255,255,255,0.10)", busy)}>
+                        {t({ ar: "إعادة مزامنة من Zoho", en: "Re-sync from Zoho" })}
+                      </button>
+                    )}
+                    {q.estimate_url && (
+                      <a href={q.estimate_url} target="_blank" rel="noopener noreferrer" style={{ ...btn("rgba(255,255,255,0.10)"), textDecoration: "none" }}>
+                        {t({ ar: "فتح في Zoho ↗", en: "Open in Zoho ↗" })}
+                      </a>
+                    )}
+                    <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>
+                      {q.source === "zoho"
+                        ? t({ ar: "السعر يُعدّل في Zoho ثم أعد المزامنة. الاعتماد يُظهره للعميل.", en: "Edit prices in Zoho, then re-sync. Approve to reveal to the client." })
+                        : t({ ar: "الاعتماد/الإرسال يُظهر العرض ويُنبّه العميل.", en: "Approve/Send reveals the quote + notifies the client." })}
+                    </span>
                   </div>
 
                   {/* Revision requests */}

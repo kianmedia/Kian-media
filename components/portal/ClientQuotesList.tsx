@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
-import { listQuotes, getQuoteItems, acceptQuote, requestQuoteRevision } from "@/lib/portal/quotes";
+import { listQuotes, getQuoteItems, requestQuoteRevision, respondToQuote, promoteByEmail } from "@/lib/portal/quotes";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteItem } from "@/lib/portal/types";
 
 const money = (n: number | null | undefined, cur: string) =>
@@ -31,7 +31,11 @@ export default function ClientQuotesList() {
     setQuotes(r.ok ? r.data : []);
     setPhase(r.ok ? "ready" : "error");
   }, []);
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    // Best-effort: a same-email visitor/lead gets their email-matched quotes linked
+    // to their client context, then we load (visibility itself works via email-match RLS).
+    (async () => { try { await promoteByEmail(); } catch { /* non-blocking */ } await reload(); })();
+  }, [reload]);
 
   async function toggle(id: string) {
     if (openId === id) { setOpenId(null); return; }
@@ -41,12 +45,19 @@ export default function ClientQuotesList() {
       if (r.ok) setItems((p) => ({ ...p, [id]: r.data }));
     }
   }
-  async function accept(id: string) {
+  async function respond(q: Quote, response: "accepted" | "declined") {
     if (readOnly) return;
-    if (!window.confirm(t({ ar: "تأكيد قبول عرض السعر؟", en: "Accept this quote?" }))) return;
-    setBusy(true); const r = await acceptQuote(id); setBusy(false);
+    const ask = response === "accepted" ? t({ ar: "تأكيد قبول عرض السعر؟", en: "Accept this quote?" }) : t({ ar: "تأكيد رفض عرض السعر؟", en: "Decline this quote?" });
+    if (!window.confirm(ask)) return;
+    setBusy(true);
+    const r = await respondToQuote(q.id, response, (revBox[q.id] || "").trim(), q.zoho_estimate_id);
+    setBusy(false);
     if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
-    await reload(); flash(t({ ar: "تم قبول العرض. سيتواصل فريق كيان معك.", en: "Quote accepted. Kian's team will follow up." }));
+    setRevBox((p) => ({ ...p, [q.id]: "" }));
+    await reload();
+    flash(response === "accepted"
+      ? t({ ar: "تم قبول العرض. سيتواصل فريق كيان معك.", en: "Quote accepted. Kian's team will follow up." })
+      : t({ ar: "تم تسجيل رفضك. شكرًا لملاحظتك.", en: "Your decline was recorded. Thank you for the note." }));
   }
   async function revise(id: string) {
     if (readOnly) return;
@@ -127,17 +138,34 @@ export default function ClientQuotesList() {
                   </div>
                   {q.notes && <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 12.5, marginTop: 12, lineHeight: 1.8 }}>{q.notes}</p>}
 
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
-                    {canAccept && <button onClick={() => void accept(q.id)} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "قبول عرض السعر", en: "Accept Quote" })}</button>}
-                    {q.status === "accepted" && <span style={{ ...btn("rgba(37,211,102,0.18)"), cursor: "default" }}>✓ {t({ ar: "تم القبول", en: "Accepted" })}</span>}
-                  </div>
-                  <div style={{ marginTop: 12 }}>
-                    <textarea value={revBox[q.id] || ""} onChange={(e) => setRevBox((p) => ({ ...p, [q.id]: e.target.value }))} rows={2}
-                      placeholder={t({ ar: "اكتب ملاحظتك لطلب تعديل العرض…", en: "Write a note to request a revision…" })} style={inp} />
-                    <button onClick={() => void revise(q.id)} disabled={busy || readOnly} style={{ ...btn("rgba(255,255,255,0.10)", busy || readOnly), marginTop: 8 }}>
-                      {t({ ar: "طلب تعديل على عرض السعر", en: "Request Quote Revision" })}
-                    </button>
-                  </div>
+                  {/* Official Zoho estimate → PDF/preview note (no usable public PDF in this foundation) */}
+                  {q.source === "zoho" && (
+                    <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, marginTop: 12, lineHeight: 1.7, padding: "8px 11px", background: "rgba(37,211,102,0.06)", border: "1px solid rgba(37,211,102,0.18)", borderRadius: 8 }}>
+                      {t({ ar: "هذا عرض رسمي من Zoho Books. نسخة PDF الرسمية متاحة عبر فريق كيان عند الطلب.", en: "This is an official Zoho Books estimate. The official PDF is available from Kian's team on request." })}
+                    </p>
+                  )}
+
+                  {q.client_response && q.client_response !== "pending" ? (
+                    <div style={{ marginTop: 16 }}>
+                      <span style={{ ...btn(q.client_response === "accepted" ? "rgba(37,211,102,0.18)" : "rgba(227,30,36,0.18)"), cursor: "default" }}>
+                        {q.client_response === "accepted" ? `✓ ${t({ ar: "تم القبول", en: "Accepted" })}` : `✗ ${t({ ar: "تم الرفض", en: "Declined" })}`}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ marginTop: 12 }}>
+                        <textarea value={revBox[q.id] || ""} onChange={(e) => setRevBox((p) => ({ ...p, [q.id]: e.target.value }))} rows={2}
+                          placeholder={t({ ar: "ملاحظة (اختياري) — تُرفق عند الرفض أو طلب التعديل…", en: "Note (optional) — attached when you decline or request a revision…" })} style={inp} />
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                        {canAccept && <button onClick={() => void respond(q, "accepted")} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "قبول العرض", en: "Accept" })}</button>}
+                        {canAccept && <button onClick={() => void respond(q, "declined")} disabled={busy || readOnly} style={btn("rgba(227,30,36,0.7)", busy || readOnly)}>{t({ ar: "رفض العرض", en: "Decline" })}</button>}
+                        <button onClick={() => void revise(q.id)} disabled={busy || readOnly} style={btn("rgba(255,255,255,0.10)", busy || readOnly)}>
+                          {t({ ar: "طلب تعديل", en: "Request Revision" })}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

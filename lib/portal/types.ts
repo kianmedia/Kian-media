@@ -326,6 +326,17 @@ export interface Quote {
   created_by: string | null;
   approved_by: string | null;
   public_portal_visible: boolean;
+  // Zoho Books estimate mirror (additive — docs/portal_zoho_estimates_RUNME.sql).
+  email?: string | null;
+  source?: string | null;              // 'local' | 'zoho'
+  zoho_customer_id?: string | null;
+  zoho_estimate_id?: string | null;
+  estimate_number?: string | null;
+  estimate_url?: string | null;
+  client_response?: "pending" | "accepted" | "declined" | null;
+  admin_approved_at?: string | null;
+  admin_approved_by?: string | null;
+  synced_at?: string | null;
   created_at: string;
   updated_at: string;
 }
