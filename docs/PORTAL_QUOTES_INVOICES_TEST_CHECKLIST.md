@@ -64,5 +64,17 @@ Run on **Preview only**. DB-backed items require `docs/portal_quotes_invoices_RU
 - ⏳ Zoho estimate PDF: client sees a clear "official PDF available from Kian on request" note (no usable public link in this foundation); admin gets "Open in Zoho ↗"
 - ✅ Zoho **not configured** → routes return `{configured:false}` with a setup message; no crash; 401 without auth; 403 if not owner/sales/finance
 
+## Tax-invoice approval flow (run docs/portal_invoice_approval_RUNME.sql first)
+- ⏳ Client **accepts** an estimate → NO invoice is created; the quote shows `invoice_approval_pending`; owner/admin/finance/manager get an **"invoice approval required"** notification
+- ⏳ Admin/finance sees **"الموافقة على إنشاء فاتورة ضريبية من Zoho Books / Approve tax invoice creation from Zoho Books"** on the accepted quote (only owner/manager/finance — `can_see_invoices`)
+- ⏳ Invoice is **NOT** created before approval
+- ⏳ On approve with Zoho configured (+ `ZohoBooks.invoices.CREATE`): an official invoice is created in Zoho **from the accepted estimate**, mirrored locally read-only (number/status/line items/subtotal/VAT/total/due/PDF), quote → `invoice_created`, client gets `invoice_visible`, admin gets `invoice_created`
+- ⏳ Client sees the invoice **read-only inside the portal** (expandable: line items + subtotal/VAT/total + PDF) — not redirected to Zoho
+- ⏳ **Dedup:** approving again (or for an estimate already invoiced) does not create a second invoice
+- ⏳ **Missing Zoho config** → "Client accepted the estimate, but Zoho invoice creation is not configured yet." (approval recorded, no crash)
+- ⏳ **Missing `invoices.CREATE` scope / Zoho error** → quote → `invoice_creation_failed`, admin notified, **client acceptance preserved**, clear admin error
+- ⏳ No invoice is emailed to the client automatically
+- ✅ `/api/integrations/zoho/invoice-from-estimate` → 401 without auth; 403 if not owner/finance; never calls Zoho without a permitted user
+
 ## Mobile / RTL
 - ✅/⏳ Arabic RTL + English LTR correct; tables/totals readable on mobile; empty states professional

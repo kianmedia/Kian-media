@@ -28,6 +28,9 @@ const TYPE_LABEL: Record<NotificationType, { ar: string; en: string }> = {
   quote_accepted:              { ar: "قبول عرض سعر", en: "Quote Accepted" },
   quote_revision_requested:    { ar: "طلب تعديل عرض", en: "Quote Revision" },
   invoice_visible:             { ar: "فاتورة متاحة", en: "Invoice Available" },
+  invoice_approval_required:   { ar: "موافقة فاتورة مطلوبة", en: "Invoice Approval" },
+  invoice_created:             { ar: "أُنشئت فاتورة", en: "Invoice Created" },
+  invoice_creation_failed:     { ar: "فشل إنشاء الفاتورة", en: "Invoice Failed" },
 };
 
 /** Where a notification links to, from entity_type/entity_id (exact when possible). */

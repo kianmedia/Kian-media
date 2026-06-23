@@ -107,6 +107,24 @@ export function approveQuote(quoteId: string, zohoEstimateId?: string | null): P
   return postEstimateAdmin({ action: "approve", quote_id: quoteId, zoho_estimate_id: zohoEstimateId ?? "" });
 }
 
+/** Owner/finance: approve creating the official tax invoice from an accepted estimate. */
+export type InvoiceApprovalResult =
+  | { ok: true; configured?: boolean; status: string; invoiceNumber?: string; deduped?: boolean; message?: string }
+  | { ok: false; configured?: boolean; status?: string; reason?: string; message?: string; error?: string };
+export async function approveInvoiceCreation(quoteId: string): Promise<InvoiceApprovalResult> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, reason: "not_authenticated" };
+  try {
+    const res = await fetch("/api/integrations/zoho/invoice-from-estimate", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({ quote_id: quoteId }),
+    });
+    const d = (await res.json()) as { ok?: boolean; configured?: boolean; status?: string; invoice_number?: string; deduped?: boolean; message?: string; reason?: string; error?: string };
+    if (!d.ok) return { ok: false, configured: d.configured, status: d.status, reason: d.reason || d.error, message: d.message };
+    return { ok: true, configured: d.configured, status: d.status || "invoice_created", invoiceNumber: d.invoice_number, deduped: d.deduped, message: d.message };
+  } catch (e) { return { ok: false, reason: String(e) }; }
+}
+
 /** Client accept / decline (+ Zoho status sync). */
 export async function respondToQuote(quoteId: string, response: "accepted" | "declined", note: string, zohoEstimateId?: string | null): Promise<Result<boolean>> {
   const s = await getValidSession();

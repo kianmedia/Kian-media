@@ -186,3 +186,51 @@ export function markEstimateStatus(estimateId: string, action: "sent" | "accepte
     return { status: action };
   });
 }
+
+// ─── Official tax invoice creation from an accepted estimate (invoices.CREATE) ──
+export interface NormalizedInvoice {
+  zohoInvoiceId: string; zohoCustomerId: string; invoiceNumber: string; status: string;
+  currency: string; subtotal: number; vat: number; total: number; dueDate: string | null; pdfUrl: string | null;
+  lineItems: { title: string; description: string; quantity: number; unit_price: number; total: number }[];
+}
+function normalizeInvoice(cfg: Cfg, inv: Record<string, unknown>): NormalizedInvoice {
+  const num = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : 0);
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const iid = str(inv.invoice_id);
+  const items = (inv.line_items as Array<Record<string, unknown>> | undefined) ?? [];
+  return {
+    zohoInvoiceId: iid, zohoCustomerId: str(inv.customer_id), invoiceNumber: str(inv.invoice_number),
+    status: str(inv.status) || "sent", currency: str(inv.currency_code) || "SAR",
+    subtotal: num(inv.sub_total), vat: num(inv.tax_total), total: num(inv.total),
+    dueDate: /^\d{4}-\d{2}-\d{2}/.test(str(inv.due_date)) ? str(inv.due_date).slice(0, 10) : null,
+    pdfUrl: iid ? `https://books.zoho.sa/app/${cfg.orgId}#/invoices/${iid}` : null,
+    lineItems: items.map((li) => ({ title: str(li.name) || "-", description: str(li.description), quantity: num(li.quantity) || 1, unit_price: num(li.rate), total: num(li.item_total) })),
+  };
+}
+
+/** Create an official tax invoice from an ACCEPTED estimate (reads the estimate for
+ *  customer + line items, then POST /invoices). Requires ZohoBooks.invoices.CREATE.
+ *  Draft estimates with no priced items will produce an empty/zero invoice → callers
+ *  should only invoke this for a priced, accepted estimate. */
+export function createInvoiceFromEstimate(estimateId: string): Promise<EstimateResult<NormalizedInvoice>> {
+  return withToken(async (cfg, token, base) => {
+    const org = cfg.orgId;
+    const er = await call("GET", `${base}/estimates/${encodeURIComponent(estimateId)}?organization_id=${encodeURIComponent(org)}`, token);
+    const est = er.json.estimate as Record<string, unknown> | undefined;
+    if (!est?.estimate_id) throw new Error(`books_estimate_http_${er.status}`);
+    const customerId = typeof est.customer_id === "string" ? est.customer_id : "";
+    if (!customerId) throw new Error("estimate_has_no_customer");
+    const lines = ((est.line_items as Array<Record<string, unknown>> | undefined) ?? []).map((li) => ({
+      name: typeof li.name === "string" ? li.name : "-",
+      description: typeof li.description === "string" ? li.description : undefined,
+      rate: typeof li.rate === "number" ? li.rate : Number(li.rate) || 0,
+      quantity: typeof li.quantity === "number" ? li.quantity : Number(li.quantity) || 1,
+    }));
+    const body: Record<string, unknown> = { customer_id: customerId, line_items: lines };
+    if (typeof est.estimate_number === "string") body.reference_number = est.estimate_number;
+    const res = await call("POST", `${base}/invoices?organization_id=${encodeURIComponent(org)}`, token, body);
+    const inv = res.json.invoice as Record<string, unknown> | undefined;
+    if (res.json.code !== 0 || !inv?.invoice_id) throw new Error(`books_invoice_http_${res.status}_${res.json.code ?? "x"}`);
+    return normalizeInvoice(cfg, inv);
+  });
+}

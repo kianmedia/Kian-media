@@ -42,7 +42,8 @@ export type NotificationType =
   | "deliverable_new" | "revision_requested" | "deliverable_approved"
   | "deliverable_final_delivered" | "project_status_changed" | "opportunity_new"
   | "whatsapp_new"
-  | "quote_sent" | "quote_accepted" | "quote_revision_requested" | "invoice_visible";
+  | "quote_sent" | "quote_accepted" | "quote_revision_requested" | "invoice_visible"
+  | "invoice_approval_required" | "invoice_created" | "invoice_creation_failed";
 
 export type OfferAudience = "all" | "leads" | "clients";
 export type InternalCommentCategory = "editor" | "production" | "budget" | "qa" | "general";
@@ -282,6 +283,8 @@ export interface Invoice extends SoftDeletable {
   public_portal_visible: boolean;
   zoho_customer_id?: string | null;
   source?: string | null; // 'zoho' | 'manual'
+  quote_id?: string | null;
+  line_items?: InvoiceLineItem[] | null;
   created_at: string;
   // Legacy columns from the finance-addendum PROPOSAL (optional; may be absent).
   user_id?: string | null;
@@ -337,9 +340,16 @@ export interface Quote {
   admin_approved_at?: string | null;
   admin_approved_by?: string | null;
   synced_at?: string | null;
+  // Tax-invoice approval flow (additive — docs/portal_invoice_approval_RUNME.sql).
+  invoice_approval_status?: "none" | "invoice_approval_pending" | "invoice_creation_approved" | "invoice_created" | "invoice_creation_failed" | null;
+  invoice_approved_at?: string | null;
+  invoice_approved_by?: string | null;
+  linked_invoice_id?: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export interface InvoiceLineItem { title: string; description?: string | null; quantity: number; unit_price: number; total: number; }
 
 export interface QuoteRevisionRequest {
   id: string;

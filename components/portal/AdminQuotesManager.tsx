@@ -8,11 +8,12 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
 import {
   listQuotes, getQuoteAdmin, getQuoteItems, listQuoteRevisions, listQuoteClients,
   createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility,
   listPendingQuoteRequests, convertQuoteRequest, createEstimateFromRequest, syncEstimate, approveQuote,
-  type QuoteItemInput, type PendingQuoteRequest,
+  approveInvoiceCreation, type QuoteItemInput, type PendingQuoteRequest,
 } from "@/lib/portal/quotes";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteRevisionRequest } from "@/lib/portal/types";
 
@@ -22,6 +23,7 @@ const emptyItem = (): QuoteItemInput => ({ title: "", description: "", quantity:
 
 export default function AdminQuotesManager() {
   const { t, isAr } = useI18n();
+  const { caps } = usePortal();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [clients, setClients] = useState<{ client_id: string; label: string }[]>([]);
   const [pending, setPending] = useState<PendingQuoteRequest[]>([]);
@@ -142,6 +144,21 @@ export default function AdminQuotesManager() {
     if (!r.ok) { flash(r.configured === false ? t({ ar: "Zoho غير مهيأ.", en: "Zoho not configured." }) : ((isAr ? "تعذّر: " : "Failed: ") + r.reason)); return; }
     await reload();
     flash(t({ ar: "تمت إعادة المزامنة من Zoho.", en: "Re-synced from Zoho." }));
+  }
+  // Owner/finance: approve creating the official tax invoice from the accepted estimate.
+  async function approveInvoice(q: Quote) {
+    if (!window.confirm(t({ ar: "الموافقة على إنشاء فاتورة ضريبية رسمية من Zoho Books؟", en: "Approve creating an official tax invoice in Zoho Books?" }))) return;
+    setBusy(true);
+    const r = await approveInvoiceCreation(q.id);
+    setBusy(false);
+    await reload();
+    if (r.ok) {
+      flash(r.deduped ? t({ ar: "الفاتورة موجودة مسبقًا لهذا التقدير.", en: "An invoice already exists for this estimate." })
+        : r.configured === false ? t({ ar: "تمت الموافقة — لكن إنشاء فواتير Zoho غير مهيأ بعد.", en: "Approved — but Zoho invoice creation isn't configured yet." })
+        : t({ ar: `أُنشئت الفاتورة الضريبية (${r.invoiceNumber || ""}) وأصبحت متاحة للعميل.`, en: `Tax invoice created (${r.invoiceNumber || ""}) and available to the client.` }));
+    } else {
+      flash(r.message || ((isAr ? "تعذّر إنشاء الفاتورة: " : "Invoice failed: ") + (r.reason || "")));
+    }
   }
 
   async function expand(id: string) {
@@ -305,6 +322,28 @@ export default function AdminQuotesManager() {
                         : t({ ar: "الاعتماد/الإرسال يُظهر العرض ويُنبّه العميل.", en: "Approve/Send reveals the quote + notifies the client." })}
                     </span>
                   </div>
+
+                  {/* Tax-invoice approval (after the client accepts) */}
+                  {q.client_response === "accepted" && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                      <span style={{ fontSize: 11, color: "#25D366" }}>✓ {t({ ar: "قبل العميل التقدير", en: "Client accepted" })}</span>
+                      {(() => {
+                        const s = q.invoice_approval_status || "none";
+                        const label: Record<string, { ar: string; en: string }> = {
+                          invoice_approval_pending: { ar: "بانتظار موافقة الفاتورة", en: "Invoice approval pending" },
+                          invoice_creation_approved: { ar: "تمت الموافقة — بانتظار Zoho", en: "Approved — awaiting Zoho" },
+                          invoice_created: { ar: "أُنشئت الفاتورة الضريبية", en: "Tax invoice created" },
+                          invoice_creation_failed: { ar: "فشل إنشاء الفاتورة", en: "Invoice creation failed" },
+                        };
+                        return label[s] ? <span style={{ fontSize: 11, color: s === "invoice_created" ? "#25D366" : s === "invoice_creation_failed" ? "#ff8a8e" : "rgba(255,255,255,0.6)" }}>· {t(label[s])}</span> : null;
+                      })()}
+                      {caps.canSeeInvoices && q.invoice_approval_status !== "invoice_created" && (
+                        <button onClick={() => void approveInvoice(q)} disabled={busy} style={{ ...btn("#25D366", busy), marginInlineStart: "auto" }}>
+                          {t({ ar: "الموافقة على إنشاء فاتورة ضريبية من Zoho Books", en: "Approve tax invoice creation from Zoho Books" })}
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* Revision requests */}
                   {(revs[q.id]?.length ?? 0) > 0 && (
