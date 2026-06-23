@@ -13,6 +13,8 @@
 
 begin;
 
+drop function if exists public.list_pending_quote_requests();
+
 create or replace function public.list_pending_quote_requests()
 returns table (
   id uuid, reference text, services text[], email text, city text, budget_range text,
