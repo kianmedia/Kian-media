@@ -39,6 +39,7 @@ function routeFor(n: NotificationRow): string | null {
   switch (n.entity_type) {
     case "project":        return id ? `/client-portal/projects/${id}` : "/client-portal/projects";
     case "quote_request":  return id ? `/client-portal/quotes?open=${id}` : "/client-portal/quotes";
+    case "public_intake":  return "/client-portal/quotes";
     case "quote":          return "/client-portal/quotes";
     case "invoice":        return "/client-portal/invoices";
     case "message":        return "/client-portal/messages";
@@ -55,6 +56,7 @@ function sectionLabel(n: NotificationRow): { ar: string; en: string } | null {
   switch (n.entity_type) {
     case "project": case "deliverable": case "project_note": return { ar: "فتح المشروع", en: "Open Project" };
     case "quote_request": return { ar: "فتح الطلب", en: "Open Request" };
+    case "public_intake": return { ar: "فتح الطلبات", en: "Open Requests" };
     case "quote":         return { ar: "فتح عروض الأسعار", en: "Open Quotes" };
     case "invoice":       return { ar: "فتح الفواتير", en: "Open Invoices" };
     case "message":       return { ar: "فتح الرسائل", en: "Open Messages" };

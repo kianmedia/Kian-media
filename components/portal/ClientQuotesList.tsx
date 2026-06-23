@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { listQuotes, getQuoteItems, requestQuoteRevision, respondToQuote, promoteByEmail } from "@/lib/portal/quotes";
+import { listMyIntake } from "@/lib/portal/intake";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteItem } from "@/lib/portal/types";
 
 const money = (n: number | null | undefined, cur: string) =>
@@ -26,6 +27,7 @@ export default function ClientQuotesList() {
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2800); };
 
+  const [hasRequest, setHasRequest] = useState(false);
   const reload = useCallback(async () => {
     const r = await listQuotes();
     setQuotes(r.ok ? r.data : []);
@@ -34,7 +36,11 @@ export default function ClientQuotesList() {
   useEffect(() => {
     // Best-effort: a same-email visitor/lead gets their email-matched quotes linked
     // to their client context, then we load (visibility itself works via email-match RLS).
-    (async () => { try { await promoteByEmail(); } catch { /* non-blocking */ } await reload(); })();
+    (async () => {
+      try { await promoteByEmail(); } catch { /* non-blocking */ }
+      try { const ir = await listMyIntake(); if (ir.ok) setHasRequest(ir.data.length > 0); } catch { /* non-blocking */ }
+      await reload();
+    })();
   }, [reload]);
 
   async function toggle(id: string) {
@@ -84,9 +90,11 @@ export default function ClientQuotesList() {
       {phase !== "loading" && quotes.length === 0 && (
         <div style={{ padding: "26px 22px", background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.14)", borderRadius: 8 }}>
           <p className="text-white/60" style={{ fontSize: 14, lineHeight: 1.9, maxWidth: 560 }}>
-            {t({ ar: "لا توجد عروض أسعار حتى الآن. يمكنك طلب عرض سعر جديد وسيتابع فريق كيان معك.", en: "No quotes yet. Request a quote and Kian's team will follow up with you." })}
+            {hasRequest
+              ? t({ ar: "تم استلام طلبك، وسيظهر عرض السعر هنا بعد مراجعته واعتماده من فريق كيان.", en: "Your request was received — the quote will appear here after Kian's team reviews and approves it." })
+              : t({ ar: "لا توجد عروض أسعار حتى الآن. يمكنك طلب عرض سعر جديد وسيتابع فريق كيان معك.", en: "No quotes yet. Request a quote and Kian's team will follow up with you." })}
           </p>
-          <Link href="/quote-request" style={{ ...btn("#E31E24"), marginTop: 14 }}>{t({ ar: "اطلب عرض سعر", en: "Request a Quote" })}</Link>
+          {!hasRequest && <Link href="/quote-request" style={{ ...btn("#E31E24"), marginTop: 14 }}>{t({ ar: "اطلب عرض سعر", en: "Request a Quote" })}</Link>}
         </div>
       )}
 

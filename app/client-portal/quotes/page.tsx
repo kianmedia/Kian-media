@@ -6,6 +6,7 @@
 import { usePortal } from "@/components/portal/PortalShell";
 import ClientQuotes from "@/components/portal/ClientQuotes";
 import ClientQuotesList from "@/components/portal/ClientQuotesList";
+import MyRequests from "@/components/portal/MyRequests";
 import AdminQuotesInbox from "@/components/portal/AdminQuotesInbox";
 import AdminQuotesManager from "@/components/portal/AdminQuotesManager";
 
@@ -15,6 +16,6 @@ export default function QuotesPage() {
   if (profile.account_type === "admin" || caps.canSeeFinancials) {
     return <><AdminQuotesInbox /><AdminQuotesManager /></>;
   }
-  // Client/lead: submit a request + read-only formal quotes (accept / request revision).
-  return <><ClientQuotes /><ClientQuotesList /></>;
+  // Client/lead: their website requests (linked by email) + submit + published quotes.
+  return <><MyRequests /><ClientQuotes /><ClientQuotesList /></>;
 }

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea } from "@/components/forms/Field";
-import { submitToSheets, makeRef, isValidMobile, isValidEmail } from "@/lib/submitForm";
+import { submitToSheets, captureIntake, makeRef, isValidMobile, isValidEmail } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -38,6 +38,16 @@ function Form() {
     setSending(true);
     const ref = makeRef("upload");
     await submitToSheets("upload", { ...f, "Reference": ref, "Language": isAr ? "AR" : "EN" });
+    // Mirror into the portal so a same-email signup sees their uploaded file links.
+    const files = ([
+      { label: "Google Drive", url: f["Google Drive Link"] },
+      { label: "WeTransfer", url: f["WeTransfer Link"] },
+      { label: "Dropbox", url: f["Dropbox Link"] },
+    ] as { label: string; url: string }[]).filter((x) => x.url);
+    void captureIntake({
+      type: "files", email: f["Email"], phone: f["Mobile"], name: f["Client Name"], company: f["Company"],
+      reference: ref, details: f["Project Name"] || f["Notes"], source: "upload-files", files,
+    });
     setSending(false);
     setReference(ref);
     setSent(true);

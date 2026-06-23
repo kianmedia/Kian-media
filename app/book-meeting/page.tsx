@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField } from "@/components/forms/Field";
-import { submitToSheets, makeRef, isValidMobile } from "@/lib/submitForm";
+import { submitToSheets, captureIntake, makeRef, isValidMobile } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -71,6 +71,13 @@ function Form() {
       "How did you hear about us": leadLabel,
       "Lead Source": leadLabel,
       "Language": isAr ? "AR" : "EN",
+    });
+    // Mirror into the portal so a same-email signup sees this booking.
+    void captureIntake({
+      type: f["Meeting Type"] === "Phone Consultation" ? "call" : "meeting",
+      email: f["Email"], phone: f["Mobile"], name: f["Name"], company: f["Company"],
+      reference: ref, details: f["Notes"], preferred_date: f["Preferred Date"],
+      preferred_contact: meetingTypeLabel, source: "book-meeting",
     });
     setSending(false);
     setReference(ref);

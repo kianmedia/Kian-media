@@ -44,6 +44,31 @@ export function isValidMobile(mobile: string): boolean {
   return digits.length >= 9; // permissive: at least 9 digits
 }
 
+/**
+ * Best-effort: mirror a website submission into Supabase (public_intake) so the
+ * same person sees it in the portal after signing up with the same verified email.
+ * Never throws and never blocks the form. Sends the logged-in user's bearer when
+ * present so the row is attributed immediately.
+ */
+export interface IntakeInput {
+  type: "quote" | "meeting" | "call" | "files" | "contact" | "other";
+  email: string; phone?: string; name?: string; company?: string; city?: string;
+  reference?: string; services?: string[]; details?: string; preferred_date?: string;
+  preferred_contact?: string; source?: string; files?: { label?: string; url: string }[];
+  bearer?: string;
+}
+export async function captureIntake(input: IntakeInput): Promise<void> {
+  try {
+    if (!input.email || !input.email.includes("@")) return;
+    const { bearer, ...body } = input;
+    await fetch("/api/public/intake", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
+      body: JSON.stringify(body),
+    });
+  } catch { /* never block the form */ }
+}
+
 export async function submitToSheets(
   type: SubmitType,
   fields: Record<string, string | number | boolean>
