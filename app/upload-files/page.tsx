@@ -26,8 +26,9 @@ function Form() {
       alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
       return;
     }
-    if (f["Email"] && !isValidEmail(f["Email"])) {
-      alert(isAr ? "البريد الإلكتروني غير صحيح" : "Invalid email address");
+    // Email required so the uploaded files link to the client's portal account by verified email.
+    if (!f["Email"] || !isValidEmail(f["Email"])) {
+      alert(isAr ? "الرجاء إدخال بريد إلكتروني صحيح" : "Please enter a valid email address");
       return;
     }
     const hasLink = f["Google Drive Link"] || f["WeTransfer Link"] || f["Dropbox Link"];
@@ -63,7 +64,7 @@ function Form() {
       </div>
       <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div><Label htmlFor="mo" required>{t({ ar: "رقم الجوال", en: "Mobile Number" })}</Label><TextField id="mo" type="tel" dir="ltr" value={f["Mobile"]} onChange={(v) => set("Mobile", v)} required /></div>
-        <div><Label htmlFor="em">{t({ ar: "البريد الإلكتروني", en: "Email Address" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} /></div>
+        <div><Label htmlFor="em" required>{t({ ar: "البريد الإلكتروني", en: "Email Address" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} required /></div>
       </div>
       <div><Label htmlFor="pn">{t({ ar: "اسم المشروع", en: "Project Name" })}</Label><TextField id="pn" value={f["Project Name"]} onChange={(v) => set("Project Name", v)} /></div>
 

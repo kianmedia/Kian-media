@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField } from "@/components/forms/Field";
-import { submitToSheets, captureIntake, makeRef, isValidMobile } from "@/lib/submitForm";
+import { submitToSheets, captureIntake, makeRef, isValidMobile, isValidEmail } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -44,6 +44,11 @@ function Form() {
     }
     if (!isValidMobile(f["Mobile"])) {
       alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
+      return;
+    }
+    // Email required so the booking links to the client's portal account by verified email.
+    if (!f["Email"] || !isValidEmail(f["Email"])) {
+      alert(isAr ? "الرجاء إدخال بريد إلكتروني صحيح" : "Please enter a valid email address");
       return;
     }
     setSending(true);
@@ -99,7 +104,7 @@ function Form() {
       </div>
       <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div><Label htmlFor="mo" required>{t({ ar: "الجوال", en: "Mobile" })}</Label><TextField id="mo" type="tel" dir="ltr" value={f["Mobile"]} onChange={(v) => set("Mobile", v)} required /></div>
-        <div><Label htmlFor="em">{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} /></div>
+        <div><Label htmlFor="em" required>{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} required /></div>
       </div>
       <div><Label htmlFor="mt" required>{t({ ar: "نوع الاجتماع", en: "Meeting Type" })}</Label>
         <SelectField id="mt" value={f["Meeting Type"]} onChange={(v) => set("Meeting Type", v)} options={MEETING_TYPES.map((m) => ({ value: m.en, label: isAr ? m.ar : m.en }))} required /></div>
