@@ -20,6 +20,15 @@ export async function getQuote(quoteId: string): Promise<Result<Quote | null>> {
   if (!r.ok) return r;
   return { ok: true, data: r.data[0] ?? null };
 }
+
+/** Admin/manager single-quote getter via SECURITY DEFINER RPC (same gate as the
+ *  pending list), so a quote-manager can open ANY quote — incl. a draft/zero-total
+ *  one that the table-RLS read path may not return. Returns the quote + its items. */
+export async function getQuoteAdmin(quoteId: string): Promise<Result<{ quote: Quote; items: QuoteItem[] } | null>> {
+  const r = await prpc<{ quote: Quote; items: QuoteItem[] } | null>("get_quote_admin", { p_quote: quoteId });
+  if (!r.ok) return r;
+  return { ok: true, data: r.data ?? null };
+}
 export function getQuoteItems(quoteId: string): Promise<Result<QuoteItem[]>> {
   return pget<QuoteItem[]>(`quote_items?quote_id=eq.${enc(quoteId)}&select=*&order=position.asc`);
 }

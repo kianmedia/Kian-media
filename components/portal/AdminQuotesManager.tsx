@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  listQuotes, getQuote, getQuoteItems, listQuoteRevisions, listQuoteClients,
+  listQuotes, getQuoteAdmin, getQuoteItems, listQuoteRevisions, listQuoteClients,
   createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility,
   listPendingQuoteRequests, convertQuoteRequest, createEstimateFromRequest, syncEstimate, approveQuote,
   type QuoteItemInput, type PendingQuoteRequest,
@@ -73,19 +73,31 @@ export default function AdminQuotesManager() {
   }
 
   // Open the formal quote linked to a request. Uses the RPC's linked_quote_id (not a
-  // client-side guess); if that quote isn't in the loaded list, fetch + inject it.
+  // client-side guess). If the quote isn't in the loaded list, fetch it via the
+  // SECURITY DEFINER admin getter (same gate as the pending list) so draft/zero/
+  // RLS-hidden quotes still open. Surfaces the real error on failure.
   async function openLinkedQuote(pr: PendingQuoteRequest) {
     const qid = pr.linked_quote_id || quotes.find((x) => x.quote_request_id === pr.id)?.id || null;
     if (!qid) { flash(t({ ar: "لا يوجد عرض مرتبط بهذا الطلب.", en: "No quote is linked to this request." })); return; }
-    if (!quotes.some((x) => x.id === qid)) {
-      const r = await getQuote(qid);
-      if (!r.ok || !r.data) { flash(t({ ar: "تعذّر فتح العرض المرتبط — جرّب التحديث.", en: "Couldn't open the linked quote — try refreshing." })); await reload(); return; }
-      const fetched = r.data;
-      setQuotes((prev) => (prev.some((x) => x.id === fetched.id) ? prev : [fetched, ...prev]));
-    }
-    setOpenId(qid);
-    await loadEditItems(qid);
-    scrollToQuote(qid);
+    setBusy(true);
+    try {
+      if (!quotes.some((x) => x.id === qid)) {
+        const r = await getQuoteAdmin(qid);
+        if (!r.ok) {
+          console.error("[open-quote] get_quote_admin failed:", r.error);
+          flash((isAr ? "تعذّر فتح العرض: " : "Couldn't open quote: ") + r.error);
+          return;
+        }
+        if (!r.data) { flash(t({ ar: "العرض غير موجود (قد يكون محذوفًا).", en: "Quote not found (it may be deleted)." })); await reload(); return; }
+        const { quote, items } = r.data;
+        setQuotes((prev) => (prev.some((x) => x.id === quote.id) ? prev.map((x) => (x.id === quote.id ? quote : x)) : [quote, ...prev]));
+        setEditItems((p) => ({ ...p, [qid]: items.length ? items.map((x) => ({ title: x.title, description: x.description ?? "", quantity: x.quantity, unit_price: x.unit_price })) : [emptyItem()] }));
+      } else {
+        await loadEditItems(qid);
+      }
+      setOpenId(qid);
+      scrollToQuote(qid);
+    } finally { setBusy(false); }
   }
 
   // Create a DRAFT Zoho estimate from the request; fall back to a LOCAL draft if Zoho is off.
@@ -241,6 +253,9 @@ export default function AdminQuotesManager() {
 
               {open && (
                 <div style={{ padding: "0 16px 16px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                  {rows.every((it) => !it.title.trim()) && (
+                    <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, marginTop: 12 }}>{t({ ar: "لم تتم إضافة بنود بعد — أضف البنود ثم احفظ.", en: "No line items yet — add items, then save." })}</p>
+                  )}
                   {/* Line items editor */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
                     {rows.map((it, i) => (
