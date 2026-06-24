@@ -113,7 +113,7 @@ export interface NotificationRow {
 
 export interface QuoteRequest extends SoftDeletable {
   id: string;
-  user_id: string;
+  user_id: string | null;          // NULL for guest website submissions (promoted from public_intake)
   reference: string | null;
   services: string[];
   description: string | null;
@@ -125,6 +125,14 @@ export interface QuoteRequest extends SoftDeletable {
   zoho_deal_id: string | null;
   zoho_books_estimate_id: string | null;
   created_at: string;
+  // Inline contact carried by guest (public_intake-promoted) rows when there is no profile yet.
+  email?: string | null;
+  full_name?: string | null;
+  company?: string | null;
+  phone?: string | null;
+  preferred_contact?: string | null;
+  source?: string | null;
+  source_intake_id?: string | null;
 }
 
 export interface MessageRow extends SoftDeletable {

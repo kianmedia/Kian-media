@@ -22,7 +22,8 @@ export default function AdminQuotesInbox() {
     const r = await adminListQuotes();
     if (!r.ok) { setErr(r.error); setPhase("error"); return; }
     setQuotes(r.data);
-    const ids = Array.from(new Set(r.data.map((q) => q.user_id)));
+    // Guest (website) rows have user_id NULL — only resolve real profile ids.
+    const ids = Array.from(new Set(r.data.map((q) => q.user_id).filter((x): x is string => !!x)));
     const sp = await adminListSenders(ids);
     if (sp.ok) {
       const map: Record<string, SenderProfile> = {};
@@ -42,10 +43,12 @@ export default function AdminQuotesInbox() {
   }, []);
 
   function senderLine(q: QuoteRequest): string {
-    const s = senders[q.user_id];
-    if (!s) return q.user_id.slice(0, 8) + "…";
-    const name = s.full_name || s.email;
-    return s.company ? `${name} · ${s.company}` : name;
+    const s = q.user_id ? senders[q.user_id] : undefined;
+    // Fall back to the guest's inline contact (public_intake-promoted rows have no profile).
+    const name = s?.full_name || s?.email || q.full_name || q.email
+      || (q.user_id ? q.user_id.slice(0, 8) + "…" : t({ ar: "زائر من الموقع", en: "Website guest" }));
+    const company = s?.company || q.company;
+    return company ? `${name} · ${company}` : name;
   }
 
   const stats = useMemo(() => {
@@ -99,7 +102,7 @@ export default function AdminQuotesInbox() {
                 {/* Detail panel */}
                 {open && (
                   <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "18px" }}>
-                    <DetailGrid q={q} sender={senders[q.user_id]} />
+                    <DetailGrid q={q} sender={q.user_id ? senders[q.user_id] : undefined} />
                   </div>
                 )}
               </div>
@@ -125,17 +128,26 @@ function DetailGrid({ q, sender }: { q: QuoteRequest; sender?: SenderProfile }) 
   const zoho = (id: string | null | undefined) =>
     id ? id : t({ ar: "غير مزامن بعد (لاحقاً)", en: "Not synced yet (future)" });
 
+  // Guest (website) rows carry contact inline; staff rows resolve it from the profile.
+  const clientName = (sender ? (sender.full_name || sender.email) : (q.full_name || q.email)) || (q.user_id ?? "");
+  const company = sender?.company || q.company;
+  const email = sender?.email || q.email;
+  const fromWebsite = !!q.source_intake_id;
+
   return (
     <div>
       {row(t({ ar: "رقم الطلب", en: "Reference" }), q.reference, { ltr: true })}
-      {row(t({ ar: "العميل", en: "Client" }), sender ? (sender.full_name || sender.email) : q.user_id)}
-      {row(t({ ar: "الشركة", en: "Company" }), sender?.company)}
-      {row(t({ ar: "البريد", en: "Email" }), sender?.email, { ltr: true })}
+      {row(t({ ar: "العميل", en: "Client" }), clientName)}
+      {row(t({ ar: "الشركة", en: "Company" }), company)}
+      {row(t({ ar: "البريد", en: "Email" }), email, { ltr: true })}
+      {row(t({ ar: "الجوال", en: "Phone" }), q.phone, { ltr: true })}
       {row(t({ ar: "الخدمات", en: "Services" }), q.services.map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", "))}
-      {row(t({ ar: "الوصف (يشمل العنوان/التواصل/الملاحظات)", en: "Description (incl. title/contact/notes)" }), q.description, { pre: true })}
+      {row(t({ ar: "الوصف / الملاحظات", en: "Description / Notes" }), q.description, { pre: true })}
       {row(t({ ar: "المدينة", en: "City" }), q.city)}
+      {row(t({ ar: "طريقة/وقت التواصل المفضّل", en: "Preferred Contact" }), q.preferred_contact)}
       {row(t({ ar: "الميزانية", en: "Budget" }), q.budget_range)}
       {row(t({ ar: "التاريخ المفضّل", en: "Preferred Date" }), q.preferred_date, { ltr: true })}
+      {row(t({ ar: "المصدر", en: "Source" }), fromWebsite ? t({ ar: `الموقع${q.source ? ` · ${q.source}` : ""}`, en: `Website${q.source ? ` · ${q.source}` : ""}` }) : (q.source || t({ ar: "البوابة", en: "Portal" })))}
       {row(t({ ar: "الحالة", en: "Status" }), t(QUOTE_STATUS_LABELS[q.status] ?? { ar: q.status, en: q.status }))}
       {row(t({ ar: "تاريخ الإنشاء", en: "Created" }), new Date(q.created_at).toLocaleString(isAr ? "ar-SA" : "en-GB"), { ltr: true })}
       {row(t({ ar: "النسخة الاحتياطية (Google Sheet)", en: "Backup (Google Sheet)" }), q.sheet_mirrored ? t({ ar: "تم النسخ ✓", en: "Mirrored ✓" }) : t({ ar: "لم يتم", en: "Not mirrored" }))}
