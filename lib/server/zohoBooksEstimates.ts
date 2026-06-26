@@ -178,6 +178,19 @@ export function getEstimate(estimateId: string): Promise<EstimateResult<Normaliz
   });
 }
 
+/** Fetch the official Zoho Books estimate PDF as raw bytes (for authorized portal streaming).
+ *  Uses a raw fetch (not the JSON call() helper) so we read the binary body. Needs only
+ *  the existing estimates.READ scope. */
+export function fetchEstimatePdf(estimateId: string): Promise<EstimateResult<{ bytes: ArrayBuffer; filename: string }>> {
+  return withToken(async (cfg, token, base) => {
+    const url = `${base}/estimates/${encodeURIComponent(estimateId)}?organization_id=${encodeURIComponent(cfg.orgId)}&accept=pdf`;
+    const res = await fetch(url, { method: "GET", headers: { Authorization: `Zoho-oauthtoken ${token}`, Accept: "application/pdf" }, cache: "no-store" });
+    if (res.status === 401) throw new Error("INVALID_TOKEN");
+    if (!res.ok) throw new Error(`books_estimate_pdf_http_${res.status}`);
+    return { bytes: await res.arrayBuffer(), filename: `estimate-${estimateId}.pdf` };
+  });
+}
+
 /** Mark an estimate sent / accepted / declined in Zoho (status sync). */
 export function markEstimateStatus(estimateId: string, action: "sent" | "accepted" | "declined"): Promise<EstimateResult<{ status: string }>> {
   return withToken(async (cfg, token, base) => {

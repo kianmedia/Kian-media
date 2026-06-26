@@ -347,6 +347,7 @@ export interface Quote {
   client_response?: "pending" | "accepted" | "declined" | null;
   admin_approved_at?: string | null;
   admin_approved_by?: string | null;
+  published_at?: string | null;        // first publish-to-client moment (docs/portal_guest_quote_publish_fix_RUNME.sql)
   synced_at?: string | null;
   // Tax-invoice approval flow (additive — docs/portal_invoice_approval_RUNME.sql).
   invoice_approval_status?: "none" | "invoice_approval_pending" | "invoice_creation_approved" | "invoice_created" | "invoice_creation_failed" | null;

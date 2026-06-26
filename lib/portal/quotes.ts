@@ -140,6 +140,33 @@ export async function respondToQuote(quoteId: string, response: "accepted" | "de
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
+/** Open the official Zoho estimate PDF for a quote the user is authorized to see.
+ *  The portal authenticates with a localStorage JWT (not cookies), so we fetch the
+ *  signed route WITH the bearer, get the PDF blob, and open it — a plain <a href>
+ *  would arrive unauthenticated. Returns ok:false (with a reason) when Zoho is
+ *  unconfigured or the estimate has no PDF, so the caller can show a fallback. */
+export async function openEstimatePdf(quoteId: string): Promise<Result<boolean>> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated", status: 401 };
+  try {
+    const res = await fetch(`/api/integrations/zoho/estimate-pdf?quote_id=${enc(quoteId)}`, {
+      headers: { Authorization: `Bearer ${s.access_token}` },
+    });
+    if (!res.ok || !(res.headers.get("content-type") || "").includes("application/pdf")) {
+      let err = `HTTP ${res.status}`;
+      try {
+        const j = (await res.json()) as { configured?: boolean; reason?: string; error?: string };
+        err = j.configured === false ? "zoho_not_configured" : (j.reason || j.error || err);
+      } catch { /* non-JSON */ }
+      return { ok: false, error: err, status: res.status };
+    }
+    const url = URL.createObjectURL(await res.blob());
+    window.open(url, "_blank", "noopener");
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return { ok: true, data: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
 /** Best-effort: link this user's email-matched quotes to their client context. */
 export function promoteByEmail(): Promise<Result<{ recognized: boolean; linked: number; has_client: boolean }>> {
   return prpc<{ recognized: boolean; linked: number; has_client: boolean }>("promote_and_link_by_email", {});

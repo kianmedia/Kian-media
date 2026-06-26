@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
-import { listQuotes, getQuoteItems, requestQuoteRevision, respondToQuote, promoteByEmail } from "@/lib/portal/quotes";
+import { listQuotes, getQuoteItems, requestQuoteRevision, respondToQuote, promoteByEmail, openEstimatePdf } from "@/lib/portal/quotes";
 import { listMyIntake } from "@/lib/portal/intake";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteItem } from "@/lib/portal/types";
 
@@ -51,8 +51,21 @@ export default function ClientQuotesList() {
       if (r.ok) setItems((p) => ({ ...p, [id]: r.data }));
     }
   }
+  async function viewPdf(q: Quote) {
+    flash(t({ ar: "جارٍ فتح PDF…", en: "Opening PDF…" }));
+    const r = await openEstimatePdf(q.id);
+    if (!r.ok) {
+      flash(r.error === "zoho_not_configured"
+        ? t({ ar: "نسخة PDF غير متاحة حالياً — تواصل مع فريق كيان.", en: "PDF not available yet — please contact Kian's team." })
+        : (isAr ? "تعذّر فتح PDF: " : "Couldn't open PDF: ") + r.error);
+    }
+  }
   async function respond(q: Quote, response: "accepted" | "declined") {
     if (readOnly) return;
+    // Rejection notes are required (parity with request-revision).
+    if (response === "declined" && !(revBox[q.id] || "").trim()) {
+      flash(t({ ar: "اكتب سبب الرفض أولاً", en: "Write the reason for declining first" })); return;
+    }
     const ask = response === "accepted" ? t({ ar: "تأكيد قبول عرض السعر؟", en: "Accept this quote?" }) : t({ ar: "تأكيد رفض عرض السعر؟", en: "Decline this quote?" });
     if (!window.confirm(ask)) return;
     setBusy(true);
@@ -146,11 +159,17 @@ export default function ClientQuotesList() {
                   </div>
                   {q.notes && <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 12.5, marginTop: 12, lineHeight: 1.8 }}>{q.notes}</p>}
 
-                  {/* Official Zoho estimate → PDF/preview note (no usable public PDF in this foundation) */}
-                  {q.source === "zoho" && (
-                    <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, marginTop: 12, lineHeight: 1.7, padding: "8px 11px", background: "rgba(37,211,102,0.06)", border: "1px solid rgba(37,211,102,0.18)", borderRadius: 8 }}>
-                      {t({ ar: "هذا عرض رسمي من Zoho Books. نسخة PDF الرسمية متاحة عبر فريق كيان عند الطلب.", en: "This is an official Zoho Books estimate. The official PDF is available from Kian's team on request." })}
-                    </p>
+                  {/* Official Zoho estimate → stream the real Zoho Books PDF to the authorized client. */}
+                  {q.source === "zoho" && q.zoho_estimate_id && (
+                    <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <button onClick={() => void viewPdf(q)} style={btn("rgba(37,211,102,0.18)")}>
+                        {t({ ar: "عرض PDF", en: "View PDF" })}
+                      </button>
+                      <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11.5 }}>
+                        {t({ ar: "عرض رسمي من Zoho Books", en: "Official Zoho Books estimate" })}
+                        {q.published_at ? ` · ${t({ ar: "نُشر", en: "published" })} ${new Date(q.published_at).toLocaleDateString(isAr ? "ar-SA" : "en-GB")}` : ""}
+                      </span>
+                    </div>
                   )}
 
                   {q.client_response && q.client_response !== "pending" ? (
@@ -163,7 +182,7 @@ export default function ClientQuotesList() {
                     <>
                       <div style={{ marginTop: 12 }}>
                         <textarea value={revBox[q.id] || ""} onChange={(e) => setRevBox((p) => ({ ...p, [q.id]: e.target.value }))} rows={2}
-                          placeholder={t({ ar: "ملاحظة (اختياري) — تُرفق عند الرفض أو طلب التعديل…", en: "Note (optional) — attached when you decline or request a revision…" })} style={inp} />
+                          placeholder={t({ ar: "ملاحظة — مطلوبة عند الرفض أو طلب التعديل…", en: "Note — required when you decline or request a revision…" })} style={inp} />
                       </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                         {canAccept && <button onClick={() => void respond(q, "accepted")} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "قبول العرض", en: "Accept" })}</button>}
