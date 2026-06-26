@@ -28,9 +28,11 @@ export default function ClientQuotesList() {
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2800); };
 
   const [hasRequest, setHasRequest] = useState(false);
+  const [err, setErr] = useState("");
   const reload = useCallback(async () => {
     const r = await listQuotes();
     setQuotes(r.ok ? r.data : []);
+    setErr(r.ok ? "" : r.error);
     setPhase(r.ok ? "ready" : "error");
   }, []);
   useEffect(() => {
@@ -100,7 +102,14 @@ export default function ClientQuotesList() {
 
       {phase === "loading" && <p className="text-white/45" style={{ fontSize: 13.5 }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}
 
-      {phase !== "loading" && quotes.length === 0 && (
+      {phase === "error" && (
+        <div style={{ padding: "14px 16px", fontSize: 13, color: "#ff9ea1", background: "rgba(227,30,36,0.08)", border: "1px solid rgba(227,30,36,0.3)", borderRadius: 8 }}>
+          {t({ ar: "تعذّر تحميل عروض الأسعار. حدّث الصفحة، وإن استمرت المشكلة أبلغ فريق كيان.", en: "Couldn't load quotes. Refresh the page; if it persists, tell Kian's team." })}
+          <span style={{ display: "block", marginTop: 6, color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "ui-monospace, Menlo, monospace" }}>{err}</span>
+        </div>
+      )}
+
+      {phase === "ready" && quotes.length === 0 && (
         <div style={{ padding: "26px 22px", background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.14)", borderRadius: 8 }}>
           <p className="text-white/60" style={{ fontSize: 14, lineHeight: 1.9, maxWidth: 560 }}>
             {hasRequest
@@ -185,8 +194,8 @@ export default function ClientQuotesList() {
                           placeholder={t({ ar: "ملاحظة — مطلوبة عند الرفض أو طلب التعديل…", en: "Note — required when you decline or request a revision…" })} style={inp} />
                       </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                        {canAccept && <button onClick={() => void respond(q, "accepted")} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "قبول العرض", en: "Accept" })}</button>}
-                        {canAccept && <button onClick={() => void respond(q, "declined")} disabled={busy || readOnly} style={btn("rgba(227,30,36,0.7)", busy || readOnly)}>{t({ ar: "رفض العرض", en: "Decline" })}</button>}
+                        {canAccept && <button onClick={() => void respond(q, "accepted")} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "موافقة", en: "Approve" })}</button>}
+                        {canAccept && <button onClick={() => void respond(q, "declined")} disabled={busy || readOnly} style={btn("rgba(227,30,36,0.7)", busy || readOnly)}>{t({ ar: "رفض", en: "Reject" })}</button>}
                         <button onClick={() => void revise(q.id)} disabled={busy || readOnly} style={btn("rgba(255,255,255,0.10)", busy || readOnly)}>
                           {t({ ar: "طلب تعديل", en: "Request Revision" })}
                         </button>
