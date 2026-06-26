@@ -25,20 +25,21 @@ const REG: Record<string, TabDef> = {
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
+  deliveries:    { href: "/client-portal/deliveries",    ar: "سجل التسليم",  en: "Delivery Log" },
   profile:       { href: "/client-portal/profile",       ar: "ملفي",        en: "Profile",       adminAr: "الإعدادات",            adminEn: "Settings" },
 };
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "whatsapp", "opportunities", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "whatsapp", "opportunities", "invoices", "notifications", "profile"],
-  manager:     ["overview", "projects", "quotes", "messages", "files", "whatsapp", "opportunities", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "whatsapp", "opportunities", "invoices", "deliveries", "notifications", "profile"],
+  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "whatsapp", "opportunities", "invoices", "deliveries", "notifications", "profile"],
+  manager:     ["overview", "projects", "quotes", "messages", "files", "whatsapp", "opportunities", "invoices", "deliveries", "notifications", "profile"],
   support:     ["messages", "files", "whatsapp", "notifications", "profile"],
-  sales:       ["quotes", "whatsapp", "notifications", "profile"],
+  sales:       ["quotes", "whatsapp", "deliveries", "notifications", "profile"],
   editor:      ["projects", "notifications", "profile"],
   hr:          ["overview", "whatsapp", "opportunities", "notifications", "profile"],
   readonly:    ["projects", "notifications", "profile"],
-  finance:     ["invoices", "whatsapp", "notifications", "profile"],
+  finance:     ["invoices", "whatsapp", "deliveries", "notifications", "profile"],
   client:      ["overview", "explore", "projects", "quotes", "messages", "files", "invoices", "offers", "notifications", "profile"],
   lead:        ["overview", "explore", "quotes", "messages", "files", "offers", "notifications", "profile"],
 };
