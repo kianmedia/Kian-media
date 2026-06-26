@@ -138,13 +138,13 @@ export default function ProfileSettings() {
               checked={prefs.portal_enabled} disabled={readOnly}
               onChange={(v) => togglePref("portal_enabled", v)} />
             <Toggle label={t({ ar: "إشعارات البريد الإلكتروني", en: "Email notifications" })}
-              checked={prefs.email_enabled} disabled={readOnly} planned
+              checked={prefs.email_enabled} disabled={readOnly}
               onChange={(v) => togglePref("email_enabled", v)} />
             <Toggle label={t({ ar: "إشعارات واتساب", en: "WhatsApp notifications" })}
-              checked={prefs.whatsapp_enabled} disabled={readOnly} planned
+              checked={prefs.whatsapp_enabled} disabled={readOnly}
               onChange={(v) => togglePref("whatsapp_enabled", v)} />
             <p className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", lineHeight: 1.6, marginTop: "2px" }}>
-              {t({ ar: "تفضيلات البريد وواتساب تُحفظ الآن وسيتم تفعيل الإرسال الخارجي لاحقاً.", en: "Email & WhatsApp preferences are saved now; external delivery will be activated later." })}
+              {t({ ar: "بتفعيل واتساب فإنك توافق على استلام رسائل المعاملات عبر واتساب على رقمك المسجّل.", en: "Enabling WhatsApp means you consent to receive transactional WhatsApp messages on your registered number." })}
             </p>
           </div>
         ) : (

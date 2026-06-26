@@ -6,7 +6,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listDeliveries, EVENT_LABELS, STATUS_STYLE, type NotificationDelivery, type DeliveryStatus } from "@/lib/portal/deliveries";
+import { listDeliveries, processPending, retryDelivery, EVENT_LABELS, STATUS_STYLE, type NotificationDelivery, type DeliveryStatus, type DeliveryChannel } from "@/lib/portal/deliveries";
 
 // Mask destinations so one client's contact isn't shown in full.
 const maskEmail = (e: string | null) => !e ? "" : e.replace(/^(.).*(@.*)$/, (_, a, d) => `${a}***${d}`);
@@ -18,6 +18,10 @@ export default function DeliveriesView() {
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [err, setErr] = useState("");
   const [filter, setFilter] = useState<"all" | DeliveryStatus>("all");
+  const [chan, setChan] = useState<"all" | DeliveryChannel>("all");
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3500); };
 
   const load = useCallback(async () => {
     const r = await listDeliveries(400);
@@ -26,12 +30,28 @@ export default function DeliveriesView() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
+  async function runProcessor() {
+    setBusy(true);
+    const r = await processPending();
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    flash(r.data.disabled
+      ? t({ ar: "المعالِج معطّل (DELIVERY_PROCESSOR_ENABLED=false).", en: "Processor disabled (DELIVERY_PROCESSOR_ENABLED=false)." })
+      : `${t({ ar: "تمت المعالجة", en: "Processed" })}: claimed ${r.data.claimed} · sent ${r.data.sent} · dry_run ${r.data.dry_run} · skipped ${r.data.skipped} · failed ${r.data.failed}`);
+    await load();
+  }
+  async function doRetry(id: string) {
+    setBusy(true); const r = await retryDelivery(id); setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    flash(t({ ar: "أُعيد إلى قائمة الانتظار.", en: "Requeued." })); await load();
+  }
+
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: rows.length };
     rows.forEach((r) => { c[r.status] = (c[r.status] ?? 0) + 1; });
     return c;
   }, [rows]);
-  const shown = filter === "all" ? rows : rows.filter((r) => r.status === filter);
+  const shown = rows.filter((r) => (filter === "all" || r.status === filter) && (chan === "all" || r.channel === chan));
 
   const cell: React.CSSProperties = { padding: "8px 10px", fontSize: 12, color: "rgba(255,255,255,0.82)", borderBottom: "1px solid rgba(255,255,255,0.05)", whiteSpace: "nowrap" };
   const th: React.CSSProperties = { padding: "8px 10px", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", textAlign: isAr ? "right" : "left", borderBottom: "1px solid rgba(255,255,255,0.1)" };
@@ -58,9 +78,21 @@ export default function DeliveriesView() {
             background: filter === f ? "rgba(227,30,36,0.14)" : "transparent", color: "rgba(255,255,255,0.8)",
           }}>{f}{typeof counts[f] === "number" ? ` (${counts[f]})` : ""}</button>
         ))}
-        <button onClick={() => void load()} style={{ fontSize: 11.5, padding: "5px 11px", borderRadius: 7, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "rgba(255,255,255,0.6)", marginInlineStart: "auto" }}>
-          {t({ ar: "تحديث", en: "Refresh" })}
-        </button>
+        <span style={{ marginInlineStart: "auto", display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {(["all", "portal", "email", "whatsapp"] as const).map((c) => (
+            <button key={c} onClick={() => setChan(c)} style={{
+              fontSize: 11, padding: "5px 10px", borderRadius: 7, cursor: "pointer",
+              border: chan === c ? "1px solid rgba(99,179,237,0.6)" : "1px solid rgba(255,255,255,0.1)",
+              background: chan === c ? "rgba(99,179,237,0.12)" : "transparent", color: "rgba(255,255,255,0.7)",
+            }}>{c}</button>
+          ))}
+          <button onClick={() => void runProcessor()} disabled={busy} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, cursor: busy ? "wait" : "pointer", border: "1px solid rgba(37,211,102,0.5)", background: "rgba(37,211,102,0.14)", color: "#7ee2a8", opacity: busy ? 0.6 : 1 }}>
+            {t({ ar: "معالجة المعلّقة", en: "Process pending" })}
+          </button>
+          <button onClick={() => void load()} style={{ fontSize: 11.5, padding: "5px 11px", borderRadius: 7, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
+            {t({ ar: "تحديث", en: "Refresh" })}
+          </button>
+        </span>
       </div>
 
       {phase === "loading" && <p className="text-white/45" style={{ fontSize: 13 }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}
@@ -76,8 +108,10 @@ export default function DeliveriesView() {
               <th style={th}>{t({ ar: "القناة", en: "Channel" })}</th>
               <th style={th}>{t({ ar: "الوجهة", en: "Destination" })}</th>
               <th style={th}>{t({ ar: "الحالة", en: "Status" })}</th>
+              <th style={th}>{t({ ar: "المزوّد", en: "Provider" })}</th>
               <th style={th}>{t({ ar: "السبب/الخطأ", en: "Reason / Error" })}</th>
               <th style={th}>{t({ ar: "الوقت", en: "Time" })}</th>
+              <th style={th}></th>
             </tr></thead>
             <tbody>
               {shown.map((r) => {
@@ -90,8 +124,16 @@ export default function DeliveriesView() {
                     <td style={cell}>{r.channel}</td>
                     <td style={{ ...cell, direction: "ltr", fontFamily: "ui-monospace, Menlo, monospace" }}>{dest || "—"}</td>
                     <td style={cell}><span style={chip(r.status)}>{r.status}</span></td>
+                    <td style={{ ...cell, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{r.provider || "—"}{r.provider_message_id ? <span style={{ display: "block", color: "rgba(255,255,255,0.3)", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.provider_message_id.slice(0, 14)}</span> : null}</td>
                     <td style={{ ...cell, color: r.error_message ? "#ff9ea1" : "rgba(255,255,255,0.5)", whiteSpace: "normal" }}>{r.error_message || r.skip_reason || "—"}{r.retry_count > 0 ? ` · ↻${r.retry_count}` : ""}</td>
                     <td style={{ ...cell, direction: "ltr", color: "rgba(255,255,255,0.45)" }}>{new Date(r.created_at).toLocaleString(isAr ? "ar-SA" : "en-GB")}</td>
+                    <td style={cell}>
+                      {(r.status === "failed" || r.status === "skipped") && r.channel !== "portal" && (
+                        <button onClick={() => void doRetry(r.id)} disabled={busy} style={{ fontSize: 10.5, padding: "3px 9px", borderRadius: 6, cursor: busy ? "wait" : "pointer", border: "1px solid rgba(255,255,255,0.16)", background: "transparent", color: "rgba(255,255,255,0.7)" }}>
+                          {t({ ar: "إعادة", en: "Retry" })}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -99,6 +141,7 @@ export default function DeliveriesView() {
           </table>
         </div>
       )}
+      {toast && <div style={{ position: "fixed", insetInlineEnd: 20, bottom: 20, background: "rgba(0,0,0,0.92)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 10, padding: "10px 16px", fontSize: 12.5, color: "#fff", zIndex: 50, maxWidth: 420 }}>{toast}</div>}
     </div>
   );
 }

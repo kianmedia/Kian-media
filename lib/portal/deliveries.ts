@@ -4,6 +4,7 @@
 // never read this table. Mirrors docs/portal_notification_delivery_stage1_RUNME.sql.
 // ════════════════════════════════════════════════════════════════════════
 import { prpc, type Result } from "@/lib/portal/client";
+import { getValidSession } from "@/lib/portalAuth";
 
 export type DeliveryChannel = "portal" | "email" | "whatsapp";
 export type DeliveryStatus = "pending" | "sent" | "failed" | "skipped" | "dry_run";
@@ -30,10 +31,30 @@ export interface NotificationDelivery {
   created_at: string;
   sent_at: string | null;
   updated_at: string;
+  claimed_at?: string | null;
 }
 
 export function listDeliveries(limit = 300, entityId?: string): Promise<Result<NotificationDelivery[]>> {
   return prpc<NotificationDelivery[]>("list_deliveries", { p_limit: limit, p_entity: entityId ?? null });
+}
+
+/** Admin: requeue a failed/skipped row (gated can_manage_quotes server-side). */
+export function retryDelivery(id: string): Promise<Result<boolean>> {
+  return prpc<boolean>("retry_delivery", { p_id: id });
+}
+
+/** Admin "process now": triggers the processor with the staff bearer (no secret needed). */
+export async function processPending(): Promise<Result<{ claimed: number; sent: number; failed: number; skipped: number; dry_run: number; disabled?: boolean }>> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated", status: 401 };
+  try {
+    const res = await fetch("/api/integrations/deliveries/process", {
+      method: "POST", headers: { Authorization: `Bearer ${s.access_token}` },
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) return { ok: false, error: d.error || `HTTP ${res.status}`, status: res.status };
+    return { ok: true, data: d };
+  } catch (e) { return { ok: false, error: String(e) }; }
 }
 
 export const EVENT_LABELS: Record<string, { ar: string; en: string }> = {
