@@ -64,9 +64,19 @@ export async function processPending(): Promise<Result<ProcessResult>> {
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
+export type ConfigIssueReason =
+  | "missing" | "non_ascii_header" | "control_chars" | "placeholder" | "not_http_url" | "not_numeric";
+export interface ConfigIssue { env: string; reason: ConfigIssueReason }
+
 export interface DeliveryStatusInfo {
   processor_enabled: boolean; dry_run: boolean; email_send: boolean; whatsapp_send: boolean;
   whatsapp_allow_all: boolean; whatsapp_webhook: boolean; whatsapp_webhook_secret: boolean; whatsapp_meta: boolean;
+  // Outbound WhatsApp config health (presence + header-safety). No secret values.
+  n8n_webhook_present?: boolean; n8n_webhook_valid?: boolean;
+  n8n_secret_present?: boolean; n8n_secret_valid_header_value?: boolean;
+  whatsapp_token_present?: boolean; whatsapp_token_valid_header_value?: boolean;
+  whatsapp_phone_number_id_present?: boolean; whatsapp_phone_number_id_valid?: boolean;
+  config_issues?: ConfigIssue[];
 }
 
 /** Read the server-side gating config (no processing) so the UI can show a clear

@@ -6,11 +6,32 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listDeliveries, processPending, getDeliveryStatus, retryDelivery, EVENT_LABELS, STATUS_STYLE, type NotificationDelivery, type DeliveryStatus, type DeliveryChannel, type ProcessResult, type DeliveryStatusInfo } from "@/lib/portal/deliveries";
+import { listDeliveries, processPending, getDeliveryStatus, retryDelivery, EVENT_LABELS, STATUS_STYLE, type NotificationDelivery, type DeliveryStatus, type DeliveryChannel, type ProcessResult, type DeliveryStatusInfo, type ConfigIssueReason } from "@/lib/portal/deliveries";
 
 // Mask destinations so one client's contact isn't shown in full.
 const maskEmail = (e: string | null) => !e ? "" : e.replace(/^(.).*(@.*)$/, (_, a, d) => `${a}***${d}`);
 const maskPhone = (p: string | null) => { const d = (p || "").replace(/[^\d]/g, ""); return d ? `••••${d.slice(-4)}` : ""; };
+
+// Safe, human-readable copy for a config issue reason. Names the env var; never a value.
+const REASON_TEXT: Record<ConfigIssueReason, { ar: string; en: string }> = {
+  non_ascii_header: { ar: "يحتوي على حروف غير مدعومة في الهيدر (غير ASCII/عربية)", en: "contains non-ASCII characters (not header-safe)" },
+  control_chars:    { ar: "يحتوي على رموز تحكم أو مسافات غير صالحة", en: "contains control/whitespace characters" },
+  placeholder:      { ar: "ما زال يحمل قيمة افتراضية/مكان حجز", en: "still looks like a placeholder value" },
+  not_http_url:     { ar: "ليس رابط http/https صالحًا", en: "is not a valid http/https URL" },
+  not_numeric:      { ar: "يجب أن يكون أرقامًا فقط", en: "must be numeric digits only" },
+  missing:          { ar: "غير مُعرّف", en: "is missing" },
+};
+const configIssueMsg = (env: string, reason: ConfigIssueReason, isAr: boolean) =>
+  isAr ? `إعداد غير صالح: ${env} ${REASON_TEXT[reason].ar}` : `Invalid config: ${env} ${REASON_TEXT[reason].en}`;
+
+// Turn a row error like "invalid_config:N8N_WHATSAPP_SEND_SECRET:non_ascii_header" into clear copy.
+function friendlyRowError(raw: string | null, isAr: boolean): string | null {
+  if (!raw) return null;
+  const m = /^invalid_config:([^:]+):(.+)$/.exec(raw);
+  if (m && (m[2] as ConfigIssueReason) in REASON_TEXT) return configIssueMsg(m[1], m[2] as ConfigIssueReason, isAr);
+  if (raw.startsWith("invalid_config:")) return isAr ? `إعداد غير صالح: ${raw.split(":")[1] || ""}` : raw;
+  return raw;
+}
 
 export default function DeliveriesView() {
   const { t, isAr } = useI18n();
@@ -105,6 +126,23 @@ export default function DeliveriesView() {
         </div>
       ))}
 
+      {/* Invalid outbound config — names the exact env var + safe reason (never the value). */}
+      {status?.config_issues && status.config_issues.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(227,30,36,0.45)", background: "rgba(227,30,36,0.08)" }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.5px", color: "#ff9ea1", marginBottom: 8 }}>
+            {t({ ar: "إعدادات إرسال واتساب غير صالحة — لن يتم الإرسال حتى تُصحَّح", en: "Invalid WhatsApp send config — sending blocked until fixed" })}
+          </div>
+          <ul style={{ margin: 0, paddingInlineStart: 18, display: "flex", flexDirection: "column", gap: 5 }}>
+            {status.config_issues.map((iss, i) => (
+              <li key={i} style={{ fontSize: 12, lineHeight: 1.6, color: "rgba(255,158,161,0.95)" }}>{configIssueMsg(iss.env, iss.reason, isAr)}</li>
+            ))}
+          </ul>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 8, lineHeight: 1.6 }}>
+            {t({ ar: "صحّح القيمة في إعدادات البيئة (Vercel) بقيمة ASCII فقط، ثم أعد النشر واضغط «إعادة» على الصفوف الفاشلة.", en: "Set an ASCII-only value in Vercel env, redeploy, then click “Retry” on the failed rows." })}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
         {(["all", "sent", "pending", "skipped", "dry_run", "failed"] as const).map((f) => (
           <button key={f} onClick={() => setFilter(f)} style={{
@@ -171,6 +209,13 @@ export default function DeliveriesView() {
                   {t({ ar: "بعض الصفوف في وضع المحاكاة (لم تُرسَل فعليًا) — راجع حالة المُعالِج أعلاه.", en: "Some rows ran in dry-run (not actually sent) — see the processor status above." })}
                 </div>
               )}
+              {result.data!.failed > 0 && (
+                <div style={{ fontSize: 11.5, color: "#ff9ea1", marginTop: 8 }}>
+                  {(status?.config_issues?.length ?? 0) > 0
+                    ? t({ ar: "فشلت صفوف بسبب إعداد غير صالح — راجع التحذير الأحمر أعلاه واسم متغيّر البيئة.", en: "Some rows failed due to invalid config — see the red warning above naming the env var." })
+                    : t({ ar: "فشلت بعض الصفوف — السبب الدقيق موضّح في عمود «السبب/الخطأ» لكل صف.", en: "Some rows failed — the exact reason is shown per row in the “Reason / Error” column." })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -206,7 +251,7 @@ export default function DeliveriesView() {
                     <td style={{ ...cell, direction: "ltr", fontFamily: "ui-monospace, Menlo, monospace" }}>{dest || "—"}</td>
                     <td style={cell}><span style={chip(r.status)}>{r.status}</span></td>
                     <td style={{ ...cell, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{r.provider || "—"}{r.provider_message_id ? <span style={{ display: "block", color: "rgba(255,255,255,0.3)", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.provider_message_id.slice(0, 14)}</span> : null}</td>
-                    <td style={{ ...cell, color: r.error_message ? "#ff9ea1" : "rgba(255,255,255,0.5)", whiteSpace: "normal" }}>{r.error_message || r.skip_reason || "—"}{r.retry_count > 0 ? ` · ↻${r.retry_count}` : ""}</td>
+                    <td style={{ ...cell, color: r.error_message ? "#ff9ea1" : "rgba(255,255,255,0.5)", whiteSpace: "normal" }}>{friendlyRowError(r.error_message, isAr) || r.skip_reason || "—"}{r.retry_count > 0 ? ` · ↻${r.retry_count}` : ""}</td>
                     <td style={{ ...cell, direction: "ltr", color: "rgba(255,255,255,0.45)" }}>{new Date(r.created_at).toLocaleString(isAr ? "ar-SA" : "en-GB")}</td>
                     <td style={cell}>
                       {(r.status === "failed" || r.status === "skipped") && r.channel !== "portal" && (

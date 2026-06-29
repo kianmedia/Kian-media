@@ -15,6 +15,7 @@ import { rpcAsService, rpcAsUser } from "@/lib/server/supabaseAdmin";
 import { renderEmail, whatsappTemplate, portalUrl, type DeliveryRow } from "@/lib/server/deliveryRender";
 import { sendEmail } from "@/lib/server/deliveryEmail";
 import { sendWhatsAppTemplate, toE164Digits } from "@/lib/server/deliveryWhatsApp";
+import { whatsappConfigHealth } from "@/lib/server/deliveryConfig";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,9 @@ async function handle(req: Request) {
   //    booleans only (presence flags) — never the secret values themselves. Used by
   //    the Delivery Log UI to show a clear "why aren't rows sending" banner.
   if (url.searchParams.get("status")) {
+    // Health of outbound WhatsApp config — presence + header-safety. The `issues`
+    // array carries only {env, reason}; NO secret value is ever read out here.
+    const h = whatsappConfigHealth();
     return NextResponse.json({
       ok: true, status: true,
       processor_enabled: flag("DELIVERY_PROCESSOR_ENABLED"),
@@ -62,9 +66,19 @@ async function handle(req: Request) {
       email_send: flag("EMAIL_SEND_ENABLED"),
       whatsapp_send: flag("WHATSAPP_DELIVERY_ENABLED"),
       whatsapp_allow_all: flag("WHATSAPP_ALLOW_ALL"),
-      whatsapp_webhook: !!process.env.N8N_WHATSAPP_SEND_WEBHOOK_URL,
-      whatsapp_webhook_secret: !!process.env.N8N_WHATSAPP_SEND_SECRET,
-      whatsapp_meta: !!(process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.WHATSAPP_ACCESS_TOKEN),
+      whatsapp_webhook: h.n8n_webhook_present,
+      whatsapp_webhook_secret: h.n8n_secret_present,
+      whatsapp_meta: h.whatsapp_token_present && h.whatsapp_phone_number_id_present,
+      // Config health (booleans + safe {env, reason} issues — never any value).
+      n8n_webhook_present: h.n8n_webhook_present,
+      n8n_webhook_valid: h.n8n_webhook_valid,
+      n8n_secret_present: h.n8n_secret_present,
+      n8n_secret_valid_header_value: h.n8n_secret_valid_header_value,
+      whatsapp_token_present: h.whatsapp_token_present,
+      whatsapp_token_valid_header_value: h.whatsapp_token_valid_header_value,
+      whatsapp_phone_number_id_present: h.whatsapp_phone_number_id_present,
+      whatsapp_phone_number_id_valid: h.whatsapp_phone_number_id_valid,
+      config_issues: h.issues,
     }, { status: 200 });
   }
 
