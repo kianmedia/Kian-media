@@ -6,7 +6,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listDeliveries, processPending, retryDelivery, EVENT_LABELS, STATUS_STYLE, type NotificationDelivery, type DeliveryStatus, type DeliveryChannel } from "@/lib/portal/deliveries";
+import { listDeliveries, processPending, getDeliveryStatus, retryDelivery, EVENT_LABELS, STATUS_STYLE, type NotificationDelivery, type DeliveryStatus, type DeliveryChannel, type ProcessResult, type DeliveryStatusInfo } from "@/lib/portal/deliveries";
 
 // Mask destinations so one client's contact isn't shown in full.
 const maskEmail = (e: string | null) => !e ? "" : e.replace(/^(.).*(@.*)$/, (_, a, d) => `${a}***${d}`);
@@ -21,6 +21,8 @@ export default function DeliveriesView() {
   const [chan, setChan] = useState<"all" | DeliveryChannel>("all");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [status, setStatus] = useState<DeliveryStatusInfo | null>(null);
+  const [result, setResult] = useState<{ data?: ProcessResult; error?: string } | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3500); };
 
   const load = useCallback(async () => {
@@ -28,17 +30,16 @@ export default function DeliveriesView() {
     if (!r.ok) { setErr(r.error); setPhase("error"); return; }
     setRows(r.data); setPhase("ready");
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  const loadStatus = useCallback(async () => { const s = await getDeliveryStatus(); if (s.ok) setStatus(s.data); }, []);
+  useEffect(() => { void load(); void loadStatus(); }, [load, loadStatus]);
 
   async function runProcessor() {
-    setBusy(true);
+    setBusy(true); setResult(null);
     const r = await processPending();
     setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
-    flash(r.data.disabled
-      ? t({ ar: "المعالِج معطّل (DELIVERY_PROCESSOR_ENABLED=false).", en: "Processor disabled (DELIVERY_PROCESSOR_ENABLED=false)." })
-      : `${t({ ar: "تمت المعالجة", en: "Processed" })}: claimed ${r.data.claimed} · sent ${r.data.sent} · dry_run ${r.data.dry_run} · skipped ${r.data.skipped} · failed ${r.data.failed}`);
-    await load();
+    if (!r.ok) { setResult({ error: r.error }); return; }
+    setResult({ data: r.data });
+    await Promise.all([load(), loadStatus()]);  // auto-refresh the table + gating state
   }
   async function doRetry(id: string) {
     setBusy(true); const r = await retryDelivery(id); setBusy(false);
@@ -53,6 +54,20 @@ export default function DeliveriesView() {
   }, [rows]);
   const shown = rows.filter((r) => (filter === "all" || r.status === filter) && (chan === "all" || r.channel === chan));
 
+  // Gating warnings derived from the server status probe (booleans only; no secrets).
+  const gates = useMemo(() => {
+    if (!status) return [] as { sev: "block" | "warn"; ar: string; en: string }[];
+    const w: { sev: "block" | "warn"; ar: string; en: string }[] = [];
+    if (!status.processor_enabled) w.push({ sev: "block", ar: "المعالِج مُعطّل — لن تُعالَج أو تُرسل أي صفوف. اضبط DELIVERY_PROCESSOR_ENABLED=true في الخادم.", en: "Processor disabled — no rows are processed or sent. Set DELIVERY_PROCESSOR_ENABLED=true on the server." });
+    if (status.dry_run) w.push({ sev: "warn", ar: "وضع المحاكاة مُفعّل (DELIVERY_DRY_RUN=true) — تُحاكى الإرسالات بلا إرسال فعلي. اضبطه إلى false للإرسال الحقيقي.", en: "Dry-run is ON (DELIVERY_DRY_RUN=true) — sends are simulated, not real. Set it to false for real sends." });
+    if (!status.whatsapp_send) w.push({ sev: "block", ar: "إرسال واتساب مُعطّل (WHATSAPP_DELIVERY_ENABLED=false) — صفوف واتساب لن تُرسَل.", en: "WhatsApp sending disabled (WHATSAPP_DELIVERY_ENABLED=false) — WhatsApp rows won't send." });
+    if (!status.whatsapp_webhook && !status.whatsapp_meta) w.push({ sev: "block", ar: "لا يوجد ناقل واتساب: N8N_WHATSAPP_SEND_WEBHOOK_URL مفقود (ولا بديل Meta).", en: "No WhatsApp transport: N8N_WHATSAPP_SEND_WEBHOOK_URL missing (and no Meta fallback configured)." });
+    else if (status.whatsapp_webhook && !status.whatsapp_webhook_secret) w.push({ sev: "warn", ar: "تحذير: N8N_WHATSAPP_SEND_SECRET مفقود — قد يرفض n8n الطلب.", en: "N8N_WHATSAPP_SEND_SECRET missing — n8n may reject the request." });
+    if (!status.whatsapp_allow_all) w.push({ sev: "warn", ar: "قائمة السماح مُفعّلة — تُرسل فقط الأرقام في WHATSAPP_TEST_ALLOWLIST. اضبط WHATSAPP_ALLOW_ALL=true للإنتاج.", en: "Allowlist mode — only numbers in WHATSAPP_TEST_ALLOWLIST send. Set WHATSAPP_ALLOW_ALL=true for production." });
+    return w;
+  }, [status]);
+  const fullyLive = !!status && status.processor_enabled && !status.dry_run && status.whatsapp_send && (status.whatsapp_webhook || status.whatsapp_meta);
+
   const cell: React.CSSProperties = { padding: "8px 10px", fontSize: 12, color: "rgba(255,255,255,0.82)", borderBottom: "1px solid rgba(255,255,255,0.05)", whiteSpace: "nowrap" };
   const th: React.CSSProperties = { padding: "8px 10px", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", textAlign: isAr ? "right" : "left", borderBottom: "1px solid rgba(255,255,255,0.1)" };
   const chip = (s: DeliveryStatus) => { const st = STATUS_STYLE[s]; return { background: st.bg, color: st.fg, fontSize: 10.5, fontWeight: 600, padding: "2px 8px", borderRadius: 6, textTransform: "uppercase" as const }; };
@@ -65,10 +80,30 @@ export default function DeliveriesView() {
           {t({ ar: "سجل التسليم", en: "Delivery Log" })}
         </h1>
         <p className="text-white/45" style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.7, maxWidth: 640 }}>
-          {t({ ar: "المرحلة 1: تسجيل ومراقبة فقط. لا يتم إرسال بريد إلكتروني أو واتساب فعلي بعد. صفوف البوابة = أُرسلت؛ البريد/الواتساب = قيد الانتظار أو متخطّى (سبب).",
-               en: "Stage 1: logging & observability only. No real email/WhatsApp is sent yet. Portal rows = sent; email/WhatsApp = pending or skipped (with reason)." })}
+          {t({ ar: "صفوف البوابة تُرسَل فورًا. صفوف البريد/الواتساب تبقى \"قيد الانتظار\" حتى تُعالَج — اضغط «معالجة الإشعارات الآن» لإرسالها عبر المزوّد المُهيّأ. تعتمد النتيجة على إعدادات الخادم أدناه.",
+               en: "Portal rows send instantly. Email/WhatsApp rows stay \"pending\" until processed — click “Process pending now” to send them via the configured provider. The outcome depends on the server settings below." })}
         </p>
       </div>
+
+      {/* Server gating status — explains why rows do / don't actually send. */}
+      {status && (gates.length > 0 ? (
+        <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, border: `1px solid ${gates.some((g) => g.sev === "block") ? "rgba(227,30,36,0.4)" : "rgba(245,200,66,0.4)"}`, background: gates.some((g) => g.sev === "block") ? "rgba(227,30,36,0.07)" : "rgba(245,200,66,0.07)" }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.5px", color: gates.some((g) => g.sev === "block") ? "#ff9ea1" : "#f5d76e", marginBottom: 8 }}>
+            {t({ ar: "حالة المُعالِج على الخادم", en: "Server processor status" })}
+          </div>
+          <ul style={{ margin: 0, paddingInlineStart: 18, display: "flex", flexDirection: "column", gap: 5 }}>
+            {gates.map((g, i) => (
+              <li key={i} style={{ fontSize: 12, lineHeight: 1.6, color: g.sev === "block" ? "rgba(255,158,161,0.95)" : "rgba(245,215,110,0.92)" }}>{t(g)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 14, padding: "9px 13px", borderRadius: 10, border: "1px solid rgba(37,211,102,0.4)", background: "rgba(37,211,102,0.07)", fontSize: 12, color: "#7ee2a8" }}>
+          {fullyLive
+            ? t({ ar: "✓ المُعالِج مُفعّل والإرسال الحقيقي قيد التشغيل.", en: "✓ Processor enabled — real sending is live." })
+            : t({ ar: "✓ المُعالِج جاهز.", en: "✓ Processor ready." })}
+        </div>
+      ))}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
         {(["all", "sent", "pending", "skipped", "dry_run", "failed"] as const).map((f) => (
@@ -86,14 +121,60 @@ export default function DeliveriesView() {
               background: chan === c ? "rgba(99,179,237,0.12)" : "transparent", color: "rgba(255,255,255,0.7)",
             }}>{c}</button>
           ))}
-          <button onClick={() => void runProcessor()} disabled={busy} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, cursor: busy ? "wait" : "pointer", border: "1px solid rgba(37,211,102,0.5)", background: "rgba(37,211,102,0.14)", color: "#7ee2a8", opacity: busy ? 0.6 : 1 }}>
-            {t({ ar: "معالجة المعلّقة", en: "Process pending" })}
+          <button onClick={() => void runProcessor()} disabled={busy} style={{ fontSize: 11.5, fontWeight: 600, padding: "5px 13px", borderRadius: 7, cursor: busy ? "wait" : "pointer", border: "1px solid rgba(37,211,102,0.5)", background: "rgba(37,211,102,0.14)", color: "#7ee2a8", opacity: busy ? 0.6 : 1 }}>
+            {busy ? (isAr ? "جارٍ المعالجة…" : "Processing…") : t({ ar: "معالجة الإشعارات الآن", en: "Process pending now" })}
           </button>
-          <button onClick={() => void load()} style={{ fontSize: 11.5, padding: "5px 11px", borderRadius: 7, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
-            {t({ ar: "تحديث", en: "Refresh" })}
+          <button onClick={() => void load()} disabled={busy} style={{ fontSize: 11.5, padding: "5px 11px", borderRadius: 7, cursor: busy ? "wait" : "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
+            {t({ ar: "تحديث السجل", en: "Refresh log" })}
           </button>
         </span>
       </div>
+
+      {/* Persistent result of the last "Process pending now" run. */}
+      {result && (
+        <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, position: "relative",
+          border: `1px solid ${result.error ? "rgba(227,30,36,0.4)" : result.data?.disabled ? "rgba(245,200,66,0.4)" : "rgba(37,211,102,0.4)"}`,
+          background: result.error ? "rgba(227,30,36,0.07)" : result.data?.disabled ? "rgba(245,200,66,0.07)" : "rgba(37,211,102,0.07)" }}>
+          <button onClick={() => setResult(null)} aria-label="close" style={{ position: "absolute", insetInlineEnd: 8, top: 6, background: "transparent", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>
+          {result.error ? (
+            <div style={{ fontSize: 12.5, color: "#ff9ea1" }}>
+              <strong>{t({ ar: "تعذّرت المعالجة:", en: "Processing failed:" })}</strong>{" "}
+              {result.error === "unauthorized" ? t({ ar: "غير مُصرّح (لا تملك صلاحية المعالجة).", en: "Unauthorized (you don't have permission to process)." }) : result.error}
+            </div>
+          ) : result.data?.disabled ? (
+            <div style={{ fontSize: 12.5, color: "#f5d76e" }}>
+              {t({ ar: "المُعالِج مُعطّل (DELIVERY_PROCESSOR_ENABLED=false) — لم تتم معالجة أي صف.", en: "Processor disabled (DELIVERY_PROCESSOR_ENABLED=false) — no rows were processed." })}
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#7ee2a8", marginBottom: 8 }}>{t({ ar: "نتيجة المعالجة", en: "Processing result" })}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {([
+                  { k: "claimed", ar: "مُلتقَطة", en: "Processed", v: result.data!.claimed, c: "rgba(255,255,255,0.75)" },
+                  { k: "sent", ar: "أُرسلت", en: "Sent", v: result.data!.sent, c: "#7ee2a8" },
+                  { k: "failed", ar: "فشلت", en: "Failed", v: result.data!.failed, c: "#ff9ea1" },
+                  { k: "skipped", ar: "متخطّاة", en: "Skipped", v: result.data!.skipped, c: "rgba(255,255,255,0.6)" },
+                  { k: "dry_run", ar: "محاكاة", en: "Dry-run", v: result.data!.dry_run, c: "#90cdf4" },
+                ] as const).map((m) => (
+                  <span key={m.k} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.12)", color: m.c }}>
+                    {t({ ar: m.ar, en: m.en })}: <strong>{m.v}</strong>
+                  </span>
+                ))}
+              </div>
+              {result.data!.claimed === 0 && (
+                <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.55)", marginTop: 8 }}>
+                  {t({ ar: "لا توجد صفوف معلّقة لمعالجتها الآن.", en: "No pending rows to process right now." })}
+                </div>
+              )}
+              {result.data!.dry_run > 0 && (
+                <div style={{ fontSize: 11.5, color: "#90cdf4", marginTop: 8 }}>
+                  {t({ ar: "بعض الصفوف في وضع المحاكاة (لم تُرسَل فعليًا) — راجع حالة المُعالِج أعلاه.", en: "Some rows ran in dry-run (not actually sent) — see the processor status above." })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {phase === "loading" && <p className="text-white/45" style={{ fontSize: 13 }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}
       {phase === "error" && <div style={{ padding: "12px 14px", fontSize: 13, color: "#ff9ea1", background: "rgba(227,30,36,0.08)", border: "1px solid rgba(227,30,36,0.3)", borderRadius: 8 }}>{err}</div>}

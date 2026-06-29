@@ -51,7 +51,24 @@ async function handle(req: Request) {
   }
   if (!authed) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
-  if (!flag("DELIVERY_PROCESSOR_ENABLED")) return NextResponse.json({ ok: true, disabled: true, processed: 0 }, { status: 200 });
+  // ── Status probe (?status): report the gating config WITHOUT processing. Returns
+  //    booleans only (presence flags) — never the secret values themselves. Used by
+  //    the Delivery Log UI to show a clear "why aren't rows sending" banner.
+  if (url.searchParams.get("status")) {
+    return NextResponse.json({
+      ok: true, status: true,
+      processor_enabled: flag("DELIVERY_PROCESSOR_ENABLED"),
+      dry_run: flag("DELIVERY_DRY_RUN", true),
+      email_send: flag("EMAIL_SEND_ENABLED"),
+      whatsapp_send: flag("WHATSAPP_DELIVERY_ENABLED"),
+      whatsapp_allow_all: flag("WHATSAPP_ALLOW_ALL"),
+      whatsapp_webhook: !!process.env.N8N_WHATSAPP_SEND_WEBHOOK_URL,
+      whatsapp_webhook_secret: !!process.env.N8N_WHATSAPP_SEND_SECRET,
+      whatsapp_meta: !!(process.env.WHATSAPP_PHONE_NUMBER_ID && process.env.WHATSAPP_ACCESS_TOKEN),
+    }, { status: 200 });
+  }
+
+  if (!flag("DELIVERY_PROCESSOR_ENABLED")) return NextResponse.json({ ok: true, disabled: true, processed: 0, claimed: 0, sent: 0, failed: 0, skipped: 0, dry_run: 0 }, { status: 200 });
 
   const dryRun = flag("DELIVERY_DRY_RUN", true);
   const emailOn = flag("EMAIL_SEND_ENABLED");
@@ -86,7 +103,7 @@ async function handle(req: Request) {
     } else if (row.channel === "whatsapp") {
       const e164 = toE164Digits(row.destination_phone);
       const tmpl = whatsappTemplate(row);
-      if (!e164) { status = "skipped"; error = "invalid_phone"; }
+      if (!e164) { status = "skipped"; error = (row.destination_phone || "").trim() ? "invalid_phone" : "no_phone"; }
       else if (!tmpl) { status = "skipped"; error = "no_approved_template"; }     // client event with no approved template
       else if (!waAllowAll && !waAllow.includes(e164)) { status = "skipped"; error = "not_allowlisted"; }
       else if (!waOn || dryRun) { status = "dry_run"; provider = "whatsapp"; error = !waOn ? "channel_disabled" : "dry_run"; }

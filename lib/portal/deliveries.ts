@@ -43,8 +43,15 @@ export function retryDelivery(id: string): Promise<Result<boolean>> {
   return prpc<boolean>("retry_delivery", { p_id: id });
 }
 
-/** Admin "process now": triggers the processor with the staff bearer (no secret needed). */
-export async function processPending(): Promise<Result<{ claimed: number; sent: number; failed: number; skipped: number; dry_run: number; disabled?: boolean }>> {
+export interface ProcessResult {
+  claimed: number; sent: number; failed: number; skipped: number; dry_run: number;
+  disabled?: boolean; dry_run_mode?: boolean; email_send?: boolean; whatsapp_send?: boolean;
+}
+
+/** Admin "process now": triggers the real server processor with the staff bearer
+ *  (no secret in the browser — the route uses DELIVERY_PROCESSOR_SECRET / service
+ *  role server-side and authorises the caller via can_manage_quotes). */
+export async function processPending(): Promise<Result<ProcessResult>> {
   const s = await getValidSession();
   if (!s) return { ok: false, error: "not_authenticated", status: 401 };
   try {
@@ -53,7 +60,27 @@ export async function processPending(): Promise<Result<{ claimed: number; sent: 
     });
     const d = await res.json();
     if (!res.ok || !d.ok) return { ok: false, error: d.error || `HTTP ${res.status}`, status: res.status };
-    return { ok: true, data: d };
+    return { ok: true, data: d as ProcessResult };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+export interface DeliveryStatusInfo {
+  processor_enabled: boolean; dry_run: boolean; email_send: boolean; whatsapp_send: boolean;
+  whatsapp_allow_all: boolean; whatsapp_webhook: boolean; whatsapp_webhook_secret: boolean; whatsapp_meta: boolean;
+}
+
+/** Read the server-side gating config (no processing) so the UI can show a clear
+ *  "why aren't rows sending" banner. Returns booleans only — never secret values. */
+export async function getDeliveryStatus(): Promise<Result<DeliveryStatusInfo>> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated", status: 401 };
+  try {
+    const res = await fetch("/api/integrations/deliveries/process?status=1", {
+      method: "POST", headers: { Authorization: `Bearer ${s.access_token}` },
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) return { ok: false, error: d.error || `HTTP ${res.status}`, status: res.status };
+    return { ok: true, data: d as DeliveryStatusInfo };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
