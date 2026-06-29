@@ -7,7 +7,7 @@
   "crons": [
     {
       "path": "/api/integrations/deliveries/process",
-      "schedule": "*/2 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
