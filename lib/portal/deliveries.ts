@@ -96,6 +96,10 @@ export async function getDeliveryStatus(): Promise<Result<DeliveryStatusInfo>> {
 
 export const EVENT_LABELS: Record<string, { ar: string; en: string }> = {
   new_quote_request:         { ar: "طلب عرض سعر جديد",   en: "New quote request" },
+  new_account_signup:        { ar: "تسجيل حساب جديد",    en: "New account signup" },
+  booking_request:           { ar: "طلب حجز/اجتماع",      en: "Booking request" },
+  contact_request:           { ar: "رسالة تواصل",         en: "Contact request" },
+  files_received:            { ar: "استلام ملفات",        en: "Files received" },
   estimate_created:          { ar: "تم إنشاء تقدير",      en: "Estimate created" },
   estimate_synced:           { ar: "مزامنة تقدير",        en: "Estimate synced" },
   estimate_published:        { ar: "نشر التقدير للعميل",  en: "Estimate published" },

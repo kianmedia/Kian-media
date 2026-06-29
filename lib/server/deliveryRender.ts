@@ -47,6 +47,7 @@ const CLIENT_EMAIL: Record<string, { subject: string; body: string }> = {
   booking_request:         { subject: "تم استلام طلب الحجز — كيان ميديا", body: "شكرًا لك. تم استلام طلب الاجتماع/المكالمة وسيتواصل معك فريقنا لتأكيد الموعد." },
   files_received:          { subject: "تم استلام ملفاتك — كيان ميديا", body: "تم استلام الملفات التي شاركتها. سيراجعها فريقنا ويتابع معك." },
   contact_request:         { subject: "تم استلام رسالتك — كيان ميديا", body: "شكرًا لتواصلك. تم استلام رسالتك وسيرد عليك فريقنا قريبًا." },
+  new_account_signup:      { subject: "مرحبًا بك في بوابة كيان ميديا", body: "تم إنشاء حسابك بنجاح. يمكنك الآن متابعة طلباتك ومشاريعك وعروض الأسعار من بوابة العملاء." },
 };
 const STAFF_EMAIL: Record<string, string> = {
   new_quote_request: "طلب عرض سعر جديد من الموقع", booking_request: "طلب حجز/اجتماع جديد",
@@ -56,7 +57,7 @@ const STAFF_EMAIL: Record<string, string> = {
   client_approved: "وافق العميل على عرض السعر", client_rejected: "رفض العميل عرض السعر",
   client_requested_revision: "طلب العميل تعديل عرض السعر", draft_invoice_created: "تم إنشاء مسودة فاتورة",
   official_invoice_issued: "تم إصدار فاتورة رسمية", project_created: "تم إنشاء مشروع جديد",
-  opportunity_received: "طلب جديد في مركز الفرص",
+  opportunity_received: "طلب جديد في مركز الفرص", new_account_signup: "تسجيل حساب جديد في البوابة",
 };
 
 export function renderEmail(row: DeliveryRow): { subject: string; html: string; text: string } {
@@ -93,6 +94,11 @@ export function whatsappTemplate(row: DeliveryRow): { name: string; variables: s
       case "booking_request":         return { name: T("WHATSAPP_TEMPLATE_BOOKING_RECEIVED_AR", "booking_received_ar"), variables: [ref] };
       case "files_received":          return { name: T("WHATSAPP_TEMPLATE_FILES_RECEIVED_AR", "files_received_ar"), variables: [ref] };
       case "official_invoice_issued": return { name: T("WHATSAPP_TEMPLATE_INVOICE_ISSUED_AR", "invoice_issued_ar"), variables: [ref] };
+      // New client confirmations. Gated on the env var being set: until you create &
+      // approve the Meta template and set its name, these cleanly skip (no_approved_template)
+      // instead of failing — so enabling them is a config step, never a code change.
+      case "new_quote_request":       return process.env.WHATSAPP_TEMPLATE_QUOTE_REQUEST_RECEIVED_AR ? { name: process.env.WHATSAPP_TEMPLATE_QUOTE_REQUEST_RECEIVED_AR, variables: [ref] } : null;
+      case "new_account_signup":      return process.env.WHATSAPP_TEMPLATE_WELCOME_AR ? { name: process.env.WHATSAPP_TEMPLATE_WELCOME_AR, variables: [ref] } : null;
       default: return null; // no approved client template for this event → skip no_approved_template
     }
   }

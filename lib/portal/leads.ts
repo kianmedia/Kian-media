@@ -18,7 +18,7 @@ export interface NewQuoteInput {
   preferred_date?: string;       // ISO date
   /** Contact info from the logged-in profile — forwarded to the Apps Script so
    *  the email notification matches the main-site hero form's payload shape. */
-  contact?: { fullName?: string; company?: string; mobile?: string; email?: string };
+  contact?: { fullName?: string; company?: string; mobile?: string; email?: string; preferredContact?: string };
   language?: "AR" | "EN";
   /** extra fields forwarded only to the Google Sheet mirror */
   sheetExtras?: Record<string, string>;
@@ -59,6 +59,15 @@ export async function createQuote(input: NewQuoteInput): Promise<Result<CreateQu
     budget_range: input.budget_range ?? null,
     city: input.city ?? null,
     preferred_date: input.preferred_date ?? null,
+    // Persist the requester's contact ON the row so notifications can reach the
+    // client (the WhatsApp/email confirmation reads quote_requests.phone/email).
+    // Without this the row had no phone → the delivery row was "no_phone".
+    full_name: input.contact?.fullName?.trim() || null,
+    company: input.contact?.company?.trim() || null,
+    phone: input.contact?.mobile?.trim() || null,
+    email: input.contact?.email?.trim() || null,
+    preferred_contact: input.contact?.preferredContact || null,
+    source: "portal_client_quote",
     sheet_mirrored: false,
   });
   if (!r.ok) return r;

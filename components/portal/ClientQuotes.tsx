@@ -26,6 +26,7 @@ export default function ClientQuotes() {
   const [description, setDescription] = useState("");
   const [budget, setBudget] = useState("");
   const [city, setCity] = useState("");
+  const [phone, setPhone] = useState(profile.mobile || "");   // prefilled from profile, editable — drives WhatsApp/SMS notifications
   const [preferredDate, setPreferredDate] = useState("");
   const [contactPref, setContactPref] = useState("");
   const [notes, setNotes] = useState("");
@@ -57,13 +58,15 @@ export default function ClientQuotes() {
   }
   function resetForm() {
     setServices([]); setTitle(""); setDescription(""); setBudget("");
-    setCity(""); setPreferredDate(""); setContactPref(""); setNotes("");
+    setCity(""); setPhone(profile.mobile || ""); setPreferredDate(""); setContactPref(""); setNotes("");
   }
 
   async function submit() {
     setFormErr("");
     if (services.length === 0) { setFormErr(t({ ar: "اختر خدمة واحدة على الأقل", en: "Select at least one service" })); return; }
     if (!description.trim()) { setFormErr(t({ ar: "اكتب وصفاً موجزاً لمشروعك", en: "Add a brief project description" })); return; }
+    const phoneDigits = phone.replace(/[^\d]/g, "");
+    if (phoneDigits.length < 9) { setFormErr(t({ ar: "أدخل رقم جوال صحيح لاستقبال إشعارات طلبك.", en: "Enter a valid mobile number to receive updates on your request." })); return; }
 
     const extras: string[] = [];
     if (title.trim()) extras.push(`${t({ ar: "العنوان", en: "Title" })}: ${title.trim()}`);
@@ -83,8 +86,9 @@ export default function ClientQuotes() {
       contact: {
         fullName: profile.full_name || "",
         company: profile.company || "",
-        mobile: profile.mobile || "",
+        mobile: phone.trim() || profile.mobile || "",
         email: profile.email || "",
+        preferredContact: contactPref || undefined,
       },
       language: isAr ? "AR" : "EN",
       // Title / contact preference / notes are already folded into the
@@ -206,10 +210,16 @@ export default function ClientQuotes() {
               <TextField id="qc" value={city} onChange={setCity} /></div>
           </div>
           <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-            <div><Label htmlFor="qpd">{t({ ar: "التاريخ المفضّل", en: "Preferred Date" })}</Label>
-              <TextField id="qpd" type="date" dir="ltr" value={preferredDate} onChange={setPreferredDate} /></div>
+            <div><Label htmlFor="qph" required>{t({ ar: "رقم الجوال", en: "Mobile Number" })}</Label>
+              <TextField id="qph" type="tel" dir="ltr" value={phone} onChange={setPhone} placeholder="05XXXXXXXX" />
+              <p className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", marginTop: "5px" }}>
+                {t({ ar: "لإرسال إشعارات الواتساب والتواصل بخصوص طلبك.", en: "For WhatsApp updates and follow-up about your request." })}</p></div>
             <div><Label htmlFor="qcp">{t({ ar: "طريقة التواصل المفضلة", en: "Preferred Contact" })}</Label>
               <SelectField id="qcp" value={contactPref} onChange={setContactPref} options={CONTACT_PREFS.map((c) => ({ value: c.en, label: isAr ? c.ar : c.en }))} /></div>
+          </div>
+          <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+            <div><Label htmlFor="qpd">{t({ ar: "التاريخ المفضّل", en: "Preferred Date" })}</Label>
+              <TextField id="qpd" type="date" dir="ltr" value={preferredDate} onChange={setPreferredDate} /></div>
           </div>
           <div><Label htmlFor="qn">{t({ ar: "ملاحظات إضافية", en: "Additional Notes" })}</Label>
             <TextArea id="qn" value={notes} onChange={setNotes} rows={3} /></div>
