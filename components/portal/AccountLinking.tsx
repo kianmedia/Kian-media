@@ -166,20 +166,14 @@ function CreateProjectModal({
     setErr("");
     if (!title.trim()) { setErr(t({ ar: "عنوان المشروع مطلوب", en: "Project title required" })); return; }
     setSaving(true);
-    // Resolve a real client_id from the account (id/email), create the legacy clients
-    // row if needed, insert the project (non-null client_id) and link membership — all
-    // atomically in one is_admin() RPC. Fixes the client_id NOT-NULL crash.
+    // Create the project linked to THIS account (userId), via one is_admin() RPC
+    // that resolves/creates the client record and links membership atomically.
     const cr = await adminCreateProjectForClient({
-      title: title.trim(), userId: account.id, email: account.email,
+      title: title.trim(), userId: account.id, clientEmail: account.email,
       status, notes: notes.trim() || undefined, shootingDate: shooting || undefined,
     });
     setSaving(false);
-    if (!cr.ok) {
-      const friendly = /client_not_linked/i.test(cr.error)
-        ? t({ ar: "لا يمكن إنشاء المشروع لأن العميل غير مرتبط بحساب عميل. الرجاء إنشاء/ربط العميل أولاً.", en: "Can't create the project — this email isn't linked to a client account. Create/link the client first." })
-        : t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error;
-      setErr(friendly); return;
-    }
+    if (!cr.ok) { setErr(t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error); return; }
     onCreated(t({ ar: "تم إنشاء المشروع وربط العميل به ✓", en: "Project created and client linked ✓" }));
   }
 

@@ -170,7 +170,7 @@ export interface Offer extends SoftDeletable {
 /** Legacy `clients` table (admin-provisioned; the client→project link). */
 export interface ClientRow extends SoftDeletable {
   id: string;
-  user_id: string;
+  user_id: string | null;          // NULL = pending (admin-created, no portal account yet)
   full_name: string | null;
   company: string | null;
   mobile: string | null;

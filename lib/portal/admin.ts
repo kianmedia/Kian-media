@@ -40,7 +40,7 @@ export function adminListProjects(limit = 300): Promise<Result<Project[]>> {
 export async function adminListClientsByIds(ids: string[]): Promise<Result<ClientRow[]>> {
   if (ids.length === 0) return { ok: true, data: [] };
   const inList = ids.map((id) => enc(id)).join(",");
-  return pget<ClientRow[]>(`clients?id=in.(${inList})&select=id,user_id,full_name,company,email`);
+  return pget<ClientRow[]>(`clients?id=in.(${inList})&select=id,user_id,full_name,company,email,mobile`);
 }
 
 /** All portal profiles for account management (admin reads all via profiles RLS). */
@@ -214,19 +214,58 @@ export function adminCreateProject(input: {
  *  from the account (profiles.id and/or email) — creating the legacy clients row
  *  if missing — and linking membership. Fixes the client_id NOT-NULL crash.
  *  Returns the new project id. Error "client_not_linked" → no portal account. */
+export type ProjectLinkState = "account" | "email_pending" | "unlinked";
+export interface ProjectMutationOutcome { project_id: string; client_id: string | null; linked: ProjectLinkState }
+
+/** Create a project — email/account OPTIONAL. With no email it is a pending
+ *  (unlinked) client project; with an email it links to a matching account or
+ *  stays pending until the client signs up. Returns project_id + linked state. */
 export function adminCreateProjectForClient(input: {
-  title: string; userId?: string | null; email?: string | null;
-  companyId?: string | null; status?: ProjectStatus; notes?: string | null; shootingDate?: string | null;
-}): Promise<Result<string>> {
-  return prpc<string>("admin_create_project_for_client", {
+  title: string; clientName?: string | null; clientCompany?: string | null;
+  clientEmail?: string | null; clientPhone?: string | null;
+  status?: ProjectStatus; shootingDate?: string | null; notes?: string | null; userId?: string | null;
+}): Promise<Result<ProjectMutationOutcome>> {
+  return prpc<ProjectMutationOutcome>("admin_create_project_for_client", {
     p_title: input.title,
-    p_user: input.userId ?? null,
-    p_email: input.email ?? null,
-    p_company: input.companyId ?? null,
+    p_client_name: input.clientName ?? null,
+    p_client_company: input.clientCompany ?? null,
+    p_client_email: input.clientEmail ?? null,
+    p_client_phone: input.clientPhone ?? null,
     p_status: input.status ?? "request_received",
-    p_notes: input.notes ?? null,
     p_shooting: input.shootingDate ?? null,
+    p_notes: input.notes ?? null,
+    p_user: input.userId ?? null,
   });
+}
+
+/** Edit a project + its client contact. Adding an email later auto-links a
+ *  matching account (or keeps it pending until signup). */
+export function adminUpdateProject(input: {
+  projectId: string; title?: string | null; status?: ProjectStatus | null;
+  shootingDate?: string | null; notes?: string | null;
+  clientName?: string | null; clientCompany?: string | null; clientEmail?: string | null; clientPhone?: string | null;
+}): Promise<Result<ProjectMutationOutcome>> {
+  return prpc<ProjectMutationOutcome>("admin_update_project", {
+    p_project: input.projectId,
+    p_title: input.title ?? null,
+    p_status: input.status ?? null,
+    p_shooting: input.shootingDate ?? null,
+    p_notes: input.notes ?? null,
+    p_client_name: input.clientName ?? null,
+    p_client_company: input.clientCompany ?? null,
+    p_client_email: input.clientEmail ?? null,
+    p_client_phone: input.clientPhone ?? null,
+  });
+}
+
+/** Manually link / reassign a project to an existing portal account. */
+export function adminLinkProjectToUser(projectId: string, userId: string): Promise<Result<ProjectMutationOutcome>> {
+  return prpc<ProjectMutationOutcome>("admin_link_project_to_user", { p_project: projectId, p_user: userId });
+}
+
+/** Soft-delete a project (admin-gated via the existing soft_delete RPC). */
+export function adminSoftDeleteProject(projectId: string): Promise<Result<boolean>> {
+  return prpc<boolean>("soft_delete", { p_table: "projects", p_id: projectId });
 }
 
 export function adminAddProjectMember(input: {
