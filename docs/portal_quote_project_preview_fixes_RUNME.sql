@@ -93,3 +93,123 @@ grant  execute on function public.admin_create_project_for_client(text,uuid,text
 -- Validation (Part B):
 --   select public.admin_create_project_for_client('Test project', '<profiles.id>', null);  -- returns a project uuid
 --   select id, project_name, client_id from public.projects order by created_at desc limit 3;  -- client_id must be NOT NULL
+
+
+-- ════════════════════════════════════════════════════════════════════════
+-- PART C — Secure watermarked Drive previews (originals NEVER exposed to clients)
+-- ════════════════════════════════════════════════════════════════════════
+-- Only generated, watermarked preview assets are stored (private bucket) and shown
+-- to clients through an authenticated server route. The Google Drive source ids/urls
+-- are ADMIN-ONLY: they live on this table but are returned ONLY by the admin-gated
+-- RLS, never by the client-facing RPCs below.
+create table if not exists public.deliverable_preview_assets (
+  id                  uuid primary key default gen_random_uuid(),
+  deliverable_id      uuid references public.deliverables(id) on delete cascade,
+  review_id           uuid,                              -- optional (review-record schemas)
+  project_id          uuid not null references public.projects(id) on delete cascade,
+  asset_type          text not null check (asset_type in ('image','audio')),
+  source_provider     text not null default 'google_drive',
+  source_file_id      text,                              -- ADMIN-ONLY (never in client RPC)
+  source_folder_id    text,                              -- ADMIN-ONLY
+  original_file_name  text,
+  preview_storage_path text not null default '',         -- path in the private bucket ('' until ready)
+  preview_mime_type   text,
+  watermark_applied   boolean not null default true,
+  status              text not null default 'processing' check (status in ('processing','ready','failed')),
+  error_message       text,
+  created_by          uuid,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
+create index if not exists idx_dpa_project     on public.deliverable_preview_assets(project_id);
+create index if not exists idx_dpa_deliverable on public.deliverable_preview_assets(deliverable_id);
+create index if not exists idx_dpa_status      on public.deliverable_preview_assets(status);
+
+alter table public.deliverable_preview_assets enable row level security;
+
+-- Admin/manager only on the BASE table (full columns incl. source ids). Clients have
+-- NO base-table policy → they can never read source_file_id/source_folder_id. They
+-- read safe metadata through list_project_preview_assets() instead.
+drop policy if exists dpa_admin_all on public.deliverable_preview_assets;
+create policy dpa_admin_all on public.deliverable_preview_assets for all to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+grant select, insert, update, delete on public.deliverable_preview_assets to authenticated;
+
+-- Membership predicate: project_members link OR the legacy clients link.
+create or replace function public.is_project_member(p_project uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.project_members m
+                  where m.project_id = p_project and m.user_id = auth.uid() and m.is_deleted = false)
+      or exists (select 1 from public.projects pr
+                  where pr.id = p_project and pr.client_id = public.my_client_id());
+$$;
+revoke execute on function public.is_project_member(uuid) from public, anon;
+grant  execute on function public.is_project_member(uuid) to authenticated;
+
+-- CLIENT-FACING: list safe preview metadata for a project the caller belongs to.
+-- Returns NO source ids/urls and NO storage path — only ids + display metadata.
+create or replace function public.list_project_preview_assets(p_project uuid)
+returns table (id uuid, deliverable_id uuid, asset_type text, original_file_name text,
+               preview_mime_type text, status text, watermark_applied boolean, created_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select a.id, a.deliverable_id, a.asset_type, a.original_file_name,
+         a.preview_mime_type, a.status, a.watermark_applied, a.created_at
+  from public.deliverable_preview_assets a
+  where a.status = 'ready'
+    and (public.is_admin() or public.is_project_member(a.project_id))
+    and a.project_id = p_project
+  order by a.created_at;
+$$;
+revoke execute on function public.list_project_preview_assets(uuid) from public, anon;
+grant  execute on function public.list_project_preview_assets(uuid) to authenticated;
+
+-- STREAM AUTH (server-only use): returns the storage path + mime for ONE asset, but
+-- ONLY if the caller is admin or a member of the asset's project and it is 'ready'.
+-- The authenticated stream route calls this AS THE USER, then streams the bytes via
+-- the service role. The path/source never reaches the browser.
+create or replace function public.get_preview_asset_for_stream(p_asset uuid)
+returns table (preview_storage_path text, preview_mime_type text, asset_type text)
+language sql stable security definer set search_path = public as $$
+  select a.preview_storage_path, a.preview_mime_type, a.asset_type
+  from public.deliverable_preview_assets a
+  where a.id = p_asset and a.status = 'ready'
+    and (public.is_admin() or public.is_project_member(a.project_id));
+$$;
+revoke execute on function public.get_preview_asset_for_stream(uuid) from public, anon;
+grant  execute on function public.get_preview_asset_for_stream(uuid) to authenticated;
+
+-- ADMIN write RPC (is_admin gated) — the import route calls this AS THE ADMIN to
+-- record a generated preview asset. Source ids are stored (admin-only columns).
+create or replace function public.admin_save_preview_asset(p jsonb)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not public.is_admin() then raise exception 'admin only'; end if;
+  if nullif(p->>'project_id','') is null then raise exception 'project_id required'; end if;
+  if (p->>'asset_type') not in ('image','audio') then raise exception 'invalid asset_type'; end if;
+  insert into public.deliverable_preview_assets
+    (deliverable_id, review_id, project_id, asset_type, source_provider, source_file_id, source_folder_id,
+     original_file_name, preview_storage_path, preview_mime_type, watermark_applied, status, error_message, created_by)
+  values (
+    nullif(p->>'deliverable_id','')::uuid, nullif(p->>'review_id','')::uuid, (p->>'project_id')::uuid,
+    p->>'asset_type', coalesce(nullif(p->>'source_provider',''),'google_drive'),
+    nullif(p->>'source_file_id',''), nullif(p->>'source_folder_id',''), nullif(p->>'original_file_name',''),
+    coalesce(p->>'preview_storage_path',''), nullif(p->>'preview_mime_type',''),
+    coalesce((p->>'watermark_applied')::boolean, true),
+    coalesce(nullif(p->>'status',''),'processing'), nullif(p->>'error_message',''), auth.uid())
+  returning id into v_id;
+  return v_id;
+end; $$;
+revoke execute on function public.admin_save_preview_asset(jsonb) from public, anon;
+grant  execute on function public.admin_save_preview_asset(jsonb) to authenticated;
+
+-- Private storage bucket for generated previews (NOT public). All access is via the
+-- service role in the server routes; clients never touch storage directly.
+insert into storage.buckets (id, name, public)
+values ('deliverable-previews', 'deliverable-previews', false)
+on conflict (id) do nothing;
+
+-- Validation (Part C):
+--   select id, asset_type, status, watermark_applied from public.deliverable_preview_assets order by created_at desc limit 5;
+--   -- As a CLIENT (their JWT): select * from public.list_project_preview_assets('<project_id>');  -- safe cols only, no source ids
+--   select id, name, public from storage.buckets where id = 'deliverable-previews';  -- public must be false
