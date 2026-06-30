@@ -24,12 +24,30 @@ const REASON_TEXT: Record<ConfigIssueReason, { ar: string; en: string }> = {
 const configIssueMsg = (env: string, reason: ConfigIssueReason, isAr: boolean) =>
   isAr ? `إعداد غير صالح: ${env} ${REASON_TEXT[reason].ar}` : `Invalid config: ${env} ${REASON_TEXT[reason].en}`;
 
-// Turn a row error like "invalid_config:N8N_WHATSAPP_SEND_SECRET:non_ascii_header" into clear copy.
+// Friendly copy for skip reasons + common provider errors. Value-free.
+const SKIP_TEXT: Record<string, { ar: string; en: string }> = {
+  no_phone:             { ar: "لا يوجد رقم جوال للمستلم", en: "Recipient has no phone" },
+  consent_missing:      { ar: "لم يوافق العميل على واتساب لهذا الطلب", en: "No WhatsApp consent for this request" },
+  pref_off:             { ar: "تفضيل الإشعار مُعطّل للمستلم", en: "Notification preference is off" },
+  no_email:             { ar: "لا يوجد بريد للمستلم", en: "Recipient has no email" },
+  no_approved_template: { ar: "لا يوجد قالب واتساب معتمد لهذا الحدث", en: "No approved WhatsApp template for this event" },
+  not_allowlisted:      { ar: "الرقم/البريد خارج قائمة السماح الاختبارية", en: "Not in the test allowlist" },
+  channel_disabled:     { ar: "القناة مُعطّلة في الخادم", en: "Channel disabled on the server" },
+  invalid_phone:        { ar: "رقم الجوال غير صالح", en: "Invalid phone number" },
+  dry_run:              { ar: "وضع المحاكاة", en: "Dry-run" },
+};
+const skipReasonText = (raw: string | null, isAr: boolean): string | null =>
+  !raw ? null : (SKIP_TEXT[raw] ? (isAr ? SKIP_TEXT[raw].ar : SKIP_TEXT[raw].en) : raw);
+
+// Turn a row error into clear copy. Handles invalid_config:*, the Meta-auth hint,
+// and the "no Meta message id" truth check — translated, value-free.
 function friendlyRowError(raw: string | null, isAr: boolean): string | null {
   if (!raw) return null;
   const m = /^invalid_config:([^:]+):(.+)$/.exec(raw);
   if (m && (m[2] as ConfigIssueReason) in REASON_TEXT) return configIssueMsg(m[1], m[2] as ConfigIssueReason, isAr);
   if (raw.startsWith("invalid_config:")) return isAr ? `إعداد غير صالح: ${raw.split(":")[1] || ""}` : raw;
+  if (/Meta authentication failed/i.test(raw)) return isAr ? "فشل مصادقة Meta — تحقّق من WHATSAPP_ACCESS_TOKEN / بيانات اعتماد n8n" : raw;
+  if (/did not return Meta message id|no message id/i.test(raw)) return isAr ? "لم يُرجِع المزوّد معرّف رسالة من Meta (لم يتأكد الإرسال)" : raw;
   return raw;
 }
 
@@ -251,7 +269,7 @@ export default function DeliveriesView() {
                     <td style={{ ...cell, direction: "ltr", fontFamily: "ui-monospace, Menlo, monospace" }}>{dest || "—"}</td>
                     <td style={cell}><span style={chip(r.status)}>{r.status}</span></td>
                     <td style={{ ...cell, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{r.provider || "—"}{r.provider_message_id ? <span style={{ display: "block", color: "rgba(255,255,255,0.3)", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.provider_message_id.slice(0, 14)}</span> : null}</td>
-                    <td style={{ ...cell, color: r.error_message ? "#ff9ea1" : "rgba(255,255,255,0.5)", whiteSpace: "normal" }}>{friendlyRowError(r.error_message, isAr) || r.skip_reason || "—"}{r.retry_count > 0 ? ` · ↻${r.retry_count}` : ""}</td>
+                    <td style={{ ...cell, color: r.error_message ? "#ff9ea1" : "rgba(255,255,255,0.5)", whiteSpace: "normal" }}>{friendlyRowError(r.error_message, isAr) || skipReasonText(r.skip_reason, isAr) || "—"}{r.retry_count > 0 ? ` · ↻${r.retry_count}` : ""}</td>
                     <td style={{ ...cell, direction: "ltr", color: "rgba(255,255,255,0.45)" }}>{new Date(r.created_at).toLocaleString(isAr ? "ar-SA" : "en-GB")}</td>
                     <td style={cell}>
                       {(r.status === "failed" || r.status === "skipped") && r.channel !== "portal" && (

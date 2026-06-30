@@ -19,6 +19,8 @@ export interface NewQuoteInput {
   /** Contact info from the logged-in profile — forwarded to the Apps Script so
    *  the email notification matches the main-site hero form's payload shape. */
   contact?: { fullName?: string; company?: string; mobile?: string; email?: string; preferredContact?: string };
+  /** Explicit per-request consent to receive WhatsApp updates for THIS request. */
+  whatsappConsent?: boolean;
   language?: "AR" | "EN";
   /** extra fields forwarded only to the Google Sheet mirror */
   sheetExtras?: Record<string, string>;
@@ -51,7 +53,10 @@ export async function createQuote(input: NewQuoteInput): Promise<Result<CreateQu
 
   // 1) Source of truth: insert into Supabase first. If THIS fails, the whole
   //    submission fails — the Sheet mirror can never make a submission "succeed".
-  const r = await ppost<QuoteRequest[]>(`quote_requests`, {
+  // Persist the requester's contact ON the row so notifications can reach the
+  // client (the WhatsApp/email confirmation reads quote_requests.phone/email).
+  // Without this the row had no phone → the delivery row was "no_phone".
+  const base = {
     user_id: uid,
     reference,
     services: input.services,
@@ -59,9 +64,6 @@ export async function createQuote(input: NewQuoteInput): Promise<Result<CreateQu
     budget_range: input.budget_range ?? null,
     city: input.city ?? null,
     preferred_date: input.preferred_date ?? null,
-    // Persist the requester's contact ON the row so notifications can reach the
-    // client (the WhatsApp/email confirmation reads quote_requests.phone/email).
-    // Without this the row had no phone → the delivery row was "no_phone".
     full_name: input.contact?.fullName?.trim() || null,
     company: input.contact?.company?.trim() || null,
     phone: input.contact?.mobile?.trim() || null,
@@ -69,7 +71,14 @@ export async function createQuote(input: NewQuoteInput): Promise<Result<CreateQu
     preferred_contact: input.contact?.preferredContact || null,
     source: "portal_client_quote",
     sheet_mirrored: false,
-  });
+  };
+  // whatsapp_consent is added by docs/portal_whatsapp_truth_and_consent_RUNME.sql.
+  // If that migration hasn't run yet, gracefully retry WITHOUT it so submission
+  // never breaks (consent just won't be stored → WhatsApp stays consent-gated off).
+  let r = await ppost<QuoteRequest[]>(`quote_requests`, { ...base, whatsapp_consent: !!input.whatsappConsent });
+  if (!r.ok && /whatsapp_consent|PGRST204|42703|column/i.test(r.error || "")) {
+    r = await ppost<QuoteRequest[]>(`quote_requests`, base);
+  }
   if (!r.ok) return r;
   const row = r.data[0];
   if (!row) return { ok: false, error: "insert returned no row" };

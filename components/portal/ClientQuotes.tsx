@@ -30,6 +30,7 @@ export default function ClientQuotes() {
   const [preferredDate, setPreferredDate] = useState("");
   const [contactPref, setContactPref] = useState("");
   const [notes, setNotes] = useState("");
+  const [waConsent, setWaConsent] = useState(false);   // explicit per-request WhatsApp consent
 
   const [sending, setSending] = useState(false);
   const [formErr, setFormErr] = useState("");
@@ -58,7 +59,7 @@ export default function ClientQuotes() {
   }
   function resetForm() {
     setServices([]); setTitle(""); setDescription(""); setBudget("");
-    setCity(""); setPhone(profile.mobile || ""); setPreferredDate(""); setContactPref(""); setNotes("");
+    setCity(""); setPhone(profile.mobile || ""); setPreferredDate(""); setContactPref(""); setNotes(""); setWaConsent(false);
   }
 
   async function submit() {
@@ -90,6 +91,7 @@ export default function ClientQuotes() {
         email: profile.email || "",
         preferredContact: contactPref || undefined,
       },
+      whatsappConsent: waConsent,
       language: isAr ? "AR" : "EN",
       // Title / contact preference / notes are already folded into the
       // description above, so the Sheet payload stays exactly hero-shaped.
@@ -223,6 +225,14 @@ export default function ClientQuotes() {
           </div>
           <div><Label htmlFor="qn">{t({ ar: "ملاحظات إضافية", en: "Additional Notes" })}</Label>
             <TextArea id="qn" value={notes} onChange={setNotes} rows={3} /></div>
+
+          <label htmlFor="qwac" style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", padding: "12px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "4px" }}>
+            <input id="qwac" type="checkbox" checked={waConsent} onChange={(e) => setWaConsent(e.target.checked)}
+              style={{ marginTop: "2px", width: "16px", height: "16px", accentColor: "#E31E24", flexShrink: 0, cursor: "pointer" }} />
+            <span className="f-sans" style={{ fontSize: "13px", lineHeight: 1.6, color: "rgba(255,255,255,0.75)" }}>
+              {t({ ar: "أوافق على استلام تحديثات هذا الطلب عبر واتساب.", en: "I agree to receive updates about this request via WhatsApp." })}
+            </span>
+          </label>
 
           {formErr && <div className="f-sans" style={{ padding: "12px 14px", fontSize: "13px", color: "#ff8a8e", background: "rgba(227,30,36,0.08)", border: "1px solid rgba(227,30,36,0.3)", borderRadius: "3px" }}>{formErr}</div>}
 

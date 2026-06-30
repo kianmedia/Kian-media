@@ -133,6 +133,7 @@ export interface QuoteRequest extends SoftDeletable {
   preferred_contact?: string | null;
   source?: string | null;
   source_intake_id?: string | null;
+  whatsapp_consent?: boolean | null;   // per-request WhatsApp opt-in (truth_and_consent RUNME)
 }
 
 export interface MessageRow extends SoftDeletable {

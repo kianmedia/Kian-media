@@ -8,6 +8,16 @@ if (typeof window !== "undefined") throw new Error("lib/server/deliveryWhatsApp 
 
 import { headerReason, urlReason, phoneIdReason, bearerAuth, tokenCore, safeFetchError } from "@/lib/server/deliveryConfig";
 
+/** Map a Meta/n8n error to a SAFE, actionable reason (never the token/secret).
+ *  401 / OAuthException → the auth-failure hint; otherwise a truncated message. */
+function providerErrorReason(raw: string, httpStatus?: number): string {
+  const s = (raw || "").toString();
+  if (httpStatus === 401 || /\b401\b|oauthexception|oauth|access[ _-]?token|authenticat|unauthoriz|expired/i.test(s)) {
+    return "Meta authentication failed — check WHATSAPP_ACCESS_TOKEN / n8n Authorization credential";
+  }
+  return s.slice(0, 240);
+}
+
 export interface WaSendResult {
   ok: boolean;
   status: "sent" | "failed" | "skipped";
@@ -69,9 +79,24 @@ export async function sendWhatsAppTemplate(p: WaTemplateSend): Promise<WaSendRes
         }),
         cache: "no-store",
       });
-      const j = (await res.json().catch(() => ({}))) as { message_id?: string; id?: string; error?: string };
-      if (!res.ok) return { ok: false, status: "failed", provider: "n8n", messageId: null, error: `n8n_${res.status}:${j.error || ""}`.slice(0, 300) };
-      return { ok: true, status: "sent", provider: "n8n", messageId: j.message_id || j.id || null, error: null };
+      // STRICT delivery truth: SENT only when n8n confirms Meta accepted the message
+      // AND returns a Meta message id. n8n contract:
+      //   success → { ok:true, provider:"meta_cloud", message_id:"<messages[0].id>" }
+      //   error   → { ok:false, provider:"meta_cloud", error:"<safe>", message:"<safe>" }
+      const j = (await res.json().catch(() => ({}))) as
+        { ok?: boolean; provider?: string; message_id?: string; id?: string; error?: string; message?: string; messages?: Array<{ id?: string }> };
+      const provider = j.provider || "meta_cloud";
+      const metaId = j.message_id || j.messages?.[0]?.id || (j.ok === true ? j.id : undefined) || null;
+      // (a) HTTP-level failure from n8n itself.
+      if (!res.ok) return { ok: false, status: "failed", provider: "n8n", messageId: null, error: providerErrorReason(j.error || j.message || `n8n_${res.status}`, res.status) };
+      // (b) n8n explicitly reported failure (its error branch), or no success flag + no id.
+      if (j.ok === false || (j.ok === undefined && !metaId)) {
+        return { ok: false, status: "failed", provider, messageId: null, error: providerErrorReason(j.error || j.message || "n8n returned no Meta result") };
+      }
+      // (c) n8n said ok but gave no Meta message id → NOT a real send.
+      if (!metaId) return { ok: false, status: "failed", provider, messageId: null, error: "n8n did not return Meta message id" };
+      // (d) Confirmed: Meta accepted and returned a message id.
+      return { ok: true, status: "sent", provider, messageId: metaId, error: null };
     } catch (e) {
       return { ok: false, status: "failed", provider: "n8n", messageId: null, error: safeFetchError(e, "N8N_WHATSAPP_SEND_SECRET") };
     }
@@ -101,8 +126,11 @@ export async function sendWhatsAppTemplate(p: WaTemplateSend): Promise<WaSendRes
       cache: "no-store",
     });
     const j = (await res.json().catch(() => ({}))) as { messages?: Array<{ id?: string }>; error?: { message?: string } };
-    if (!res.ok) return { ok: false, status: "failed", provider: "meta_cloud", messageId: null, error: `cloud_${res.status}:${j.error?.message || ""}`.slice(0, 300) };
-    return { ok: true, status: "sent", provider: "meta_cloud", messageId: j.messages?.[0]?.id ?? null, error: null };
+    if (!res.ok) return { ok: false, status: "failed", provider: "meta_cloud", messageId: null, error: providerErrorReason(j.error?.message || `cloud_${res.status}`, res.status) };
+    // STRICT: a 200 without a message id is not a confirmed send.
+    const metaId = j.messages?.[0]?.id ?? null;
+    if (!metaId) return { ok: false, status: "failed", provider: "meta_cloud", messageId: null, error: "Meta returned no message id" };
+    return { ok: true, status: "sent", provider: "meta_cloud", messageId: metaId, error: null };
   } catch (e) {
     return { ok: false, status: "failed", provider: "meta_cloud", messageId: null, error: safeFetchError(e, "WHATSAPP_ACCESS_TOKEN") };
   }
