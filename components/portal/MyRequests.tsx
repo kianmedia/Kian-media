@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { listMyIntake, linkMyRecords, INTAKE_TYPE_LABELS, INTAKE_STATUS_LABELS, type PublicIntake } from "@/lib/portal/intake";
+import { safeShortId } from "@/lib/portal/safe";
 
 function timeShort(iso: string, isAr: boolean) {
   try { return new Date(iso).toLocaleDateString(isAr ? "ar-SA" : "en-GB"); } catch { return ""; }
@@ -49,7 +50,7 @@ export default function MyRequests() {
             return (
               <div key={r.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, overflow: "hidden" }}>
                 <button onClick={() => setOpenId(open ? null : r.id)} style={{ width: "100%", textAlign: isAr ? "right" : "left", background: "transparent", border: "none", cursor: "pointer", padding: "12px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{r.reference || r.id.slice(0, 8)}</strong>
+                  <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{r.reference || safeShortId(r.id)}</strong>
                   <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: "rgba(227,30,36,0.16)", color: "#ff9ea1" }}>{t(typeL)}</span>
                   {(r.services?.length ?? 0) > 0 && <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 12.5 }}>{r.services!.join("، ")}</span>}
                   <span style={{ marginInlineStart: "auto", color: "rgba(255,255,255,0.45)", fontSize: 11.5 }}>{t(statL)} · {timeShort(r.created_at, isAr)}</span>

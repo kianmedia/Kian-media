@@ -16,6 +16,7 @@ import {
   approveInvoiceCreation, type QuoteItemInput, type PendingQuoteRequest,
 } from "@/lib/portal/quotes";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteRevisionRequest } from "@/lib/portal/types";
+import { safeShortId } from "@/lib/portal/safe";
 
 const STATUSES: Quote["status"][] = ["draft", "internal_review", "approved", "sent", "accepted", "rejected", "expired"];
 const money = (n: number, cur: string) => `${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
@@ -213,7 +214,7 @@ export default function AdminQuotesManager() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
             {pending.map((pr) => (
               <div key={pr.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "9px 12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, fontSize: 12.5 }}>
-                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace" }}>{pr.reference || pr.id.slice(0, 8)}</strong>
+                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace" }}>{pr.reference || safeShortId(pr.id)}</strong>
                 {(pr.services?.length ?? 0) > 0 && <span style={{ color: "rgba(255,255,255,0.7)" }}>{pr.services.join("، ")}</span>}
                 {pr.email && <span style={{ color: "rgba(255,255,255,0.45)" }}>{pr.email}</span>}
                 {pr.city && <span style={{ color: "rgba(255,255,255,0.45)" }}>· {pr.city}</span>}
@@ -257,7 +258,7 @@ export default function AdminQuotesManager() {
           return (
             <div key={q.id} id={`quote-${q.id}`} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${open ? "rgba(227,30,36,0.4)" : "rgba(255,255,255,0.09)"}`, borderRadius: 10, overflow: "hidden" }}>
               <button onClick={() => void expand(q.id)} style={{ width: "100%", textAlign: isAr ? "right" : "left", background: "transparent", border: "none", cursor: "pointer", padding: "12px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.estimate_number || q.quote_number || q.id.slice(0, 8)}</strong>
+                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.estimate_number || q.quote_number || safeShortId(q.id)}</strong>
                 <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: q.source === "zoho" ? "rgba(37,211,102,0.16)" : "rgba(255,255,255,0.08)", color: q.source === "zoho" ? "#25D366" : "rgba(255,255,255,0.5)" }}>{q.source === "zoho" ? "Zoho" : t({ ar: "محلي", en: "Local" })}</span>
                 {q.title && <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12.5 }}>{q.title}</span>}
                 {q.quote_request_id && <span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>🔗 {t({ ar: "من طلب", en: "from request" })}</span>}

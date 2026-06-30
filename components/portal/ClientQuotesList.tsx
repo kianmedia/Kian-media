@@ -11,6 +11,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import { listQuotes, getQuoteItems, requestQuoteRevision, respondToQuote, promoteByEmail, openEstimatePdf } from "@/lib/portal/quotes";
 import { listMyIntake } from "@/lib/portal/intake";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteItem } from "@/lib/portal/types";
+import { safeShortId } from "@/lib/portal/safe";
 
 const money = (n: number | null | undefined, cur: string) =>
   `${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
@@ -128,7 +129,7 @@ export default function ClientQuotesList() {
           return (
             <div key={q.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, overflow: "hidden" }}>
               <button onClick={() => void toggle(q.id)} style={{ width: "100%", textAlign: isAr ? "right" : "left", background: "transparent", border: "none", cursor: "pointer", padding: "13px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.quote_number || q.id.slice(0, 8)}</strong>
+                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 }}>{q.quote_number || safeShortId(q.id)}</strong>
                 {q.title && <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12.5 }}>{q.title}</span>}
                 <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 6, background: "rgba(227,30,36,0.16)", color: "#ff9ea1" }}>{t(st)}</span>
                 {q.valid_until && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{t({ ar: "صالح حتى", en: "valid until" })} {q.valid_until}</span>}

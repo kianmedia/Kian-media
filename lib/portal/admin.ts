@@ -210,6 +210,25 @@ export function adminCreateProject(input: {
   });
 }
 
+/** Create a project for a client account, resolving a valid (non-null) client_id
+ *  from the account (profiles.id and/or email) — creating the legacy clients row
+ *  if missing — and linking membership. Fixes the client_id NOT-NULL crash.
+ *  Returns the new project id. Error "client_not_linked" → no portal account. */
+export function adminCreateProjectForClient(input: {
+  title: string; userId?: string | null; email?: string | null;
+  companyId?: string | null; status?: ProjectStatus; notes?: string | null; shootingDate?: string | null;
+}): Promise<Result<string>> {
+  return prpc<string>("admin_create_project_for_client", {
+    p_title: input.title,
+    p_user: input.userId ?? null,
+    p_email: input.email ?? null,
+    p_company: input.companyId ?? null,
+    p_status: input.status ?? "request_received",
+    p_notes: input.notes ?? null,
+    p_shooting: input.shootingDate ?? null,
+  });
+}
+
 export function adminAddProjectMember(input: {
   projectId: string; userId: string; role?: ProjectMemberRole;
 }): Promise<Result<string>> {
