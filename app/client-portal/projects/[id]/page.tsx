@@ -25,6 +25,7 @@ import AdminDeliverables from "@/components/portal/AdminDeliverables";
 import EditorDeliverables from "@/components/portal/EditorDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
 import AdminProjectStage from "@/components/portal/AdminProjectStage";
+import ProjectMedia from "@/components/portal/ProjectMedia";
 import type { Project, ProjectMessage, Deliverable, DeliverableReview as Review, ProjectMember } from "@/lib/portal/types";
 
 export default function ProjectDetailPage() {
@@ -190,6 +191,12 @@ export default function ProjectDetailPage() {
         ) : (
           <DeliverableReview projectId={id} projectName={p.project_name} items={dlvs} reviews={reviews} onChanged={loadDeliverables} />
         )}
+      </Section>
+
+      {/* Media — watermarked image/audio previews + final delivery. Admin manages;
+          client sees only watermarked previews + admin-released final downloads. */}
+      <Section title={t({ ar: "المعاينات والتسليم", en: "Previews & Delivery" })}>
+        <ProjectMedia projectId={id} isAdmin={isAdmin} />
       </Section>
 
       {/* Client notes & revision requests — owner + assigned editors/managers */}

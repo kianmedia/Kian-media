@@ -45,19 +45,22 @@ export async function POST(req: Request) {
 
   const save = (p: Record<string, unknown>) => rpcAsUser<string>("admin_save_preview_asset", { p }, bearer);
 
-  // ── AUDIO (V1): no in-process watermarking on serverless → record + warn. ──
+  // ── AUDIO: watermarking (a "Kian Media" voice every 20s) needs an external
+  //    ffmpeg worker — not available on Vercel serverless. Record the source so a
+  //    worker can process it later; the client sees nothing until status='ready'. ──
   if (assetType === "audio") {
     let fileMeta: { id: string; name: string } | null = null;
     try { fileMeta = await getDriveFileMeta(ref.id); } catch { /* keep going with id only */ }
     await save({
       project_id: projectId, deliverable_id: body.deliverableId, asset_type: "audio",
+      source_provider: "google_drive",
       source_file_id: ref.kind === "file" ? ref.id : null, source_folder_id: ref.kind === "folder" ? ref.id : null,
-      original_file_name: fileMeta?.name ?? null, status: "failed", watermark_applied: false,
+      original_file_name: fileMeta?.name ?? null, status: "needs_worker", watermark_applied: false,
       error_message: "audio_watermark_requires_external_worker",
     });
     return NextResponse.json({
-      ok: false, setup_required: true, created: [{ asset_type: "audio", status: "failed" }],
-      warnings: ["Audio watermarking (a 'Kian Media' voice every 20s) needs an external ffmpeg worker — not available on Vercel serverless. The asset was recorded as 'failed'. See docs/portal_quote_project_preview_fixes_RUNME.sql + .env.example (KIAN_AUDIO_WATERMARK_PATH) and run an admin-side processing job."],
+      ok: true, needs_worker: true, created: [{ asset_type: "audio", status: "needs_worker" }],
+      warnings: ["Audio preview queued. The audible “Kian Media” watermark needs an external ffmpeg worker (KIAN_AUDIO_WATERMARK_PATH) — see docs. The client will only see the preview once a worker marks it 'ready'. The original is NEVER served to the client."],
     }, { status: 200 });
   }
 
