@@ -14,6 +14,7 @@ import type { Profile } from "@/lib/portal/types";
 import { caps as deriveCaps, type Caps } from "@/lib/portal/roles";
 import { tabsForViewer, MY_OPPORTUNITIES_TAB } from "@/components/portal/nav";
 import { listMyOpportunityRequests } from "@/lib/opportunities";
+import { syncProjectsForCurrentUser } from "@/lib/portal/projects";
 import AuthTabs from "@/components/portal/AuthTabs";
 import { BlockedScreen, InactiveBanner } from "@/components/portal/StatusScreens";
 
@@ -99,6 +100,11 @@ export default function PortalShell({ children }: { children: ReactNode }) {
       const mo = await listMyOpportunityRequests();
       setHasMyOpps(mo.ok && mo.data.length > 0);
     } catch { setHasMyOpps(false); }
+
+    // Attach any pending (admin-created, no-account) projects matched by this
+    // verified email, and repair memberships. Best-effort — graceful if the
+    // production project SQL hasn't been run yet.
+    try { await syncProjectsForCurrentUser(); } catch { /* non-blocking */ }
   }, []);
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);

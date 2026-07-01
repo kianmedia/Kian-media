@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  adminCreateProject, adminAddProjectMember, adminRemoveProjectMember,
+  adminCreateProjectForClient, adminAddProjectMember, adminRemoveProjectMember,
   adminListMembershipsForUser,
 } from "@/lib/portal/admin";
 import { STATUS_STEPS } from "@/components/portal/projectMeta";
@@ -166,13 +166,15 @@ function CreateProjectModal({
     setErr("");
     if (!title.trim()) { setErr(t({ ar: "عنوان المشروع مطلوب", en: "Project title required" })); return; }
     setSaving(true);
-    // 1) create the project
-    const cr = await adminCreateProject({ title: title.trim(), status, notes: notes.trim() || undefined, shootingDate: shooting || undefined });
-    if (!cr.ok) { setSaving(false); setErr(t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error); return; }
-    // 2) auto-link this account as the project owner
-    const lk = await adminAddProjectMember({ projectId: cr.data, userId: account.id, role: "client_owner" });
+    // Create the project linked to THIS account (userId), via one is_admin() RPC
+    // that resolves/creates the client record (non-null client_id) and links
+    // membership atomically. Fixes the client_id NOT-NULL create bug.
+    const cr = await adminCreateProjectForClient({
+      title: title.trim(), userId: account.id, clientEmail: account.email,
+      status, notes: notes.trim() || undefined, shootingDate: shooting || undefined,
+    });
     setSaving(false);
-    if (!lk.ok) { onError(t({ ar: "أُنشئ المشروع لكن تعذّر ربط العميل: ", en: "Project created but linking failed: " }) + lk.error); onClose(); return; }
+    if (!cr.ok) { setErr(t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error); return; }
     onCreated(t({ ar: "تم إنشاء المشروع وربط العميل به ✓", en: "Project created and client linked ✓" }));
   }
 
