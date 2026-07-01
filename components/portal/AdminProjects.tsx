@@ -20,10 +20,16 @@ import type { Project, ClientRow, Profile, ProjectStatus } from "@/lib/portal/ty
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+// A real (client-provided) email = present, not the internal placeholder.
+function realEmail(c?: ClientRow): string | null {
+  if (!c?.email || c.email_is_placeholder || c.email.endsWith("@pending.kian.local")) return null;
+  return c.email.trim() || null;
+}
+
 type LinkState = "account" | "email_pending" | "unlinked";
 function linkStateOf(c?: ClientRow): LinkState {
   if (c?.user_id) return "account";
-  if (c?.email && c.email.trim()) return "email_pending";
+  if (realEmail(c)) return "email_pending";
   return "unlinked";
 }
 
@@ -81,7 +87,7 @@ export default function AdminProjects() {
   function clientLine(p: Project): string {
     const c = clients[p.client_id];
     if (!c) return "—";
-    const name = c.full_name || c.email || t({ ar: "عميل غير مُسمّى", en: "Unnamed client" });
+    const name = c.full_name || realEmail(c) || t({ ar: "عميل غير مُسمّى", en: "Unnamed client" });
     return c.company ? `${name} · ${c.company}` : name;
   }
 
@@ -133,7 +139,11 @@ export default function AdminProjects() {
                       <Link href={`/client-portal/projects/${p.id}`} className="text-white" style={{ fontSize: 16, fontWeight: 700, textDecoration: "none", fontFamily: isAr ? "var(--arabic-display)" : "var(--sans)" }}>{p.project_name}</Link>
                       <LinkBadge state={ls} t={t} />
                     </div>
-                    <div className="text-white/45" style={{ fontSize: 12.5, marginTop: 3 }}>{clientLine(p)}{c?.email ? <span style={{ color: "rgba(255,255,255,0.3)", direction: "ltr" }}> · {c.email}</span> : null}</div>
+                    <div className="text-white/45" style={{ fontSize: 12.5, marginTop: 3 }}>
+                      {clientLine(p)}
+                      {realEmail(c) ? <span style={{ color: "rgba(255,255,255,0.3)", direction: "ltr" }}> · {realEmail(c)}</span>
+                        : <span style={{ color: "rgba(255,255,255,0.35)" }}> · {t({ ar: "لم يتم إضافة بريد العميل", en: "No client email yet" })}</span>}
+                    </div>
                     <div className="f-sans" style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginTop: 3, direction: "ltr", textAlign: isAr ? "right" : "left" }}>{t({ ar: "أُنشئ: ", en: "Created: " })}{new Date(p.created_at).toLocaleDateString(isAr ? "ar-SA" : "en-GB")}</div>
                   </div>
                   <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
@@ -235,7 +245,7 @@ function ProjectForm({ mode, project, client, onCancel, onDone }: {
   const [title, setTitle] = useState(project?.project_name ?? "");
   const [clientName, setClientName] = useState(client?.full_name ?? "");
   const [company, setCompany] = useState(client?.company ?? "");
-  const [email, setEmail] = useState(client?.email ?? "");
+  const [email, setEmail] = useState(realEmail(client) ?? "");
   const [phone, setPhone] = useState(client?.mobile ?? "");
   const [status, setStatus] = useState<string>(project?.status && STATUS_STEPS.some((s) => s.key === project.status) ? project.status : "request_received");
   const [shooting, setShooting] = useState(project?.shooting_date ?? "");

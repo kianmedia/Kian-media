@@ -175,6 +175,7 @@ export interface ClientRow extends SoftDeletable {
   company: string | null;
   mobile: string | null;
   email: string | null;
+  email_is_placeholder?: boolean;  // true = internal pending+…@pending.kian.local (never shown)
   created_at: string;
 }
 

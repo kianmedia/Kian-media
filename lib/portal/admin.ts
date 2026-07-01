@@ -40,7 +40,7 @@ export function adminListProjects(limit = 300): Promise<Result<Project[]>> {
 export async function adminListClientsByIds(ids: string[]): Promise<Result<ClientRow[]>> {
   if (ids.length === 0) return { ok: true, data: [] };
   const inList = ids.map((id) => enc(id)).join(",");
-  return pget<ClientRow[]>(`clients?id=in.(${inList})&select=id,user_id,full_name,company,email,mobile`);
+  return pget<ClientRow[]>(`clients?id=in.(${inList})&select=id,user_id,full_name,company,email,mobile,email_is_placeholder`);
 }
 
 /** All portal profiles for account management (admin reads all via profiles RLS). */
