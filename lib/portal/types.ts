@@ -170,11 +170,12 @@ export interface Offer extends SoftDeletable {
 /** Legacy `clients` table (admin-provisioned; the client→project link). */
 export interface ClientRow extends SoftDeletable {
   id: string;
-  user_id: string;
+  user_id: string | null;          // NULL = pending (admin-created, no portal account yet)
   full_name: string | null;
   company: string | null;
   mobile: string | null;
   email: string | null;
+  email_is_placeholder?: boolean;  // true = internal pending+…@pending.kian.local (never shown)
   created_at: string;
 }
 

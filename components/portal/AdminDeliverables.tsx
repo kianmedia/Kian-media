@@ -150,7 +150,12 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
     setAdding(true);
     const r = await adminAddDeliverable({ projectId, title: title.trim(), type, previewUrl: previewUrl.trim() || undefined, vimeoUrl: vimeoUrl.trim() || undefined, status });
     setAdding(false);
-    if (!r.ok) { setErr(t({ ar: "تعذّر الإضافة: ", en: "Add failed: " }) + r.error); return; }
+    if (!r.ok) {
+      // Never surface a raw DB error (e.g. the recipient_shape constraint) to the UI.
+      console.error("[add-deliverable]", r.error);
+      setErr(t({ ar: "تعذّرت إضافة المعاينة. حدّث الصفحة وحاول مرة أخرى.", en: "Couldn't add the preview. Refresh and try again." }));
+      return;
+    }
     onAdded({ title: title.trim(), status });
   }
 
@@ -182,7 +187,7 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
           </div>
           {err && <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{err}</div>}
           <p className="f-sans" style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.35)", lineHeight: 1.6 }}>
-            {t({ ar: "اختيار «مراجعة العميل» يُشعر العميل تلقائياً. (الإصدار يبدأ من v1.)", en: "Choosing “Client Review” notifies the client automatically. (Version starts at v1.)" })}
+            {t({ ar: "اختيار «مراجعة العميل» يُشعر العميل تلقائياً إذا كان مرتبطاً بحساب. للمشاريع غير المرتبطة تُحفظ المعاينة دون إرسال إشعار. (الإصدار يبدأ من v1.)", en: "Choosing “Client Review” notifies the client automatically if they’re linked to an account. For unlinked projects the preview is saved without a notification. (Version starts at v1.)" })}
           </p>
           <div className="flex gap-3">
             <button onClick={add} disabled={adding} className="btn-red" style={{ flex: 1, justifyContent: "center", opacity: adding ? 0.6 : 1 }}><span>{adding ? "..." : t({ ar: "حفظ", en: "Save" })}</span></button>

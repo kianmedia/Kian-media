@@ -13,6 +13,13 @@ export function listMyProjects(): Promise<Result<Project[]>> {
   return pget<Project[]>(`projects?select=*&order=created_at.desc`);
 }
 
+/** On login: attach any pending (admin-created, no-account) projects whose client
+ *  record email matches the caller's VERIFIED profile email, and repair memberships.
+ *  Best-effort — called from the portal bootstrap; never blocks the session. */
+export function syncProjectsForCurrentUser(): Promise<Result<{ linked_clients: number; linked_members: number }>> {
+  return prpc<{ linked_clients: number; linked_members: number }>("sync_projects_for_current_user", {});
+}
+
 export async function getProject(id: string): Promise<Result<Project | null>> {
   const r = await pget<Project[]>(`projects?id=eq.${enc(id)}&select=*`);
   if (!r.ok) return r;

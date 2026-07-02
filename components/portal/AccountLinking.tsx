@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════════════
 // Admin "ربط العميل بالمشروع" panel (per account, inside AdminAccounts).
 // Create a project for the account, link it to an existing project, or unlink —
-// all via the approved is_admin() SECURITY DEFINER RPCs (admin_create_project,
+// all via the approved is_admin() SECURITY DEFINER RPCs (admin_create_project_for_client,
 // admin_add_project_member, admin_remove_project_member). Linking writes a
 // project_members row (role=client_owner), which is exactly what makes the
 // project visible to that client (can_access_project → project_role). No
@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  adminCreateProject, adminAddProjectMember, adminRemoveProjectMember,
+  adminCreateProjectForClient, adminAddProjectMember, adminRemoveProjectMember,
   adminListMembershipsForUser,
 } from "@/lib/portal/admin";
 import { STATUS_STEPS } from "@/components/portal/projectMeta";
@@ -166,13 +166,14 @@ function CreateProjectModal({
     setErr("");
     if (!title.trim()) { setErr(t({ ar: "عنوان المشروع مطلوب", en: "Project title required" })); return; }
     setSaving(true);
-    // 1) create the project
-    const cr = await adminCreateProject({ title: title.trim(), status, notes: notes.trim() || undefined, shootingDate: shooting || undefined });
-    if (!cr.ok) { setSaving(false); setErr(t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error); return; }
-    // 2) auto-link this account as the project owner
-    const lk = await adminAddProjectMember({ projectId: cr.data, userId: account.id, role: "client_owner" });
+    // Create the project linked to THIS account (userId), via one is_admin() RPC
+    // that resolves/creates the client record and links membership atomically.
+    const cr = await adminCreateProjectForClient({
+      title: title.trim(), userId: account.id, clientEmail: account.email,
+      status, notes: notes.trim() || undefined, shootingDate: shooting || undefined,
+    });
     setSaving(false);
-    if (!lk.ok) { onError(t({ ar: "أُنشئ المشروع لكن تعذّر ربط العميل: ", en: "Project created but linking failed: " }) + lk.error); onClose(); return; }
+    if (!cr.ok) { setErr(t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error); return; }
     onCreated(t({ ar: "تم إنشاء المشروع وربط العميل به ✓", en: "Project created and client linked ✓" }));
   }
 
