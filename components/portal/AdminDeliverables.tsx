@@ -13,7 +13,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { adminAddDeliverable, adminSetDeliverable } from "@/lib/portal/admin";
+import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable } from "@/lib/portal/admin";
 import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
@@ -36,6 +36,7 @@ export default function AdminDeliverables({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<Deliverable | null>(null);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
 
   // Latest client note per deliverable (reviews arrive newest-first).
@@ -54,6 +55,20 @@ export default function AdminDeliverables({
     if (status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: d.title, clientEmail });
     else if (status === "final_delivered") void notifyFinalDelivered({ projectId, projectName, deliverableTitle: d.title, clientEmail });
     setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }) });
+    onChanged();
+  }
+
+  async function del(d: Deliverable) {
+    if (!window.confirm(t({ ar: "هل أنت متأكد من حذف رابط المعاينة؟", en: "Delete this preview link?" }))) return;
+    setBusyId(d.id); setFlash(null);
+    const r = await adminSoftDeleteDeliverable(d.id);
+    setBusyId(null);
+    if (!r.ok || !r.data) {
+      console.error("[delete-deliverable]", r.ok ? "no row" : r.error);
+      setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر حذف المعاينة. حاول مرة أخرى.", en: "Couldn't delete. Try again." }) });
+      return;
+    }
+    setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم حذف المعاينة ✓", en: "Preview deleted ✓" }) });
     onChanged();
   }
 
@@ -95,6 +110,12 @@ export default function AdminDeliverables({
                         {t({ ar: "عرض المعاينة", en: "Preview" })}
                       </button>
                     )}
+                    <button onClick={() => setEditing(d)} disabled={busyId === d.id} className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", color: "rgba(255,255,255,0.8)", background: "none", border: "1px solid rgba(255,255,255,0.18)", padding: "8px 12px", borderRadius: "3px", cursor: busyId === d.id ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+                      {t({ ar: "تعديل", en: "Edit" })}
+                    </button>
+                    <button onClick={() => void del(d)} disabled={busyId === d.id} className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", color: "#ff9ea1", background: "none", border: "1px solid rgba(227,30,36,0.4)", padding: "8px 12px", borderRadius: "3px", cursor: busyId === d.id ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+                      {t({ ar: "حذف", en: "Delete" })}
+                    </button>
                     <div>
                       <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "3px" }}>{t({ ar: "حالة المخرج", en: "Deliverable Status" })}</div>
                       <select value={d.status} disabled={busyId === d.id} onChange={(e) => setStatus(d, e.target.value as DeliverableStatus)} className="f-sans"
@@ -126,6 +147,11 @@ export default function AdminDeliverables({
         setShowAdd(false);
         // Added straight into client_review → email the client it's ready to preview.
         if (info.status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: info.title, clientEmail });
+        onChanged();
+      }} />}
+      {editing && <EditModal deliverable={editing} onClose={() => setEditing(null)} onSaved={() => {
+        setEditing(null);
+        setFlash({ id: editing.id, kind: "ok", text: t({ ar: "تم حفظ التعديلات ✓", en: "Changes saved ✓" }) });
         onChanged();
       }} />}
       {preview && <PreviewModal title={preview.title} url={preview.url} onClose={() => setPreview(null)} />}
@@ -191,6 +217,74 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
           </p>
           <div className="flex gap-3">
             <button onClick={add} disabled={adding} className="btn-red" style={{ flex: 1, justifyContent: "center", opacity: adding ? 0.6 : 1 }}><span>{adding ? "..." : t({ ar: "حفظ", en: "Save" })}</span></button>
+            <button onClick={onClose} className="btn-ghost" style={{ justifyContent: "center" }}><span>{t({ ar: "إلغاء", en: "Cancel" })}</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Edit an EXISTING preview: title / type / preview URL / vimeo URL. Status is
+// managed by the row's own status control (kept separate to avoid duplicating the
+// client-notification flow). Requires docs/portal_deliverable_edit_delete_RUNME.sql.
+function EditModal({ deliverable, onClose, onSaved }: { deliverable: Deliverable; onClose: () => void; onSaved: () => void }) {
+  const { t, isAr } = useI18n();
+  const [title, setTitle] = useState(deliverable.title ?? "");
+  const [type, setType] = useState<DeliverableType>(deliverable.type ?? "video");
+  const [previewUrl, setPreviewUrl] = useState(deliverable.preview_url ?? "");
+  const [vimeoUrl, setVimeoUrl] = useState(deliverable.vimeo_review_url ?? "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  function validUrl(u: string): boolean {
+    if (!u.trim()) return true; // optional field
+    try { const p = new URL(u.trim()); return p.protocol === "http:" || p.protocol === "https:"; } catch { return false; }
+  }
+
+  async function save() {
+    setErr("");
+    if (!title.trim()) { setErr(t({ ar: "العنوان مطلوب", en: "Title required" })); return; }
+    if (!previewUrl.trim() && !vimeoUrl.trim()) { setErr(t({ ar: "أضف رابط معاينة واحداً على الأقل", en: "Add at least one preview URL" })); return; }
+    if (!validUrl(previewUrl) || !validUrl(vimeoUrl)) { setErr(t({ ar: "الرجاء إدخال رابط صحيح (http/https).", en: "Please enter a valid http/https URL." })); return; }
+    setSaving(true);
+    const r = await adminSetDeliverable({
+      deliverableId: deliverable.id,
+      title: title.trim(),
+      type,
+      previewUrl: previewUrl.trim(),
+      vimeoUrl: vimeoUrl.trim(),
+    });
+    setSaving(false);
+    if (!r.ok || !r.data) {
+      console.error("[edit-deliverable]", r.ok ? "no row" : r.error);
+      setErr(t({ ar: "تعذّر حفظ التعديلات. حدّث الصفحة وحاول مرة أخرى.", en: "Couldn't save changes. Refresh and try again." }));
+      return;
+    }
+    onSaved();
+  }
+
+  const input: React.CSSProperties = { width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "12px 14px", color: "#fff", fontSize: "14px", fontFamily: "var(--sans)", outline: "none", colorScheme: "dark" };
+  const lbl: React.CSSProperties = { display: "block", marginBottom: "6px", fontSize: "12px", fontWeight: 600, color: "rgba(255,255,255,0.7)" };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 130, background: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "460px", background: "#0c0c0c", border: "1px solid rgba(227,30,36,0.25)", borderRadius: "6px", padding: "24px", margin: "auto" }}>
+        <h3 className="text-white" style={{ fontSize: "18px", fontWeight: 700, marginBottom: "16px" }}>{t({ ar: "تعديل المعاينة", en: "Edit Preview" })}</h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: "13px" }}>
+          <div><label style={lbl}>{t({ ar: "العنوان *", en: "Title *" })}</label><input value={title} onChange={(e) => setTitle(e.target.value)} style={input} /></div>
+          <div><label style={lbl}>{t({ ar: "النوع", en: "Type" })}</label>
+            <select value={type} onChange={(e) => setType(e.target.value as DeliverableType)} style={input}>
+              {TYPES.map((x) => <option key={x.v} value={x.v} style={{ background: "#0a0a0a" }}>{isAr ? x.ar : x.en}</option>)}
+            </select></div>
+          <div><label style={lbl}>{t({ ar: "رابط المعاينة", en: "Preview URL" })}</label><input value={previewUrl} onChange={(e) => setPreviewUrl(e.target.value)} type="url" dir="ltr" placeholder="https://youtube.com/... / image / video" style={input} /></div>
+          <div><label style={lbl}>{t({ ar: "رابط Vimeo للمراجعة (اختياري)", en: "Vimeo Review URL (optional)" })}</label><input value={vimeoUrl} onChange={(e) => setVimeoUrl(e.target.value)} type="url" dir="ltr" placeholder="https://vimeo.com/..." style={input} /></div>
+          <p className="f-sans" style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.35)", lineHeight: 1.6 }}>
+            {t({ ar: "الحالة تُدار من قائمة «حالة المخرج» في القائمة.", en: "Status is managed from the row’s status control." })}
+          </p>
+          {err && <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{err}</div>}
+          <div className="flex gap-3">
+            <button onClick={save} disabled={saving} className="btn-red" style={{ flex: 1, justifyContent: "center", opacity: saving ? 0.6 : 1 }}><span>{saving ? "..." : t({ ar: "حفظ", en: "Save" })}</span></button>
             <button onClick={onClose} className="btn-ghost" style={{ justifyContent: "center" }}><span>{t({ ar: "إلغاء", en: "Cancel" })}</span></button>
           </div>
         </div>

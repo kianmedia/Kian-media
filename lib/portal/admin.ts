@@ -144,14 +144,28 @@ export function adminAddDeliverable(input: {
 export function adminSetDeliverable(input: {
   deliverableId: string; status?: DeliverableStatus;
   allowDownload?: boolean; previewUrl?: string; vimeoUrl?: string;
+  title?: string; type?: DeliverableType;
 }): Promise<Result<boolean>> {
-  return prpc<boolean>("admin_set_deliverable", {
+  // p_title/p_type are sent ONLY when editing meta, so a status-only call still
+  // matches the pre-migration 5-arg RPC (no "unknown parameter" during the deploy
+  // window). Editing title/type requires docs/portal_deliverable_edit_delete_RUNME.sql.
+  const args: Record<string, unknown> = {
     p_dlv: input.deliverableId,
     p_status: input.status ?? null,
     p_allow_download: input.allowDownload ?? null,
     p_preview_url: input.previewUrl ?? null,
     p_vimeo_url: input.vimeoUrl ?? null,
-  });
+  };
+  if (input.title !== undefined) args.p_title = input.title;
+  if (input.type !== undefined) args.p_type = input.type;
+  return prpc<boolean>("admin_set_deliverable", args);
+}
+
+/** Soft-delete a preview/review deliverable (admin-gated via the existing
+ *  soft_delete RPC). RLS filters is_deleted=false, so it disappears from both the
+ *  admin and client lists. Does not delete the project or cascade destructively. */
+export function adminSoftDeleteDeliverable(deliverableId: string): Promise<Result<boolean>> {
+  return prpc<boolean>("soft_delete", { p_table: "deliverables", p_id: deliverableId });
 }
 
 export function adminAddFinalAsset(deliverableId: string, url: string): Promise<Result<string>> {
