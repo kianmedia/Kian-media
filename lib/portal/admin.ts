@@ -161,11 +161,20 @@ export function adminSetDeliverable(input: {
   return prpc<boolean>("admin_set_deliverable", args);
 }
 
-/** Soft-delete a preview/review deliverable (admin-gated via the existing
- *  soft_delete RPC). RLS filters is_deleted=false, so it disappears from both the
- *  admin and client lists. Does not delete the project or cascade destructively. */
-export function adminSoftDeleteDeliverable(deliverableId: string): Promise<Result<boolean>> {
-  return prpc<boolean>("soft_delete", { p_table: "deliverables", p_id: deliverableId });
+/** Soft-delete a preview/review deliverable. Uses the dedicated admin RPC
+ *  admin_soft_delete_deliverable (docs/portal_deliverable_delete_fix_RUNME.sql);
+ *  falls back to the generic admin-gated soft_delete if that migration hasn't run
+ *  yet, so delete works regardless of deploy order. Returns ok+data=true ONLY when
+ *  a row was actually soft-deleted (data=false ⇒ nothing changed → caller must NOT
+ *  treat it as success). Never hard-deletes; never cascades to project/notes. */
+export async function adminSoftDeleteDeliverable(deliverableId: string): Promise<Result<boolean>> {
+  const r = await prpc<boolean>("admin_soft_delete_deliverable", { p_deliverable: deliverableId });
+  // Only fall back when the dedicated function is genuinely missing (migration not
+  // applied) — never mask a real false/failure from the dedicated RPC.
+  if (!r.ok && /PGRST202|could not find the function|does not exist|schema cache/i.test(r.error || "")) {
+    return prpc<boolean>("soft_delete", { p_table: "deliverables", p_id: deliverableId });
+  }
+  return r;
 }
 
 export function adminAddFinalAsset(deliverableId: string, url: string): Promise<Result<string>> {

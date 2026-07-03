@@ -38,6 +38,10 @@ export default function AdminDeliverables({
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Deliverable | null>(null);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
+  // Top-level notice for delete (the deleted row is removed from the list, so its
+  // inline flash would never render — this shows above the list instead).
+  const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const showNotice = (kind: "ok" | "err", text: string) => { setNotice({ kind, text }); window.setTimeout(() => setNotice(null), 4000); };
 
   // Latest client note per deliverable (reviews arrive newest-first).
   const latestNote = new Map<string, DeliverableReview>();
@@ -60,16 +64,18 @@ export default function AdminDeliverables({
 
   async function del(d: Deliverable) {
     if (!window.confirm(t({ ar: "هل أنت متأكد من حذف رابط المعاينة؟", en: "Delete this preview link?" }))) return;
-    setBusyId(d.id); setFlash(null);
+    setBusyId(d.id); setFlash(null); setNotice(null);
     const r = await adminSoftDeleteDeliverable(d.id);
     setBusyId(null);
-    if (!r.ok || !r.data) {
-      console.error("[delete-deliverable]", r.ok ? "no row" : r.error);
-      setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر حذف المعاينة. حاول مرة أخرى.", en: "Couldn't delete. Try again." }) });
+    // Success ONLY when a row was actually soft-deleted (r.data === true). r.data
+    // false/null means nothing changed → keep the row visible + show the error.
+    if (!r.ok || r.data !== true) {
+      console.error("[delete-deliverable]", r.ok ? "no row updated (id missing / already deleted)" : r.error);
+      showNotice("err", t({ ar: "تعذر حذف المعاينة. حاول مرة أخرى.", en: "Couldn't delete the preview. Please try again." }));
       return;
     }
-    setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم حذف المعاينة ✓", en: "Preview deleted ✓" }) });
-    onChanged();
+    showNotice("ok", t({ ar: "تم حذف المعاينة", en: "Preview deleted" }));
+    onChanged(); // refetch → the (now is_deleted=true) row is filtered out of the list
   }
 
   return (
@@ -84,6 +90,15 @@ export default function AdminDeliverables({
           <span>{t({ ar: "إضافة معاينة للمراجعة", en: "Add Review Deliverable" })}</span>
         </button>
       </div>
+
+      {notice && (
+        <div className="f-sans" style={{ fontSize: "12.5px", marginBottom: "12px", padding: "9px 12px", borderRadius: "3px",
+          color: notice.kind === "ok" ? "#7CFC9A" : "#ff8a8e",
+          background: notice.kind === "ok" ? "rgba(124,252,154,0.08)" : "rgba(227,30,36,0.08)",
+          border: `1px solid ${notice.kind === "ok" ? "rgba(124,252,154,0.3)" : "rgba(227,30,36,0.3)"}` }}>
+          {notice.text}
+        </div>
+      )}
 
       {/* Existing deliverables (admin sees all states) */}
       {items.length === 0 ? (
