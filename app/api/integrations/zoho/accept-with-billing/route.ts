@@ -48,7 +48,7 @@ interface ProfileCtx {
   building_number?: string | null; street?: string | null; district?: string | null;
   postal_code?: string | null; additional_number?: string | null;
 }
-interface QuoteRow { id: string; client_id: string | null; email: string | null; quote_number: string | null; total: number | null; public_portal_visible: boolean | null; status: string | null; billing_profile_id: string | null }
+interface QuoteRow { id: string; client_id: string | null; email: string | null; quote_number: string | null; total: number | null; public_portal_visible: boolean | null; status: string | null; billing_profile_id: string | null; zoho_customer_id: string | null }
 
 export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
   log("auth", { auth_user_id: authUid, email: maskEmail(email) });
 
   // ── step resolve_quote: load the quote AS THE USER (RLS proves ownership/visibility) ──
-  const qr = await selectAsUser<QuoteRow[]>(`quotes?id=eq.${encodeURIComponent(quoteId)}&is_deleted=eq.false&select=id,client_id,email,quote_number,total,public_portal_visible,status,billing_profile_id`, bearer);
+  const qr = await selectAsUser<QuoteRow[]>(`quotes?id=eq.${encodeURIComponent(quoteId)}&is_deleted=eq.false&select=id,client_id,email,quote_number,total,public_portal_visible,status,billing_profile_id,zoho_customer_id`, bearer);
   if (!qr.ok) return fail("resolve_quote", "quote_read_failed", 502, { detail: qr.error });
   const quote = qr.data[0];
   if (!quote) return fail("resolve_quote", "not_owner", 403, { detail: "not_visible_to_user" });
@@ -149,7 +149,10 @@ export async function POST(req: Request) {
     return fail("zoho_contact", "not_configured", 502, { detail: "zoho_not_configured" });
   }
   const zc = await upsertContactBilling({
-    zohoCustomerId: p.zoho_customer_id ?? null, customerType,
+    // Target the ESTIMATE's customer (the one the invoice is billed to) so its VAT /
+    // company name / national address are updated in place — the invoice then shows the
+    // full ZATCA buyer details. Falls back to the profile's / email match if unset.
+    zohoCustomerId: quote.zoho_customer_id ?? p.zoho_customer_id ?? null, customerType,
     name: p.name || p.contact_person || p.email || "Customer",
     contactPerson: p.contact_person ?? null, email: p.email ?? null, phone: p.phone ?? null,
     vatNumber: p.vat_number ?? null, crNumber: p.cr_number ?? null,
