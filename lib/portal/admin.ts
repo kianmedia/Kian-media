@@ -144,14 +144,34 @@ export function adminAddDeliverable(input: {
 export function adminSetDeliverable(input: {
   deliverableId: string; status?: DeliverableStatus;
   allowDownload?: boolean; previewUrl?: string; vimeoUrl?: string;
+  title?: string; type?: DeliverableType;
 }): Promise<Result<boolean>> {
-  return prpc<boolean>("admin_set_deliverable", {
+  // p_title/p_type are sent ONLY when editing meta, so a status-only call still
+  // matches the pre-migration 5-arg RPC (no "unknown parameter" during the deploy
+  // window). Editing title/type requires the deliverable edit RPC migration.
+  const args: Record<string, unknown> = {
     p_dlv: input.deliverableId,
     p_status: input.status ?? null,
     p_allow_download: input.allowDownload ?? null,
     p_preview_url: input.previewUrl ?? null,
     p_vimeo_url: input.vimeoUrl ?? null,
-  });
+  };
+  if (input.title !== undefined) args.p_title = input.title;
+  if (input.type !== undefined) args.p_type = input.type;
+  return prpc<boolean>("admin_set_deliverable", args);
+}
+
+/** Soft-delete a preview/review deliverable. Uses the dedicated admin RPC
+ *  admin_soft_delete_deliverable; falls back to the generic admin-gated soft_delete
+ *  if that migration hasn't run yet, so delete works regardless of deploy order.
+ *  Returns ok+data=true ONLY when a row was actually soft-deleted (data=false ⇒
+ *  nothing changed → caller must NOT treat it as success). Never hard-deletes. */
+export async function adminSoftDeleteDeliverable(deliverableId: string): Promise<Result<boolean>> {
+  const r = await prpc<boolean>("admin_soft_delete_deliverable", { p_deliverable: deliverableId });
+  if (!r.ok && /PGRST202|could not find the function|does not exist|schema cache/i.test(r.error || "")) {
+    return prpc<boolean>("soft_delete", { p_table: "deliverables", p_id: deliverableId });
+  }
+  return r;
 }
 
 export function adminAddFinalAsset(deliverableId: string, url: string): Promise<Result<string>> {

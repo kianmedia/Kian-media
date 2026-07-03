@@ -28,10 +28,14 @@ export function timecodeToSeconds(tc: string): number | null {
   return null;
 }
 
-// ─── Deliverables (RLS: clients only see client-visible, non-deleted states) ───
+// ─── Deliverables ───
+// Filter is_deleted=false explicitly: the "admin all dlv" RLS policy lets admins
+// read EVERY row (including soft-deleted ones), so without this filter a
+// soft-deleted preview stays visible in the admin list. Clients are already
+// filtered by RLS; the explicit filter keeps both views consistent.
 export function listDeliverables(projectId: string): Promise<Result<Deliverable[]>> {
   return pget<Deliverable[]>(
-    `deliverables?project_id=eq.${enc(projectId)}&select=*&order=created_at.desc`
+    `deliverables?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=created_at.desc`
   );
 }
 
