@@ -107,10 +107,13 @@ export function approveQuote(quoteId: string, zohoEstimateId?: string | null): P
   return postEstimateAdmin({ action: "approve", quote_id: quoteId, zoho_estimate_id: zohoEstimateId ?? "" });
 }
 
-/** Owner/finance: approve creating the official tax invoice from an accepted estimate. */
+/** Owner/finance: approve creating the official tax invoice from an accepted estimate.
+ *  `code` is a stable machine token (not_accepted | not_configured | no_zoho_estimate |
+ *  zoho_scope | zoho_failed | mirror_failed | approve_failed) the UI maps to a friendly
+ *  Arabic message; `reason` carries the raw technical detail for logs. */
 export type InvoiceApprovalResult =
-  | { ok: true; configured?: boolean; status: string; invoiceNumber?: string; deduped?: boolean; message?: string }
-  | { ok: false; configured?: boolean; status?: string; reason?: string; message?: string; error?: string };
+  | { ok: true; configured?: boolean; status: string; invoiceNumber?: string; deduped?: boolean; code?: string; message?: string }
+  | { ok: false; configured?: boolean; status?: string; code?: string; reason?: string; message?: string; error?: string };
 export async function approveInvoiceCreation(quoteId: string): Promise<InvoiceApprovalResult> {
   const s = await getValidSession();
   if (!s) return { ok: false, reason: "not_authenticated" };
@@ -119,9 +122,9 @@ export async function approveInvoiceCreation(quoteId: string): Promise<InvoiceAp
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
       body: JSON.stringify({ quote_id: quoteId }),
     });
-    const d = (await res.json()) as { ok?: boolean; configured?: boolean; status?: string; invoice_number?: string; deduped?: boolean; message?: string; reason?: string; error?: string };
-    if (!d.ok) return { ok: false, configured: d.configured, status: d.status, reason: d.reason || d.error, message: d.message };
-    return { ok: true, configured: d.configured, status: d.status || "invoice_created", invoiceNumber: d.invoice_number, deduped: d.deduped, message: d.message };
+    const d = (await res.json()) as { ok?: boolean; configured?: boolean; status?: string; invoice_number?: string; deduped?: boolean; code?: string; message?: string; reason?: string; error?: string };
+    if (!d.ok) return { ok: false, configured: d.configured, status: d.status, code: d.code, reason: d.reason || d.error, message: d.message };
+    return { ok: true, configured: d.configured, status: d.status || "invoice_created", invoiceNumber: d.invoice_number, deduped: d.deduped, code: d.code, message: d.message };
   } catch (e) { return { ok: false, reason: String(e) }; }
 }
 

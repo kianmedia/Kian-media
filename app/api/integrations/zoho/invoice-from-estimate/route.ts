@@ -35,31 +35,49 @@ export async function POST(req: Request) {
   if (!quoteId) return NextResponse.json({ ok: false, error: "quote_id_required" }, { status: 400 });
 
   // 1) Record approval + dedup (enforces accepted + can_see_invoices in the DB).
+  //    The RPC only blocks when the client hasn't accepted; an ACCEPTED quote that
+  //    hasn't changed is a perfectly valid state to invoice from — it is NOT an error.
   const ap = await rpcAsUser<ApproveResult>("approve_invoice_creation", { p_quote: quoteId }, bearer);
-  if (!ap.ok) return NextResponse.json({ ok: false, error: ap.error }, { status: ap.status && ap.status < 500 ? ap.status : 200 });
+  if (!ap.ok) {
+    // The one legitimate guard: the client hasn't accepted yet.
+    const notAccepted = /not accepted/i.test(ap.error || "");
+    console.error(`[zoho/invoice-from-estimate] approve failed quote=${quoteId}: ${ap.error}`);
+    return NextResponse.json(
+      { ok: false, status: "blocked", code: notAccepted ? "not_accepted" : "approve_failed", reason: ap.error },
+      { status: ap.status && ap.status < 500 ? ap.status : 200 },
+    );
+  }
   const a = ap.data || {};
+  // 2) Idempotency guard = "invoice already exists" (NOT "quote unchanged"): never
+  //    create a duplicate; surface the existing invoice instead.
   if (a.existing_invoice_id) {
-    return NextResponse.json({ ok: true, status: "invoice_created", deduped: true }, { status: 200 });
+    return NextResponse.json({ ok: true, status: "invoice_created", deduped: true, invoice_id: a.existing_invoice_id }, { status: 200 });
   }
 
-  // 2) If Zoho isn't set up, approval is recorded but creation waits for config.
+  // 3) If Zoho isn't set up, approval is recorded but creation waits for config.
   if (!estimatesConfigured()) {
     return NextResponse.json({ ok: true, configured: false, status: "invoice_creation_approved",
-      message: "Client accepted the estimate, but Zoho invoice creation is not configured yet." }, { status: 200 });
+      code: "not_configured", message: "Client accepted the estimate, but Zoho invoice creation is not configured yet." }, { status: 200 });
   }
   const estId = asStr(a.zoho_estimate_id);
   if (!estId) {
-    return NextResponse.json({ ok: false, status: "invoice_creation_approved", error: "no_zoho_estimate",
-      message: "Approved, but this quote has no Zoho estimate to invoice from." }, { status: 200 });
+    return NextResponse.json({ ok: false, status: "invoice_creation_approved", code: "no_zoho_estimate",
+      reason: "no_zoho_estimate", message: "Approved, but this quote has no Zoho estimate to invoice from." }, { status: 200 });
   }
 
-  // 3) Create the official invoice in Zoho + mirror locally, or record failure.
+  // 4) Create the official invoice in Zoho + mirror locally, or record an HONEST failure.
   const created = await createInvoiceFromEstimate(estId);
   if (!created.ok) {
     await rpcAsService("set_quote_invoice_status", { p_quote: quoteId, p_status: "invoice_creation_failed", p_invoice: null }).catch(() => undefined);
-    const scopeIssue = /401|403|scope|permission/i.test(created.reason);
+    // A missing invoices.CREATE scope surfaces from Zoho as 401/403 OR as INVALID_TOKEN
+    // (the invoice endpoint rejects the token) — treat all of those as a scope issue.
+    const scopeIssue = /401|403|scope|permission|invalid_token|unauthor/i.test(created.reason);
+    // Log the real technical reason for developers; the user sees an honest,
+    // actionable message (a genuine Zoho failure is NOT blamed on the accepted quote).
+    console.error(`[zoho/invoice-from-estimate] Zoho create failed quote=${quoteId} estimate=${estId}: ${created.reason}`);
     return NextResponse.json({ ok: false, configured: created.configured, status: "invoice_creation_failed",
-      reason: created.reason, message: scopeIssue ? "Zoho invoice creation permission/scope is missing (ZohoBooks.invoices.CREATE)." : "Zoho invoice creation failed; the accepted quote is unchanged." }, { status: 200 });
+      code: scopeIssue ? "zoho_scope" : "zoho_failed", reason: created.reason,
+      message: scopeIssue ? "Zoho invoice creation permission/scope is missing (ZohoBooks.invoices.CREATE)." : "Zoho Books rejected the invoice creation." }, { status: 200 });
   }
   const inv = created.data;
   const up = await rpcAsService<string>("upsert_zoho_invoice", {
@@ -70,7 +88,8 @@ export async function POST(req: Request) {
   });
   if (!up.ok) {
     await rpcAsService("set_quote_invoice_status", { p_quote: quoteId, p_status: "invoice_creation_failed", p_invoice: null }).catch(() => undefined);
-    return NextResponse.json({ ok: false, status: "invoice_creation_failed", reason: up.error, message: "Invoice created in Zoho but mirroring failed." }, { status: 200 });
+    console.error(`[zoho/invoice-from-estimate] mirror failed quote=${quoteId} invoice=${inv.zohoInvoiceId}: ${up.error}`);
+    return NextResponse.json({ ok: false, status: "invoice_creation_failed", code: "mirror_failed", reason: up.error, message: "Invoice created in Zoho but mirroring failed." }, { status: 200 });
   }
   await rpcAsService("set_quote_invoice_status", { p_quote: quoteId, p_status: "invoice_created", p_invoice: up.data });
   console.log(`[zoho/invoice-from-estimate] quote=${quoteId} estimate=${estId} invoice=${inv.zohoInvoiceId} (${inv.invoiceNumber})`);

@@ -146,19 +146,32 @@ export default function AdminQuotesManager() {
     flash(t({ ar: "تمت إعادة المزامنة من Zoho.", en: "Re-synced from Zoho." }));
   }
   // Owner/finance: approve creating the official tax invoice from the accepted estimate.
+  // An ACCEPTED-but-unchanged quote is a valid state — it never fails here. The only
+  // blocks are: client hasn't accepted yet, or an invoice already exists (dedup).
   async function approveInvoice(q: Quote) {
     if (!window.confirm(t({ ar: "الموافقة على إنشاء فاتورة ضريبية رسمية من Zoho Books؟", en: "Approve creating an official tax invoice in Zoho Books?" }))) return;
     setBusy(true);
     const r = await approveInvoiceCreation(q.id);
     setBusy(false);
     await reload();
+    // Friendly Arabic per stable code; raw `reason` is logged to the console for devs.
+    if (!r.ok && r.reason) console.error("[invoice-from-estimate]", r.code || "", r.reason);
     if (r.ok) {
-      flash(r.deduped ? t({ ar: "الفاتورة موجودة مسبقًا لهذا التقدير.", en: "An invoice already exists for this estimate." })
-        : r.configured === false ? t({ ar: "تمت الموافقة — لكن إنشاء فواتير Zoho غير مهيأ بعد.", en: "Approved — but Zoho invoice creation isn't configured yet." })
-        : t({ ar: `أُنشئت الفاتورة الضريبية (${r.invoiceNumber || ""}) وأصبحت متاحة للعميل.`, en: `Tax invoice created (${r.invoiceNumber || ""}) and available to the client.` }));
-    } else {
-      flash(r.message || ((isAr ? "تعذّر إنشاء الفاتورة: " : "Invoice failed: ") + (r.reason || "")));
+      if (r.deduped) { flash(t({ ar: "تم إنشاء الفاتورة مسبقاً لهذا العرض.", en: "An invoice already exists for this quote." })); return; }
+      if (r.configured === false || r.code === "not_configured") { flash(t({ ar: "إعدادات Zoho غير مكتملة.", en: "Zoho configuration is incomplete." })); return; }
+      flash(t({ ar: `أُنشئت الفاتورة الضريبية (${r.invoiceNumber || ""}) وأصبحت متاحة للعميل.`, en: `Tax invoice created (${r.invoiceNumber || ""}) and available to the client.` }));
+      return;
     }
+    const failMsg: Record<string, { ar: string; en: string }> = {
+      not_accepted:    { ar: "لا يمكن إنشاء الفاتورة قبل اعتماد العرض من العميل.", en: "Can't create the invoice before the client accepts the quote." },
+      not_configured:  { ar: "إعدادات Zoho غير مكتملة.", en: "Zoho configuration is incomplete." },
+      no_zoho_estimate:{ ar: "هذا العرض لا يملك تقدير Zoho لإنشاء الفاتورة منه.", en: "This quote has no Zoho estimate to invoice from." },
+      zoho_scope:      { ar: "صلاحيات Zoho غير كافية لإنشاء الفواتير (ZohoBooks.invoices.CREATE). فعّلها في Zoho ثم أعد المحاولة.", en: "Zoho invoice-create permission is missing (ZohoBooks.invoices.CREATE)." },
+      zoho_failed:     { ar: "تعذّر إنشاء الفاتورة في Zoho Books. تحقّق من إعداد Zoho ثم أعد المحاولة.", en: "Zoho Books rejected the invoice creation. Check Zoho setup and retry." },
+      mirror_failed:   { ar: "أُنشئت الفاتورة في Zoho لكن تعذّر عرضها محليًا. أعد المحاولة أو حدّث الصفحة.", en: "Invoice created in Zoho but couldn't be shown locally. Retry or refresh." },
+    };
+    const m = r.code ? failMsg[r.code] : undefined;
+    flash(m ? t(m) : t({ ar: "تعذّر إنشاء الفاتورة. أعد المحاولة، وإن استمرّت المشكلة تحقّق من إعداد Zoho.", en: "Couldn't create the invoice. Retry; if it persists, check Zoho setup." }));
   }
 
   async function expand(id: string) {
