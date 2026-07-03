@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField, CheckField } from "@/components/forms/Field";
-import { submitToSheets, makeRef, isValidEmail, isValidMobile } from "@/lib/submitForm";
+import { submitToSheets, captureIntake, makeRef, isValidEmail, isValidMobile } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -153,6 +153,13 @@ function Form() {
       "Lead Source": leadLabel,
       "Priority": priorityLabel,
       "Language": isAr ? "AR" : "EN",
+    });
+
+    // Mirror into the portal (public_intake) so a same-email signup sees this request.
+    void captureIntake({
+      type: "quote", email: f["Email"], phone: f["Mobile"], name: f["Full Name"], company: f["Company"],
+      city: f["City"], reference: ref, services, details: f["Description"], preferred_date: f["Delivery Date"],
+      source: "quote-request",
     });
 
     // WhatsApp link-back: ONLY when the form was opened from a conversation

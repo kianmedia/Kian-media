@@ -5,11 +5,17 @@
 //   lead/client → ClientQuotes (submit + own list)
 import { usePortal } from "@/components/portal/PortalShell";
 import ClientQuotes from "@/components/portal/ClientQuotes";
+import ClientQuotesList from "@/components/portal/ClientQuotesList";
+import MyRequests from "@/components/portal/MyRequests";
 import AdminQuotesInbox from "@/components/portal/AdminQuotesInbox";
+import AdminQuotesManager from "@/components/portal/AdminQuotesManager";
 
 export default function QuotesPage() {
   const { profile, caps } = usePortal();
-  // AdminQuotesInbox is already read-only (expand-only; no write controls).
-  if (profile.account_type === "admin" || caps.canSeeFinancials) return <AdminQuotesInbox />;
-  return <ClientQuotes />;
+  // Financiers: intake inbox (read-only) + formal-quote management.
+  if (profile.account_type === "admin" || caps.canSeeFinancials) {
+    return <><AdminQuotesInbox /><AdminQuotesManager /></>;
+  }
+  // Client/lead: their website requests (linked by email) + submit + published quotes.
+  return <><MyRequests /><ClientQuotes /><ClientQuotesList /></>;
 }

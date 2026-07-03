@@ -41,7 +41,9 @@ export type NotificationType =
   | "quote_request_new" | "message_new" | "file_link_new" | "project_note_new"
   | "deliverable_new" | "revision_requested" | "deliverable_approved"
   | "deliverable_final_delivered" | "project_status_changed" | "opportunity_new"
-  | "whatsapp_new";
+  | "whatsapp_new"
+  | "quote_sent" | "quote_accepted" | "quote_revision_requested" | "invoice_visible"
+  | "invoice_approval_required" | "invoice_created" | "invoice_creation_failed";
 
 export type OfferAudience = "all" | "leads" | "clients";
 export type InternalCommentCategory = "editor" | "production" | "budget" | "qa" | "general";
@@ -111,7 +113,7 @@ export interface NotificationRow {
 
 export interface QuoteRequest extends SoftDeletable {
   id: string;
-  user_id: string;
+  user_id: string | null;          // NULL for guest website submissions (promoted from public_intake)
   reference: string | null;
   services: string[];
   description: string | null;
@@ -123,6 +125,15 @@ export interface QuoteRequest extends SoftDeletable {
   zoho_deal_id: string | null;
   zoho_books_estimate_id: string | null;
   created_at: string;
+  // Inline contact carried by guest (public_intake-promoted) rows when there is no profile yet.
+  email?: string | null;
+  full_name?: string | null;
+  company?: string | null;
+  phone?: string | null;
+  preferred_contact?: string | null;
+  source?: string | null;
+  source_intake_id?: string | null;
+  whatsapp_consent?: boolean | null;   // per-request WhatsApp opt-in (truth_and_consent RUNME)
 }
 
 export interface MessageRow extends SoftDeletable {
@@ -268,16 +279,103 @@ export interface AssignmentNote extends SoftDeletable {
 
 export interface Invoice extends SoftDeletable {
   id: string;
-  client_id: string | null;
-  user_id: string | null;
-  project_id: string | null;
+  invoice_number: string | null;
   zoho_invoice_id: string | null;
-  zoho_estimate_id: string | null;
-  number: string | null;
+  client_id: string | null;
+  project_id: string | null;
   status: string | null;
-  amount: number | null;
   currency: string | null;
-  url: string | null;
-  issued_at: string | null;
+  subtotal: number | null;
+  vat: number | null;
+  total: number | null;
+  due_date: string | null;
+  pdf_url: string | null;
+  public_portal_visible: boolean;
+  zoho_customer_id?: string | null;
+  source?: string | null; // 'zoho' | 'manual'
+  quote_id?: string | null;
+  line_items?: InvoiceLineItem[] | null;
+  created_at: string;
+  // Legacy columns from the finance-addendum PROPOSAL (optional; may be absent).
+  user_id?: string | null;
+  zoho_estimate_id?: string | null;
+  number?: string | null;
+  amount?: number | null;
+  url?: string | null;
+  issued_at?: string | null;
+}
+
+// ─── Formal (priced) quotes — distinct from the lightweight quote_requests ───
+export type FormalQuoteStatus =
+  | "draft" | "internal_review" | "approved" | "sent" | "accepted" | "rejected" | "expired";
+
+export interface QuoteItem {
+  id: string;
+  quote_id: string;
+  title: string;
+  description: string | null;
+  quantity: number;
+  unit_price: number;
+  total: number;
+  position: number;
+}
+
+export interface Quote {
+  id: string;
+  quote_number: string | null;
+  title: string | null;
+  client_id: string | null;
+  lead_id: string | null;
+  project_id: string | null;
+  quote_request_id: string | null;
+  status: FormalQuoteStatus;
+  currency: string;
+  subtotal: number;
+  vat: number;
+  total: number;
+  vat_rate: number;
+  valid_until: string | null;
+  notes: string | null;
+  created_by: string | null;
+  approved_by: string | null;
+  public_portal_visible: boolean;
+  // Zoho Books estimate mirror (additive — docs/portal_zoho_estimates_RUNME.sql).
+  email?: string | null;
+  source?: string | null;              // 'local' | 'zoho'
+  zoho_customer_id?: string | null;
+  zoho_estimate_id?: string | null;
+  estimate_number?: string | null;
+  estimate_url?: string | null;
+  client_response?: "pending" | "accepted" | "declined" | null;
+  admin_approved_at?: string | null;
+  admin_approved_by?: string | null;
+  published_at?: string | null;        // first publish-to-client moment (docs/portal_guest_quote_publish_fix_RUNME.sql)
+  synced_at?: string | null;
+  // Tax-invoice approval flow (additive — docs/portal_invoice_approval_RUNME.sql).
+  invoice_approval_status?: "none" | "invoice_approval_pending" | "invoice_creation_approved" | "invoice_created" | "invoice_creation_failed" | null;
+  invoice_approved_at?: string | null;
+  invoice_approved_by?: string | null;
+  linked_invoice_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoiceLineItem { title: string; description?: string | null; quantity: number; unit_price: number; total: number; }
+
+export interface QuoteRevisionRequest {
+  id: string;
+  quote_id: string;
+  author_id: string | null;
+  note: string;
   created_at: string;
 }
+
+export const FORMAL_QUOTE_STATUS_LABELS: Record<FormalQuoteStatus, { ar: string; en: string }> = {
+  draft:           { ar: "مسودة",         en: "Draft" },
+  internal_review: { ar: "مراجعة داخلية",  en: "Internal review" },
+  approved:        { ar: "معتمد",         en: "Approved" },
+  sent:            { ar: "مُرسل",          en: "Sent" },
+  accepted:        { ar: "مقبول",         en: "Accepted" },
+  rejected:        { ar: "مرفوض",         en: "Rejected" },
+  expired:         { ar: "منتهٍ",          en: "Expired" },
+};
