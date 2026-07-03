@@ -18,6 +18,7 @@ const FAIL: Record<string, { ar: string; en: string }> = {
   not_owner:                  { ar: "هذا العرض غير مرتبط بحسابك الحالي.", en: "This quote isn't linked to your account." },
   not_authenticated:          { ar: "انتهت الجلسة أو لم يتم التعرف على حسابك. سجّل الدخول مرة أخرى ثم حاول.", en: "Session expired or your account wasn't recognized. Sign in again and retry." },
   no_client_context:          { ar: "تعذّر تجهيز حسابك للفوترة. حدّث الصفحة وحاول مجددًا، وإن استمرّت المشكلة تواصل مع فريق كيان.", en: "Couldn't prepare your billing account. Refresh and retry." },
+  sql_not_run:                { ar: "لم يتم تشغيل تحديث قاعدة البيانات المطلوب لهذه الميزة. أبلغ فريق كيان لتشغيله.", en: "The required database update for this feature hasn't been run yet." },
   not_authorized:             { ar: "غير مصرّح لك بهذا الإجراء.", en: "Not authorized." },
   not_configured:             { ar: "إعدادات Zoho غير مكتملة — لم يتم اعتماد العرض. تواصل مع فريق كيان.", en: "Zoho isn't configured — the quote was not accepted." },
   zoho_scope:                 { ar: "صلاحيات Zoho غير كافية لتحديث بيانات العميل. لم يتم اعتماد العرض.", en: "Zoho permissions are insufficient. Quote not accepted." },

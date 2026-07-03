@@ -63,6 +63,52 @@ export async function rpcAsService<T>(fn: string, args: Record<string, unknown>)
   return { ok: true, data: body as T };
 }
 
+/** INSERT a row via PostgREST as the service_role; returns the inserted row(s).
+ *  Server-only. Callers MUST enforce authorization themselves before using this. */
+export async function insertAsService<T>(table: string, row: Record<string, unknown>): Promise<AdminResult<T>> {
+  if (!adminConfigured()) return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      method: "POST",
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify(row),
+      cache: "no-store",
+    });
+  } catch (e) { return { ok: false, error: String(e), status: 502 }; }
+  const text = await res.text();
+  let body: unknown = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const msg = (body && typeof body === "object" && "message" in (body as Record<string, unknown>)) ? String((body as Record<string, unknown>).message) : `HTTP ${res.status}`;
+    return { ok: false, error: msg, status: res.status };
+  }
+  return { ok: true, data: body as T };
+}
+
+/** PATCH rows matching `pathWithFilter` via PostgREST as the service_role; returns the
+ *  updated row(s). Server-only. Callers MUST enforce authorization themselves. */
+export async function patchAsService<T>(pathWithFilter: string, patch: Record<string, unknown>): Promise<AdminResult<T>> {
+  if (!adminConfigured()) return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/${pathWithFilter}`, {
+      method: "PATCH",
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify(patch),
+      cache: "no-store",
+    });
+  } catch (e) { return { ok: false, error: String(e), status: 502 }; }
+  const text = await res.text();
+  let body: unknown = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const msg = (body && typeof body === "object" && "message" in (body as Record<string, unknown>)) ? String((body as Record<string, unknown>).message) : `HTTP ${res.status}`;
+    return { ok: false, error: msg, status: res.status };
+  }
+  return { ok: true, data: body as T };
+}
+
 /** Read rows via PostgREST as the service_role (bypasses RLS). Server-only.
  *  Use sparingly and never return service-role data straight to a client. */
 export async function selectAsService<T>(query: string): Promise<AdminResult<T>> {
