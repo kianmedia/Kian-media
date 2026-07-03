@@ -4,10 +4,11 @@
 // The e-invoice acceptance gate. Works for a quote the client sees only by EMAIL
 // match (public/guest origin, quotes.client_id NULL, no clients row yet):
 //   step auth          — decode + VALIDATE the JWT (as-user RLS query) → auth uid + email
-//   step resolve_quote — load the quote AS THE USER (RLS) → proves ownership/visibility
-//   step ensure_client — ensure the caller's OWN clients row via a SECURITY DEFINER RPC
-//                        (the clients table has NO direct write grant — all writes go
-//                        through RPCs; the RPC runs as the user, so it only touches THEIR row)
+//   step resolve_quote  — load the quote AS THE USER (RLS) → proves ownership/visibility
+//   step prepare_client — portal_prepare_quote_accept_client_v1: verify ownership + ensure the
+//                         caller's OWN clients row via a SECURITY DEFINER RPC that returns
+//                         STRUCTURED JSON (never a raw throw), so an internal DB error can't be
+//                         mislabeled "function not found". The clients table has no direct write grant.
 //   step save_billing  — upsert_client_billing_profile (client row now exists → succeeds)
 //   step zoho_contact  — create/UPDATE the Zoho Books contact
 //   step accept_quote  — accept_quote_with_billing_profile (requires a synced Zoho contact)
@@ -25,7 +26,10 @@ export const dynamic = "force-dynamic";
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const orNull = (v: unknown) => { const s = str(v); return s === "" ? null : s; };
 const maskEmail = (e: string) => { const [l, d] = (e || "").split("@"); return d ? `${(l || "").slice(0, 2)}***@${d}` : "***"; };
-const isMissingFn = (e: string) => /PGRST202|could not find the function|does not exist|schema cache/i.test(e || "");
+// ONLY a genuine "PostgREST can't find this function" — NOT any error whose text
+// happens to contain "does not exist"/"schema cache" (those can come from inside a
+// function and must NOT be mislabeled as sql_not_run).
+const isMissingFn = (e: string) => /PGRST202|could not find the function .* in the schema cache/i.test(e || "");
 // Read sub/email claims WITHOUT trusting them yet — verified below by an as-user query
 // PostgREST authenticates (bad signature → 401; RLS own-profile returns a row only when
 // auth.uid() equals the claimed sub).
@@ -54,7 +58,8 @@ export async function POST(req: Request) {
     console.log(JSON.stringify({ tag: "accept-with-billing", step, quote_id: quoteId, ...extra }));
   const fail = (step: string, code: string, status: number, extra: Record<string, unknown> = {}) => {
     log(step, { code, ...extra });
-    return NextResponse.json({ ok: false, code, ...extra }, { status });
+    // `step`/`detail` are safe diagnostics (no tokens/secrets) surfaced to the UI too.
+    return NextResponse.json({ ok: false, step, code, ...extra }, { status });
   };
 
   if (!bearer) return fail("auth", "not_authenticated", 401, { detail: "no_bearer" });
@@ -92,16 +97,23 @@ export async function POST(req: Request) {
       : (!orNull(b.building_number) || !orNull(b.street) || !orNull(b.district) || !orNull(b.city) || !orNull(b.postal_code)) ? "business_address_required" : null);
   if (missing) return fail("validate", missing, 400);
 
-  // ── step ensure_client: ensure the caller's OWN clients row via a SECURITY DEFINER
-  //    RPC (clients has NO direct write grant). Runs as the user → only touches THEIR row. ──
-  const ec = await rpcAsUser<string>("ensure_my_client_id", {}, bearer);
-  if (!ec.ok || !ec.data) {
-    const code = isMissingFn(ec.error || "") ? "sql_not_run" : "ensure_client_failed";
-    return fail("ensure_client", code, code === "sql_not_run" ? 503 : 500, { detail: ec.error });
+  // ── step prepare_client: verify ownership + ensure the caller's OWN clients row via a
+  //    purpose-specific SECURITY DEFINER RPC that RETURNS STRUCTURED JSON (never a raw
+  //    throw). So the only thing isMissingFn can catch here is a genuinely missing RPC. ──
+  const pc = await rpcAsUser<{ ok?: boolean; client_id?: string; ownership_mode?: string; code?: string; message?: string; sqlstate?: string }>(
+    "portal_prepare_quote_accept_client_v1", { p_quote_id: quoteId }, bearer);
+  if (!pc.ok) {
+    // Transport-level failure (function missing / PostgREST error).
+    if (isMissingFn(pc.error || "")) return fail("prepare_client", "sql_not_run", 503, { detail: pc.error });
+    return fail("prepare_client", "prepare_client_failed", 500, { detail: pc.error });
   }
-  log("ensure_client", { client_id: ec.data });
-  // Best-effort: link this user's email-matched quotes to their (now-ensured) client.
-  await rpcAsUser("promote_and_link_by_email", {}, bearer).catch(() => undefined);
+  const prep = pc.data || {};
+  if (!prep.ok || !prep.client_id) {
+    const c = prep.code || "prepare_client_failed";
+    const status = c === "not_authenticated" ? 401 : c === "not_owner" ? 403 : c === "quote_missing" ? 404 : 500;
+    return fail("prepare_client", c, status, { detail: prep.message || prep.sqlstate });
+  }
+  log("prepare_client", { client_id: prep.client_id, ownership_mode: prep.ownership_mode });
 
   // ── step save_billing_profile: runs as the user; the clients row now exists ──
   const up = await rpcAsUser<ProfileCtx>("upsert_client_billing_profile", {

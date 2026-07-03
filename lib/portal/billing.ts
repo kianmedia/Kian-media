@@ -18,7 +18,7 @@ export interface BillingInput {
 
 export type AcceptBillingResult =
   | { ok: true; zohoCustomerId?: string; customerType?: string }
-  | { ok: false; code?: string; reason?: string; recoverable?: boolean };
+  | { ok: false; code?: string; step?: string; detail?: string; reason?: string; recoverable?: boolean };
 
 /** Save billing details, sync the Zoho contact, and (only on success) accept the quote. */
 export async function acceptQuoteWithBilling(quoteId: string, b: BillingInput, note?: string): Promise<AcceptBillingResult> {
@@ -36,10 +36,10 @@ export async function acceptQuoteWithBilling(quoteId: string, b: BillingInput, n
         postal_code: b.postalCode, additional_number: b.additionalNumber,
       }),
     });
-    const d = (await res.json()) as { ok?: boolean; code?: string; reason?: string; recoverable?: boolean; zoho_customer_id?: string; customer_type?: string };
-    if (!d.ok) return { ok: false, code: d.code, reason: d.reason, recoverable: d.recoverable };
+    const d = (await res.json()) as { ok?: boolean; code?: string; step?: string; detail?: string; reason?: string; recoverable?: boolean; zoho_customer_id?: string; customer_type?: string };
+    if (!d.ok) return { ok: false, code: d.code, step: d.step, detail: d.detail || d.reason, recoverable: d.recoverable };
     return { ok: true, zohoCustomerId: d.zoho_customer_id, customerType: d.customer_type };
-  } catch (e) { return { ok: false, code: "network", reason: String(e) }; }
+  } catch (e) { return { ok: false, code: "network", detail: String(e) }; }
 }
 
 // ─── Billing profile reads (RLS: own for client, all for finance/manager) ───

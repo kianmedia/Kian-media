@@ -69,7 +69,12 @@ export default function BillingModal({
     setBusy(false);
     if (r.ok) { onAccepted(); return; }
     const m = r.code ? FAIL[r.code] : undefined;
-    setErrMsg(m ? t(m) : (isAr ? "تعذّر إتمام العملية. حاول مجددًا." : "Couldn't complete. Try again.") + (r.reason ? ` (${r.reason})` : ""));
+    if (m) { setErrMsg(t(m)); return; }
+    // Unexpected code → surface a SAFE diagnostic (step + code [+ detail]) so testing isn't blind.
+    setErrMsg(r.code
+      ? t({ ar: `فشل تجهيز الفوترة عند خطوة: ${r.step || "?"} — الكود: ${r.code}${r.detail ? ` — ${r.detail}` : ""}`,
+            en: `Billing prep failed at step: ${r.step || "?"} — code: ${r.code}${r.detail ? ` — ${r.detail}` : ""}` })
+      : t({ ar: "تعذّر إتمام العملية. حاول مجددًا.", en: "Couldn't complete. Try again." }));
   }
 
   const inp: React.CSSProperties = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.16)", borderRadius: 7, padding: "9px 11px", color: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
