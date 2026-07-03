@@ -1,16 +1,20 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- Kian Portal — Billing accept RUNTIME diagnostic + safety re-assert (OPTIONAL)
+-- Kian Portal — Billing accept: ensure_my_client_id() (REQUIRED)
 -- Run ONCE in the Supabase SQL Editor (idempotent — safe to rerun).
 --
--- CONTEXT: the accept-with-billing API route was made SELF-SUFFICIENT — after it
--- authenticates the user (their JWT) and proves quote ownership via RLS, it ensures
--- the caller's own clients row with the service role, so acceptance now works even
--- if this or the previous patch was never run. This file is therefore OPTIONAL: it
--- (a) re-asserts ensure_my_client_id() idempotently (belt-and-suspenders for the
--- RPC path), and (b) VALIDATES that the billing feature objects exist.
+-- WHY REQUIRED: public.clients has NO direct table write grant (by design — all
+-- writes go through SECURITY DEFINER RPCs). So the accept-with-billing route creates
+-- the caller's own clients row by calling this SECURITY DEFINER function via the
+-- user's JWT (rpcAsUser → auth.uid()). Without it, the route returns code
+-- 'sql_not_run' and acceptance cannot complete. (An earlier attempt to INSERT into
+-- clients directly with the service role failed with "permission denied for table
+-- clients" precisely because there is no write grant — this RPC is the fix.)
 --
--- It changes NO data, weakens NO RLS, and adds NO WhatsApp/email/n8n/media objects.
--- SECURITY DEFINER fn sets search_path=public.
+-- Idempotent. SECURITY DEFINER sets search_path=public. Granted to `authenticated`
+-- (callable as the logged-in user). Changes NO data; weakens NO RLS; adds NO
+-- WhatsApp/email/n8n/media objects. If you already ran
+-- docs/portal_billing_accept_client_resolution_PATCH_RUNME.sql, this function
+-- already exists and re-running is a harmless no-op.
 -- ════════════════════════════════════════════════════════════════════════════
 
 begin;

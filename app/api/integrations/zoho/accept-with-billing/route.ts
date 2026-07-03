@@ -1,23 +1,23 @@
 // ════════════════════════════════════════════════════════════════════════
 // POST /api/integrations/zoho/accept-with-billing   (SERVER-ONLY, client owner)
 //
-// The e-invoice acceptance gate. Self-sufficient client resolution so it works even
-// for a quote the client sees only by EMAIL match (public/guest origin, quotes.client_id
-// NULL, no clients row yet):
-//   step auth          — identify the logged-in user (their JWT) + verified email
+// The e-invoice acceptance gate. Works for a quote the client sees only by EMAIL
+// match (public/guest origin, quotes.client_id NULL, no clients row yet):
+//   step auth          — decode + VALIDATE the JWT (as-user RLS query) → auth uid + email
 //   step resolve_quote — load the quote AS THE USER (RLS) → proves ownership/visibility
-//   step ensure_client — resolve/claim/create the caller's OWN clients row (service role,
-//                        only AFTER auth + ownership are verified → never cross-client)
-//   step save_billing  — upsert_client_billing_profile (runs as the user; client row now exists)
+//   step ensure_client — ensure the caller's OWN clients row via a SECURITY DEFINER RPC
+//                        (the clients table has NO direct write grant — all writes go
+//                        through RPCs; the RPC runs as the user, so it only touches THEIR row)
+//   step save_billing  — upsert_client_billing_profile (client row now exists → succeeds)
 //   step zoho_contact  — create/UPDATE the Zoho Books contact
 //   step accept_quote  — accept_quote_with_billing_profile (requires a synced Zoho contact)
 //
-// The quote is NEVER accepted if ownership/billing/Zoho fails. No invoice, no email/WhatsApp.
-// Structured non-sensitive logs are emitted per step (never tokens/secrets).
+// Never accepts unless ownership + billing + Zoho all succeed. Never returns HTTP 200
+// on failure. Structured per-step logs (never tokens/secrets). No invoice, no email/WhatsApp.
 // ════════════════════════════════════════════════════════════════════════
 
 import { NextResponse } from "next/server";
-import { rpcAsUser, rpcAsService, selectAsUser, selectAsService, insertAsService, patchAsService } from "@/lib/server/supabaseAdmin";
+import { rpcAsUser, rpcAsService, selectAsUser, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { estimatesConfigured, upsertContactBilling } from "@/lib/server/zohoBooksEstimates";
 
 export const runtime = "nodejs";
@@ -26,9 +26,9 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const orNull = (v: unknown) => { const s = str(v); return s === "" ? null : s; };
 const maskEmail = (e: string) => { const [l, d] = (e || "").split("@"); return d ? `${(l || "").slice(0, 2)}***@${d}` : "***"; };
 const isMissingFn = (e: string) => /PGRST202|could not find the function|does not exist|schema cache/i.test(e || "");
-// Read the sub/email claims from the bearer WITHOUT trusting them yet — they are
-// verified below by an as-user query PostgREST authenticates (bad signature → 401,
-// and RLS "own profile" returns a row only when auth.uid() equals the claimed sub).
+// Read sub/email claims WITHOUT trusting them yet — verified below by an as-user query
+// PostgREST authenticates (bad signature → 401; RLS own-profile returns a row only when
+// auth.uid() equals the claimed sub).
 function jwtClaims(bearer: string): { sub: string; email: string } {
   try {
     const p = bearer.split(".")[1] || "";
@@ -52,70 +52,55 @@ export async function POST(req: Request) {
   let quoteId = "";
   const log = (step: string, extra: Record<string, unknown> = {}) =>
     console.log(JSON.stringify({ tag: "accept-with-billing", step, quote_id: quoteId, ...extra }));
+  const fail = (step: string, code: string, status: number, extra: Record<string, unknown> = {}) => {
+    log(step, { code, ...extra });
+    return NextResponse.json({ ok: false, code, ...extra }, { status });
+  };
 
-  if (!bearer) { log("auth", { code: "no_bearer" }); return NextResponse.json({ ok: false, code: "not_authenticated", error: "unauthorized" }, { status: 401 }); }
+  if (!bearer) return fail("auth", "not_authenticated", 401, { detail: "no_bearer" });
 
   let b: Record<string, unknown>;
-  try { b = (await req.json()) as Record<string, unknown>; } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
+  try { b = (await req.json()) as Record<string, unknown>; } catch { return fail("parse", "invalid_json", 400); }
   quoteId = str(b.quote_id);
   const customerType = str(b.customer_type) === "business" ? "business" : "individual";
-  if (!quoteId) return NextResponse.json({ ok: false, error: "quote_id_required" }, { status: 400 });
+  if (!quoteId) return fail("parse", "quote_id_required", 400);
 
-  // ── step auth: identify the logged-in user + verified email, then VALIDATE ──
+  // The server needs the service-role key to record the Zoho sync (service-only RPC).
+  if (!adminConfigured()) return fail("config", "missing_service_role_env", 500);
+
+  // ── step auth: decode JWT sub/email, then VALIDATE via an as-user RLS query ──
   const claims = jwtClaims(bearer);
-  if (!claims.sub) { log("auth", { code: "no_sub" }); return NextResponse.json({ ok: false, code: "not_authenticated", reason: "no_sub" }, { status: 200 }); }
-  // Validate the token + that sub is really the caller: as-user RLS returns the
-  // caller's OWN profile only, so filtering by the claimed id proves identity.
+  if (!claims.sub) return fail("auth", "not_authenticated", 401, { detail: "no_sub" });
   const me = await selectAsUser<{ id: string; email: string | null }[]>(`profiles?id=eq.${encodeURIComponent(claims.sub)}&select=id,email&limit=1`, bearer);
   const authUid = me.ok ? (me.data[0]?.id ?? "") : "";
   const email = (me.ok ? (me.data[0]?.email ?? "") : (claims.email || "")).trim();
-  if (!authUid) { log("auth", { code: "session_invalid", detail: me.ok ? "no_profile" : me.error }); return NextResponse.json({ ok: false, code: "not_authenticated", reason: me.ok ? "no_profile" : me.error }, { status: 200 }); }
+  if (!authUid) return fail("auth", "not_authenticated", 401, { detail: me.ok ? "no_profile" : me.error });
   log("auth", { auth_user_id: authUid, email: maskEmail(email) });
 
   // ── step resolve_quote: load the quote AS THE USER (RLS proves ownership/visibility) ──
   const qr = await selectAsUser<QuoteRow[]>(`quotes?id=eq.${encodeURIComponent(quoteId)}&is_deleted=eq.false&select=id,client_id,email,quote_number,total,public_portal_visible,status,billing_profile_id`, bearer);
-  if (!qr.ok) { log("resolve_quote", { code: "read_failed", detail: qr.error }); return NextResponse.json({ ok: false, code: "billing_save_failed", reason: qr.error }, { status: 200 }); }
+  if (!qr.ok) return fail("resolve_quote", "quote_read_failed", 502, { detail: qr.error });
   const quote = qr.data[0];
-  if (!quote) { log("resolve_quote", { code: "not_visible_to_user" }); return NextResponse.json({ ok: false, code: "not_owner" }, { status: 200 }); }
+  if (!quote) return fail("resolve_quote", "not_owner", 403, { detail: "not_visible_to_user" });
   log("resolve_quote", { quote_number: quote.quote_number, quote_client_id: quote.client_id, email_linked: !!quote.email });
 
-  // ── route-side billing validation (authoritative check also lives in the RPC) ──
+  // ── route-side billing validation (the RPC re-validates authoritatively) ──
   const missing = customerType === "individual"
     ? (!orNull(b.full_name) ? "individual_name_required" : (!orNull(b.email) && !orNull(b.phone) ? "individual_contact_required" : null))
     : (!orNull(b.legal_name) ? "business_legal_name_required"
       : !orNull(b.vat_number) ? "business_vat_required"
       : (!orNull(b.building_number) || !orNull(b.street) || !orNull(b.district) || !orNull(b.city) || !orNull(b.postal_code)) ? "business_address_required" : null);
-  if (missing) { log("validate", { code: missing }); return NextResponse.json({ ok: false, code: missing }, { status: 200 }); }
+  if (missing) return fail("validate", missing, 400);
 
-  // ── step ensure_client: resolve/claim/create the CALLER's own clients row ──
-  //    Safe: only ever acts on auth.uid()+their verified email, AFTER ownership is proven.
-  let clientId = "";
-  const ex = await selectAsService<{ id: string }[]>(`clients?user_id=eq.${encodeURIComponent(authUid)}&is_deleted=eq.false&select=id&limit=1`);
-  if (ex.ok && ex.data[0]) clientId = ex.data[0].id;
-  if (!clientId && email) {
-    const pend = await selectAsService<{ id: string }[]>(`clients?user_id=is.null&is_deleted=eq.false&email_is_placeholder=eq.false&email=ilike.${encodeURIComponent(email)}&select=id&limit=1`);
-    const pid = pend.ok ? pend.data[0]?.id : undefined;
-    if (pid) {
-      const cl = await patchAsService<{ id: string }[]>(`clients?id=eq.${encodeURIComponent(pid)}`, { user_id: authUid });
-      if (cl.ok && cl.data[0]) { clientId = cl.data[0].id; log("ensure_client", { action: "claimed", client_id: clientId }); }
-    }
+  // ── step ensure_client: ensure the caller's OWN clients row via a SECURITY DEFINER
+  //    RPC (clients has NO direct write grant). Runs as the user → only touches THEIR row. ──
+  const ec = await rpcAsUser<string>("ensure_my_client_id", {}, bearer);
+  if (!ec.ok || !ec.data) {
+    const code = isMissingFn(ec.error || "") ? "sql_not_run" : "ensure_client_failed";
+    return fail("ensure_client", code, code === "sql_not_run" ? 503 : 500, { detail: ec.error });
   }
-  if (!clientId) {
-    const ins = await insertAsService<{ id: string }[]>("clients", {
-      user_id: authUid,
-      full_name: orNull(b.legal_name) ?? orNull(b.full_name),
-      email: email || `pending+${authUid}@pending.kian.local`,
-      email_is_placeholder: !email,
-    });
-    if (!ins.ok || !ins.data[0]) { log("ensure_client", { code: "create_failed", detail: ins.ok ? "no_row" : ins.error }); return NextResponse.json({ ok: false, code: "no_client_context", reason: ins.ok ? "no_row" : ins.error }, { status: 200 }); }
-    clientId = ins.data[0].id;
-    log("ensure_client", { action: "created", client_id: clientId });
-  } else if (ex.ok && ex.data[0]) {
-    log("ensure_client", { action: "existing", client_id: clientId });
-  }
-  // Promote lead → client so my_client_id()/RLS resolve for the freshly-linked client.
-  await patchAsService(`profiles?id=eq.${encodeURIComponent(authUid)}&account_type=eq.lead`, { account_type: "client" }).catch(() => undefined);
-  // Best-effort: link this user's email-matched quotes to their client context.
+  log("ensure_client", { client_id: ec.data });
+  // Best-effort: link this user's email-matched quotes to their (now-ensured) client.
   await rpcAsUser("promote_and_link_by_email", {}, bearer).catch(() => undefined);
 
   // ── step save_billing_profile: runs as the user; the clients row now exists ──
@@ -131,26 +116,25 @@ export async function POST(req: Request) {
   }, bearer);
   if (!up.ok) {
     const e = up.error || "";
-    const code = isMissingFn(e) ? "sql_not_run"
-      : /individual_name/.test(e) ? "individual_name_required"
+    if (isMissingFn(e)) return fail("save_billing_profile", "sql_not_run", 503, { detail: e });
+    const code = /individual_name/.test(e) ? "individual_name_required"
       : /individual_contact/.test(e) ? "individual_contact_required"
       : /business_legal_name/.test(e) ? "business_legal_name_required"
       : /business_vat/.test(e) ? "business_vat_required"
-      : /business_address/.test(e) ? "business_address_required"
-      : /not_owner/.test(e) ? "not_owner"
-      : /no_client_context/.test(e) ? "no_client_context" : "billing_save_failed";
-    log("save_billing_profile", { code, detail: e });
-    return NextResponse.json({ ok: false, code, reason: e }, { status: up.status && up.status < 500 ? up.status : 200 });
+      : /business_address/.test(e) ? "business_address_required" : null;
+    if (code) return fail("save_billing_profile", code, 400, { detail: e });
+    if (/not_owner/.test(e)) return fail("save_billing_profile", "not_owner", 403, { detail: e });
+    if (/no_client_context/.test(e)) return fail("save_billing_profile", "no_client_context", 500, { detail: e });
+    return fail("save_billing_profile", "billing_save_failed", 500, { detail: e });
   }
   const p = up.data || {};
-  if (!p.profile_id) { log("save_billing_profile", { code: "no_profile" }); return NextResponse.json({ ok: false, code: "billing_save_failed", reason: "no_profile" }, { status: 200 }); }
+  if (!p.profile_id) return fail("save_billing_profile", "billing_save_failed", 500, { detail: "no_profile" });
   log("save_billing_profile", { profile_id: p.profile_id, client_id: p.client_id });
 
   // ── step zoho_contact: Zoho must be configured; create/UPDATE the contact ──
   if (!estimatesConfigured()) {
     await rpcAsService("set_billing_profile_zoho", { p_profile: p.profile_id, p_customer_id: null, p_status: "failed", p_error: "zoho_not_configured" }).catch(() => undefined);
-    log("zoho_contact", { code: "not_configured" });
-    return NextResponse.json({ ok: false, code: "not_configured", reason: "zoho_not_configured" }, { status: 200 });
+    return fail("zoho_contact", "not_configured", 502, { detail: "zoho_not_configured" });
   }
   const zc = await upsertContactBilling({
     zohoCustomerId: p.zoho_customer_id ?? null, customerType,
@@ -164,19 +148,18 @@ export async function POST(req: Request) {
   if (!zc.ok) {
     await rpcAsService("set_billing_profile_zoho", { p_profile: p.profile_id, p_customer_id: null, p_status: "failed", p_error: zc.reason }).catch(() => undefined);
     const scopeIssue = /401|403|scope|permission|invalid_token|unauthor/i.test(zc.reason);
-    log("zoho_contact", { code: scopeIssue ? "zoho_scope" : "zoho_failed", detail: zc.reason });
-    return NextResponse.json({ ok: false, code: scopeIssue ? "zoho_scope" : "zoho_failed", reason: zc.reason }, { status: 200 });
+    return fail("zoho_contact", scopeIssue ? "zoho_scope" : "zoho_failed", 502, { detail: zc.reason });
   }
   log("zoho_contact", { zoho_customer_id: zc.data.customerId });
 
   // ── step accept_quote: record sync, then mark accepted (gate requires 'synced') ──
-  await rpcAsService("set_billing_profile_zoho", { p_profile: p.profile_id, p_customer_id: zc.data.customerId, p_status: "synced", p_error: null }).catch(() => undefined);
+  const sync = await rpcAsService("set_billing_profile_zoho", { p_profile: p.profile_id, p_customer_id: zc.data.customerId, p_status: "synced", p_error: null });
+  if (!sync.ok) return fail("accept_quote", isMissingFn(sync.error) ? "sql_not_run" : "sync_write_failed", isMissingFn(sync.error) ? 503 : 500, { detail: sync.error });
 
   const acc = await rpcAsUser<boolean>("accept_quote_with_billing_profile", { p_quote: quoteId, p_note: orNull(b.note) }, bearer);
   if (!acc.ok) {
     const code = isMissingFn(acc.error) ? "sql_not_run" : "accept_failed";
-    log("accept_quote", { code, detail: acc.error });
-    return NextResponse.json({ ok: false, code, reason: acc.error, recoverable: true }, { status: 200 });
+    return fail("accept_quote", code, code === "sql_not_run" ? 503 : 500, { detail: acc.error, recoverable: true });
   }
 
   log("accept_quote", { ok: true, quote_number: quote.quote_number, zoho_customer_id: zc.data.customerId });
