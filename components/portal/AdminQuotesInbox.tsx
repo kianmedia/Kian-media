@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { adminListQuotes, adminListSenders, type SenderProfile } from "@/lib/portal/admin";
 import { SERVICES, QUOTE_STATUS_LABELS, labelFor } from "@/components/portal/quoteOptions";
+import { safeShortId, safeDate, safeArray } from "@/lib/portal/safe";
 import type { QuoteRequest } from "@/lib/portal/types";
 
 export default function AdminQuotesInbox() {
@@ -22,7 +23,9 @@ export default function AdminQuotesInbox() {
     const r = await adminListQuotes();
     if (!r.ok) { setErr(r.error); setPhase("error"); return; }
     setQuotes(r.data);
-    const ids = Array.from(new Set(r.data.map((q) => q.user_id)));
+    // user_id is null for guest / public-form / WhatsApp submissions — filter
+    // those out so the sender lookup query stays valid (and never sends "null").
+    const ids = Array.from(new Set(r.data.map((q) => q.user_id).filter((id): id is string => !!id)));
     const sp = await adminListSenders(ids);
     if (sp.ok) {
       const map: Record<string, SenderProfile> = {};
@@ -42,9 +45,14 @@ export default function AdminQuotesInbox() {
   }, []);
 
   function senderLine(q: QuoteRequest): string {
-    const s = senders[q.user_id];
-    if (!s) return q.user_id.slice(0, 8) + "…";
-    const name = s.full_name || s.email;
+    const s = q.user_id ? senders[q.user_id] : undefined;
+    if (!s) {
+      // No linked profile: show a short id for registered users, or a clear
+      // "guest / no account" label when user_id itself is null. (This is the
+      // line that crashed in production: q.user_id.slice on a null value.)
+      return q.user_id ? safeShortId(q.user_id) : t({ ar: "زائر / بدون حساب", en: "Guest / no account" });
+    }
+    const name = s.full_name || s.email || safeShortId(q.user_id);
     return s.company ? `${name} · ${s.company}` : name;
   }
 
@@ -87,10 +95,10 @@ export default function AdminQuotesInbox() {
                   </div>
                   <div className="text-white" style={{ fontSize: "14px", fontWeight: 600, marginBottom: "3px" }}>{senderLine(q)}</div>
                   <div className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.5 }}>
-                    {q.services.map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", ")}
+                    {safeArray(q.services).map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", ")}
                   </div>
                   <div className="flex items-center gap-2 mt-2" style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)" }}>
-                    <span style={{ direction: "ltr" }}>{new Date(q.created_at).toLocaleDateString(isAr ? "ar-SA" : "en-GB")}</span>
+                    <span style={{ direction: "ltr" }}>{safeDate(q.created_at, isAr ? "ar-SA" : "en-GB")}</span>
                     <span>·</span>
                     <span>{open ? t({ ar: "إغلاق ▲", en: "Close ▲" }) : t({ ar: "التفاصيل ▼", en: "Details ▼" })}</span>
                   </div>
@@ -99,7 +107,7 @@ export default function AdminQuotesInbox() {
                 {/* Detail panel */}
                 {open && (
                   <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "18px" }}>
-                    <DetailGrid q={q} sender={senders[q.user_id]} />
+                    <DetailGrid q={q} sender={q.user_id ? senders[q.user_id] : undefined} />
                   </div>
                 )}
               </div>
@@ -128,16 +136,16 @@ function DetailGrid({ q, sender }: { q: QuoteRequest; sender?: SenderProfile }) 
   return (
     <div>
       {row(t({ ar: "رقم الطلب", en: "Reference" }), q.reference, { ltr: true })}
-      {row(t({ ar: "العميل", en: "Client" }), sender ? (sender.full_name || sender.email) : q.user_id)}
+      {row(t({ ar: "العميل", en: "Client" }), sender ? (sender.full_name || sender.email) : (q.user_id ? safeShortId(q.user_id) : t({ ar: "زائر / بدون حساب", en: "Guest / no account" })))}
       {row(t({ ar: "الشركة", en: "Company" }), sender?.company)}
       {row(t({ ar: "البريد", en: "Email" }), sender?.email, { ltr: true })}
-      {row(t({ ar: "الخدمات", en: "Services" }), q.services.map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", "))}
+      {row(t({ ar: "الخدمات", en: "Services" }), safeArray(q.services).map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", "))}
       {row(t({ ar: "الوصف (يشمل العنوان/التواصل/الملاحظات)", en: "Description (incl. title/contact/notes)" }), q.description, { pre: true })}
       {row(t({ ar: "المدينة", en: "City" }), q.city)}
       {row(t({ ar: "الميزانية", en: "Budget" }), q.budget_range)}
       {row(t({ ar: "التاريخ المفضّل", en: "Preferred Date" }), q.preferred_date, { ltr: true })}
       {row(t({ ar: "الحالة", en: "Status" }), t(QUOTE_STATUS_LABELS[q.status] ?? { ar: q.status, en: q.status }))}
-      {row(t({ ar: "تاريخ الإنشاء", en: "Created" }), new Date(q.created_at).toLocaleString(isAr ? "ar-SA" : "en-GB"), { ltr: true })}
+      {row(t({ ar: "تاريخ الإنشاء", en: "Created" }), safeDate(q.created_at, isAr ? "ar-SA" : "en-GB", { withTime: true }), { ltr: true })}
       {row(t({ ar: "النسخة الاحتياطية (Google Sheet)", en: "Backup (Google Sheet)" }), q.sheet_mirrored ? t({ ar: "تم النسخ ✓", en: "Mirrored ✓" }) : t({ ar: "لم يتم", en: "Not mirrored" }))}
       {row("Zoho CRM", zoho(q.zoho_deal_id), { ltr: true })}
       {row("Zoho Books", zoho(q.zoho_books_estimate_id), { ltr: true })}

@@ -11,6 +11,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import { Label, TextField, TextArea, SelectField } from "@/components/forms/Field";
 import { listMyQuotes, createQuote, type CreateQuoteResult } from "@/lib/portal/leads";
 import { SERVICES, BUDGETS, CONTACT_PREFS, QUOTE_STATUS_LABELS, labelFor } from "@/components/portal/quoteOptions";
+import { safeText, safeDate, safeArray } from "@/lib/portal/safe";
 import type { QuoteRequest } from "@/lib/portal/types";
 
 export default function ClientQuotes() {
@@ -235,14 +236,14 @@ export default function ClientQuotes() {
             return (
               <div key={q.id} style={{ padding: "16px 18px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px" }}>
                 <div className="flex items-center justify-between gap-3 mb-2">
-                  <span className="f-display" style={{ fontSize: "15px", color: "#E31E24", letterSpacing: "1px", direction: "ltr" }}>{q.reference}</span>
+                  <span className="f-display" style={{ fontSize: "15px", color: "#E31E24", letterSpacing: "1px", direction: "ltr" }}>{safeText(q.reference)}</span>
                   <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.7)", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", padding: "5px 10px", borderRadius: "2px", whiteSpace: "nowrap" }}>{t(st)}</span>
                 </div>
                 <div className="text-white/70" style={{ fontSize: "13px", lineHeight: 1.5, marginBottom: "6px" }}>
-                  {q.services.map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", ")}
+                  {safeArray(q.services).map((s) => labelFor(SERVICES, s, isAr)).join(isAr ? "، " : ", ")}
                 </div>
                 <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.35)", direction: "ltr", textAlign: isAr ? "right" : "left" }}>
-                  {new Date(q.created_at).toLocaleDateString(isAr ? "ar-SA" : "en-GB")}
+                  {safeDate(q.created_at, isAr ? "ar-SA" : "en-GB")}
                 </div>
               </div>
             );
