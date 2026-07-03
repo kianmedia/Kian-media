@@ -57,7 +57,8 @@ begin
       v_client := v_self; v_mode := 'email_link';
     else
       -- Claim a pending (unlinked, real-email) client row matching the verified email.
-      update public.clients set user_id = v_uid, updated_at = now()
+      -- NOTE: public.clients has NO updated_at column — do not set it here.
+      update public.clients set user_id = v_uid
        where user_id is null and is_deleted = false and coalesce(email_is_placeholder, false) = false
          and lower(coalesce(email, '')) = v_email
        returning id into v_client;
