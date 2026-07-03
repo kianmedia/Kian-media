@@ -15,13 +15,14 @@ const FAIL: Record<string, { ar: string; en: string }> = {
   business_legal_name_required:{ ar: "اسم المنشأة مطلوب.", en: "Business legal name is required." },
   business_vat_required:      { ar: "الرقم الضريبي مطلوب للمنشآت.", en: "VAT number is required for a business." },
   business_address_required:  { ar: "العنوان الوطني الكامل مطلوب (رقم المبنى، الشارع، الحي، المدينة، الرمز البريدي).", en: "Full national address is required." },
-  no_client_context:          { ar: "تعذّر ربط حسابك كعميل. حدّث الصفحة وحاول مجددًا.", en: "Couldn't resolve your client account. Refresh and retry." },
+  not_owner:                  { ar: "هذا العرض غير مرتبط بحسابك الحالي.", en: "This quote isn't linked to your account." },
+  not_authenticated:          { ar: "انتهت الجلسة أو لم يتم التعرف على حسابك. سجّل الدخول مرة أخرى ثم حاول.", en: "Session expired or your account wasn't recognized. Sign in again and retry." },
+  no_client_context:          { ar: "تعذّر تجهيز حسابك للفوترة. حدّث الصفحة وحاول مجددًا، وإن استمرّت المشكلة تواصل مع فريق كيان.", en: "Couldn't prepare your billing account. Refresh and retry." },
   not_authorized:             { ar: "غير مصرّح لك بهذا الإجراء.", en: "Not authorized." },
   not_configured:             { ar: "إعدادات Zoho غير مكتملة — لم يتم اعتماد العرض. تواصل مع فريق كيان.", en: "Zoho isn't configured — the quote was not accepted." },
   zoho_scope:                 { ar: "صلاحيات Zoho غير كافية لتحديث بيانات العميل. لم يتم اعتماد العرض.", en: "Zoho permissions are insufficient. Quote not accepted." },
   zoho_failed:                { ar: "تعذّر تحديث بيانات العميل في Zoho — لم يتم اعتماد العرض. حاول مرة أخرى.", en: "Couldn't update the Zoho customer. Quote not accepted." },
   accept_failed:              { ar: "حُفظت بياناتك لكن تعذّر اعتماد العرض. أعد المحاولة (لن تتكرر بياناتك).", en: "Your details were saved but acceptance failed. Retry safely." },
-  not_authenticated:          { ar: "انتهت الجلسة. سجّل الدخول ثم حاول مجددًا.", en: "Session expired — sign in and retry." },
   network:                    { ar: "تعذّر الاتصال. تحقّق من الإنترنت وحاول مجددًا.", en: "Network error — check your connection." },
 };
 

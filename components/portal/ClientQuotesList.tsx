@@ -64,12 +64,9 @@ export default function ClientQuotesList() {
         : (isAr ? "تعذّر فتح PDF: " : "Couldn't open PDF: ") + r.error);
     }
   }
+  // Decline: note is OPTIONAL (a confirmation dialog gates it). Never touches billing/Zoho.
   async function respond(q: Quote, response: "accepted" | "declined") {
     if (readOnly) return;
-    // Rejection notes are required (parity with request-revision).
-    if (response === "declined" && !(revBox[q.id] || "").trim()) {
-      flash(t({ ar: "اكتب سبب الرفض أولاً", en: "Write the reason for declining first" })); return;
-    }
     const ask = response === "accepted" ? t({ ar: "تأكيد قبول عرض السعر؟", en: "Accept this quote?" }) : t({ ar: "تأكيد رفض عرض السعر؟", en: "Decline this quote?" });
     if (!window.confirm(ask)) return;
     setBusy(true);
@@ -80,15 +77,17 @@ export default function ClientQuotesList() {
     await reload();
     flash(response === "accepted"
       ? t({ ar: "تم قبول العرض. سيتواصل فريق كيان معك.", en: "Quote accepted. Kian's team will follow up." })
-      : t({ ar: "تم تسجيل رفضك. شكرًا لملاحظتك.", en: "Your decline was recorded. Thank you for the note." }));
+      : t({ ar: "تم تسجيل رفضك للعرض.", en: "Your decline was recorded." }));
   }
+  // Revision: a note IS required (it's the change the client is asking for).
   async function revise(id: string) {
     if (readOnly) return;
     const note = (revBox[id] || "").trim();
-    if (!note) { flash(t({ ar: "اكتب ملاحظتك أولاً", en: "Write your note first" })); return; }
+    if (!note) { flash(t({ ar: "اكتب ملاحظتك أو سبب طلب التعديل أولاً.", en: "Write your note / revision reason first." })); return; }
     setBusy(true); const r = await requestQuoteRevision(id, note); setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    if (!r.ok) { flash((isAr ? "تعذّر إرسال طلب التعديل: " : "Couldn't send revision: ") + r.error); return; }
     setRevBox((p) => ({ ...p, [id]: "" }));
+    await reload();
     flash(t({ ar: "أُرسل طلب التعديل لفريق كيان.", en: "Revision request sent to Kian's team." }));
   }
 

@@ -41,6 +41,11 @@ export async function POST(req: Request) {
   const customerType = str(b.customer_type) === "business" ? "business" : "individual";
   if (!quoteId) return NextResponse.json({ ok: false, error: "quote_id_required" }, { status: 400 });
 
+  // 0) Best-effort: link any email-matched quotes/intake to this user's client context
+  //    first (guest/public-request origin). Never blocks; the RPC below also ensures a
+  //    client row exists on its own.
+  await rpcAsUser("promote_and_link_by_email", {}, bearer).catch(() => undefined);
+
   // 1) Save the billing profile (RLS-owned; authoritative validation lives in the RPC).
   const up = await rpcAsUser<ProfileCtx>("upsert_client_billing_profile", {
     p_quote: quoteId, p_type: customerType,
@@ -59,6 +64,8 @@ export async function POST(req: Request) {
       : /business_legal_name/.test(e) ? "business_legal_name_required"
       : /business_vat/.test(e) ? "business_vat_required"
       : /business_address/.test(e) ? "business_address_required"
+      : /not_owner/.test(e) ? "not_owner"
+      : /not authenticated/i.test(e) ? "not_authenticated"
       : /no_client_context/.test(e) ? "no_client_context"
       : /not authorized/.test(e) ? "not_authorized" : "billing_save_failed";
     return NextResponse.json({ ok: false, code, reason: e }, { status: up.status && up.status < 500 ? up.status : 200 });
