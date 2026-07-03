@@ -52,3 +52,19 @@ export function createInvoiceDisplay(input: {
 export function setInvoiceVisibility(invoiceId: string, visible: boolean): Promise<Result<boolean>> {
   return prpc<boolean>("set_invoice_visibility", { p_invoice: invoiceId, p_visible: visible });
 }
+
+// ─── Admin/finance invoice review controls (portal metadata only — never edits
+//     or deletes the official Zoho invoice) ───
+export function updateInvoiceReviewState(invoiceId: string, input: {
+  reviewStatus?: string; internalNotes?: string; clientNote?: string; visible?: boolean;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_update_invoice_review_state", {
+    p_invoice: invoiceId,
+    p_review_status: input.reviewStatus ?? null, p_internal_notes: input.internalNotes ?? null,
+    p_client_note: input.clientNote ?? null, p_visible: input.visible ?? null,
+  });
+}
+/** action: "hide" | "unhide" | "soft_delete" — soft-delete only hides the PORTAL record. */
+export function hideOrSoftDeleteInvoice(invoiceId: string, action: "hide" | "unhide" | "soft_delete"): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_hide_or_soft_delete_invoice", { p_invoice: invoiceId, p_action: action });
+}

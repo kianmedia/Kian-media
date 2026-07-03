@@ -9,7 +9,8 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { listInvoices } from "@/lib/portal/finance";
 import AdminInvoicesManager from "@/components/portal/AdminInvoicesManager";
-import type { Invoice } from "@/lib/portal/types";
+import InvoiceNotes from "@/components/portal/InvoiceNotes";
+import { INVOICE_REVIEW_STATUS_LABELS, type Invoice } from "@/lib/portal/types";
 
 const money = (n: number | null | undefined, cur: string | null) =>
   `${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur || "SAR"}`;
@@ -89,7 +90,7 @@ export default function InvoicesPage() {
                       <div style={{ minWidth: 0 }}>
                         <div className="text-white" style={{ fontSize: "14px", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.invoice_number || t({ ar: "فاتورة", en: "Invoice" })}</div>
                         <div className="f-sans" style={{ fontSize: "11.5px", color: "rgba(255,255,255,0.45)", marginTop: "3px" }}>
-                          {inv.status ? inv.status : ""}
+                          {inv.review_status ? t(INVOICE_REVIEW_STATUS_LABELS[inv.review_status] ?? { ar: inv.review_status, en: inv.review_status }) : (inv.status || "")}
                           {inv.due_date ? ` · ${t({ ar: "الاستحقاق", en: "due" })} ${new Date(inv.due_date).toLocaleDateString(isAr ? "ar-SA" : "en-GB")}` : ""}
                         </div>
                       </div>
@@ -128,6 +129,10 @@ export default function InvoicesPage() {
                             {t({ ar: "عرض / تحميل PDF", en: "View / Download PDF" })}
                           </a>
                         )}
+                        {inv.review_status === "issued"
+                          ? <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 10 }}>{t({ ar: "فاتورة نهائية صادرة — ملاحظاتك هنا للدعم العام.", en: "Final issued invoice — notes here are general support." })}</p>
+                          : null}
+                        <InvoiceNotes invoiceId={inv.id} />
                       </div>
                     )}
                   </div>

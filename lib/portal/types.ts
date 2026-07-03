@@ -296,6 +296,10 @@ export interface Invoice extends SoftDeletable {
   quote_id?: string | null;
   line_items?: InvoiceLineItem[] | null;
   created_at: string;
+  // Portal review workflow (additive — docs/portal_billing_profile_invoice_review_admin_crud_RUNME.sql).
+  review_status?: InvoiceReviewStatus | null;
+  internal_notes?: string | null;
+  client_note?: string | null;
   // Legacy columns from the finance-addendum PROPOSAL (optional; may be absent).
   user_id?: string | null;
   zoho_estimate_id?: string | null;
@@ -303,6 +307,63 @@ export interface Invoice extends SoftDeletable {
   amount?: number | null;
   url?: string | null;
   issued_at?: string | null;
+}
+
+export type InvoiceReviewStatus =
+  | "draft" | "in_review" | "awaiting_client_notes" | "ready_to_issue" | "issued" | "cancelled";
+
+export const INVOICE_REVIEW_STATUS_LABELS: Record<InvoiceReviewStatus, { ar: string; en: string }> = {
+  draft:                 { ar: "مسودة / تحت المراجعة",  en: "Draft / in review" },
+  in_review:             { ar: "تحت المراجعة",          en: "In review" },
+  awaiting_client_notes: { ar: "بانتظار ملاحظات العميل", en: "Awaiting client notes" },
+  ready_to_issue:        { ar: "جاهزة للإصدار",         en: "Ready to issue" },
+  issued:                { ar: "صادرة / نهائية",        en: "Issued / final" },
+  cancelled:             { ar: "ملغاة / مخفية",         en: "Cancelled / hidden" },
+};
+
+export interface InvoiceNote {
+  id: string;
+  invoice_id: string;
+  author_id: string | null;
+  author_role: "client" | "admin";
+  body: string;
+  is_resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+// ─── Client billing profile (e-invoice details, individual or business) ───
+export type CustomerType = "individual" | "business";
+
+export interface BillingProfile {
+  id: string;
+  client_id: string;
+  customer_type: CustomerType;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  city: string | null;
+  country: string;
+  notes: string | null;
+  legal_name: string | null;
+  contact_person: string | null;
+  vat_number: string | null;
+  cr_number: string | null;
+  po_reference: string | null;
+  finance_email: string | null;
+  building_number: string | null;
+  street: string | null;
+  district: string | null;
+  postal_code: string | null;
+  additional_number: string | null;
+  zoho_customer_id: string | null;
+  zoho_sync_status: "pending" | "synced" | "failed";
+  zoho_sync_error: string | null;
+  zoho_synced_at: string | null;
+  is_deleted: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // ─── Formal (priced) quotes — distinct from the lightweight quote_requests ───
@@ -356,6 +417,10 @@ export interface Quote {
   invoice_approved_at?: string | null;
   invoice_approved_by?: string | null;
   linked_invoice_id?: string | null;
+  // Billing profile + safe cancel (additive — docs/portal_billing_profile_invoice_review_admin_crud_RUNME.sql).
+  billing_profile_id?: string | null;
+  cancelled_at?: string | null;
+  cancel_reason?: string | null;
   created_at: string;
   updated_at: string;
 }

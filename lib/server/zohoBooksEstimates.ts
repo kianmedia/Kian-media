@@ -85,7 +85,7 @@ export interface NormalizedEstimate {
   raw: Record<string, unknown>;
 }
 
-async function call(method: "GET" | "POST", url: string, token: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+async function call(method: "GET" | "POST" | "PUT", url: string, token: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
   const res = await fetch(url, { method, headers: headers(token), cache: "no-store", ...(body ? { body: JSON.stringify(body) } : {}) });
   if (res.status === 401) throw new Error("INVALID_TOKEN");
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -245,5 +245,84 @@ export function createInvoiceFromEstimate(estimateId: string): Promise<EstimateR
     const inv = res.json.invoice as Record<string, unknown> | undefined;
     if (res.json.code !== 0 || !inv?.invoice_id) throw new Error(`books_invoice_http_${res.status}_${res.json.code ?? "x"}`);
     return normalizeInvoice(cfg, inv);
+  });
+}
+
+// ─── Contact/customer billing upsert from a client billing profile ─────────────
+// Create or UPDATE a Zoho Books contact so the official invoice carries the client's
+// e-invoicing details. Matches an existing contact by id (preferred) or email to avoid
+// duplicates. Sends the standard Zoho Books MENA fields (vat_reg_no + tax_treatment +
+// billing_address); the CR number goes into contact notes — no unsupported custom-field
+// ids are guessed. Needs contacts.CREATE + contacts.UPDATE scopes.
+export interface BillingContactInput {
+  zohoCustomerId?: string | null;
+  customerType: "individual" | "business";
+  name: string;                 // legal_name (business) or full_name (individual)
+  contactPerson?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  vatNumber?: string | null;
+  crNumber?: string | null;
+  buildingNumber?: string | null;
+  street?: string | null;
+  district?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  additionalNumber?: string | null;
+  country?: string | null;
+}
+
+export function upsertContactBilling(input: BillingContactInput): Promise<EstimateResult<{ customerId: string }>> {
+  return withToken(async (cfg, token, base) => {
+    const org = cfg.orgId;
+    // 1) Locate an existing contact (by id, else by email) so we UPDATE, not duplicate.
+    let contactId = (input.zohoCustomerId || "").trim();
+    if (!contactId && input.email) {
+      const found = await call("GET", `${base}/contacts?organization_id=${encodeURIComponent(org)}&email=${encodeURIComponent(input.email)}`, token);
+      const rows = (found.json.contacts as Array<{ contact_id?: string }> | undefined) ?? [];
+      if (rows[0]?.contact_id) contactId = rows[0].contact_id;
+    }
+
+    // 2) Contact person.
+    const person: Record<string, unknown> = {};
+    const pName = (input.contactPerson || input.name || "").trim();
+    if (pName) { const parts = pName.split(/\s+/); person.first_name = parts[0]; if (parts.length > 1) person.last_name = parts.slice(1).join(" "); }
+    if (input.email) person.email = input.email;
+    if (input.phone) person.phone = digits(input.phone);
+
+    // 3) Saudi national address → Zoho billing_address.
+    const line1 = [input.buildingNumber, input.street].filter(Boolean).join(" ");
+    const line2 = [input.district, input.additionalNumber ? `#${input.additionalNumber}` : ""].filter(Boolean).join(" · ");
+    const billingAddress: Record<string, unknown> = { country: input.country || "Saudi Arabia" };
+    if (line1) billingAddress.address = line1;
+    if (line2) billingAddress.street2 = line2;
+    if (input.city) billingAddress.city = input.city;
+    if (input.postalCode) billingAddress.zip = input.postalCode;
+
+    // 4) Contact body.
+    const body: Record<string, unknown> = {
+      contact_name: (input.name || input.email || "Customer").trim(),
+      contact_type: "customer",
+    };
+    if (input.customerType === "business") {
+      body.company_name = input.name;
+      body.customer_sub_type = "business";
+      if (input.vatNumber) { body.tax_treatment = "vat_registered"; body.vat_reg_no = input.vatNumber; }
+    } else {
+      body.customer_sub_type = "individual";
+      body.tax_treatment = "vat_not_registered";
+    }
+    if (Object.keys(person).length) body.contact_persons = [person];
+    if (Object.keys(billingAddress).length > 1) body.billing_address = billingAddress;
+    if (input.crNumber) body.notes = `CR / السجل التجاري: ${input.crNumber}`;
+
+    // 5) Update the existing contact, else create a new one.
+    const res = contactId
+      ? await call("PUT", `${base}/contacts/${encodeURIComponent(contactId)}?organization_id=${encodeURIComponent(org)}`, token, body)
+      : await call("POST", `${base}/contacts?organization_id=${encodeURIComponent(org)}`, token, body);
+    const c = res.json.contact as { contact_id?: string } | undefined;
+    const id = c?.contact_id || contactId;
+    if (res.json.code !== 0 || !id) throw new Error(`books_contact_upsert_http_${res.status}_${res.json.code ?? "x"}`);
+    return { customerId: id };
   });
 }

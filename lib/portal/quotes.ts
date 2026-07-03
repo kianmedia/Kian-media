@@ -183,3 +183,22 @@ export function setQuoteStatus(quoteId: string, status: string): Promise<Result<
 export function setQuoteVisibility(quoteId: string, visible: boolean): Promise<Result<boolean>> {
   return prpc<boolean>("set_quote_visibility", { p_quote: quoteId, p_visible: visible });
 }
+
+// ─── Safe admin edit / delete (blocked once accepted or invoiced) ───
+export function adminUpdateQuoteSafe(quoteId: string, input: {
+  title?: string; notes?: string; validUntil?: string | null; visible?: boolean;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_update_quote_safe", {
+    p_quote: quoteId,
+    p_title: input.title ?? null, p_notes: input.notes ?? null,
+    p_valid_until: input.validUntil ?? null, p_visible: input.visible ?? null,
+  });
+}
+/** Recomputes totals server-side; blocked once the quote is accepted/invoiced. */
+export function adminSetQuoteItemsSafe(quoteId: string, items: QuoteItemInput[]): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_set_quote_items_safe", { p_quote: quoteId, p_items: items });
+}
+/** Soft-deletes a draft quote, or safely cancels (hides, keeps record) an accepted one. */
+export function adminSoftDeleteOrCancelQuote(quoteId: string, reason?: string): Promise<Result<{ ok: boolean; action: "deleted" | "cancelled" }>> {
+  return prpc<{ ok: boolean; action: "deleted" | "cancelled" }>("admin_soft_delete_or_cancel_quote", { p_quote: quoteId, p_reason: reason ?? null });
+}

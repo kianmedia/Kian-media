@@ -11,11 +11,13 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   listQuotes, getQuoteAdmin, getQuoteItems, listQuoteRevisions, listQuoteClients,
-  createQuote, setQuoteItems, setQuoteStatus, setQuoteVisibility,
+  createQuote, setQuoteStatus, setQuoteVisibility,
   listPendingQuoteRequests, convertQuoteRequest, createEstimateFromRequest, syncEstimate, approveQuote,
-  approveInvoiceCreation, type QuoteItemInput, type PendingQuoteRequest,
+  approveInvoiceCreation, adminUpdateQuoteSafe, adminSetQuoteItemsSafe, adminSoftDeleteOrCancelQuote,
+  type QuoteItemInput, type PendingQuoteRequest,
 } from "@/lib/portal/quotes";
-import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteRevisionRequest } from "@/lib/portal/types";
+import { getBillingProfileForClient } from "@/lib/portal/billing";
+import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteRevisionRequest, type BillingProfile } from "@/lib/portal/types";
 
 const STATUSES: Quote["status"][] = ["draft", "internal_review", "approved", "sent", "accepted", "rejected", "expired"];
 const money = (n: number, cur: string) => `${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
@@ -39,6 +41,11 @@ export default function AdminQuotesManager() {
 
   // Create form
   const [cf, setCf] = useState({ clientId: "", title: "", validUntil: "", notes: "", vatRate: "15" });
+  // Safe meta edit + billing profile (per open quote)
+  const [meta, setMeta] = useState<Record<string, { title: string; notes: string }>>({});
+  const [billing, setBilling] = useState<Record<string, BillingProfile | null>>({});
+  const lockedMsg = () => t({ ar: "لا يمكن تعديل هذا العرض بعد اعتماده أو إنشاء فاتورة منه. أنشئ نسخة/مراجعة جديدة بدلاً من ذلك.", en: "Can't edit this quote after it's accepted or invoiced. Create a new revision instead." });
+  const isLocked = (q: Quote) => q.status === "accepted" || q.client_response === "accepted" || !!q.cancelled_at;
 
   const reload = useCallback(async () => {
     const [q, c, pr] = await Promise.all([listQuotes(), listQuoteClients(), listPendingQuoteRequests()]);
@@ -183,6 +190,14 @@ export default function AdminQuotesManager() {
     }
     const rv = await listQuoteRevisions(id);
     if (rv.ok) setRevs((p) => ({ ...p, [id]: rv.data }));
+    const q = quotes.find((x) => x.id === id);
+    if (q) {
+      setMeta((p) => ({ ...p, [id]: { title: q.title || "", notes: q.notes || "" } }));
+      if (q.client_id && billing[id] === undefined) {
+        const bp = await getBillingProfileForClient(q.client_id);
+        setBilling((p) => ({ ...p, [id]: bp.ok ? bp.data : null }));
+      }
+    }
   }
   const setItem = (id: string, i: number, patch: Partial<QuoteItemInput>) =>
     setEditItems((p) => ({ ...p, [id]: (p[id] || []).map((x, j) => j === i ? { ...x, ...patch } : x) }));
@@ -190,11 +205,33 @@ export default function AdminQuotesManager() {
   async function saveItems(id: string) {
     setBusy(true);
     const items = (editItems[id] || []).filter((x) => x.title.trim());
-    const r = await setQuoteItems(id, items);
+    const r = await adminSetQuoteItemsSafe(id, items);
     setBusy(false);
-    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    if (!r.ok) { flash(/quote_locked/.test(r.error) ? lockedMsg() : (isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
     await reload();
     flash(t({ ar: "حُفظت البنود وحُسبت الإجماليات.", en: "Items saved & totals computed." }));
+  }
+
+  async function saveMeta(q: Quote) {
+    const m = meta[q.id] || { title: q.title || "", notes: q.notes || "" };
+    setBusy(true);
+    const r = await adminUpdateQuoteSafe(q.id, { title: m.title, notes: m.notes });
+    setBusy(false);
+    if (!r.ok) { flash(/quote_locked/.test(r.error) ? lockedMsg() : (isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    await reload();
+    flash(t({ ar: "حُفظت بيانات العرض.", en: "Quote details saved." }));
+  }
+
+  async function deleteQuote(q: Quote) {
+    const reason = window.prompt(t({ ar: "سبب الحذف/الإلغاء (اختياري):", en: "Reason for delete/cancel (optional):" }), "") ?? undefined;
+    if (reason === undefined && !window.confirm(t({ ar: "متابعة الحذف/الإلغاء؟", en: "Proceed with delete/cancel?" }))) return;
+    setBusy(true);
+    const r = await adminSoftDeleteOrCancelQuote(q.id, reason);
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    if (openId === q.id) setOpenId(null);
+    await reload();
+    flash(r.data.action === "cancelled" ? t({ ar: "تم إلغاء العرض وإخفاؤه عن العميل.", en: "Quote cancelled and hidden from the client." }) : t({ ar: "تم حذف العرض.", en: "Quote deleted." }));
   }
 
   async function status(id: string, s: string) {
@@ -286,6 +323,35 @@ export default function AdminQuotesManager() {
                   {rows.every((it) => !it.title.trim()) && (
                     <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, marginTop: 12 }}>{t({ ar: "لم تتم إضافة بنود بعد — أضف البنود ثم احفظ.", en: "No line items yet — add items, then save." })}</p>
                   )}
+
+                  {/* Safe meta edit — blocked once accepted/invoiced */}
+                  {isLocked(q) ? (
+                    <p style={{ color: "rgba(255,210,138,0.9)", fontSize: 12, marginTop: 12, lineHeight: 1.7 }}>🔒 {lockedMsg()}</p>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
+                      <span style={{ flex: 2, minWidth: 160 }}><input value={(meta[q.id]?.title) ?? (q.title || "")} onChange={(e) => setMeta((p) => ({ ...p, [q.id]: { title: e.target.value, notes: p[q.id]?.notes ?? (q.notes || "") } }))} placeholder={t({ ar: "عنوان العرض", en: "Quote title" })} style={inp} /></span>
+                      <span style={{ flex: 3, minWidth: 200 }}><input value={(meta[q.id]?.notes) ?? (q.notes || "")} onChange={(e) => setMeta((p) => ({ ...p, [q.id]: { notes: e.target.value, title: p[q.id]?.title ?? (q.title || "") } }))} placeholder={t({ ar: "ملاحظات", en: "Notes" })} style={inp} /></span>
+                      <button onClick={() => void saveMeta(q)} disabled={busy} style={btn("rgba(255,255,255,0.10)", busy)}>{t({ ar: "حفظ البيانات", en: "Save details" })}</button>
+                    </div>
+                  )}
+
+                  {/* Billing profile (e-invoice) — shown once available */}
+                  {billing[q.id] && (
+                    <div style={{ marginTop: 12, padding: "10px 12px", background: "rgba(37,211,102,0.05)", border: "1px solid rgba(37,211,102,0.2)", borderRadius: 8, fontSize: 12 }}>
+                      <div style={{ color: "rgba(255,255,255,0.55)", fontWeight: 600, marginBottom: 5 }}>{t({ ar: "بيانات الفوترة", en: "Billing profile" })}</div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", color: "rgba(255,255,255,0.8)" }}>
+                        <span>{billing[q.id]!.customer_type === "business" ? t({ ar: "شركة/مؤسسة", en: "Business" }) : t({ ar: "فرد", en: "Individual" })}</span>
+                        {billing[q.id]!.legal_name && <span>· {billing[q.id]!.legal_name}</span>}
+                        {billing[q.id]!.vat_number && <span>· {t({ ar: "ض.ق.م", en: "VAT" })}: <span dir="ltr">{billing[q.id]!.vat_number}</span></span>}
+                        {billing[q.id]!.cr_number && <span>· {t({ ar: "س.ت", en: "CR" })}: <span dir="ltr">{billing[q.id]!.cr_number}</span></span>}
+                        {(billing[q.id]!.building_number || billing[q.id]!.city) && <span>· {[billing[q.id]!.building_number, billing[q.id]!.street, billing[q.id]!.district, billing[q.id]!.city, billing[q.id]!.postal_code].filter(Boolean).join(" ")}</span>}
+                        <span style={{ marginInlineStart: "auto", color: billing[q.id]!.zoho_sync_status === "synced" ? "#25D366" : billing[q.id]!.zoho_sync_status === "failed" ? "#ff8a8e" : "rgba(255,255,255,0.5)" }}>
+                          Zoho: {billing[q.id]!.zoho_sync_status}{billing[q.id]!.zoho_sync_error ? ` (${billing[q.id]!.zoho_sync_error})` : ""}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Line items editor */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
                     {rows.map((it, i) => (
@@ -311,6 +377,9 @@ export default function AdminQuotesManager() {
                     </select>
                     <button onClick={() => void visibility(q.id, !q.public_portal_visible)} disabled={busy} style={btn(q.public_portal_visible ? "rgba(255,255,255,0.10)" : "#25D366", busy)}>
                       {q.public_portal_visible ? t({ ar: "إخفاء عن العميل", en: "Hide from client" }) : t({ ar: "إظهار للعميل", en: "Show to client" })}
+                    </button>
+                    <button onClick={() => void deleteQuote(q)} disabled={busy} style={{ ...btn("rgba(227,30,36,0.55)", busy), marginInlineStart: "auto" }}>
+                      {isLocked(q) ? t({ ar: "إلغاء العرض", en: "Cancel quote" }) : t({ ar: "حذف العرض", en: "Delete quote" })}
                     </button>
                   </div>
 

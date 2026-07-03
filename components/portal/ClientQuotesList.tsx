@@ -10,6 +10,7 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { listQuotes, getQuoteItems, requestQuoteRevision, respondToQuote, promoteByEmail, openEstimatePdf } from "@/lib/portal/quotes";
 import { listMyIntake } from "@/lib/portal/intake";
+import BillingModal from "@/components/portal/BillingModal";
 import { FORMAL_QUOTE_STATUS_LABELS, type Quote, type QuoteItem } from "@/lib/portal/types";
 
 const money = (n: number | null | undefined, cur: string) =>
@@ -24,6 +25,7 @@ export default function ClientQuotesList() {
   const [items, setItems] = useState<Record<string, QuoteItem[]>>({});
   const [busy, setBusy] = useState(false);
   const [revBox, setRevBox] = useState<Record<string, string>>({});
+  const [billingFor, setBillingFor] = useState<Quote | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 2800); };
 
@@ -194,7 +196,7 @@ export default function ClientQuotesList() {
                           placeholder={t({ ar: "ملاحظة — مطلوبة عند الرفض أو طلب التعديل…", en: "Note — required when you decline or request a revision…" })} style={inp} />
                       </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                        {canAccept && <button onClick={() => void respond(q, "accepted")} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "موافقة", en: "Approve" })}</button>}
+                        {canAccept && <button onClick={() => setBillingFor(q)} disabled={busy || readOnly} style={btn("#25D366", busy || readOnly)}>{t({ ar: "قبول العرض", en: "Accept quote" })}</button>}
                         {canAccept && <button onClick={() => void respond(q, "declined")} disabled={busy || readOnly} style={btn("rgba(227,30,36,0.7)", busy || readOnly)}>{t({ ar: "رفض", en: "Reject" })}</button>}
                         <button onClick={() => void revise(q.id)} disabled={busy || readOnly} style={btn("rgba(255,255,255,0.10)", busy || readOnly)}>
                           {t({ ar: "طلب تعديل", en: "Request Revision" })}
@@ -208,6 +210,19 @@ export default function ClientQuotesList() {
           );
         })}
       </div>
+
+      {billingFor && (
+        <BillingModal
+          quoteId={billingFor.id}
+          quoteNumber={billingFor.quote_number || billingFor.id.slice(0, 8)}
+          onClose={() => setBillingFor(null)}
+          onAccepted={() => {
+            setBillingFor(null);
+            void reload();
+            flash(t({ ar: "تم اعتماد العرض وتحديث بيانات الفاتورة بنجاح.", en: "Quote accepted and billing details updated successfully." }));
+          }}
+        />
+      )}
 
       {toast && <div style={{ position: "fixed", insetInlineEnd: 20, bottom: 20, background: "rgba(0,0,0,0.92)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 10, padding: "10px 16px", fontSize: 13, color: "#fff", zIndex: 50, maxWidth: 360 }}>{toast}</div>}
     </div>

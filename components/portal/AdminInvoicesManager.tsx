@@ -7,9 +7,10 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listInvoices, createInvoiceDisplay, setInvoiceVisibility, syncZohoInvoices } from "@/lib/portal/finance";
+import { listInvoices, createInvoiceDisplay, setInvoiceVisibility, syncZohoInvoices, updateInvoiceReviewState, hideOrSoftDeleteInvoice } from "@/lib/portal/finance";
 import { listQuoteClients } from "@/lib/portal/quotes";
-import type { Invoice } from "@/lib/portal/types";
+import InvoiceNotes from "@/components/portal/InvoiceNotes";
+import { INVOICE_REVIEW_STATUS_LABELS, type Invoice, type InvoiceReviewStatus } from "@/lib/portal/types";
 
 const money = (n: number | null | undefined, cur: string | null) =>
   `${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur || "SAR"}`;
@@ -27,6 +28,30 @@ export default function AdminInvoicesManager() {
   const [syncEmail, setSyncEmail] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [zohoMsg, setZohoMsg] = useState<string | null>(null);
+  // Review panel
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [rev, setRev] = useState<{ status: string; internal: string; clientNote: string }>({ status: "", internal: "", clientNote: "" });
+  function openReview(r: Invoice) {
+    if (openId === r.id) { setOpenId(null); return; }
+    setOpenId(r.id);
+    setRev({ status: r.review_status || "draft", internal: r.internal_notes || "", clientNote: r.client_note || "" });
+  }
+  async function saveReview(id: string) {
+    setBusy(true);
+    const r = await updateInvoiceReviewState(id, { reviewStatus: rev.status, internalNotes: rev.internal, clientNote: rev.clientNote });
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    await reload();
+    flash(t({ ar: "حُفظت حالة المراجعة.", en: "Review state saved." }));
+  }
+  async function hideDelete(id: string, action: "hide" | "unhide" | "soft_delete") {
+    if (action === "soft_delete" && !window.confirm(t({ ar: "إخفاء سجل الفاتورة من البوابة؟ (لا يُحذف من Zoho)", en: "Hide this invoice record from the portal? (not deleted from Zoho)" }))) return;
+    setBusy(true);
+    const r = await hideOrSoftDeleteInvoice(id, action);
+    setBusy(false);
+    if (!r.ok) { flash((isAr ? "تعذّر: " : "Failed: ") + r.error); return; }
+    await reload();
+  }
 
   const reload = useCallback(async () => {
     const [inv, c] = await Promise.all([listInvoices(), listQuoteClients()]);
@@ -120,19 +145,54 @@ export default function AdminInvoicesManager() {
       {phase === "ready" && rows.length === 0 && <p className="text-white/50" style={{ fontSize: 13.5 }}>{t({ ar: "لا توجد فواتير بعد.", en: "No invoices yet." })}</p>}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {rows.map((r) => (
-          <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "11px 14px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, fontSize: 12.5 }}>
-            <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.invoice_number || r.id.slice(0, 8)}</strong>
-            <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: r.source === "zoho" ? "rgba(37,211,102,0.16)" : "rgba(255,255,255,0.08)", color: r.source === "zoho" ? "#25D366" : "rgba(255,255,255,0.5)" }}>{r.source === "zoho" ? "Zoho" : t({ ar: "يدوي", en: "Manual" })}</span>
-            <span style={{ color: "rgba(255,255,255,0.6)" }}>{r.status}</span>
-            {r.due_date && <span style={{ color: "rgba(255,255,255,0.45)" }}>{t({ ar: "الاستحقاق", en: "due" })} {r.due_date}</span>}
-            {r.pdf_url && <a href={r.pdf_url} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>PDF ↗</a>}
-            <span style={{ marginInlineStart: "auto", color: "#fff", fontWeight: 700 }}>{money(r.total, r.currency)}</span>
-            <button onClick={() => void toggle(r.id, !r.public_portal_visible)} disabled={busy} style={btn(r.public_portal_visible ? "rgba(255,255,255,0.10)" : "#25D366", busy)}>
-              {r.public_portal_visible ? t({ ar: "👁 ظاهرة", en: "👁 visible" }) : t({ ar: "إظهار", en: "Show" })}
-            </button>
-          </div>
-        ))}
+        {rows.map((r) => {
+          const open = openId === r.id;
+          return (
+            <div key={r.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "11px 14px", fontSize: 12.5 }}>
+                <strong style={{ color: "#fff", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.invoice_number || r.id.slice(0, 8)}</strong>
+                <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: r.source === "zoho" ? "rgba(37,211,102,0.16)" : "rgba(255,255,255,0.08)", color: r.source === "zoho" ? "#25D366" : "rgba(255,255,255,0.5)" }}>{r.source === "zoho" ? "Zoho" : t({ ar: "يدوي", en: "Manual" })}</span>
+                <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.7)" }}>{t(INVOICE_REVIEW_STATUS_LABELS[(r.review_status as InvoiceReviewStatus) || "draft"] ?? { ar: r.review_status || "—", en: r.review_status || "—" })}</span>
+                {r.due_date && <span style={{ color: "rgba(255,255,255,0.45)" }}>{t({ ar: "الاستحقاق", en: "due" })} {r.due_date}</span>}
+                {r.pdf_url && <a href={r.pdf_url} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>PDF ↗</a>}
+                <span style={{ marginInlineStart: "auto", color: "#fff", fontWeight: 700 }}>{money(r.total, r.currency)}</span>
+                <button onClick={() => void toggle(r.id, !r.public_portal_visible)} disabled={busy} style={btn(r.public_portal_visible ? "rgba(255,255,255,0.10)" : "#25D366", busy)}>
+                  {r.public_portal_visible ? t({ ar: "👁 ظاهرة", en: "👁 visible" }) : t({ ar: "إظهار", en: "Show" })}
+                </button>
+                <button onClick={() => openReview(r)} style={btn("rgba(255,255,255,0.08)")}>{open ? t({ ar: "إغلاق", en: "Close" }) : t({ ar: "مراجعة", en: "Review" })}</button>
+              </div>
+              {open && (
+                <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "12px 14px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 4 }}>{t({ ar: "حالة المراجعة", en: "Review status" })}</label>
+                      <select value={rev.status} onChange={(e) => setRev((p) => ({ ...p, status: e.target.value }))} style={inp}>
+                        {(Object.keys(INVOICE_REVIEW_STATUS_LABELS) as InvoiceReviewStatus[]).map((s) => (
+                          <option key={s} value={s}>{isAr ? INVOICE_REVIEW_STATUS_LABELS[s].ar : INVOICE_REVIEW_STATUS_LABELS[s].en}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ display: "block", fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 4 }}>{t({ ar: "ملاحظات داخلية (لا تظهر للعميل)", en: "Internal notes (not shown to client)" })}</label>
+                    <textarea value={rev.internal} onChange={(e) => setRev((p) => ({ ...p, internal: e.target.value }))} rows={2} style={inp} />
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ display: "block", fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 4 }}>{t({ ar: "ملاحظة للعميل (اختياري)", en: "Client-facing note (optional)" })}</label>
+                    <textarea value={rev.clientNote} onChange={(e) => setRev((p) => ({ ...p, clientNote: e.target.value }))} rows={2} style={inp} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                    <button onClick={() => void saveReview(r.id)} disabled={busy} style={btn("#E31E24", busy)}>{t({ ar: "حفظ المراجعة", en: "Save review" })}</button>
+                    <button onClick={() => void hideDelete(r.id, r.public_portal_visible ? "hide" : "unhide")} disabled={busy} style={btn("rgba(255,255,255,0.10)", busy)}>{r.public_portal_visible ? t({ ar: "إخفاء عن العميل", en: "Hide from client" }) : t({ ar: "إظهار للعميل", en: "Show to client" })}</button>
+                    <button onClick={() => void hideDelete(r.id, "soft_delete")} disabled={busy} style={btn("rgba(227,30,36,0.55)", busy)}>{t({ ar: "حذف السجل (بالبوابة)", en: "Soft-delete record" })}</button>
+                  </div>
+                  <p style={{ color: "rgba(255,255,255,0.38)", fontSize: 10.5, marginTop: 8 }}>{t({ ar: "لا يُعدَّل أو يُحذف من Zoho Books — سجل البوابة فقط.", en: "Never edits/deletes in Zoho Books — portal record only." })}</p>
+                  <InvoiceNotes invoiceId={r.id} canResolve />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {toast && <div style={{ position: "fixed", insetInlineEnd: 20, bottom: 20, background: "rgba(0,0,0,0.92)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 10, padding: "10px 16px", fontSize: 13, color: "#fff", zIndex: 50, maxWidth: 360 }}>{toast}</div>}
