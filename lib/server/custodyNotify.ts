@@ -65,8 +65,11 @@ export async function postCustodyEvent(payload: CustodyEventPayload):
 }
 
 // ─── Email relay (existing Apps Script channel; no provider keys) ───
+// ENABLED BY DEFAULT (set CUSTODY_EMAIL_ALERTS_ENABLED=false to switch off).
+// Actual delivery requires the Apps Script doPost to handle _type=portal_notify
+// (paste-ready handler: docs/custody/apps_script_custody_email_SETUP.md).
 export function custodyEmailEnabled(): boolean {
-  return process.env.CUSTODY_EMAIL_ALERTS_ENABLED === "true";
+  return process.env.CUSTODY_EMAIL_ALERTS_ENABLED !== "false";
 }
 function emailEndpoint(): string {
   return process.env.PORTAL_NOTIFY_ENDPOINT || SHEETS_ENDPOINT || "";

@@ -174,7 +174,9 @@ export default function RenterRentals() {
     flash(t({ ar: "أُرسل الإرجاع — الإقفال النهائي بعد مراجعة الإدارة.", en: "Return sent — final closure after admin review." }));
   }
 
-  const inp = "w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
+  // inpBare بلا w-full — للحقول داخل صفوف flex حتى لا يتغلب w-full على العرض المحدد (خانة العدد).
+  const inpBare = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
+  const inp = `w-full ${inpBare}`;
 
   if (phase === "loading") return <p className="text-stone-500 text-sm">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
   if (phase === "error") return <p className="text-red-400 text-sm">{t({ ar: "تعذّر التحميل — شغّل ترحيل قاعدة البيانات أولاً.", en: "Couldn't load — run the DB migration first." })}</p>;
@@ -226,13 +228,16 @@ export default function RenterRentals() {
         </p>
         {quoteLines.map((l, i) => (
           <div key={i} className="flex gap-2">
+            {/* اسم المعدة = الحقل العريض؛ العدد = خانة صغيرة ثابتة (inpBare بلا w-full حتى لا يتغلب على العرض) */}
             <input value={l.name} onChange={(e) => setQuoteLines((p) => p.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-              placeholder={t({ ar: `المعدة ${i + 1} (مثال: كاميرا Sony FX6)`, en: `Equipment ${i + 1} (e.g. Sony FX6)` })} className={`flex-1 min-w-0 ${inp}`} />
+              placeholder={t({ ar: `المعدة ${i + 1} (مثال: كاميرا Sony FX6)`, en: `Equipment ${i + 1} (e.g. Sony FX6)` })}
+              className={`flex-1 min-w-0 ${inpBare}`} />
             <input value={l.qty} onChange={(e) => setQuoteLines((p) => p.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
-              type="number" min={1} className={`w-16 text-center ${inp}`} aria-label={t({ ar: "الكمية", en: "Qty" })} />
+              type="number" min={1} className={`${inpBare} text-center`} style={{ width: 64, flex: "0 0 auto" }}
+              aria-label={t({ ar: "الكمية", en: "Qty" })} />
             <button type="button" aria-label={t({ ar: "حذف", en: "Remove" })}
               onClick={() => setQuoteLines((p) => p.length > 1 ? p.filter((_, j) => j !== i) : p)}
-              className="px-2.5 rounded-lg bg-stone-800 border border-stone-700 text-stone-400">×</button>
+              className="px-2.5 rounded-lg bg-stone-800 border border-stone-700 text-stone-400" style={{ flex: "0 0 auto" }}>×</button>
           </div>
         ))}
         <button type="button" onClick={() => setQuoteLines((p) => [...p, { name: "", qty: "1" }])}
