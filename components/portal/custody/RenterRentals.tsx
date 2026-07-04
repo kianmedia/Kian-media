@@ -1,25 +1,30 @@
 "use client";
 // ════════════════════════════════════════════════════════════════════════
-// External rental — registration gate (KYC renter_profiles row, mandatory
-// before the rental tab opens) → rental request (per-item + overall photos +
-// bilingual rental contract click-to-sign) → "my rentals" list with a return
-// panel when status=rented. Handover approval + closure stay admin-only.
+// External rental v2 — registration gate (KYC) → (a) طلب عرض سعر تأجير معدات
+// (feeds the EXISTING Zoho quotes flow: admin prices it in Zoho Books, renter
+// views/downloads the PDF, accepts/rejects/requests changes, admin issues the
+// e-invoice — all in the quotes tab; can be skipped for personal-deal clients)
+// → (b) rental handover request with signed bilingual contract (min 2 photos
+// per item + 2 overall) → "my rentals" + return.
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   getMyRenterProfile, upsertRenterProfile, listMyCustodyRecords, submitRentalRequest,
   submitReturn, uploadEvidence, evidencePath, newRecordId, emitCustodyEvent,
-  type CustodyRecord, type RenterProfile,
+  MIN_PHOTOS_PER_ITEM, MIN_PHOTOS_OVERALL,
+  type CustodyRecord, type RenterProfile, type CheckoutItemInput,
 } from "@/lib/portal/custody";
+import { createQuote } from "@/lib/portal/leads";
 import {
-  SectionTitle, Empty, RecordCard, ReturnPanel, ItemPhotoEditor, PhotoCapture,
-  SignBlock, RENT_CLAUSES, RENT_AGREE,
+  SectionTitle, Empty, RecordCard, ReturnPanel, ItemPhotoEditor, MultiPhotoCapture,
+  SignBlock, RENT_CLAUSES, RENT_AGREE, type DraftItem, type ShotFile,
 } from "@/components/portal/custody/ui";
 
 export default function RenterRentals() {
-  const { t } = useI18n();
+  const { t, isAr } = useI18n();
   const { profile, readOnly } = usePortal();
   const uid = profile.id;
 
@@ -28,7 +33,7 @@ export default function RenterRentals() {
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3600); };
+  const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); };
 
   const reload = useCallback(async () => {
     const [rp, rec] = await Promise.all([getMyRenterProfile(uid), listMyCustodyRecords("rental", uid)]);
@@ -56,9 +61,40 @@ export default function RenterRentals() {
     flash(t({ ar: "تم تفعيل حسابك كمستأجر.", en: "Your renter account is active." }));
   }
 
-  // ─── Rental request form ───
-  const [items, setItems] = useState<{ name: string; qty: number; file: File | null; preview: string | null }[]>([]);
-  const [overall, setOverall] = useState<{ file: File; preview: string } | null>(null);
+  // ─── طلب عرض سعر تأجير معدات (يغذي نظام عروض Zoho القائم) ───
+  const [quoteLines, setQuoteLines] = useState<{ name: string; qty: string }[]>([{ name: "", qty: "1" }]);
+  const [quoteNotes, setQuoteNotes] = useState("");
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const [quoteErr, setQuoteErr] = useState<string | null>(null);
+  const [quoteRef, setQuoteRef] = useState<string | null>(null);
+
+  async function doQuoteRequest() {
+    setQuoteErr(null);
+    if (readOnly || !renter) return;
+    const lines = quoteLines.map((l) => ({ name: l.name.trim(), qty: Math.max(Number(l.qty) || 1, 1) }))
+      .filter((l) => l.name);
+    if (lines.length === 0) { setQuoteErr(t({ ar: "أضف معدة واحدة على الأقل.", en: "Add at least one equipment line." })); return; }
+    const description =
+      "طلب تأجير معدات — Equipment Rental Quote Request\n" +
+      lines.map((l, i) => `${i + 1}. ${l.name} × ${l.qty}`).join("\n") +
+      (quoteNotes.trim() ? `\n\nملاحظات: ${quoteNotes.trim()}` : "");
+    setQuoteBusy(true);
+    const r = await createQuote({
+      services: ["Equipment Rental"],
+      description,
+      contact: { fullName: renter.full_name, mobile: renter.phone, email: renter.email },
+      language: isAr ? "AR" : "EN",
+    });
+    setQuoteBusy(false);
+    if (!r.ok) { setQuoteErr((t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error); return; }
+    setQuoteRef(r.data.row.reference || "");
+    setQuoteLines([{ name: "", qty: "1" }]); setQuoteNotes("");
+    flash(t({ ar: "أُرسل طلب عرض السعر — سيصلك عرض مرتب من فريق كيان في تبويب طلبات السعر.", en: "Quote request sent — Kian's priced offer will appear in your Quotes tab." }));
+  }
+
+  // ─── Rental handover request form ───
+  const [items, setItems] = useState<DraftItem[]>([]);
+  const [overall, setOverall] = useState<ShotFile[]>([]);
   const [signed, setSigned] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -66,47 +102,67 @@ export default function RenterRentals() {
     setErr(null);
     if (readOnly || !renter) return;
     if (items.length === 0) { setErr(t({ ar: "أضف صنفاً واحداً على الأقل.", en: "Add at least one item." })); return; }
-    if (items.some((i) => !i.file)) { setErr(t({ ar: "صوّر كل قطعة قبل الإرسال.", en: "Photograph every item first." })); return; }
-    if (!overall) { setErr(t({ ar: "صوّر إجمالي المعدات قبل الإرسال.", en: "Capture the overall photo first." })); return; }
+    if (items.some((i) => i.shots.length < MIN_PHOTOS_PER_ITEM)) {
+      setErr(t({ ar: `صوّر كل قطعة (${MIN_PHOTOS_PER_ITEM} صور على الأقل لكل بند).`, en: `Min ${MIN_PHOTOS_PER_ITEM} photos per item.` })); return;
+    }
+    if (overall.length < MIN_PHOTOS_OVERALL) {
+      setErr(t({ ar: `صوّر إجمالي المعدات (${MIN_PHOTOS_OVERALL} صور على الأقل).`, en: `Min ${MIN_PHOTOS_OVERALL} overall photos.` })); return;
+    }
     if (!signed) { setErr(t({ ar: "أشّر على عقد الإيجار قبل الإرسال.", en: "Check the rental contract first." })); return; }
 
     setBusy(true);
     const recordId = newRecordId();
-    const payload: { name: string; qty: number; photo_before_path: string }[] = [];
+    const payload: CheckoutItemInput[] = [];
     for (let i = 0; i < items.length; i++) {
-      const p = evidencePath(uid, recordId, "before", `item-${i}`);
-      const up = await uploadEvidence(p, items[i].file as File);
-      if (!up.ok) { setBusy(false); setErr(t({ ar: `تعذّر رفع صورة «${items[i].name}» — حاول مجددًا.`, en: `Couldn't upload the photo of "${items[i].name}" — retry.` })); return; }
-      payload.push({ name: items[i].name, qty: items[i].qty, photo_before_path: p });
+      const paths: string[] = [];
+      for (let j = 0; j < items[i].shots.length; j++) {
+        const p = evidencePath(uid, recordId, "before", `item-${i}-${j}`);
+        const up = await uploadEvidence(p, items[i].shots[j].file);
+        if (!up.ok) { setBusy(false); setErr(t({ ar: `تعذّر رفع صور «${items[i].name}» — حاول مجددًا.`, en: `Couldn't upload photos of "${items[i].name}" — retry.` })); return; }
+        paths.push(p);
+      }
+      payload.push({ name: items[i].name, qty: items[i].qty, photos: paths });
     }
-    const overallPath = evidencePath(uid, recordId, "before", "overall");
-    const upo = await uploadEvidence(overallPath, overall.file);
-    if (!upo.ok) { setBusy(false); setErr(t({ ar: "تعذّر رفع الصورة الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photo — retry." })); return; }
+    const overallPaths: string[] = [];
+    for (let j = 0; j < overall.length; j++) {
+      const p = evidencePath(uid, recordId, "before", `overall-${j}`);
+      const up = await uploadEvidence(p, overall[j].file);
+      if (!up.ok) { setBusy(false); setErr(t({ ar: "تعذّر رفع الصور الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photos — retry." })); return; }
+      overallPaths.push(p);
+    }
 
-    const r = await submitRentalRequest(recordId, payload, overallPath);
+    const r = await submitRentalRequest(recordId, payload, overallPaths);
     setBusy(false);
     if (!r.ok) { setErr((t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error); return; }
 
     emitCustodyEvent({ event: "rental_request_new", record_id: recordId, record_no: r.data.record_no, kind: "rental", party_name: renter.full_name });
-    setItems([]); setOverall(null); setSigned(false);
+    setItems([]); setOverall([]); setSigned(false);
     await reload();
     flash(t({ ar: `استلمنا طلبك ${r.data.record_no} — سيراجعه فريق كيان قبل التسليم.`, en: `Request ${r.data.record_no} received — Kian will review before handover.` }));
   }
 
-  async function doReturn(record: CustodyRecord, afters: Map<string, File>, overallFile: File, shortage: boolean, note: string) {
+  async function doReturn(record: CustodyRecord, afters: Map<string, File[]>, overallFiles: File[], shortage: boolean, note: string) {
     setBusy(true);
-    const after: { item_id: string; path: string }[] = [];
-    for (const [itemId, file] of afters) {
-      const p = evidencePath(uid, record.id, "after", `item-${itemId}`);
-      const up = await uploadEvidence(p, file);
-      if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع إحدى صور الإرجاع — حاول مجددًا.", en: "Couldn't upload a return photo — retry." })); return; }
-      after.push({ item_id: itemId, path: p });
+    const after: { item_id: string; photos: string[] }[] = [];
+    for (const [itemId, files] of afters) {
+      const paths: string[] = [];
+      for (let j = 0; j < files.length; j++) {
+        const p = evidencePath(uid, record.id, "after", `item-${itemId}-${j}`);
+        const up = await uploadEvidence(p, files[j]);
+        if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع إحدى صور الإرجاع — حاول مجددًا.", en: "Couldn't upload a return photo — retry." })); return; }
+        paths.push(p);
+      }
+      after.push({ item_id: itemId, photos: paths });
     }
-    const overallPath = evidencePath(uid, record.id, "after", "overall");
-    const upo = await uploadEvidence(overallPath, overallFile);
-    if (!upo.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الصورة الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photo — retry." })); return; }
+    const overallPaths: string[] = [];
+    for (let j = 0; j < overallFiles.length; j++) {
+      const p = evidencePath(uid, record.id, "after", `overall-${j}`);
+      const up = await uploadEvidence(p, overallFiles[j]);
+      if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الصور الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photos — retry." })); return; }
+      overallPaths.push(p);
+    }
 
-    const r = await submitReturn(record.id, after, overallPath, shortage, note);
+    const r = await submitReturn(record.id, after, overallPaths, shortage, note);
     setBusy(false);
     if (!r.ok) { flash((t({ ar: "تعذّر إرسال الإرجاع: ", en: "Couldn't send the return: " })) + r.error); return; }
     emitCustodyEvent({
@@ -161,15 +217,58 @@ export default function RenterRentals() {
         </div>
       </div>
 
-      {/* Rental request */}
+      {/* طلب عرض سعر تأجير معدات */}
       <section className="bg-stone-900 border border-stone-800 rounded-xl p-4 space-y-3">
-        <SectionTitle icon="pkg">{t({ ar: "تأجير المعدات", en: "Rent equipment" })}</SectionTitle>
+        <SectionTitle icon="pkg">{t({ ar: "طلب تأجير معدات — عرض سعر", en: "Equipment rental — request a quote" })}</SectionTitle>
+        <p className="text-xs text-stone-400 leading-relaxed">
+          {t({ ar: "اكتب المعدات المطلوب تأجيرها وسيرد عليك فريق كيان بعرض سعر مرتب (PDF من Zoho Books) في تبويب طلبات السعر — تقدر تقبله أو ترفضه أو تطلب تعديله، وبعد قبوله تُصدر الفاتورة الإلكترونية ثم تفتح طلب استلام العهدة أدناه.",
+               en: "List the equipment you want to rent — Kian replies with a formal priced quote (Zoho Books PDF) in your Quotes tab; accept/reject/request changes, then the e-invoice is issued and you open the handover request below." })}
+        </p>
+        {quoteLines.map((l, i) => (
+          <div key={i} className="flex gap-2">
+            <input value={l.name} onChange={(e) => setQuoteLines((p) => p.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+              placeholder={t({ ar: `المعدة ${i + 1} (مثال: كاميرا Sony FX6)`, en: `Equipment ${i + 1} (e.g. Sony FX6)` })} className={`flex-1 min-w-0 ${inp}`} />
+            <input value={l.qty} onChange={(e) => setQuoteLines((p) => p.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
+              type="number" min={1} className={`w-16 text-center ${inp}`} aria-label={t({ ar: "الكمية", en: "Qty" })} />
+            <button type="button" aria-label={t({ ar: "حذف", en: "Remove" })}
+              onClick={() => setQuoteLines((p) => p.length > 1 ? p.filter((_, j) => j !== i) : p)}
+              className="px-2.5 rounded-lg bg-stone-800 border border-stone-700 text-stone-400">×</button>
+          </div>
+        ))}
+        <button type="button" onClick={() => setQuoteLines((p) => [...p, { name: "", qty: "1" }])}
+          className="rounded-lg bg-stone-800 border border-stone-700 text-stone-300 text-xs px-3 py-1.5">
+          + {t({ ar: "إضافة معدة", en: "Add equipment" })}
+        </button>
+        <textarea value={quoteNotes} onChange={(e) => setQuoteNotes(e.target.value)} rows={2}
+          placeholder={t({ ar: "ملاحظات (مدة الإيجار، الموقع، التواريخ…) — اختياري", en: "Notes (duration, location, dates…) — optional" })} className={inp} />
+        {quoteErr && <div className="text-red-400 text-xs">{quoteErr}</div>}
+        {quoteRef && (
+          <div className="text-xs text-emerald-400">
+            {t({ ar: `أُرسل الطلب (${quoteRef}) — تابع عرض السعر في `, en: `Request sent (${quoteRef}) — track the quote in ` })}
+            <Link href="/client-portal/quotes" className="underline text-emerald-300">{t({ ar: "تبويب طلبات السعر", en: "the Quotes tab" })}</Link>
+          </div>
+        )}
+        <button type="button" onClick={() => void doQuoteRequest()} disabled={quoteBusy || readOnly}
+          className="w-full rounded-lg bg-stone-800 border border-red-800 text-red-300 hover:text-red-200 disabled:opacity-50 text-sm font-medium py-2.5">
+          {quoteBusy ? "…" : t({ ar: "إرسال طلب عرض السعر", en: "Send quote request" })}
+        </button>
+        <p className="text-[10.5px] text-stone-500">
+          {t({ ar: "للعملاء الخاصين: يمكن لفريق كيان اعتماد التأجير مباشرة (بدون عرض سعر أو بمبلغ صفر) — تجاوز هذا القسم وافتح طلب الاستلام أدناه.",
+               en: "Personal-deal clients: Kian can approve directly (no quote / zero amount) — skip this and open the handover request below." })}
+        </p>
+      </section>
+
+      {/* Rental handover request */}
+      <section className="bg-stone-900 border border-stone-800 rounded-xl p-4 space-y-3">
+        <SectionTitle icon="pkg">{t({ ar: "طلب استلام عهدة مستأجر", en: "Renter handover request" })}</SectionTitle>
         <div className="text-xs font-mono text-stone-500">
           {t({ ar: "المستأجر (من حسابك): ", en: "Renter (from your account): " })}{renter.full_name} • <span dir="ltr">{renter.phone}</span>
         </div>
         <ItemPhotoEditor items={items} setItems={(fn) => setItems(fn)} />
-        <PhotoCapture label={t({ ar: "صورة إجمالي المعدات (بعد تصوير القطع)", en: "Overall equipment photo (after per-item shots)" })}
-          preview={overall?.preview ?? null} onPick={(f) => setOverall({ file: f, preview: URL.createObjectURL(f) })} />
+        <MultiPhotoCapture label={t({ ar: "صور إجمالي المعدات (بعد تصوير القطع)", en: "Overall equipment photos (after per-item shots)" })}
+          shots={overall}
+          onAdd={(f) => setOverall((p) => [...p, { file: f, preview: URL.createObjectURL(f) }])}
+          onRemove={(i) => setOverall((p) => p.filter((_, k) => k !== i))} />
         <SignBlock title={t({ ar: "عقد إيجار معدات — كيان", en: "Equipment rental contract — Kian" })}
           clauses={RENT_CLAUSES} agree={RENT_AGREE} signerName={renter.full_name}
           checked={signed} onChange={setSigned} />
@@ -187,7 +286,7 @@ export default function RenterRentals() {
         {records.length === 0 && <Empty>{t({ ar: "لا توجد تأجيرات بعد.", en: "No rentals yet." })}</Empty>}
         <div className="space-y-2.5">
           {records.map((rec) => (
-            <RecordCard key={rec.id} record={rec}>
+            <RecordCard key={rec.id} record={rec} onChanged={() => void reload()}>
               {({ items: recItems }) => rec.status === "rented" ? (
                 <ReturnPanel record={rec} items={recItems} busy={busy}
                   onSubmit={(a, o, s, n) => void doReturn(rec, a, o, s, n)} />

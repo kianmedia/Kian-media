@@ -77,23 +77,29 @@ export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
 /** Arabic/English label for a staff role (display — includes finance so an
  *  already-assigned finance user renders correctly). */
 export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
-  super_admin: { ar: "مالك", en: "Super Admin" },
-  manager:     { ar: "مدير", en: "Manager" },
-  support:     { ar: "دعم العملاء", en: "Support" },
-  editor:      { ar: "مونتير", en: "Editor" },
-  sales:       { ar: "مبيعات", en: "Sales" },
-  hr:          { ar: "الموارد البشرية", en: "HR" },
-  readonly:    { ar: "مشاهدة فقط", en: "Read-only" },
-  finance:     { ar: "المالية", en: "Finance" },
+  super_admin:      { ar: "مالك", en: "Super Admin" },
+  manager:          { ar: "مدير", en: "Manager" },
+  support:          { ar: "دعم العملاء", en: "Support" },
+  editor:           { ar: "مونتير", en: "Editor" },
+  sales:            { ar: "مبيعات", en: "Sales" },
+  hr:               { ar: "الموارد البشرية", en: "HR" },
+  readonly:         { ar: "مشاهدة فقط", en: "Read-only" },
+  finance:          { ar: "المالية", en: "Finance" },
+  photographer:     { ar: "مصور", en: "Photographer" },
+  lighting_tech:    { ar: "فني إضاءة", en: "Lighting Tech" },
+  camera_assistant: { ar: "مساعد تصوير", en: "Camera Assistant" },
+  custody_officer:  { ar: "أمين عهدة", en: "Custody Officer" },
 };
 
 /**
  * Roles SELECTABLE in the Staff role dropdown. Must match what the deployed DB
- * accepts (profiles.staff_role CHECK + admin_set_staff_role). finance is now
- * included — the staff_assignment_notifications_finance_ADDENDUM.sql is live.
+ * accepts (profiles.staff_role CHECK + admin_set_staff_role). The crew/custody
+ * roles (photographer/lighting_tech/camera_assistant/custody_officer) require
+ * docs/portal_custody_v2_claims_photos_roles_PATCH_RUNME.sql to be live.
  */
 export const STAFF_ROLE_OPTIONS: StaffRole[] =
-  ["super_admin", "manager", "support", "editor", "sales", "hr", "readonly", "finance"];
+  ["super_admin", "manager", "support", "editor", "sales", "hr", "readonly", "finance",
+   "photographer", "lighting_tech", "camera_assistant", "custody_officer"];
 
 /**
  * Project-assignment roles (project_members.role) staff are assigned with.

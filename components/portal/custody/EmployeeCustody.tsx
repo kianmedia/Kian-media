@@ -1,20 +1,20 @@
 "use client";
 // ════════════════════════════════════════════════════════════════════════
-// Employee custody — "my custody" list (+ return panel when status=out) and
-// the checkout form (per-item photos + overall + click-to-sign acknowledgment).
-// Name/phone are auto-pulled from the profile (never typed). All writes go
-// through guarded RPCs; photos upload to the private evidence bucket first.
+// Employee custody v2 — "my custody" list (+ return panel when status=out) and
+// the checkout form. Evidence: UNLIMITED photos, minimum 2 per item + 2 overall
+// at checkout AND at return. Name/phone auto-pulled from the profile.
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   listMyCustodyRecords, submitCheckout, submitReturn, uploadEvidence, evidencePath,
-  newRecordId, emitCustodyEvent, type CustodyRecord,
+  newRecordId, emitCustodyEvent, MIN_PHOTOS_PER_ITEM, MIN_PHOTOS_OVERALL,
+  type CustodyRecord, type CheckoutItemInput,
 } from "@/lib/portal/custody";
 import {
-  SectionTitle, Empty, RecordCard, ReturnPanel, ItemPhotoEditor, PhotoCapture,
-  SignBlock, CUSTODY_CLAUSES, CUSTODY_AGREE,
+  SectionTitle, Empty, RecordCard, ReturnPanel, ItemPhotoEditor, MultiPhotoCapture,
+  SignBlock, CUSTODY_CLAUSES, CUSTODY_AGREE, type DraftItem, type ShotFile,
 } from "@/components/portal/custody/ui";
 
 export default function EmployeeCustody() {
@@ -37,8 +37,8 @@ export default function EmployeeCustody() {
   useEffect(() => { void reload(); }, [reload]);
 
   // ─── Checkout form state ───
-  const [items, setItems] = useState<{ name: string; qty: number; file: File | null; preview: string | null }[]>([]);
-  const [overall, setOverall] = useState<{ file: File; preview: string } | null>(null);
+  const [items, setItems] = useState<DraftItem[]>([]);
+  const [overall, setOverall] = useState<ShotFile[]>([]);
   const [signed, setSigned] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -46,49 +46,69 @@ export default function EmployeeCustody() {
     setErr(null);
     if (readOnly) return;
     if (items.length === 0) { setErr(t({ ar: "أضف صنفاً واحداً على الأقل.", en: "Add at least one item." })); return; }
-    if (items.some((i) => !i.file)) { setErr(t({ ar: "صوّر كل قطعة قبل الإرسال.", en: "Photograph every item first." })); return; }
-    if (!overall) { setErr(t({ ar: "صوّر إجمالي المعدات قبل الإرسال.", en: "Capture the overall photo first." })); return; }
+    if (items.some((i) => i.shots.length < MIN_PHOTOS_PER_ITEM)) {
+      setErr(t({ ar: `صوّر كل قطعة (${MIN_PHOTOS_PER_ITEM} صور على الأقل لكل بند).`, en: `Min ${MIN_PHOTOS_PER_ITEM} photos per item.` })); return;
+    }
+    if (overall.length < MIN_PHOTOS_OVERALL) {
+      setErr(t({ ar: `صوّر إجمالي المعدات (${MIN_PHOTOS_OVERALL} صور على الأقل).`, en: `Min ${MIN_PHOTOS_OVERALL} overall photos.` })); return;
+    }
     if (!signed) { setErr(t({ ar: "أشّر على الإقرار قبل الإرسال.", en: "Check the acknowledgment first." })); return; }
 
     setBusy(true);
     const recordId = newRecordId();
-    // 1) Upload evidence (owner-first paths; storage RLS scopes to this user).
-    const payload: { name: string; qty: number; photo_before_path: string }[] = [];
+    // 1) Upload ALL evidence photos (owner-first paths; storage RLS scopes to this user).
+    const payload: CheckoutItemInput[] = [];
     for (let i = 0; i < items.length; i++) {
-      const p = evidencePath(uid, recordId, "before", `item-${i}`);
-      const up = await uploadEvidence(p, items[i].file as File);
-      if (!up.ok) { setBusy(false); setErr(t({ ar: `تعذّر رفع صورة «${items[i].name}» — حاول مجددًا.`, en: `Couldn't upload the photo of "${items[i].name}" — retry.` })); return; }
-      payload.push({ name: items[i].name, qty: items[i].qty, photo_before_path: p });
+      const paths: string[] = [];
+      for (let j = 0; j < items[i].shots.length; j++) {
+        const p = evidencePath(uid, recordId, "before", `item-${i}-${j}`);
+        const up = await uploadEvidence(p, items[i].shots[j].file);
+        if (!up.ok) { setBusy(false); setErr(t({ ar: `تعذّر رفع صور «${items[i].name}» — حاول مجددًا.`, en: `Couldn't upload photos of "${items[i].name}" — retry.` })); return; }
+        paths.push(p);
+      }
+      payload.push({ name: items[i].name, qty: items[i].qty, photos: paths });
     }
-    const overallPath = evidencePath(uid, recordId, "before", "overall");
-    const upo = await uploadEvidence(overallPath, overall.file);
-    if (!upo.ok) { setBusy(false); setErr(t({ ar: "تعذّر رفع الصورة الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photo — retry." })); return; }
+    const overallPaths: string[] = [];
+    for (let j = 0; j < overall.length; j++) {
+      const p = evidencePath(uid, recordId, "before", `overall-${j}`);
+      const up = await uploadEvidence(p, overall[j].file);
+      if (!up.ok) { setBusy(false); setErr(t({ ar: "تعذّر رفع الصور الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photos — retry." })); return; }
+      overallPaths.push(p);
+    }
 
-    // 2) Create the record (RPC validates paths + writes ack + notifies).
-    const r = await submitCheckout(recordId, payload, overallPath);
+    // 2) Create the record (RPC validates paths+minimums, writes ack + notifies).
+    const r = await submitCheckout(recordId, payload, overallPaths);
     setBusy(false);
     if (!r.ok) { setErr((t({ ar: "تعذّر تسجيل العهدة: ", en: "Couldn't record the checkout: " })) + r.error); return; }
 
     emitCustodyEvent({ event: "custody_checkout_new", record_id: recordId, record_no: r.data.record_no, kind: "custody", party_name: displayName });
-    setItems([]); setOverall(null); setSigned(false);
+    setItems([]); setOverall([]); setSigned(false);
     await reload();
     flash(t({ ar: `تم تسجيل عهدتك ${r.data.record_no} — أنت مسؤول عنها حتى الإقفال.`, en: `Custody ${r.data.record_no} recorded — you are responsible until closure.` }));
   }
 
-  async function doReturn(record: CustodyRecord, afters: Map<string, File>, overallFile: File, shortage: boolean, note: string) {
+  async function doReturn(record: CustodyRecord, afters: Map<string, File[]>, overallFiles: File[], shortage: boolean, note: string) {
     setBusy(true);
-    const after: { item_id: string; path: string }[] = [];
-    for (const [itemId, file] of afters) {
-      const p = evidencePath(uid, record.id, "after", `item-${itemId}`);
-      const up = await uploadEvidence(p, file);
-      if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع إحدى صور الإرجاع — حاول مجددًا.", en: "Couldn't upload a return photo — retry." })); return; }
-      after.push({ item_id: itemId, path: p });
+    const after: { item_id: string; photos: string[] }[] = [];
+    for (const [itemId, files] of afters) {
+      const paths: string[] = [];
+      for (let j = 0; j < files.length; j++) {
+        const p = evidencePath(uid, record.id, "after", `item-${itemId}-${j}`);
+        const up = await uploadEvidence(p, files[j]);
+        if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع إحدى صور الإرجاع — حاول مجددًا.", en: "Couldn't upload a return photo — retry." })); return; }
+        paths.push(p);
+      }
+      after.push({ item_id: itemId, photos: paths });
     }
-    const overallPath = evidencePath(uid, record.id, "after", "overall");
-    const upo = await uploadEvidence(overallPath, overallFile);
-    if (!upo.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الصورة الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photo — retry." })); return; }
+    const overallPaths: string[] = [];
+    for (let j = 0; j < overallFiles.length; j++) {
+      const p = evidencePath(uid, record.id, "after", `overall-${j}`);
+      const up = await uploadEvidence(p, overallFiles[j]);
+      if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الصور الإجمالية — حاول مجددًا.", en: "Couldn't upload the overall photos — retry." })); return; }
+      overallPaths.push(p);
+    }
 
-    const r = await submitReturn(record.id, after, overallPath, shortage, note);
+    const r = await submitReturn(record.id, after, overallPaths, shortage, note);
     setBusy(false);
     if (!r.ok) { flash((t({ ar: "تعذّر إرسال الإرجاع: ", en: "Couldn't send the return: " })) + r.error); return; }
     emitCustodyEvent({
@@ -110,7 +130,7 @@ export default function EmployeeCustody() {
         {phase === "ready" && records.length === 0 && <Empty>{t({ ar: "لا توجد عهدة مسجّلة باسمك.", en: "No custody recorded in your name." })}</Empty>}
         <div className="space-y-2.5">
           {records.map((rec) => (
-            <RecordCard key={rec.id} record={rec}>
+            <RecordCard key={rec.id} record={rec} onChanged={() => void reload()}>
               {({ items: recItems }) => rec.status === "out" ? (
                 <ReturnPanel record={rec} items={recItems} busy={busy}
                   onSubmit={(a, o, s, n) => void doReturn(rec, a, o, s, n)} />
@@ -128,8 +148,10 @@ export default function EmployeeCustody() {
           {displayName}{profile.mobile ? <> • <span dir="ltr">{profile.mobile}</span></> : null}
         </div>
         <ItemPhotoEditor items={items} setItems={(fn) => setItems(fn)} />
-        <PhotoCapture label={t({ ar: "صورة إجمالي المعدات (بعد تصوير القطع)", en: "Overall equipment photo (after per-item shots)" })}
-          preview={overall?.preview ?? null} onPick={(f) => setOverall({ file: f, preview: URL.createObjectURL(f) })} />
+        <MultiPhotoCapture label={t({ ar: "صور إجمالي المعدات (بعد تصوير القطع)", en: "Overall equipment photos (after per-item shots)" })}
+          shots={overall}
+          onAdd={(f) => setOverall((p) => [...p, { file: f, preview: URL.createObjectURL(f) }])}
+          onRemove={(i) => setOverall((p) => p.filter((_, k) => k !== i))} />
         <SignBlock title={t({ ar: "إقرار استلام عهدة", en: "Custody acknowledgment" })}
           clauses={CUSTODY_CLAUSES} agree={CUSTODY_AGREE} signerName={displayName}
           checked={signed} onChange={setSigned} />

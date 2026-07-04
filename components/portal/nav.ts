@@ -9,7 +9,7 @@ import { caps, type ViewRole } from "@/lib/portal/roles";
 
 export interface PortalTab { key: string; href: string; ar: string; en: string; }
 
-interface TabDef { href: string; ar: string; en: string; adminAr?: string; adminEn?: string; }
+interface TabDef { href: string; ar: string; en: string; adminAr?: string; adminEn?: string; staffAr?: string; staffEn?: string; }
 
 const REG: Record<string, TabDef> = {
   overview:      { href: "/client-portal",               ar: "نظرة عامة",   en: "Overview",      adminAr: "لوحة الإدارة",         adminEn: "Admin Dashboard" },
@@ -21,7 +21,7 @@ const REG: Record<string, TabDef> = {
   staff:         { href: "/client-portal/staff",         ar: "الموظفون",    en: "Staff" },
   whatsapp:      { href: "/client-portal/admin/whatsapp", ar: "صندوق واتساب", en: "WhatsApp Inbox" },
   opportunities: { href: "/client-portal/opportunities", ar: "مركز الفرص",  en: "Opportunities" },
-  equipment:     { href: "/client-portal/equipment",     ar: "تأجير المعدات", en: "Equipment Rental", adminAr: "العهدة والتأجير", adminEn: "Custody & Rental" },
+  equipment:     { href: "/client-portal/equipment",     ar: "تأجير المعدات", en: "Equipment Rental", adminAr: "العهدة والتأجير", adminEn: "Custody & Rental", staffAr: "العهدة", staffEn: "Custody" },
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
@@ -39,6 +39,10 @@ const SETS: Record<ViewRole, string[]> = {
   hr:          ["overview", "whatsapp", "opportunities", "equipment", "notifications", "profile"],
   readonly:    ["projects", "equipment", "notifications", "profile"],
   finance:     ["invoices", "whatsapp", "equipment", "notifications", "profile"],
+  photographer:     ["equipment", "projects", "notifications", "profile"],
+  lighting_tech:    ["equipment", "notifications", "profile"],
+  camera_assistant: ["equipment", "notifications", "profile"],
+  custody_officer:  ["equipment", "notifications", "profile"],
   client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "equipment", "notifications", "profile"],
   lead:        ["overview", "quotes", "messages", "files", "offers", "equipment", "notifications", "profile"],
 };
@@ -49,18 +53,21 @@ export const MY_OPPORTUNITIES_TAB: PortalTab = {
   key: "my_opportunities", href: "/client-portal/my-opportunities", ar: "طلباتي", en: "My Requests",
 };
 
-/** Tabs for the viewer, with admin-area label overrides resolved. */
+/** Tabs for the viewer, with admin-area / staff label overrides resolved
+ *  (e.g. equipment: clients see "تأجير المعدات", staff see "العهدة",
+ *   admin area sees "العهدة والتأجير"). */
 export function tabsForViewer(p: Pick<Profile, "account_type" | "staff_role">): PortalTab[] {
   const c = caps(p);
   const useAdminLabels = c.isAdminArea;
+  const useStaffLabels = !useAdminLabels && c.isStaff;
   const keys = SETS[c.view] ?? SETS.client;
   return keys.map((k) => {
     const r = REG[k];
     return {
       key: k,
       href: r.href,
-      ar: useAdminLabels ? (r.adminAr ?? r.ar) : r.ar,
-      en: useAdminLabels ? (r.adminEn ?? r.en) : r.en,
+      ar: useAdminLabels ? (r.adminAr ?? r.ar) : useStaffLabels ? (r.staffAr ?? r.ar) : r.ar,
+      en: useAdminLabels ? (r.adminEn ?? r.en) : useStaffLabels ? (r.staffEn ?? r.en) : r.en,
     };
   });
 }

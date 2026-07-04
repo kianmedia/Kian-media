@@ -1,21 +1,21 @@
 // ════════════════════════════════════════════════════════════════════════
-// Kian Portal — Equipment Custody & Rental (عهدة وتأجير المعدات).
+// Kian Portal — Equipment Custody & Rental (عهدة وتأجير المعدات) — v2.
 // Reads are RLS-scoped (party sees own records; custody managers see all).
 // EVERY write goes through a SECURITY DEFINER RPC — no table write grants.
-// Evidence photos live in the PRIVATE bucket custody-evidence with owner-first
-// paths {user_id}/{record_id}/before|after/... and are displayed via signed
-// URLs only. Mirrors docs/portal_equipment_custody_rental_RUNME.sql.
-//
-// NOTE: the generic request() in lib/portal/client.ts is JSON-only, so the two
-// storage helpers below do their own fetch (same headers + one 401-refresh retry).
+// Evidence photos (UNLIMITED, minimum 2 per item + 2 overall at checkout AND
+// at return) live in the PRIVATE bucket custody-evidence with owner-first paths
+// {user_id}/{record_id}/before|after/... and are displayed via signed URLs only.
+// Mirrors docs/portal_equipment_custody_rental_RUNME.sql +
+// docs/portal_custody_v2_claims_photos_roles_PATCH_RUNME.sql.
 // ════════════════════════════════════════════════════════════════════════
 import { pget, prpc, enc, type Result } from "@/lib/portal/client";
 import { getValidSession, SUPABASE_URL, SUPABASE_KEY } from "@/lib/portalAuth";
 
-// ─── Types (self-contained — no changes to lib/portal/types.ts) ───
+// ─── Types (self-contained) ───
 export type RecordKind = "custody" | "rental";
 export type RecordStatus =
-  | "out" | "review_handover" | "rented" | "review_return" | "closed" | "rejected" | "flagged";
+  | "out" | "review_handover" | "rented" | "review_return"
+  | "claim_pending" | "closed" | "rejected" | "flagged";
 
 export interface CustodyRecord {
   id: string;
@@ -35,6 +35,13 @@ export interface CustodyRecord {
   ack_signature: string | null;
   ack_signed_at: string | null;
   ack_type: "custody" | "rental_contract" | null;
+  // Financial claim (رفض الإقفال → مطالبة → تعهد بالسداد → سند)
+  claim_amount: number | null;
+  claim_note: string | null;
+  claim_ack_signed: boolean;
+  claim_ack_at: string | null;
+  claim_ack_ip: string | null;
+  claim_ack_signature: string | null;
   is_deleted: boolean;
   created_at: string;
   updated_at: string;
@@ -48,6 +55,16 @@ export interface CustodyItem {
   photo_before_path: string | null;
   photo_after_path: string | null;
   position: number;
+}
+
+export interface CustodyPhoto {
+  id: string;
+  record_id: string;
+  item_id: string | null;   // NULL = overall
+  stage: "before" | "after";
+  path: string;
+  position: number;
+  created_at: string;
 }
 
 export interface CustodyEvent {
@@ -74,10 +91,14 @@ export const CUSTODY_STATUS_LABELS: Record<RecordStatus, { ar: string; en: strin
   review_handover: { ar: "بانتظار اعتماد التسليم",     en: "Awaiting handover approval" },
   rented:          { ar: "مُسلّمة للمستأجر",           en: "Handed to renter" },
   review_return:   { ar: "بانتظار مراجعة الإرجاع",     en: "Awaiting return review" },
+  claim_pending:   { ar: "مطالبة — بانتظار تعهد السداد", en: "Claim — awaiting payment pledge" },
   closed:          { ar: "مقفلة",                     en: "Closed" },
   rejected:        { ar: "مرفوضة",                    en: "Rejected" },
   flagged:         { ar: "مقفلة مع مطالبة",            en: "Closed with claim" },
 };
+
+/** الطرف صاحب الحق في التعويض (السند). */
+export const CLAIM_CREDITOR = "شركة كيان الابتكار المتميز للإنتاج الفني";
 
 // ─── Reads (RLS-scoped) ───
 export function listMyCustodyRecords(kind: RecordKind, userId: string): Promise<Result<CustodyRecord[]>> {
@@ -90,6 +111,9 @@ export function listAllCustodyRecords(): Promise<Result<CustodyRecord[]>> {
 }
 export function listCustodyItems(recordId: string): Promise<Result<CustodyItem[]>> {
   return pget<CustodyItem[]>(`custody_items?record_id=eq.${enc(recordId)}&select=*&order=position.asc`);
+}
+export function listCustodyPhotos(recordId: string): Promise<Result<CustodyPhoto[]>> {
+  return pget<CustodyPhoto[]>(`custody_photos?record_id=eq.${enc(recordId)}&select=*&order=position.asc`);
 }
 export function listCustodyEvents(recordId: string): Promise<Result<CustodyEvent[]>> {
   return pget<CustodyEvent[]>(`custody_events?record_id=eq.${enc(recordId)}&select=*&order=created_at.asc`);
@@ -116,24 +140,25 @@ export function upsertRenterProfile(p: {
   });
 }
 
-export interface CheckoutItemInput { name: string; qty: number; photo_before_path: string; }
+/** v2: each item carries ALL its photos (min 2); overall is an array (min 2). */
+export interface CheckoutItemInput { name: string; qty: number; photos: string[]; }
 
-export function submitCheckout(recordId: string, items: CheckoutItemInput[], overallBeforePath: string):
+export function submitCheckout(recordId: string, items: CheckoutItemInput[], overallPaths: string[]):
   Promise<Result<{ ok: boolean; record_no: string }>> {
   return prpc<{ ok: boolean; record_no: string }>("submit_checkout", {
-    p_record: recordId, p_items: items, p_overall_before: overallBeforePath,
+    p_record: recordId, p_items: items, p_overall: overallPaths,
   });
 }
-export function submitRentalRequest(recordId: string, items: CheckoutItemInput[], overallBeforePath: string):
+export function submitRentalRequest(recordId: string, items: CheckoutItemInput[], overallPaths: string[]):
   Promise<Result<{ ok: boolean; record_no: string }>> {
   return prpc<{ ok: boolean; record_no: string }>("submit_rental_request", {
-    p_record: recordId, p_items: items, p_overall_before: overallBeforePath,
+    p_record: recordId, p_items: items, p_overall: overallPaths,
   });
 }
-export function submitReturn(recordId: string, after: { item_id: string; path: string }[],
-  overallAfterPath: string, shortage: boolean, note: string): Promise<Result<boolean>> {
+export function submitReturn(recordId: string, after: { item_id: string; photos: string[] }[],
+  overallPaths: string[], shortage: boolean, note: string): Promise<Result<boolean>> {
   return prpc<boolean>("submit_return", {
-    p_record: recordId, p_after: after, p_overall_after: overallAfterPath,
+    p_record: recordId, p_after: after, p_overall: overallPaths,
     p_shortage: shortage, p_note: note || null,
   });
 }
@@ -149,14 +174,26 @@ export function adminRejectCustody(recordId: string, note: string): Promise<Resu
 export function adminAddCustodyNote(recordId: string, note: string): Promise<Result<boolean>> {
   return prpc<boolean>("admin_add_custody_note", { p_record: recordId, p_note: note });
 }
+/** رفض إقفال العهدة + تسجيل مطالبة مالية (أدمن). */
+export function adminRejectClosure(recordId: string, amount: number, note: string): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_reject_closure", { p_record: recordId, p_amount: amount, p_note: note || null });
+}
+/** تعهد الطرف بالسداد (توقيع إلكتروني) → مقفلة مع مطالبة + بيانات السند. */
+export function acknowledgeCustodyClaim(recordId: string): Promise<Result<boolean>> {
+  return prpc<boolean>("acknowledge_custody_claim", { p_record: recordId });
+}
+/** حذف سجل (soft) — للمالك/الأدمن فقط (is_owner). */
+export function adminDeleteCustodyRecord(recordId: string, reason?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_delete_custody_record", { p_record: recordId, p_reason: reason ?? null });
+}
 
 // ─── Evidence storage (private bucket, user JWT, RLS-enforced) ───
 const BUCKET = "custody-evidence";
 export const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024; // mirrors the bucket's server-side limit
+export const MIN_PHOTOS_PER_ITEM = 2;
+export const MIN_PHOTOS_OVERALL = 2;
 
 export function newRecordId(): string {
-  // Client-generated so upload paths can exist before the DB row (owner-first
-  // storage RLS keys on auth.uid(), so this is safe).
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0; return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
@@ -206,7 +243,7 @@ export async function uploadEvidence(path: string, file: File | Blob): Promise<R
 
 /** Batch-sign evidence paths → map path → full signed URL (1h). Skips nulls. */
 export async function signEvidence(paths: (string | null | undefined)[]): Promise<Record<string, string>> {
-  const list = paths.filter((p): p is string => !!p);
+  const list = Array.from(new Set(paths.filter((p): p is string => !!p)));
   if (list.length === 0) return {};
   try {
     const res = await storageFetch(`/object/sign/${BUCKET}`, {
@@ -224,11 +261,10 @@ export async function signEvidence(paths: (string | null | undefined)[]): Promis
   } catch { return {}; }
 }
 
-// ─── Staged notification webhook (channel-ready; WhatsApp disabled in n8n) ───
-// Fire-and-forget: never blocks or fails the business action.
+// ─── Staged notification webhook + email relay (portal rows come from the RPCs) ───
 export function emitCustodyEvent(event: {
   event: string; record_id: string; record_no?: string; kind?: RecordKind;
-  party_name?: string; urgent?: boolean;
+  party_name?: string; urgent?: boolean; amount?: number;
 }): void {
   void (async () => {
     try {

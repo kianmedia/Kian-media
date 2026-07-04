@@ -1,18 +1,21 @@
 "use client";
 // ════════════════════════════════════════════════════════════════════════
-// Equipment Custody & Rental — shared UI, ported 1:1 from the approved
-// prototype (docs/custody/kian-custody-prototype.jsx): viewfinder corner
-// brackets, per-item + overall photo capture, click-to-sign block, the
-// one-page record card (party info, before/after evidence, signature line,
-// admin note, audit timeline). Icons are tiny inline SVGs (repo rule: no new
-// packages). Tailwind stone/red per prototype — `red` is remapped to Kian
-// brand red in tailwind.config.ts.
+// Equipment Custody & Rental — shared UI v2.
+// v2 adds: UNLIMITED multi-photo capture (min 2 per item + 2 overall, at both
+// checkout and return), click-to-zoom lightbox with save/download, the
+// financial-claim flow (رفض الإقفال → مطالبة → تعهد بالسداد → سند قابل
+// للطباعة لصالح شركة كيان الابتكار المتميز للإنتاج الفني), and photo galleries
+// backed by the custody_photos table (legacy single-path fallback kept).
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
 import {
-  CUSTODY_STATUS_LABELS, listCustodyItems, listCustodyEvents, signEvidence,
-  type CustodyRecord, type CustodyItem, type CustodyEvent, type RecordStatus,
+  CUSTODY_STATUS_LABELS, CLAIM_CREDITOR, MIN_PHOTOS_PER_ITEM, MIN_PHOTOS_OVERALL,
+  listCustodyItems, listCustodyEvents, listCustodyPhotos, signEvidence,
+  acknowledgeCustodyClaim, emitCustodyEvent,
+  type CustodyRecord, type CustodyItem, type CustodyEvent, type CustodyPhoto,
+  type RecordStatus, type RenterProfile,
 } from "@/lib/portal/custody";
 
 // ─── Inline icons (stroke = currentColor) ───
@@ -36,7 +39,9 @@ export const Ic = {
   user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2|M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   shield: "M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8z|M9 12l2 2 4-4",
   send: "m22 2-7 20-4-9-9-4 20-7z|M22 2 11 13",
-  aperture: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z|m14.31 8 5.74 9.94|M9.69 8h11.48|m7.38 12 5.74-9.94|M9.69 16 3.95 6.06|M14.31 16H2.83|m16.62 12-5.74 9.94",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4|M7 10l5 5 5-5|M12 15V3",
+  x: "M18 6 6 18|M6 6l12 12",
+  zoom: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z|m21 21-4.35-4.35|M11 8v6|M8 11h6",
 };
 
 // ─── Legal text (brief §9 — verbatim, bilingual) ───
@@ -72,13 +77,18 @@ export const RENT_AGREE = {
   ar: "أقر بأني قرأت عقد الإيجار كاملاً، وأوافق على جميع شروطه، وأتعهد بالمسؤولية القانونية والمالية الكاملة عن المعدات. (التأشير هنا بمثابة توقيع ملزم)",
   en: "I confirm I have read this rental contract in full, agree to all its terms, and undertake full legal and financial responsibility for the equipment. (Checking here constitutes a binding signature.)",
 };
+export const PLEDGE_AGREE = {
+  ar: "أقر بصحة المطالبة المالية الموضحة أعلاه، وأتعهد بسداد كامل مبلغ التعويض لصالح شركة كيان الابتكار المتميز للإنتاج الفني، ويُعد هذا التأشير توقيعاً إلكترونياً ملزماً وسنداً بالمديونية يجوز الاحتجاج به نظاماً.",
+  en: "I acknowledge the above financial claim and pledge to pay the full compensation amount to Kian Al-Ebtikar Al-Mutamayz for Artistic Production. This checkmark constitutes a binding electronic signature and a debt instrument enforceable by law.",
+};
 
-// ─── Status badge (prototype color map, literal Tailwind classes) ───
+// ─── Status badge ───
 const STATUS_CLS: Record<RecordStatus, string> = {
   out:             "bg-amber-950 text-amber-300 border-amber-800",
   review_handover: "bg-sky-950 text-sky-300 border-sky-800",
   rented:          "bg-amber-950 text-amber-300 border-amber-800",
   review_return:   "bg-sky-950 text-sky-300 border-sky-800",
+  claim_pending:   "bg-red-950 text-red-300 border-red-700",
   closed:          "bg-emerald-950 text-emerald-300 border-emerald-800",
   rejected:        "bg-red-950 text-red-300 border-red-800",
   flagged:         "bg-red-950 text-red-300 border-red-800",
@@ -87,7 +97,7 @@ export function StatusBadge({ status }: { status: RecordStatus }) {
   const { t } = useI18n();
   const l = CUSTODY_STATUS_LABELS[status] ?? { ar: status, en: status };
   return (
-    <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${STATUS_CLS[status] || "bg-stone-800 text-stone-300 border-stone-700"}`}>
+    <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap ${STATUS_CLS[status] || "bg-stone-800 text-stone-300 border-stone-700"}`}>
       {t(l)}
     </span>
   );
@@ -110,7 +120,7 @@ export function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ─── Viewfinder corner brackets (prototype signature look) ───
+// ─── Viewfinder corner brackets ───
 export function Viewfinder({ active, children }: { active: boolean; children: React.ReactNode }) {
   const c = active ? "border-red-500" : "border-stone-600";
   return (
@@ -124,7 +134,33 @@ export function Viewfinder({ active, children }: { active: boolean; children: Re
   );
 }
 
-// ─── Photo capture (File-based; upload happens at submit) ───
+// ─── Lightbox (تكبير + حفظ الصورة بالنقر) ───
+export function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  const { t } = useI18n();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-4">
+      <div className="flex gap-2 mb-3" onClick={(e) => e.stopPropagation()}>
+        <a href={url} download target="_blank" rel="noopener noreferrer"
+          className="flex items-center gap-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-3 py-2">
+          <I d={Ic.download} size={14} />{t({ ar: "حفظ / تحميل", en: "Save / Download" })}
+        </a>
+        <button type="button" onClick={onClose}
+          className="flex items-center gap-1.5 rounded-lg bg-stone-800 border border-stone-600 text-stone-200 text-xs px-3 py-2">
+          <I d={Ic.x} size={14} />{t({ ar: "إغلاق", en: "Close" })}
+        </button>
+      </div>
+      <img src={url} alt="" onClick={(e) => e.stopPropagation()}
+        className="max-w-full max-h-[80vh] rounded-lg border border-stone-700 object-contain" />
+    </div>
+  );
+}
+
+// ─── Photo capture primitives (multi) ───
 function useFilePick(onPick: (f: File) => void) {
   const ref = useRef<HTMLInputElement>(null);
   const open = () => ref.current?.click();
@@ -136,71 +172,97 @@ function useFilePick(onPick: (f: File) => void) {
   return { open, input };
 }
 
-/** 56×48 per-item shot button (dashed → solid red when filled). */
-export function ItemShot({ preview, onPick }: { preview: string | null; onPick: (f: File) => void }) {
-  const { open, input } = useFilePick(onPick);
+export interface ShotFile { file: File; preview: string; }
+
+/** Per-item multi-photo strip: thumbnails + add button + min-2 counter. */
+export function ItemShots({ shots, onAdd, onRemove, min = MIN_PHOTOS_PER_ITEM }: {
+  shots: ShotFile[]; onAdd: (f: File) => void; onRemove: (i: number) => void; min?: number;
+}) {
+  const { t } = useI18n();
+  const { open, input } = useFilePick(onAdd);
+  const ok = shots.length >= min;
   return (
-    <>
+    <div className="flex items-center gap-1.5 flex-wrap">
       {input}
+      {shots.map((s, i) => (
+        <span key={i} className="relative">
+          <img src={s.preview} alt="" className="w-12 h-10 rounded-md object-cover border border-red-500" />
+          <button type="button" aria-label={t({ ar: "حذف الصورة", en: "Remove photo" })}
+            onClick={() => onRemove(i)}
+            className="absolute -top-1.5 -end-1.5 w-4 h-4 rounded-full bg-stone-900 border border-stone-600 text-stone-300 flex items-center justify-center">
+            <I d={Ic.x} size={9} />
+          </button>
+        </span>
+      ))}
       <button type="button" onClick={open}
-        className={`w-14 h-12 shrink-0 rounded-md overflow-hidden bg-stone-900 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-red-500 ${preview ? "border border-red-500" : "border border-dashed border-stone-600"}`}>
-        {preview
-          ? <img src={preview} alt="" className="w-full h-full object-cover" />
-          : <span className="text-stone-500"><I d={Ic.camera} size={16} /></span>}
+        className={`w-12 h-10 shrink-0 rounded-md bg-stone-900 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-red-500 ${ok ? "border border-stone-700 text-stone-500" : "border border-dashed border-red-700 text-red-400"}`}>
+        <I d={Ic.camera} size={15} />
       </button>
-    </>
+      <span className={`text-[10px] font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>
+        {shots.length}/{min}+
+      </span>
+    </div>
   );
 }
 
-/** Full-width overall capture with viewfinder brackets. */
-export function PhotoCapture({ label, preview, onPick }: { label: string; preview: string | null; onPick: (f: File) => void }) {
+/** Overall multi-photo capture with viewfinder brackets (min 2, unlimited). */
+export function MultiPhotoCapture({ label, shots, onAdd, onRemove, min = MIN_PHOTOS_OVERALL }: {
+  label: string; shots: ShotFile[]; onAdd: (f: File) => void; onRemove: (i: number) => void; min?: number;
+}) {
   const { t } = useI18n();
-  const { open, input } = useFilePick(onPick);
+  const { open, input } = useFilePick(onAdd);
+  const ok = shots.length >= min;
   return (
     <div>
-      <div className="text-[11px] font-mono text-stone-500 mb-1">{label}</div>
-      {input}
-      <Viewfinder active={!!preview}>
-        <button type="button" onClick={open}
-          className="w-full h-28 rounded-lg overflow-hidden bg-stone-800 flex flex-col items-center justify-center gap-1 text-stone-400 focus:outline-none focus:ring-2 focus:ring-red-500">
-          {preview
-            ? <img src={preview} alt="" className="w-full h-full object-cover" />
-            : <><I d={Ic.camera} size={22} /><span className="text-xs">{t({ ar: "اضغط للتصوير", en: "Tap to capture" })}</span></>}
-        </button>
-      </Viewfinder>
-    </div>
-  );
-}
-
-/** Read-only per-item thumb (signed URL) with قبل/بعد label. */
-export function Thumb({ url, label }: { url: string | null; label: string }) {
-  return (
-    <div className="text-center">
-      <div className="text-[10px] font-mono text-stone-500 mb-0.5">{label}</div>
-      <div className="w-14 h-12 rounded-md overflow-hidden bg-stone-900 border border-stone-700 flex items-center justify-center">
-        {url ? <img src={url} alt="" className="w-full h-full object-cover" /> : <span className="text-stone-600 text-xs">—</span>}
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[11px] font-mono text-stone-500">{label}</span>
+        <span className={`text-[10px] font-mono ${ok ? "text-emerald-400" : "text-red-400"}`}>{shots.length}/{min}+</span>
       </div>
-    </div>
-  );
-}
-
-/** Read-only overall photo (signed URL) inside brackets. */
-export function PhotoView({ url, label }: { url: string | null; label: string }) {
-  const { t } = useI18n();
-  return (
-    <div className="flex-1 min-w-[120px]">
-      <div className="text-[11px] font-mono text-stone-500 mb-1">{label}</div>
-      <Viewfinder active={false}>
-        <div className="w-full h-20 rounded-lg overflow-hidden bg-stone-900 border border-stone-800 flex items-center justify-center">
-          {url ? <img src={url} alt="" className="w-full h-full object-cover" />
-               : <span className="text-xs text-stone-600">{t({ ar: "لا توجد صورة", en: "No photo" })}</span>}
+      {input}
+      <Viewfinder active={ok}>
+        <div className="w-full min-h-28 rounded-lg bg-stone-800 p-2 flex flex-wrap gap-2 items-center">
+          {shots.map((s, i) => (
+            <span key={i} className="relative">
+              <img src={s.preview} alt="" className="w-20 h-16 rounded-md object-cover border border-red-500" />
+              <button type="button" aria-label={t({ ar: "حذف الصورة", en: "Remove photo" })}
+                onClick={() => onRemove(i)}
+                className="absolute -top-1.5 -end-1.5 w-4 h-4 rounded-full bg-stone-900 border border-stone-600 text-stone-300 flex items-center justify-center">
+                <I d={Ic.x} size={9} />
+              </button>
+            </span>
+          ))}
+          <button type="button" onClick={open}
+            className="w-20 h-16 rounded-md border border-dashed border-stone-600 text-stone-400 flex flex-col items-center justify-center gap-0.5 focus:outline-none focus:ring-2 focus:ring-red-500">
+            <I d={Ic.camera} size={18} />
+            <span className="text-[10px]">{t({ ar: "أضف صورة", en: "Add photo" })}</span>
+          </button>
         </div>
       </Viewfinder>
     </div>
   );
 }
 
-// ─── Click-to-sign block (bilingual clauses; checkbox = signature) ───
+/** Read-only clickable gallery (signed URLs) with a قبل/بعد label. */
+export function PhotoGallery({ label, urls, onZoom, size = "w-12 h-10" }: {
+  label: string; urls: string[]; onZoom: (u: string) => void; size?: string;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] font-mono text-stone-500 mb-0.5">{label}</div>
+      <div className="flex gap-1 flex-wrap">
+        {urls.length === 0 && <span className="text-stone-600 text-xs">—</span>}
+        {urls.map((u, i) => (
+          <button key={i} type="button" onClick={() => onZoom(u)}
+            className="rounded-md overflow-hidden border border-stone-700 hover:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500">
+            <img src={u} alt="" className={`${size} object-cover`} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Click-to-sign block ───
 export function SignBlock({ title, clauses, agree, signerName, checked, onChange }: {
   title: string; clauses: { ar: string; en: string }[]; agree: { ar: string; en: string };
   signerName: string; checked: boolean; onChange: (v: boolean) => void;
@@ -234,8 +296,8 @@ export function SignBlock({ title, clauses, agree, signerName, checked, onChange
   );
 }
 
-// ─── Draft items editor (name + qty + per-item photo) ───
-export interface DraftItem { name: string; qty: number; file: File | null; preview: string | null; }
+// ─── Draft items editor (name + qty + multi photos ≥2) ───
+export interface DraftItem { name: string; qty: number; shots: ShotFile[]; }
 
 export function ItemPhotoEditor({ items, setItems }: {
   items: DraftItem[]; setItems: (fn: (p: DraftItem[]) => DraftItem[]) => void;
@@ -246,7 +308,7 @@ export function ItemPhotoEditor({ items, setItems }: {
   const add = () => {
     const n = name.trim();
     if (!n) return;
-    setItems((p) => [...p, { name: n, qty: Math.max(Number(qty) || 1, 1), file: null, preview: null }]);
+    setItems((p) => [...p, { name: n, qty: Math.max(Number(qty) || 1, 1), shots: [] }]);
     setName(""); setQty("1");
   };
   const inp = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -265,61 +327,84 @@ export function ItemPhotoEditor({ items, setItems }: {
         </button>
       </div>
       {items.length === 0 && (
-        <div className="text-xs text-stone-500">{t({ ar: "أضف المعدات، وصوّر كل قطعة (📷 بجانبها).", en: "Add items and photograph each one (📷 next to it)." })}</div>
+        <div className="text-xs text-stone-500">
+          {t({ ar: `أضف المعدات، وصوّر كل قطعة (${MIN_PHOTOS_PER_ITEM} صور على الأقل لكل بند 📷).`, en: `Add items and photograph each one (min ${MIN_PHOTOS_PER_ITEM} photos per item 📷).` })}
+        </div>
       )}
       {items.map((it, i) => (
-        <div key={i} className="flex items-center gap-2 bg-stone-900 border border-stone-800 rounded-lg p-2">
-          <span className="flex-1 min-w-0 truncate text-sm text-stone-200">{it.name}</span>
-          <span className="font-mono text-xs text-stone-500">×{it.qty}</span>
-          <ItemShot preview={it.preview}
-            onPick={(f) => setItems((p) => p.map((x, j) => j === i
-              ? { ...x, file: f, preview: URL.createObjectURL(f) } : x))} />
-          <button type="button" aria-label={t({ ar: "حذف", en: "Remove" })}
-            onClick={() => setItems((p) => p.filter((_, j) => j !== i))}
-            className="text-stone-500 hover:text-red-400 p-1"><I d={Ic.trash} size={15} /></button>
+        <div key={i} className="bg-stone-900 border border-stone-800 rounded-lg p-2 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="flex-1 min-w-0 truncate text-sm text-stone-200">{it.name}</span>
+            <span className="font-mono text-xs text-stone-500">×{it.qty}</span>
+            <button type="button" aria-label={t({ ar: "حذف البند", en: "Remove item" })}
+              onClick={() => setItems((p) => p.filter((_, j) => j !== i))}
+              className="text-stone-500 hover:text-red-400 p-1"><I d={Ic.trash} size={15} /></button>
+          </div>
+          <ItemShots shots={it.shots}
+            onAdd={(f) => setItems((p) => p.map((x, j) => j === i
+              ? { ...x, shots: [...x.shots, { file: f, preview: URL.createObjectURL(f) }] } : x))}
+            onRemove={(si) => setItems((p) => p.map((x, j) => j === i
+              ? { ...x, shots: x.shots.filter((_, k) => k !== si) } : x))} />
         </div>
       ))}
     </div>
   );
 }
 
-// ─── Return panel (per-item after photos + shortage path) ───
+// ─── Return panel (≥2 after photos per item + ≥2 overall + shortage path) ───
 export function ReturnPanel({ record, items, busy, onSubmit }: {
   record: CustodyRecord; items: CustodyItem[]; busy: boolean;
-  onSubmit: (afters: Map<string, File>, overall: File, shortage: boolean, note: string) => void;
+  onSubmit: (afters: Map<string, File[]>, overall: File[], shortage: boolean, note: string) => void;
 }) {
   const { t } = useI18n();
-  const [afters, setAfters] = useState<Map<string, { file: File; preview: string }>>(new Map());
-  const [overall, setOverall] = useState<{ file: File; preview: string } | null>(null);
+  const [afters, setAfters] = useState<Map<string, ShotFile[]>>(new Map());
+  const [overall, setOverall] = useState<ShotFile[]>([]);
   const [shortage, setShortage] = useState(false);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
   const submit = () => {
     setErr(null);
-    if (items.some((it) => !afters.get(it.id))) { setErr(t({ ar: "صوّر كل قطعة عند الإرجاع.", en: "Photograph every item at return." })); return; }
-    if (!overall) { setErr(t({ ar: "صوّر إجمالي المعدات عند الإرجاع.", en: "Capture the overall photo at return." })); return; }
+    if (items.some((it) => (afters.get(it.id)?.length ?? 0) < MIN_PHOTOS_PER_ITEM)) {
+      setErr(t({ ar: `صوّر كل قطعة عند الإرجاع (${MIN_PHOTOS_PER_ITEM} صور على الأقل لكل بند).`, en: `Photograph every item at return (min ${MIN_PHOTOS_PER_ITEM} each).` })); return;
+    }
+    if (overall.length < MIN_PHOTOS_OVERALL) {
+      setErr(t({ ar: `صوّر إجمالي المعدات عند الإرجاع (${MIN_PHOTOS_OVERALL} صور على الأقل).`, en: `Capture the overall photos at return (min ${MIN_PHOTOS_OVERALL}).` })); return;
+    }
     if (shortage && !note.trim()) { setErr(t({ ar: "صف النقص أو التلف قبل الإرسال.", en: "Describe the shortage/damage first." })); return; }
-    const m = new Map<string, File>();
-    afters.forEach((v, k) => m.set(k, v.file));
-    onSubmit(m, overall.file, shortage, note.trim());
+    const m = new Map<string, File[]>();
+    afters.forEach((v, k) => m.set(k, v.map((s) => s.file)));
+    onSubmit(m, overall.map((s) => s.file), shortage, note.trim());
   };
 
   return (
     <div className="mt-3 border-t border-stone-800 pt-3 space-y-3">
       <div className="text-sm font-medium text-stone-200">{t({ ar: "إرجاع العدة", en: "Return equipment" })}</div>
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         {items.map((it) => (
-          <div key={it.id} className="flex items-center gap-2 bg-stone-900 border border-stone-800 rounded-lg p-2">
-            <span className="flex-1 min-w-0 truncate text-sm text-stone-200">{it.name}</span>
-            <span className="font-mono text-xs text-stone-500">×{it.qty}</span>
-            <ItemShot preview={afters.get(it.id)?.preview ?? null}
-              onPick={(f) => setAfters((p) => new Map(p).set(it.id, { file: f, preview: URL.createObjectURL(f) }))} />
+          <div key={it.id} className="bg-stone-900 border border-stone-800 rounded-lg p-2 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 min-w-0 truncate text-sm text-stone-200">{it.name}</span>
+              <span className="font-mono text-xs text-stone-500">×{it.qty}</span>
+            </div>
+            <ItemShots shots={afters.get(it.id) ?? []}
+              onAdd={(f) => setAfters((p) => {
+                const m = new Map(p);
+                m.set(it.id, [...(m.get(it.id) ?? []), { file: f, preview: URL.createObjectURL(f) }]);
+                return m;
+              })}
+              onRemove={(i) => setAfters((p) => {
+                const m = new Map(p);
+                m.set(it.id, (m.get(it.id) ?? []).filter((_, k) => k !== i));
+                return m;
+              })} />
           </div>
         ))}
       </div>
-      <PhotoCapture label={t({ ar: "صورة إجمالي المعدات عند الإرجاع", en: "Overall photo at return" })}
-        preview={overall?.preview ?? null} onPick={(f) => setOverall({ file: f, preview: URL.createObjectURL(f) })} />
+      <MultiPhotoCapture label={t({ ar: "صور إجمالي المعدات عند الإرجاع", en: "Overall photos at return" })}
+        shots={overall}
+        onAdd={(f) => setOverall((p) => [...p, { file: f, preview: URL.createObjectURL(f) }])}
+        onRemove={(i) => setOverall((p) => p.filter((_, k) => k !== i))} />
       <div className="flex gap-2">
         <button type="button" onClick={() => setShortage(false)}
           className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium ${!shortage ? "bg-emerald-950 border-emerald-700 text-emerald-300" : "bg-stone-900 border-stone-700 text-stone-400"}`}>
@@ -345,28 +430,160 @@ export function ReturnPanel({ record, items, busy, onSubmit }: {
   );
 }
 
+// ─── سند المطالبة (قابل للطباعة / حفظ PDF) ───
+export function openBondWindow(record: CustodyRecord, renter?: RenterProfile | null) {
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("ar-SA") : "—");
+  const idLine = renter ? `<div>رقم الهوية / الإقامة: <b>${renter.id_number}</b></div>` : "";
+  const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<title>سند مطالبة — ${record.record_no}</title>
+<style>
+  body{font-family:'Tajawal','Segoe UI',sans-serif;color:#111;margin:40px auto;max-width:720px;line-height:2}
+  .head{text-align:center;border-bottom:3px solid #A51419;padding-bottom:12px;margin-bottom:24px}
+  .head h1{margin:0;font-size:22px;color:#A51419}
+  .box{border:1px solid #999;border-radius:8px;padding:18px 22px;margin:14px 0}
+  .amount{font-size:26px;font-weight:800;color:#A51419;text-align:center;border:2px solid #A51419;border-radius:8px;padding:10px;margin:16px 0}
+  .meta{font-size:13px;color:#444}
+  .sig{margin-top:28px;display:flex;justify-content:space-between;gap:24px;font-size:14px}
+  .foot{margin-top:30px;font-size:12px;color:#666;border-top:1px solid #ccc;padding-top:10px}
+  @media print{.noprint{display:none}}
+</style></head><body>
+<div class="head">
+  <h1>سند إقرار بمديونية وتعهد بالسداد</h1>
+  <div class="meta">رقم السجل: <b dir="ltr">${record.record_no}</b> — ${record.kind === "rental" ? "تأجير معدات" : "عهدة معدات"}</div>
+</div>
+<div class="box">
+  <div>أقر أنا الموقّع إلكترونياً أدناه: <b>${record.party_name}</b></div>
+  ${idLine}
+  ${record.party_phone ? `<div>الجوال: <b dir="ltr">${record.party_phone}</b></div>` : ""}
+  <div>بأنني مدين وأتعهد بأن أدفع لأمر: <b>${CLAIM_CREDITOR}</b></div>
+  <div class="amount">${Number(record.claim_amount ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2 })} ريال سعودي</div>
+  ${record.claim_note ? `<div>سبب المطالبة: ${record.claim_note}</div>` : ""}
+  ${record.shortage_note ? `<div>بلاغ النقص/التلف الموثّق: ${record.shortage_note}</div>` : ""}
+  <div class="meta">وذلك تعويضاً عن النقص/التلف الموثّق بالصور والسجل الزمني في سجل ${record.kind === "rental" ? "التأجير" : "العهدة"} المشار إليه أعلاه.</div>
+</div>
+<div class="box meta">
+  <div>التوقيع الإلكتروني: <b>${record.claim_ack_signature ?? record.party_name}</b> ${record.claim_ack_signed ? "✓ (تأشير إلكتروني مُوثَّق بمثابة توقيع ملزم)" : "— بانتظار التوقيع"}</div>
+  <div>تاريخ ووقت التوقيع: <b>${fmt(record.claim_ack_at)}</b></div>
+  ${record.claim_ack_ip ? `<div>عنوان IP الموثّق عند التوقيع: <b dir="ltr">${record.claim_ack_ip}</b></div>` : ""}
+  <div>تاريخ إنشاء السجل: <b>${fmt(record.created_at)}</b></div>
+</div>
+<div class="sig">
+  <div>المدين / المتعهد بالسداد:<br><b>${record.party_name}</b></div>
+  <div>صاحب الحق (الدائن):<br><b>${CLAIM_CREDITOR}</b></div>
+</div>
+<div class="foot">
+  حُرّر هذا السند إلكترونياً عبر بوابة كيان ويُعد التأشير الإلكتروني الموثق فيه (بالاسم والتاريخ وعنوان IP)
+  توقيعاً ملزماً وإقراراً بالمديونية، ويحق للدائن الاحتجاج به وتقديمه للجهات القضائية والنظامية المختصة
+  في حال الامتناع عن السداد.
+</div>
+<div class="noprint" style="text-align:center;margin-top:24px">
+  <button onclick="window.print()" style="background:#A51419;color:#fff;border:0;border-radius:8px;padding:10px 26px;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button>
+</div>
+</body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); w.focus(); }
+}
+
+// ─── كتلة المطالبة داخل البطاقة (بانر + تعهد السداد + عرض السند) ───
+function ClaimBlock({ record, onChanged }: { record: CustodyRecord; onChanged?: () => void }) {
+  const { t } = useI18n();
+  const { profile, readOnly } = usePortal();
+  const [checked, setChecked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const isParty = profile.id === record.party_user_id;
+  const hasClaim = record.status === "claim_pending" || (record.claim_amount ?? 0) > 0;
+  if (!hasClaim) return null;
+
+  async function pledge() {
+    setErr(null);
+    if (!checked) { setErr(t({ ar: "أشّر على التعهد أولاً.", en: "Check the pledge first." })); return; }
+    setBusy(true);
+    const r = await acknowledgeCustodyClaim(record.id);
+    setBusy(false);
+    if (!r.ok) { setErr((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
+    emitCustodyEvent({ event: "custody_claim_acknowledged", record_id: record.id, record_no: record.record_no, kind: record.kind, party_name: record.party_name, amount: record.claim_amount ?? 0 });
+    onChanged?.();
+  }
+
+  return (
+    <div className="bg-red-950/60 border border-red-800 rounded-lg p-3 space-y-2">
+      <div className="flex items-center gap-2 text-red-300 text-sm font-medium">
+        <I d={Ic.alert} size={15} />
+        {t({ ar: "مطالبة مالية (تعويض)", en: "Financial claim (compensation)" })}
+        <span className="ms-auto font-mono text-red-200" dir="ltr">
+          {Number(record.claim_amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} SAR
+        </span>
+      </div>
+      {record.claim_note && <div className="text-xs text-red-200/80">{record.claim_note}</div>}
+      <div className="text-[11px] text-red-200/70">
+        {t({ ar: `صاحب الحق في التعويض: ${CLAIM_CREDITOR}`, en: `Beneficiary: ${CLAIM_CREDITOR}` })}
+      </div>
+
+      {record.status === "claim_pending" && isParty && !readOnly && (
+        <div className="bg-stone-900/70 border border-stone-700 rounded-lg p-2.5 space-y-2">
+          <label className="flex items-start gap-2 cursor-pointer text-xs text-stone-200 leading-relaxed">
+            <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-red-600 shrink-0" />
+            <span>{t(PLEDGE_AGREE)}</span>
+          </label>
+          {err && <div className="text-red-400 text-xs">{err}</div>}
+          <button type="button" onClick={() => void pledge()} disabled={busy}
+            className="w-full rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium py-2">
+            {busy ? "…" : t({ ar: "توقيع التعهد بالسداد وإقفال العهدة", en: "Sign the payment pledge & close" })}
+          </button>
+        </div>
+      )}
+      {record.status === "claim_pending" && !isParty && (
+        <div className="text-[11px] text-stone-400">{t({ ar: "بانتظار توقيع الطرف على تعهد السداد.", en: "Awaiting the party's payment pledge." })}</div>
+      )}
+
+      {record.claim_ack_signed && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="flex items-center gap-1.5 text-emerald-400 text-xs font-mono">
+            <I d={Ic.check} size={13} />
+            {t({ ar: `وُقّع التعهد: ${record.claim_ack_signature}`, en: `Pledge signed: ${record.claim_ack_signature}` })}
+          </span>
+          <button type="button" onClick={() => openBondWindow(record)}
+            className="ms-auto rounded-lg bg-stone-800 border border-red-800 text-red-300 text-xs px-3 py-1.5 flex items-center gap-1.5">
+            <I d={Ic.sign} size={13} />{t({ ar: "عرض / طباعة السند", en: "View / print the bond" })}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Record card — the full one-page report (expandable) ───
-export function RecordCard({ record, renterInfo, defaultOpen = false, children }: {
+export function RecordCard({ record, renterInfo, defaultOpen = false, onChanged, children }: {
   record: CustodyRecord;
-  renterInfo?: { id_number: string; phone: string; email: string; address: string } | null;
+  renterInfo?: RenterProfile | null;
   defaultOpen?: boolean;
+  onChanged?: () => void;
   children?: (ctx: { items: CustodyItem[]; reloadDetails: () => void }) => React.ReactNode;
 }) {
   const { t, isAr } = useI18n();
   const [open, setOpen] = useState(defaultOpen);
   const [items, setItems] = useState<CustodyItem[]>([]);
   const [events, setEvents] = useState<CustodyEvent[]>([]);
+  const [photos, setPhotos] = useState<CustodyPhoto[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
+  const [zoom, setZoom] = useState<string | null>(null);
 
   const loadDetails = useCallback(async () => {
-    const [it, ev] = await Promise.all([listCustodyItems(record.id), listCustodyEvents(record.id)]);
+    const [it, ev, ph] = await Promise.all([
+      listCustodyItems(record.id), listCustodyEvents(record.id), listCustodyPhotos(record.id),
+    ]);
     const its = it.ok ? it.data : [];
+    const phs = ph.ok ? ph.data : [];
     setItems(its);
     setEvents(ev.ok ? ev.data : []);
+    setPhotos(phs);
     const paths = [
       record.overall_before_path, record.overall_after_path,
       ...its.flatMap((x) => [x.photo_before_path, x.photo_after_path]),
+      ...phs.map((p) => p.path),
     ];
     setUrls(await signEvidence(paths));
     setLoaded(true);
@@ -377,9 +594,17 @@ export function RecordCard({ record, renterInfo, defaultOpen = false, children }
   const u = (p: string | null) => (p ? urls[p] ?? null : null);
   const fmt = (iso: string) => new Date(iso).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" });
 
+  // Gallery URLs per item/stage — custody_photos first, legacy single-path fallback.
+  const gal = (itemId: string | null, stage: "before" | "after", legacy: string | null): string[] => {
+    const list = photos.filter((p) => p.item_id === itemId && p.stage === stage)
+      .map((p) => urls[p.path]).filter((x): x is string => !!x);
+    if (list.length > 0) return list;
+    const lu = legacy ? urls[legacy] : null;
+    return lu ? [lu] : [];
+  };
+
   return (
     <div className="bg-stone-900 border border-stone-800 rounded-xl overflow-hidden">
-      {/* Header row (always visible) */}
       <button type="button" onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center gap-2 p-3 text-start focus:outline-none focus:ring-2 focus:ring-red-500">
         <span className="text-red-400"><I d={record.kind === "rental" ? Ic.pkg : Ic.user} size={16} /></span>
@@ -392,7 +617,6 @@ export function RecordCard({ record, renterInfo, defaultOpen = false, children }
 
       {open && (
         <div className="px-3 pb-3 space-y-3">
-          {/* Party / renter info */}
           <div className="text-[11px] font-mono text-stone-500">
             {record.kind === "rental" ? t({ ar: "تأجير خارجي", en: "External rental" }) : t({ ar: "عهدة داخلية", en: "Internal custody" })}
             {record.party_phone ? <> • <span dir="ltr">{record.party_phone}</span></> : null}
@@ -405,7 +629,6 @@ export function RecordCard({ record, renterInfo, defaultOpen = false, children }
             </div>
           )}
 
-          {/* Shortage banner */}
           {record.shortage && record.shortage_note && (
             <div className="flex items-start gap-2 bg-red-950 border border-red-800 rounded-lg p-2.5 text-xs text-red-300">
               <I d={Ic.alert} size={14} className="mt-0.5 shrink-0" />
@@ -413,31 +636,41 @@ export function RecordCard({ record, renterInfo, defaultOpen = false, children }
             </div>
           )}
 
-          {/* Items with before/after */}
+          {/* المطالبة المالية / التعهد / السند */}
+          <ClaimBlock record={record} onChanged={onChanged} />
+
+          {/* Items with before/after galleries (click any photo to zoom/save) */}
           <div>
-            <div className="text-[11px] font-mono text-stone-500 mb-1.5">{t({ ar: "المعدات — صورة لكل قطعة", en: "Equipment — photo per item" })}</div>
+            <div className="text-[11px] font-mono text-stone-500 mb-1.5">
+              {t({ ar: "المعدات — اضغط أي صورة للتكبير والحفظ", en: "Equipment — click any photo to zoom & save" })}
+            </div>
             <div className="space-y-1.5">
               {(loaded ? items : []).map((it) => (
-                <div key={it.id} className="flex items-center gap-2 bg-stone-950 border border-stone-800 rounded-lg p-2">
-                  <span className="flex-1 min-w-0 truncate text-sm text-stone-200">{it.name}</span>
-                  <span className="font-mono text-xs text-stone-500">×{it.qty}</span>
-                  <Thumb url={u(it.photo_before_path)} label={t({ ar: "قبل", en: "Before" })} />
-                  <Thumb url={u(it.photo_after_path)} label={t({ ar: "بعد", en: "After" })} />
+                <div key={it.id} className="bg-stone-950 border border-stone-800 rounded-lg p-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1 min-w-0 truncate text-sm text-stone-200">{it.name}</span>
+                    <span className="font-mono text-xs text-stone-500">×{it.qty}</span>
+                  </div>
+                  <div className="flex gap-4 flex-wrap">
+                    <PhotoGallery label={t({ ar: "قبل", en: "Before" })} urls={gal(it.id, "before", it.photo_before_path)} onZoom={setZoom} />
+                    <PhotoGallery label={t({ ar: "بعد", en: "After" })} urls={gal(it.id, "after", it.photo_after_path)} onZoom={setZoom} />
+                  </div>
                 </div>
               ))}
               {!loaded && <div className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</div>}
             </div>
           </div>
 
-          {/* Overall before/after */}
-          <div className="flex gap-3 flex-wrap">
-            <PhotoView url={u(record.overall_before_path)} label={t({ ar: "إجمالي — قبل", en: "Overall — before" })} />
-            <PhotoView url={u(record.overall_after_path)} label={t({ ar: "إجمالي — بعد", en: "Overall — after" })} />
+          {/* Overall before/after galleries */}
+          <div className="flex gap-6 flex-wrap">
+            <PhotoGallery label={t({ ar: "إجمالي — قبل", en: "Overall — before" })} size="w-20 h-16"
+              urls={gal(null, "before", record.overall_before_path)} onZoom={setZoom} />
+            <PhotoGallery label={t({ ar: "إجمالي — بعد", en: "Overall — after" })} size="w-20 h-16"
+              urls={gal(null, "after", record.overall_after_path)} onZoom={setZoom} />
           </div>
 
-          {/* Signature line */}
           {record.ack_signed && (
-            <div className="flex items-center gap-2 text-xs text-stone-400">
+            <div className="flex items-center gap-2 text-xs text-stone-400 flex-wrap">
               <span className="text-red-400"><I d={Ic.sign} size={14} /></span>
               {t({ ar: "وُقّع: ", en: "Signed: " })}{record.ack_signature}
               <span className="font-mono text-stone-600" dir="ltr">{record.ack_signed_at ? fmt(record.ack_signed_at) : ""}</span>
@@ -445,17 +678,14 @@ export function RecordCard({ record, renterInfo, defaultOpen = false, children }
             </div>
           )}
 
-          {/* Admin note */}
           {record.admin_note && (
             <div className={`bg-stone-800 rounded-lg p-2.5 text-xs text-stone-300 ${isAr ? "border-r-2" : "border-l-2"} border-red-600`}>
               {t({ ar: "ملاحظة الإدارة: ", en: "Admin note: " })}{record.admin_note}
             </div>
           )}
 
-          {/* Party/admin action slot (ReturnPanel / AdminActions) */}
           {children && loaded && children({ items, reloadDetails: loadDetails })}
 
-          {/* Audit timeline */}
           {events.length > 0 && (
             <div className="pt-1">
               {events.map((ev) => (
@@ -469,6 +699,8 @@ export function RecordCard({ record, renterInfo, defaultOpen = false, children }
           )}
         </div>
       )}
+
+      {zoom && <Lightbox url={zoom} onClose={() => setZoom(null)} />}
     </div>
   );
 }
