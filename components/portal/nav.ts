@@ -21,6 +21,7 @@ const REG: Record<string, TabDef> = {
   staff:         { href: "/client-portal/staff",         ar: "الموظفون",    en: "Staff" },
   whatsapp:      { href: "/client-portal/admin/whatsapp", ar: "صندوق واتساب", en: "WhatsApp Inbox" },
   opportunities: { href: "/client-portal/opportunities", ar: "مركز الفرص",  en: "Opportunities" },
+  equipment:     { href: "/client-portal/equipment",     ar: "تأجير المعدات", en: "Equipment Rental", adminAr: "العهدة والتأجير", adminEn: "Custody & Rental" },
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
@@ -29,17 +30,17 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "whatsapp", "opportunities", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "whatsapp", "opportunities", "invoices", "notifications", "profile"],
-  manager:     ["overview", "projects", "quotes", "messages", "files", "whatsapp", "opportunities", "invoices", "notifications", "profile"],
-  support:     ["messages", "files", "whatsapp", "notifications", "profile"],
-  sales:       ["quotes", "whatsapp", "notifications", "profile"],
-  editor:      ["projects", "notifications", "profile"],
-  hr:          ["overview", "whatsapp", "opportunities", "notifications", "profile"],
-  readonly:    ["projects", "notifications", "profile"],
-  finance:     ["invoices", "whatsapp", "notifications", "profile"],
-  client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "notifications", "profile"],
-  lead:        ["overview", "quotes", "messages", "files", "offers", "notifications", "profile"],
+  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "whatsapp", "opportunities", "equipment", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "whatsapp", "opportunities", "equipment", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "quotes", "messages", "files", "whatsapp", "opportunities", "equipment", "invoices", "notifications", "profile"],
+  support:     ["messages", "files", "whatsapp", "equipment", "notifications", "profile"],
+  sales:       ["quotes", "whatsapp", "equipment", "notifications", "profile"],
+  editor:      ["projects", "equipment", "notifications", "profile"],
+  hr:          ["overview", "whatsapp", "opportunities", "equipment", "notifications", "profile"],
+  readonly:    ["projects", "equipment", "notifications", "profile"],
+  finance:     ["invoices", "whatsapp", "equipment", "notifications", "profile"],
+  client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "equipment", "notifications", "profile"],
+  lead:        ["overview", "quotes", "messages", "files", "offers", "equipment", "notifications", "profile"],
 };
 
 /** Applicant tab — appended by PortalShell only when the logged-in email matches
