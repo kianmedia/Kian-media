@@ -261,10 +261,12 @@ export async function signEvidence(paths: (string | null | undefined)[]): Promis
   } catch { return {}; }
 }
 
-// ─── Staged notification webhook + email relay (portal rows come from the RPCs) ───
+// ─── Notification relay: email (Apps Script) + staged n8n webhook.
+//     Portal rows are written by the SQL RPCs; keepalive so navigation doesn't
+//     cancel the request. Failures are visible in Vercel logs (custody_email_*). ───
 export function emitCustodyEvent(event: {
   event: string; record_id: string; record_no?: string; kind?: RecordKind;
-  party_name?: string; urgent?: boolean; amount?: number;
+  party_name?: string; urgent?: boolean; amount?: number; reference?: string;
 }): void {
   void (async () => {
     try {
@@ -272,9 +274,14 @@ export function emitCustodyEvent(event: {
       if (!s) return;
       await fetch("/api/integrations/custody/notify", {
         method: "POST",
+        keepalive: true,
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
         body: JSON.stringify({ ...event, channels: ["portal", "email", "whatsapp"] }),
       });
-    } catch { /* staged channel — portal notifications already written by the RPC */ }
+    } catch { /* relay failure never blocks the action — server logs carry the reason */ }
   })();
+}
+/** إشعار داخل البوابة للأدمن/المالك/المدير/أمين العهدة عند طلب عرض سعر تأجير. */
+export function notifyRentalQuoteRequest(quoteRequestId: string, reference: string): Promise<Result<boolean>> {
+  return prpc<boolean>("custody_notify_rental_quote", { p_quote_request: quoteRequestId, p_reference: reference });
 }

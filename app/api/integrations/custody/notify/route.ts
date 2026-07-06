@@ -1,32 +1,48 @@
 // ════════════════════════════════════════════════════════════════════════
-// POST /api/integrations/custody/notify   (SERVER-ONLY, staged channel relay)
+// /api/integrations/custody/notify   (SERVER-ONLY)
 //
-// Fired by the browser AFTER a successful custody RPC (portal notifications are
-// already written by the RPC). This relays the event to:
-//   1) EMAIL (Apps Script channel) → admins + super_admin/manager +
-//      custody_officer (أمين العهدة) + the record's party — gated by
-//      CUSTODY_EMAIL_ALERTS_ENABLED (default off, fail-closed).
-//   2) the staged n8n webhook (email/WhatsApp fan-out later) — fail-closed
-//      until N8N_NOTIFY_WEBHOOK_URL is set.
-// Auth: the caller's JWT must SEE the record via RLS — no forged events.
-// Recipient emails are read server-side (service role, READ-only) exactly like
-// the existing WhatsApp alert route computes its recipients.
+// GET  → safe env diagnostic (no secrets/URLs): proves at runtime whether the
+//        deployed build sees CUSTODY_EMAIL_ALERTS_ENABLED / PORTAL_NOTIFY_ENDPOINT
+//        / the service key, and which environment it is (production/preview).
+// POST → fired by the browser AFTER a successful custody action. Relays to:
+//        EMAIL (Apps Script channel — admins+owner+manager+custody_officer+party)
+//        and the staged n8n webhook. Portal rows are written by the SQL RPCs.
+//        Every step logs (custody_notify_event_created / custody_email_*).
 // ════════════════════════════════════════════════════════════════════════
 
 import { NextResponse } from "next/server";
-import { selectAsUser, selectAsService } from "@/lib/server/supabaseAdmin";
-import { postCustodyEvent, sendCustodyEmail, custodyWebhookConfigured, custodyEmailEnabled } from "@/lib/server/custodyNotify";
+import { selectAsUser, selectAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
+import {
+  postCustodyEvent, sendCustodyEmail, custodyWebhookConfigured,
+  custodyEmailEnabled, emailEndpoint, emailEndpointHost, runtimeEnv,
+} from "@/lib/server/custodyNotify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.stringify({ tag, ...extra }));
 
-const EVENTS = new Set([
+const RECORD_EVENTS = new Set([
   "custody_checkout_new", "rental_request_new", "custody_return_submitted",
   "custody_return_shortage", "custody_handover_approved", "custody_closed",
   "custody_rejected", "custody_note_new",
   "custody_claim_pending", "custody_claim_acknowledged",
 ]);
+// طلب عرض سعر تأجير معدات — ليس سجل عهدة؛ يُتحقق من هوية المرسل فقط.
+const QUOTE_EVENTS = new Set(["rental_quote_request_new"]);
+
+/** GET — تشخيص آمن: هل البيئة المنشورة ترى المتغيرات فعلاً؟ */
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    runtime_env: runtimeEnv(),
+    email_enabled: custodyEmailEnabled(),
+    has_endpoint: emailEndpoint().startsWith("https://"),
+    endpoint_host: emailEndpointHost(),          // اسم المضيف فقط — بلا الرابط الكامل
+    webhook_configured: custodyWebhookConfigured(),
+    service_key_present: adminConfigured(),
+  }, { status: 200 });
+}
 
 export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
@@ -38,39 +54,77 @@ export async function POST(req: Request) {
 
   const event = str(b.event);
   const recordId = str(b.record_id);
-  if (!EVENTS.has(event) || !recordId) return NextResponse.json({ ok: false, error: "invalid_event" }, { status: 400 });
-
-  if (!custodyWebhookConfigured() && !custodyEmailEnabled()) {
-    // Both staged channels off — the portal notification already exists.
-    return NextResponse.json({ ok: true, sent: false, reason: "not_configured" }, { status: 200 });
+  const isRecordEvent = RECORD_EVENTS.has(event);
+  const isQuoteEvent = QUOTE_EVENTS.has(event);
+  if ((!isRecordEvent && !isQuoteEvent) || !recordId) {
+    return NextResponse.json({ ok: false, error: "invalid_event" }, { status: 400 });
   }
 
-  // The caller must be able to SEE the record (RLS as the user) — blocks forgery.
-  const rec = await selectAsUser<{ id: string; record_no: string; kind: string; party_name: string; party_user_id: string; claim_amount: number | null }[]>(
-    `custody_records?id=eq.${encodeURIComponent(recordId)}&select=id,record_no,kind,party_name,party_user_id,claim_amount&limit=1`, bearer);
-  if (!rec.ok || !rec.data[0]) return NextResponse.json({ ok: false, error: "not_visible" }, { status: 403 });
-  const r = rec.data[0];
+  log("custody_notify_event_created", {
+    event_type: event, record_id: recordId,
+    email_enabled: custodyEmailEnabled(), has_endpoint: emailEndpoint().startsWith("https://"),
+    webhook_configured: custodyWebhookConfigured(), service_key_present: adminConfigured(),
+    runtime_env: runtimeEnv(),
+  });
 
-  const payload = {
-    event, record_id: r.id, record_no: r.record_no, kind: r.kind, party_name: r.party_name,
-    urgent: event === "custody_return_shortage" || event === "custody_claim_pending",
-    amount: typeof b.amount === "number" ? (b.amount as number) : (r.claim_amount ?? undefined),
-    channels: ["portal", "email", "whatsapp"],
-  };
+  // ── تحقق الهوية/الملكية ──
+  let payload: { event: string; record_id: string; record_no?: string; kind?: string;
+                 party_name?: string; urgent?: boolean; amount?: number; reference?: string;
+                 channels: string[] };
+  let partyUserId = "";
 
-  // EMAIL: admins + super_admin/manager/custody_officer + the party (fail-closed).
+  if (isRecordEvent) {
+    // يجب أن يرى المرسل السجل عبر RLS — يمنع تزوير الأحداث.
+    const rec = await selectAsUser<{ id: string; record_no: string; kind: string; party_name: string; party_user_id: string; claim_amount: number | null }[]>(
+      `custody_records?id=eq.${encodeURIComponent(recordId)}&select=id,record_no,kind,party_name,party_user_id,claim_amount&limit=1`, bearer);
+    if (!rec.ok || !rec.data[0]) {
+      log("custody_email_skipped", { reason: "record_not_visible", event_type: event, record_id: recordId, detail: rec.ok ? "empty" : rec.error });
+      return NextResponse.json({ ok: false, error: "not_visible" }, { status: 403 });
+    }
+    const r = rec.data[0];
+    partyUserId = r.party_user_id;
+    payload = {
+      event, record_id: r.id, record_no: r.record_no, kind: r.kind, party_name: r.party_name,
+      urgent: event === "custody_return_shortage" || event === "custody_claim_pending",
+      amount: typeof b.amount === "number" ? (b.amount as number) : (r.claim_amount ?? undefined),
+      channels: ["portal", "email", "whatsapp"],
+    };
+  } else {
+    // حدث عرض سعر: يكفي إثبات هوية المرسل (قراءة ملفه بمفتاحه — توقيع JWT يُتحقق في PostgREST).
+    const me = await selectAsUser<{ id: string; email: string | null; full_name: string | null }[]>(
+      `profiles?select=id,email,full_name&limit=1`, bearer);
+    if (!me.ok || !me.data[0]) {
+      log("custody_email_skipped", { reason: "auth_failed", event_type: event, record_id: recordId });
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+    partyUserId = me.data[0].id;
+    payload = {
+      event, record_id: recordId,
+      reference: str(b.reference) || undefined,
+      kind: "rental", party_name: str(b.party_name) || me.data[0].full_name || me.data[0].email || "",
+      urgent: false, channels: ["portal", "email", "whatsapp"],
+    };
+  }
+
+  // ── حساب المستلمين (قراءة فقط بمفتاح الخدمة؛ الفشل يُسجَّل ولا يُسقط الإرسال) ──
+  const recipients: string[] = [];
   if (custodyEmailEnabled()) {
-    const recipients: string[] = [];
     const staff = await selectAsService<{ email: string | null }[]>(
       `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,custody_officer))`);
     if (staff.ok) staff.data.forEach((p) => { if (p.email) recipients.push(p.email); });
-    const party = await selectAsService<{ email: string | null }[]>(
-      `profiles?select=email&id=eq.${encodeURIComponent(r.party_user_id)}&limit=1`);
-    if (party.ok && party.data[0]?.email) recipients.push(party.data[0].email);
-    await sendCustodyEmail({ ...payload, recipients });
+    else log("custody_email_recipients_partial", { reason: "staff_query_failed", detail: staff.error, service_key_present: adminConfigured() });
+
+    if (partyUserId) {
+      const party = await selectAsService<{ email: string | null }[]>(
+        `profiles?select=email&id=eq.${encodeURIComponent(partyUserId)}&limit=1`);
+      if (party.ok && party.data[0]?.email) recipients.push(party.data[0].email);
+      else if (!party.ok) log("custody_email_recipients_partial", { reason: "party_query_failed", detail: party.error });
+    }
   }
 
-  // n8n webhook (staged; WhatsApp node stays disabled inside n8n).
-  const out = await postCustodyEvent(payload);
-  return NextResponse.json({ ok: true, ...out }, { status: 200 });
+  // ── الإرسال (كلاهما يسجّل نتيجته دائماً) ──
+  const email = await sendCustodyEmail({ ...payload, recipients });
+  const webhook = await postCustodyEvent(payload);
+
+  return NextResponse.json({ ok: true, email, webhook, recipient_count: recipients.length }, { status: 200 });
 }

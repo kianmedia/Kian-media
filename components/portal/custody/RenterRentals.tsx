@@ -14,7 +14,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import {
   getMyRenterProfile, upsertRenterProfile, listMyCustodyRecords, submitRentalRequest,
   submitReturn, uploadEvidence, evidencePath, newRecordId, emitCustodyEvent,
-  MIN_PHOTOS_PER_ITEM, MIN_PHOTOS_OVERALL,
+  notifyRentalQuoteRequest, MIN_PHOTOS_PER_ITEM, MIN_PHOTOS_OVERALL,
   type CustodyRecord, type RenterProfile, type CheckoutItemInput,
 } from "@/lib/portal/custody";
 import { createQuote } from "@/lib/portal/leads";
@@ -87,7 +87,11 @@ export default function RenterRentals() {
     });
     setQuoteBusy(false);
     if (!r.ok) { setQuoteErr((t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error); return; }
-    setQuoteRef(r.data.row.reference || "");
+    const ref = r.data.row.reference || "";
+    setQuoteRef(ref);
+    // إشعار داخل البوابة (أدمن/مالك/مدير/أمين عهدة) + بريد — لا يفشلان الطلب.
+    try { void notifyRentalQuoteRequest(r.data.row.id, ref); } catch { /* non-blocking */ }
+    emitCustodyEvent({ event: "rental_quote_request_new", record_id: r.data.row.id, reference: ref, kind: "rental", party_name: renter.full_name });
     setQuoteLines([{ name: "", qty: "1" }]); setQuoteNotes("");
     flash(t({ ar: "أُرسل طلب عرض السعر — سيصلك عرض مرتب من فريق كيان في تبويب طلبات السعر.", en: "Quote request sent — Kian's priced offer will appear in your Quotes tab." }));
   }

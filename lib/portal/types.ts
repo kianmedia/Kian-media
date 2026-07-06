@@ -44,7 +44,12 @@ export type NotificationType =
   | "deliverable_final_delivered" | "project_status_changed" | "opportunity_new"
   | "whatsapp_new"
   | "quote_sent" | "quote_accepted" | "quote_revision_requested" | "invoice_visible"
-  | "invoice_approval_required" | "invoice_created" | "invoice_creation_failed";
+  | "invoice_approval_required" | "invoice_created" | "invoice_creation_failed"
+  // العهدة والتأجير
+  | "custody_checkout_new" | "rental_request_new" | "custody_return_submitted"
+  | "custody_return_shortage" | "custody_handover_approved" | "custody_closed"
+  | "custody_rejected" | "custody_note_new"
+  | "custody_claim_pending" | "custody_claim_acknowledged";
 
 export type OfferAudience = "all" | "leads" | "clients";
 export type InternalCommentCategory = "editor" | "production" | "budget" | "qa" | "general";

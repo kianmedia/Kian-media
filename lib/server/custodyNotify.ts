@@ -1,20 +1,20 @@
 // ════════════════════════════════════════════════════════════════════════
-// Kian — custody/rental notifications (SERVER-ONLY): staged n8n webhook +
-// EMAIL relay over the existing Apps Script channel.
+// Kian — custody/rental notifications (SERVER-ONLY): EMAIL relay over the
+// existing Apps Script channel + staged n8n webhook.
 //
-// Portal notifications are written by the SQL RPCs (source of truth). This
-// module adds the outbound channels per the custody brief §8:
-//   • EMAIL — POSTs `_type:"portal_notify", Event:"custody_*"` to the existing
-//     Apps Script Web App (same channel as lib/server/notifyEmail.ts — no SMTP
-//     keys in the repo). Gated by CUSTODY_EMAIL_ALERTS_ENABLED === "true".
-//     ⚠️ Delivery requires the Apps Script doPost to handle Event custody_*.
-//   • n8n WEBHOOK — channel-ready fan-out (email/WhatsApp later); fail-closed
-//     until N8N_NOTIFY_WEBHOOK_URL is set. WhatsApp stays disabled inside n8n
-//     until Meta verification clears (activated with the notifications phase).
+// OBSERVABILITY CONTRACT (Vercel logs — never logs the endpoint URL/secrets):
+//   custody_email_attempt  { event, record, recipient_count, has_endpoint,
+//                            endpoint_host, email_enabled, runtime_env }
+//   custody_email_skipped  { reason: disabled | no_endpoint }
+//   custody_email_success  { event, record, http_status }
+//   custody_email_failed   { event, record, http_status | error }
 //
-// NEVER throws. No secrets logged. Does NOT touch the existing WhatsApp code.
-// Env (new, namespaced): N8N_NOTIFY_WEBHOOK_URL, N8N_NOTIFY_SECRET,
-// CUSTODY_EMAIL_ALERTS_ENABLED. Reuses: PORTAL_NOTIFY_ENDPOINT / SHEETS_ENDPOINT.
+// RULES:
+//   • EMAIL is ENABLED BY DEFAULT (CUSTODY_EMAIL_ALERTS_ENABLED=false disables).
+//   • Endpoint = PORTAL_NOTIFY_ENDPOINT || NEXT_PUBLIC SHEETS_ENDPOINT (trimmed).
+//   • An EMPTY recipient list does NOT skip the send — the Apps Script handler
+//     has its own fallback inbox; we still POST and log recipient_count=0.
+//   • Email failure never blocks the business action, but it ALWAYS logs.
 // ════════════════════════════════════════════════════════════════════════
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
@@ -31,17 +31,38 @@ export interface CustodyEventPayload {
   party_name?: string;
   urgent?: boolean;
   amount?: number;
+  reference?: string;               // rental quote request reference (REN/Q-…)
   channels?: string[];
 }
 
-// ─── n8n webhook (staged) ───
-export function custodyWebhookConfigured(): boolean {
-  return (process.env.N8N_NOTIFY_WEBHOOK_URL ?? "").length > 0;
+const log = (tag: string, extra: Record<string, unknown>) =>
+  console.log(JSON.stringify({ tag, ...extra }));
+
+// ─── env readers (server-side, trimmed — a stray space/newline in Vercel would
+//     otherwise silently fail the https:// check) ───
+export function custodyEmailEnabled(): boolean {
+  return (process.env.CUSTODY_EMAIL_ALERTS_ENABLED ?? "").trim() !== "false";
+}
+export function emailEndpoint(): string {
+  return (process.env.PORTAL_NOTIFY_ENDPOINT || SHEETS_ENDPOINT || "").trim();
+}
+export function emailEndpointHost(): string {
+  try { return new URL(emailEndpoint()).host; } catch { return ""; }
+}
+export function runtimeEnv(): string {
+  return process.env.VERCEL_ENV || process.env.NODE_ENV || "unknown";
+}
+function publicBase(): string {
+  return (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
 }
 
+// ─── n8n webhook (staged; unchanged behavior) ───
+export function custodyWebhookConfigured(): boolean {
+  return (process.env.N8N_NOTIFY_WEBHOOK_URL ?? "").trim().length > 0;
+}
 export async function postCustodyEvent(payload: CustodyEventPayload):
   Promise<{ sent: boolean; reason?: string }> {
-  const url = process.env.N8N_NOTIFY_WEBHOOK_URL ?? "";
+  const url = (process.env.N8N_NOTIFY_WEBHOOK_URL ?? "").trim();
   if (!url) return { sent: false, reason: "not_configured" };
   try {
     const res = await fetch(url, {
@@ -54,33 +75,21 @@ export async function postCustodyEvent(payload: CustodyEventPayload):
       cache: "no-store",
     });
     if (!res.ok) {
-      console.error(`[custody/notify] webhook HTTP ${res.status} for event=${payload.event} record=${payload.record_no || payload.record_id}`);
+      log("custody_webhook_failed", { event: payload.event, record: payload.record_no || payload.record_id, http_status: res.status });
       return { sent: false, reason: `http_${res.status}` };
     }
     return { sent: true };
   } catch (e) {
-    console.error(`[custody/notify] webhook failed for event=${payload.event}: ${String(e)}`);
+    log("custody_webhook_failed", { event: payload.event, record: payload.record_no || payload.record_id, error: String(e).slice(0, 200) });
     return { sent: false, reason: "network" };
   }
 }
 
-// ─── Email relay (existing Apps Script channel; no provider keys) ───
-// ENABLED BY DEFAULT (set CUSTODY_EMAIL_ALERTS_ENABLED=false to switch off).
-// Actual delivery requires the Apps Script doPost to handle _type=portal_notify
-// (paste-ready handler: docs/custody/apps_script_custody_email_SETUP.md).
-export function custodyEmailEnabled(): boolean {
-  return process.env.CUSTODY_EMAIL_ALERTS_ENABLED !== "false";
-}
-function emailEndpoint(): string {
-  return process.env.PORTAL_NOTIFY_ENDPOINT || SHEETS_ENDPOINT || "";
-}
-function publicBase(): string {
-  return (process.env.PORTAL_PUBLIC_URL || "https://www.kianmedia.com").replace(/\/+$/, "");
-}
-
+// ─── Email relay ───
 const EVENT_SUBJECTS: Record<string, string> = {
   custody_checkout_new:       "عهدة جديدة — كيان",
   rental_request_new:         "طلب تأجير معدات جديد — كيان",
+  rental_quote_request_new:   "طلب عرض سعر تأجير معدات — كيان",
   custody_return_submitted:   "إرجاع عهدة بانتظار المراجعة — كيان",
   custody_return_shortage:    "⚠ بلاغ نقص/تلف في إرجاع عهدة — كيان",
   custody_handover_approved:  "اعتماد تسليم معدات — كيان",
@@ -91,24 +100,36 @@ const EVENT_SUBJECTS: Record<string, string> = {
   custody_claim_acknowledged: "توقيع تعهد سداد مطالبة — كيان",
 };
 
-/** Fire-and-forget email to admins/custody-officer + the party. Never throws. */
-export async function sendCustodyEmail(input: CustodyEventPayload & { recipients: string[] }): Promise<void> {
+/** POSTs the portal_notify email payload. ALWAYS logs the outcome. */
+export async function sendCustodyEmail(input: CustodyEventPayload & { recipients: string[] }):
+  Promise<{ sent: boolean; reason?: string }> {
+  const record = input.record_no || input.reference || input.record_id;
+  if (!custodyEmailEnabled()) {
+    log("custody_email_skipped", { reason: "disabled", event: input.event, record });
+    return { sent: false, reason: "disabled" };
+  }
+  const url = emailEndpoint();
+  if (!url.startsWith("https://")) {
+    log("custody_email_skipped", { reason: "no_endpoint", event: input.event, record, has_endpoint: false, runtime_env: runtimeEnv() });
+    return { sent: false, reason: "no_endpoint" };
+  }
+  const to = Array.from(new Set(input.recipients.filter((e) => e && e.includes("@"))));
+  log("custody_email_attempt", {
+    event: input.event, record, recipient_count: to.length,
+    has_endpoint: true, endpoint_host: emailEndpointHost(),
+    email_enabled: true, runtime_env: runtimeEnv(),
+  });
   try {
-    if (!custodyEmailEnabled()) return;
-    const to = Array.from(new Set(input.recipients.filter((e) => e && e.includes("@"))));
-    if (to.length === 0) return;
-    const url = emailEndpoint();
-    if (!url.startsWith("https://")) return;
-    await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         _type: "portal_notify",
-        Event: input.event,
+        To: to.join(","),                                   // فارغة ⇒ سكربت Apps يستخدم بريده الاحتياطي
         Subject: EVENT_SUBJECTS[input.event] || "تحديث عهدة/تأجير — كيان",
-        To: to.join(","),
-        "Record No": input.record_no ?? "",
-        Kind: input.kind === "rental" ? "تأجير خارجي" : "عهدة داخلية",
+        Event: input.event,
+        Record: record ?? "",
+        Kind: input.kind === "rental" ? "تأجير خارجي" : input.kind === "custody" ? "عهدة داخلية" : "",
         Party: input.party_name ?? "",
         Amount: input.amount != null ? `${input.amount} SAR` : "",
         Urgent: input.urgent ? "URGENT" : "",
@@ -116,8 +137,16 @@ export async function sendCustodyEmail(input: CustodyEventPayload & { recipients
         Link: `${publicBase()}/client-portal/equipment`,
       }),
       cache: "no-store",
+      redirect: "follow",                                    // Apps Script /exec يعيد توجيه 302
     });
-  } catch {
-    /* email failure must never block the business action */
+    if (res.ok || res.status === 302) {
+      log("custody_email_success", { event: input.event, record, http_status: res.status, recipient_count: to.length });
+      return { sent: true };
+    }
+    log("custody_email_failed", { event: input.event, record, http_status: res.status });
+    return { sent: false, reason: `http_${res.status}` };
+  } catch (e) {
+    log("custody_email_failed", { event: input.event, record, error: String(e).slice(0, 200) });
+    return { sent: false, reason: "network" };
   }
 }

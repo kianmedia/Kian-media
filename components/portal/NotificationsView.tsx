@@ -12,7 +12,7 @@ import { useI18n } from "@/lib/i18n";
 import { listNotifications, markRead, markAllRead } from "@/lib/portal/notifications";
 import type { NotificationRow, NotificationType } from "@/lib/portal/types";
 
-const TYPE_LABEL: Record<NotificationType, { ar: string; en: string }> = {
+const TYPE_LABEL: Partial<Record<NotificationType, { ar: string; en: string }>> = {
   quote_request_new:           { ar: "طلب عرض سعر", en: "Quote Request" },
   message_new:                 { ar: "رسالة",        en: "Message" },
   file_link_new:               { ar: "ملف / رابط",   en: "File / Link" },
@@ -24,6 +24,17 @@ const TYPE_LABEL: Record<NotificationType, { ar: string; en: string }> = {
   project_status_changed:      { ar: "تحديث حالة المشروع", en: "Project Status" },
   opportunity_new:             { ar: "طلب فرصة جديد", en: "New Opportunity" },
   whatsapp_new:                { ar: "رسالة واتساب", en: "WhatsApp" },
+  // العهدة والتأجير
+  custody_checkout_new:        { ar: "عهدة جديدة",         en: "New Custody" },
+  rental_request_new:          { ar: "طلب تأجير معدات",    en: "Rental Request" },
+  custody_return_submitted:    { ar: "إرجاع عهدة",         en: "Custody Return" },
+  custody_return_shortage:     { ar: "⚠ بلاغ نقص/تلف",     en: "⚠ Shortage/Damage" },
+  custody_handover_approved:   { ar: "اعتماد تسليم معدات", en: "Handover Approved" },
+  custody_closed:              { ar: "إقفال عهدة",         en: "Custody Closed" },
+  custody_rejected:            { ar: "رفض طلب عهدة",       en: "Custody Rejected" },
+  custody_note_new:            { ar: "ملاحظة على عهدة",    en: "Custody Note" },
+  custody_claim_pending:       { ar: "⚠ مطالبة مالية",     en: "⚠ Financial Claim" },
+  custody_claim_acknowledged:  { ar: "توقيع تعهد سداد",    en: "Pledge Signed" },
 };
 
 /** Where a notification links to, from entity_type/entity_id (exact when possible). */
@@ -37,6 +48,7 @@ function routeFor(n: NotificationRow): string | null {
     case "deliverable":    return "/client-portal/projects";   // exact project needs a resolve → section
     case "project_note":   return "/client-portal/projects";
     case "opportunity":    return "/client-portal/opportunities";
+    case "custody_record": return "/client-portal/equipment";
     case "whatsapp_conversation": return id ? `/client-portal/admin/whatsapp?conversation=${id}` : "/client-portal/admin/whatsapp";
     default:               return null;
   }
@@ -49,6 +61,7 @@ function sectionLabel(n: NotificationRow): { ar: string; en: string } | null {
     case "message":       return { ar: "فتح الرسائل", en: "Open Messages" };
     case "file_link":     return { ar: "فتح الملفات", en: "Open Files" };
     case "opportunity":   return { ar: "فتح مركز الفرص", en: "Open Opportunities" };
+    case "custody_record": return { ar: "فتح العهدة والتأجير", en: "Open Custody & Rental" };
     case "whatsapp_conversation": return n.entity_id
       ? { ar: "فتح المحادثة", en: "Open Conversation" }
       : { ar: "فتح صندوق واتساب", en: "Open WhatsApp Inbox" };
