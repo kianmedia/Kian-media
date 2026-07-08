@@ -10,12 +10,14 @@ import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
-  hrMyProfile, myTodayAttendance, listMyAttendance, listMyLeaves, listMyAssignments,
-  listTasksByIds, listMyVisibleEvents, hrCheckIn, hrCheckOut, hrSubmitLeave, hrCancelMyLeave,
-  hrStartTask, hrCompleteTask, getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent, mapsLink,
+  hrMyProfile, listMyRecentSessions, findOpenSession, listMyAttendance, listMyLeaves,
+  listMyAssignments, listTasksByIds, listMyVisibleEvents, hrCheckIn, hrCheckOut,
+  hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
+  getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent,
   CONSENT_TEXT, LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
+  TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
   type HrMyProfile, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
-  type HrEvent, type LeaveType, type GeoFix,
+  type HrEvent, type LeaveType,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 
@@ -35,6 +37,9 @@ function todayRiyadh(): string {
   // yyyy-mm-dd بتوقيت الرياض (يطابق hr_today() في القاعدة)
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh" }).format(new Date());
 }
+function daysAgoRiyadh(n: number): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh" }).format(new Date(Date.now() - n * 86400000));
+}
 const fmtTime = (iso: string | null, isAr: boolean) =>
   iso ? new Date(iso).toLocaleTimeString(isAr ? "ar-SA" : "en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
 
@@ -44,7 +49,8 @@ export default function EmployeeHome() {
   const uid = profile.id;
 
   const [me, setMe] = useState<HrMyProfile | null>(null);
-  const [today, setToday] = useState<HrAttendance | null>(null);
+  const [sessions, setSessions] = useState<HrAttendance[]>([]);
+  const [leaveEnabled, setLeaveEnabled] = useState(false);
   const [attendance, setAttendance] = useState<HrAttendance[]>([]);
   const [leaves, setLeaves] = useState<HrLeave[]>([]);
   const [assignments, setAssignments] = useState<HrAssignee[]>([]);
@@ -61,13 +67,15 @@ export default function EmployeeHome() {
     const prof = await hrMyProfile();
     if (!prof.ok) { setErrDetail(prof.error); setPhase("error"); return; }
     setMe(prof.data);
-    const [att, todayR, lv, asg, ev, cu] = await Promise.all([
-      listMyAttendance(14), myTodayAttendance(uid, todayRiyadh()), listMyLeaves(),
+    const [att, ses, st, lv, asg, ev, cu] = await Promise.all([
+      listMyAttendance(20), listMyRecentSessions(uid, daysAgoRiyadh(1)), hrGetSettings(), listMyLeaves(),
       listMyAssignments(uid), listMyVisibleEvents(uid),
       listMyCustodyRecords("custody", uid),
     ]);
     if (att.ok) setAttendance(att.data);
-    if (todayR.ok) setToday(todayR.data);
+    if (ses.ok) setSessions(ses.data);
+    // فشل قراءة الإعدادات (قبل تشغيل PATCH مثلاً) ⇒ يبقى قسم الإجازات مخفيًا (الافتراضي الآمن).
+    setLeaveEnabled(st.ok && st.data.employee_leave_requests_enabled === true);
     if (lv.ok) setLeaves(lv.data);
     if (ev.ok) setEvents(ev.data);
     if (cu.ok) setCustody(cu.data);
@@ -94,8 +102,9 @@ export default function EmployeeHome() {
     const r = kind === "in" ? await hrCheckIn(pos.data) : await hrCheckOut(pos.data);
     setBusy(false);
     if (!r.ok) {
-      const msg = /already_checked_in/.test(r.error) ? t({ ar: "سجّلت حضورك مسبقًا اليوم.", en: "Already checked in today." })
-        : /no_open_check_in/.test(r.error) ? t({ ar: "لا يوجد حضور مفتوح لتسجيل الانصراف.", en: "No open check-in." })
+      const msg = /session_already_open|already_checked_in/.test(r.error)
+        ? t({ ar: "لديك جلسة حضور مفتوحة — سجّل الانصراف أولاً ثم يمكنك تسجيل حضور جديد.", en: "You have an open session — check out first." })
+        : /no_open_check_in/.test(r.error) ? t({ ar: "لا توجد جلسة حضور مفتوحة لتسجيل الانصراف.", en: "No open check-in session." })
         : (t({ ar: "تعذّر: ", en: "Failed: " })) + r.error;
       flash(msg); return;
     }
@@ -106,8 +115,8 @@ export default function EmployeeHome() {
       employee_name: me?.full_name || "",
     });
     await reload();
-    flash(kind === "in" ? t({ ar: "سُجّل حضورك — يومًا موفقًا!", en: "Checked in — have a great day!" })
-      : t({ ar: "سُجّل انصرافك — شكراً لجهدك اليوم.", en: "Checked out — thank you for today." }));
+    flash(kind === "in" ? t({ ar: "فُتحت جلسة حضور جديدة — يومًا موفقًا!", en: "New session opened — have a great day!" })
+      : t({ ar: "أُغلقت الجلسة وسُجّل انصرافك — شكراً لجهدك.", en: "Session closed — thank you." }));
   }
 
   // ─── المهام ───
@@ -131,12 +140,18 @@ export default function EmployeeHome() {
 
   async function doCompleteTask(a: HrAssignee) {
     if (readOnly || busy) return;
+    // صورة واحدة على الأقل إلزامية لتسليم المهمة (والقاعدة تفرضها أيضًا).
+    const files = taskFiles[a.task_id] ?? [];
+    if (files.length === 0) {
+      emitHrEvent({ event: "hr_task_completion_photo_required", entity_id: a.task_id, employee_name: me?.full_name || "" });
+      flash(t({ ar: "لا يمكن إنهاء المهمة بدون صورة — أضف صورة واحدة على الأقل من موقع التنفيذ ثم أعد المحاولة.", en: "At least one photo is required to complete the task." }));
+      return;
+    }
     setBusy(true);
     const pos = await getPositionOnce();
     if (!pos.ok) { setBusy(false); flash(t(GEO_ERR[pos.error] ?? { ar: "تعذّر تحديد الموقع.", en: "Location failed." })); return; }
-    // ارفع الصور الاختيارية أولاً — مفتاح فريد لكل محاولة (لا سياسة update على
+    // ارفع الصور أولاً — مفتاح فريد لكل محاولة (لا سياسة update على
     // التخزين، فإعادة المحاولة بنفس المسار سترفض؛ المفتاح الفريد يحل ذلك).
-    const files = taskFiles[a.task_id] ?? [];
     const attempt = Date.now().toString(36);
     const paths: string[] = [];
     for (let j = 0; j < files.length; j++) {
@@ -147,7 +162,12 @@ export default function EmployeeHome() {
     }
     const r = await hrCompleteTask(a.task_id, pos.data, (taskNote[a.task_id] || "").trim(), paths);
     setBusy(false);
-    if (!r.ok) { flash((t({ ar: "تعذّر إنهاء المهمة: ", en: "Couldn't complete: " })) + r.error); return; }
+    if (!r.ok) {
+      const msg = /completion_photo_required/.test(r.error)
+        ? t({ ar: "لا يمكن إنهاء المهمة بدون صورة واحدة على الأقل.", en: "A photo is required to complete the task." })
+        : (t({ ar: "تعذّر إنهاء المهمة: ", en: "Couldn't complete: " })) + r.error;
+      flash(msg); return;
+    }
     emitHrEvent({ event: "hr_task_submitted", entity_id: a.task_id, title: "تسليم مهمة: " + (tasks[a.task_id]?.title || ""), employee_name: me?.full_name || "" });
     setTaskNote((p) => ({ ...p, [a.task_id]: "" }));
     setTaskFiles((p) => ({ ...p, [a.task_id]: [] }));
@@ -171,7 +191,12 @@ export default function EmployeeHome() {
       reason: lv.reason.trim(),
     });
     setBusy(false);
-    if (!r.ok) { flash((t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error); return; }
+    if (!r.ok) {
+      const msg = /leave_requests_disabled/.test(r.error)
+        ? t({ ar: "طلبات الإجازة/الإذن غير مفعّلة حاليًا — تواصل مع الإدارة.", en: "Leave requests are currently disabled — contact management." })
+        : (t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error;
+      flash(msg); return;
+    }
     emitHrEvent({ event: "hr_leave_new", entity_id: r.data.id, title: "طلب إجازة/إذن جديد من " + (me?.full_name || ""), employee_name: me?.full_name || "" });
     setLv({ type: "annual", start: "", end: "", startTime: "", endTime: "", reason: "" });
     await reload();
@@ -192,7 +217,9 @@ export default function EmployeeHome() {
     </div>
   );
 
-  const status = !today?.check_in_at ? "none" : !today?.check_out_at ? "in" : "out";
+  const todayStr = todayRiyadh();
+  const todaySessions = sessions.filter((s) => s.work_date === todayStr).slice().reverse(); // زمنيًا تصاعديًا
+  const openSession = findOpenSession(sessions);
   const myOpenTasks = assignments.filter((a) => a.status === "assigned" || a.status === "in_progress");
   const openCustody = custody.filter((c) => !["closed", "rejected"].includes(c.status));
 
@@ -203,34 +230,42 @@ export default function EmployeeHome() {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <h2 className="text-base font-medium text-stone-100">{t({ ar: "لوحة اليوم", en: "Today" })}</h2>
           <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
-            status === "in" ? "bg-emerald-950 text-emerald-300 border-emerald-800"
-            : status === "out" ? "bg-stone-800 text-stone-300 border-stone-700"
+            openSession ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+            : todaySessions.length > 0 ? "bg-stone-800 text-stone-300 border-stone-700"
             : "bg-amber-950 text-amber-300 border-amber-800"}`}>
-            {status === "in" ? t({ ar: "حاضر", en: "Present" }) : status === "out" ? t({ ar: "منصرف", en: "Checked out" }) : t({ ar: "لم يسجّل حضور", en: "Not checked in" })}
+            {openSession ? t({ ar: "حاضر — جلسة مفتوحة", en: "Present — open session" })
+              : todaySessions.length > 0 ? t({ ar: "منصرف", en: "Checked out" })
+              : t({ ar: "لم يسجّل حضور", en: "Not checked in" })}
           </span>
-          <span className="ms-auto font-mono text-xs text-stone-500" dir="ltr">{todayRiyadh()}</span>
+          <span className="ms-auto font-mono text-xs text-stone-500" dir="ltr">{todayStr}</span>
         </div>
         <div className="grid grid-cols-2 gap-2 mb-3">
-          <button type="button" disabled={busy || readOnly || status !== "none"} onClick={() => void doAttendance("in")}
+          <button type="button" disabled={busy || readOnly || !!openSession} onClick={() => void doAttendance("in")}
             className={`${btnRed} py-3.5 text-base`}>
             {busy ? "…" : t({ ar: "تسجيل حضور", en: "Check in" })}
           </button>
-          <button type="button" disabled={busy || readOnly || status !== "in"} onClick={() => void doAttendance("out")}
-            className={`${btnGhost} py-3.5 text-base ${status === "in" ? "border-red-800 text-red-300" : ""}`}>
+          <button type="button" disabled={busy || readOnly || !openSession} onClick={() => void doAttendance("out")}
+            className={`${btnGhost} py-3.5 text-base ${openSession ? "border-red-800 text-red-300" : ""}`}>
             {busy ? "…" : t({ ar: "تسجيل انصراف", en: "Check out" })}
           </button>
         </div>
-        <div className="text-[11px] font-mono text-stone-500 space-y-0.5">
-          <div>{t({ ar: "الحضور", en: "In" })}: {fmtTime(today?.check_in_at ?? null, isAr)}
-            {today?.check_in_lat != null && mapsLink(today.check_in_lat, today.check_in_lng) && (
-              <> • <a className="text-sky-400 underline" href={mapsLink(today.check_in_lat, today.check_in_lng)!} target="_blank" rel="noopener noreferrer">{t({ ar: "الموقع", en: "Location" })}</a></>
-            )}
+        {/* جلسات اليوم — أوقات فقط. لا روابط/إحداثيات موقع هنا: تظهر للإدارة فقط. */}
+        <div className="text-[11px] text-stone-500 space-y-1">
+          <div className="text-stone-400 font-medium">
+            {t({ ar: "جلسات اليوم", en: "Today's sessions" })} ({todaySessions.length})
           </div>
-          <div>{t({ ar: "الانصراف", en: "Out" })}: {fmtTime(today?.check_out_at ?? null, isAr)}
-            {today?.check_out_lat != null && mapsLink(today.check_out_lat, today.check_out_lng) && (
-              <> • <a className="text-sky-400 underline" href={mapsLink(today.check_out_lat, today.check_out_lng)!} target="_blank" rel="noopener noreferrer">{t({ ar: "الموقع", en: "Location" })}</a></>
-            )}
-          </div>
+          {todaySessions.length === 0 && <div className="font-mono">—</div>}
+          {todaySessions.map((s, i) => (
+            <div key={s.id} className="flex items-center gap-2 flex-wrap font-mono">
+              <span className="text-stone-600">#{i + 1}</span>
+              <span>{t({ ar: "حضور", en: "In" })} {fmtTime(s.check_in_at, isAr)}</span>
+              <span>
+                {t({ ar: "انصراف", en: "Out" })}{" "}
+                {s.check_out_at ? fmtTime(s.check_out_at, isAr)
+                  : <span className="text-emerald-400 font-sans">{t({ ar: "جلسة مفتوحة", en: "open" })}</span>}
+              </span>
+            </div>
+          ))}
         </div>
         <p className="mt-3 text-[11px] text-stone-500 leading-relaxed border-t border-stone-800 pt-2">
           🔒 {t(CONSENT_TEXT)}
@@ -253,9 +288,43 @@ export default function EmployeeHome() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-medium text-stone-100">{tk?.title || "—"}</span>
                   <span className="inline-block rounded-full border border-stone-700 bg-stone-800 px-2 py-0.5 text-[10.5px] text-stone-300">{t(st)}</span>
-                  {tk?.location_name && <span className="text-[11px] text-stone-500">📍 {tk.location_name}</span>}
+                  {tk?.task_type && (
+                    <span className="inline-block rounded-full border border-stone-700 bg-stone-800 px-2 py-0.5 text-[10.5px] text-sky-300">
+                      {t(TASK_TYPE_LABELS[tk.task_type] ?? { ar: tk.task_type, en: tk.task_type })}
+                    </span>
+                  )}
+                  {tk?.priority && tk.priority !== "normal" && (
+                    <span className={`inline-block rounded-full border px-2 py-0.5 text-[10.5px] ${
+                      tk.priority === "urgent" ? "bg-red-950 text-red-300 border-red-800"
+                      : tk.priority === "high" ? "bg-amber-950 text-amber-300 border-amber-800"
+                      : "bg-stone-800 text-stone-400 border-stone-700"}`}>
+                      {t(TASK_PRIORITY_LABELS[tk.priority] ?? { ar: tk.priority, en: tk.priority })}
+                    </span>
+                  )}
                 </div>
+                {(tk?.client_name || tk?.project_name || tk?.city || tk?.location_name) && (
+                  <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-stone-400">
+                    {tk?.client_name && <span>{t({ ar: "العميل: ", en: "Client: " })}<span className="text-stone-300">{tk.client_name}</span></span>}
+                    {tk?.project_name && <span>{t({ ar: "المشروع: ", en: "Project: " })}<span className="text-stone-300">{tk.project_name}</span></span>}
+                    {tk?.city && <span>{t({ ar: "المدينة: ", en: "City: " })}<span className="text-stone-300">{tk.city}</span></span>}
+                    {tk?.location_name && <span>📍 {tk.location_name}</span>}
+                    {tk?.maps_url && (
+                      <a className="text-sky-400 underline" href={tk.maps_url} target="_blank" rel="noopener noreferrer">
+                        {t({ ar: "موقع المهمة على الخرائط", en: "Task location on Maps" })}
+                      </a>
+                    )}
+                  </div>
+                )}
                 {tk?.description && <p className="text-xs text-stone-400 leading-relaxed">{tk.description}</p>}
+                {tk?.equipment_needed && (
+                  <p className="text-[11px] text-stone-400">🎥 {t({ ar: "المعدات المطلوبة: ", en: "Equipment: " })}{tk.equipment_needed}</p>
+                )}
+                {tk?.special_requirements && (
+                  <p className="text-[11px] text-amber-300/80">⚠️ {t({ ar: "متطلبات خاصة: ", en: "Special requirements: " })}{tk.special_requirements}</p>
+                )}
+                {tk?.execution_notes && (
+                  <p className="text-[11px] text-stone-400">📝 {t({ ar: "ملاحظات التنفيذ: ", en: "Execution notes: " })}{tk.execution_notes}</p>
+                )}
                 {(tk?.expected_start_at || tk?.expected_end_at) && (
                   <div className="text-[10.5px] font-mono text-stone-500" dir="ltr">
                     {tk?.expected_start_at ? new Date(tk.expected_start_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
@@ -280,10 +349,13 @@ export default function EmployeeHome() {
                       ))}
                       <button type="button" onClick={() => { setPickFor(a.task_id); fileRef.current?.click(); }}
                         className="w-12 h-10 rounded-md border border-dashed border-stone-600 text-stone-400 text-lg">+</button>
-                      <span className="text-[10px] text-stone-500">{t({ ar: "صور (اختياري)", en: "Photos (optional)" })}</span>
+                      <span className="text-[10px] text-stone-500">{t({ ar: "الصور — صورة واحدة على الأقل إلزامية للإنهاء", en: "Photos — at least one is required to complete" })}</span>
                     </div>
                     <button type="button" disabled={busy || readOnly} onClick={() => void doCompleteTask(a)}
                       className={`${btnRed} w-full py-2.5`}>{t({ ar: "إنهاء المهمة (بموقعي الآن)", en: "Complete task (with my location)" })}</button>
+                    {(taskFiles[a.task_id] ?? []).length === 0 && (
+                      <p className="text-[10.5px] text-amber-400/90">{t({ ar: "⚠️ أضف صورة من موقع التنفيذ قبل الإنهاء.", en: "⚠️ Add a photo before completing." })}</p>
+                    )}
                   </div>
                 )}
                 {a.employee_note && a.status !== "in_progress" && (
@@ -302,7 +374,8 @@ export default function EmployeeHome() {
           }} />
       </section>
 
-      {/* ═══ طلباتي ═══ */}
+      {/* ═══ طلباتي — يظهر فقط عندما تفعّله الإدارة (hr_settings) ═══ */}
+      {leaveEnabled && (
       <section className={card}>
         <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "طلباتي (إجازة / إذن)", en: "My requests" })}</h2>
         <div className="space-y-2 mb-4">
@@ -359,6 +432,7 @@ export default function EmployeeHome() {
           ))}
         </div>
       </section>
+      )}
 
       {/* ═══ ملفي + عهدتي + آخر الحضور ═══ */}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -404,7 +478,7 @@ export default function EmployeeHome() {
 
       {/* آخر الحضور */}
       <section className={card}>
-        <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "آخر أيام الحضور", en: "Recent attendance" })}</h2>
+        <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "آخر جلسات الحضور", en: "Recent attendance sessions" })}</h2>
         {attendance.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا سجلات بعد.", en: "No records yet." })}</p>}
         <div className="space-y-1">
           {attendance.map((a) => (

@@ -23,11 +23,14 @@ const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.st
 const EVENTS = new Set([
   "hr_check_in", "hr_check_out", "hr_leave_new", "hr_leave_decided",
   "hr_task_new", "hr_task_started", "hr_task_submitted", "hr_task_closed",
-  "hr_attendance_adjusted", "hr_note_new",
+  "hr_attendance_adjusted", "hr_note_new", "hr_task_updated", "hr_settings_updated",
+  "hr_task_completion_photo_required", // سجل فقط — لا بريد
 ]);
+// أحداث تشخيصية: تُسجَّل في اللوجز ولا تُرسل بريدًا ولا إشعارًا.
+const LOG_ONLY = new Set(["hr_task_completion_photo_required"]);
 // أحداث تُرسل أيضاً لموظف محدد (قرارات تخصه أو مهام أُسندت له).
 const EMPLOYEE_TARGETED = new Set([
-  "hr_leave_decided", "hr_task_new", "hr_task_closed", "hr_attendance_adjusted", "hr_note_new",
+  "hr_leave_decided", "hr_task_new", "hr_task_updated", "hr_task_closed", "hr_attendance_adjusted", "hr_note_new",
 ]);
 
 /** GET — تشخيص آمن للبيئة المنشورة. */
@@ -72,6 +75,14 @@ export async function POST(req: Request) {
     email_enabled: hrEmailEnabled(), has_endpoint: hrEmailEndpoint().startsWith("https://"),
     service_key_present: adminConfigured(), runtime_env: hrRuntimeEnv(),
   });
+  // جلسات الحضور المتعددة (v2): أثر واضح لكل فتح/إغلاق جلسة في سجلات Vercel.
+  if (event === "hr_check_in") log("hr_attendance_session_opened", { entity_id: entityId, by: me.data[0].id });
+  if (event === "hr_check_out") log("hr_attendance_session_closed", { entity_id: entityId, by: me.data[0].id });
+  if (event === "hr_settings_updated") log("hr_settings_updated", { entity_id: entityId, by: me.data[0].id, title: str(b.title) });
+  if (LOG_ONLY.has(event)) {
+    log(event, { entity_id: entityId, by: me.data[0].id });
+    return NextResponse.json({ ok: true, email: { sent: false, reason: "log_only" }, recipient_count: 0 }, { status: 200 });
+  }
 
   // المستلمون: مجموعة إدارة HR + الموظف المستهدف إن وُجد (قراءة فقط بمفتاح الخدمة).
   const recipients: string[] = [];

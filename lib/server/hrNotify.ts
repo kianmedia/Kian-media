@@ -54,6 +54,8 @@ const EVENT_SUBJECTS: Record<string, string> = {
   hr_task_closed:         "إغلاق مهمة ميدانية — كيان",
   hr_attendance_adjusted: "تعديل إداري على حضور — كيان",
   hr_note_new:            "ملاحظة موارد بشرية جديدة — كيان",
+  hr_task_updated:        "تحديث مهمة ميدانية — كيان",
+  hr_settings_updated:    "تحديث إعدادات الموارد البشرية — كيان",
 };
 
 /** POSTs the portal_notify email payload. ALWAYS logs the outcome. */

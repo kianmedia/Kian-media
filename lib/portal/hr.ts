@@ -18,6 +18,8 @@ export type EmploymentStatus = "active" | "suspended" | "left";
 export type LeaveType = "annual" | "sick" | "emergency" | "unpaid" | "permission" | "late" | "early_exit";
 export type LeaveStatus = "pending" | "approved" | "rejected" | "cancelled";
 export type TaskStatus = "draft" | "assigned" | "in_progress" | "submitted" | "completed" | "cancelled";
+export type TaskType = "photo" | "video" | "drone" | "live_stream" | "editing" | "delivery" | "meeting" | "other";
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type AttendanceStatus = "present" | "late" | "absent" | "half_day" | "manual_adjusted";
 
 export interface HrMyProfile {
@@ -50,10 +52,14 @@ export interface HrLeave {
 }
 export interface HrTask {
   id: string; title: string; description: string | null; location_name: string | null;
+  maps_url: string | null; city: string | null; client_name: string | null; project_name: string | null;
+  task_type: TaskType; priority: TaskPriority;
+  equipment_needed: string | null; special_requirements: string | null; execution_notes: string | null;
   expected_start_at: string | null; expected_end_at: string | null; status: TaskStatus;
   created_by: string | null; approved_by: string | null; approved_at: string | null;
   created_at: string; updated_at: string;
 }
+export interface HrSettings { employee_leave_requests_enabled: boolean; }
 export interface HrAssignee {
   id: string; task_id: string; employee_id: string; user_id: string; status: TaskStatus | "assigned";
   started_at: string | null; ended_at: string | null;
@@ -92,6 +98,22 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, { ar: string; en: string }> 
   completed:   { ar: "مكتملة",           en: "Completed" },
   cancelled:   { ar: "ملغاة",            en: "Cancelled" },
 };
+export const TASK_TYPE_LABELS: Record<TaskType, { ar: string; en: string }> = {
+  photo:       { ar: "تصوير فوتوغرافي", en: "Photo" },
+  video:       { ar: "تصوير فيديو",     en: "Video" },
+  drone:       { ar: "تصوير درون",      en: "Drone" },
+  live_stream: { ar: "بث مباشر",        en: "Live stream" },
+  editing:     { ar: "مونتاج",          en: "Editing" },
+  delivery:    { ar: "تسليم",           en: "Delivery" },
+  meeting:     { ar: "اجتماع",          en: "Meeting" },
+  other:       { ar: "أخرى",            en: "Other" },
+};
+export const TASK_PRIORITY_LABELS: Record<TaskPriority, { ar: string; en: string }> = {
+  low:    { ar: "منخفضة", en: "Low" },
+  normal: { ar: "عادية",  en: "Normal" },
+  high:   { ar: "عالية",  en: "High" },
+  urgent: { ar: "عاجلة",  en: "Urgent" },
+};
 export const CONSENT_TEXT = {
   ar: "يتم استخدام موقعك فقط عند تنفيذ عملية الحضور أو الانصراف أو بداية/نهاية المهمة، ولا يتم تتبعك بشكل مستمر.",
   en: "Your location is used only at check-in, check-out, or task start/end — you are never tracked continuously.",
@@ -120,12 +142,16 @@ export function hrMyProfile(): Promise<Result<HrMyProfile>> {
   return prpc<HrMyProfile>("hr_my_profile", {});
 }
 export function listMyAttendance(limit = 30): Promise<Result<HrAttendance[]>> {
-  return pget<HrAttendance[]>(`hr_attendance_records?select=*&order=work_date.desc&limit=${limit}`);
+  return pget<HrAttendance[]>(`hr_attendance_records?select=*&order=work_date.desc,check_in_at.desc&limit=${limit}`);
 }
-export async function myTodayAttendance(userId: string, today: string): Promise<Result<HrAttendance | null>> {
-  const r = await pget<HrAttendance[]>(`hr_attendance_records?user_id=eq.${enc(userId)}&work_date=eq.${enc(today)}&select=*&limit=1`);
-  if (!r.ok) return r;
-  return { ok: true, data: r.data[0] ?? null };
+/** جلسات اليوم + أمس (لالتقاط جلسة مفتوحة عبر منتصف الليل) — الأحدث أولاً. */
+export function listMyRecentSessions(userId: string, sinceDate: string): Promise<Result<HrAttendance[]>> {
+  return pget<HrAttendance[]>(`hr_attendance_records?user_id=eq.${enc(userId)}&work_date=gte.${enc(sinceDate)}&select=*&order=check_in_at.desc&limit=20`);
+}
+/** الجلسة المفتوحة (حضور بلا انصراف خلال ٢٠ ساعة) — تعكس حارس SQL نفسه. */
+export function findOpenSession(rows: HrAttendance[]): HrAttendance | null {
+  const cutoff = Date.now() - 20 * 3600 * 1000;
+  return rows.find((r) => r.check_in_at && !r.check_out_at && new Date(r.check_in_at).getTime() > cutoff) ?? null;
 }
 export function listMyLeaves(): Promise<Result<HrLeave[]>> {
   return pget<HrLeave[]>(`hr_leave_requests?select=*&order=created_at.desc&limit=50`);
@@ -227,15 +253,42 @@ export function hrAdminAdjustAttendance(recordId: string, input: {
 export function hrAdminDecideLeave(id: string, approve: boolean, note?: string): Promise<Result<boolean>> {
   return prpc<boolean>("hr_admin_decide_leave", { p_id: id, p_approve: approve, p_note: note ?? null });
 }
-export function hrAdminCreateTask(input: {
-  title: string; description?: string; location?: string;
-  expectedStart?: string | null; expectedEnd?: string | null; assignees: string[];
-}): Promise<Result<{ ok: boolean; id: string; assignees: number }>> {
+export interface HrTaskInput {
+  title: string; description?: string; location?: string; mapsUrl?: string; city?: string;
+  clientName?: string; projectName?: string; taskType?: TaskType; priority?: TaskPriority;
+  equipment?: string; requirements?: string; execNotes?: string;
+  expectedStart?: string | null; expectedEnd?: string | null;
+}
+export function hrAdminCreateTask(input: HrTaskInput & { assignees: string[] }): Promise<Result<{ ok: boolean; id: string; assignees: number }>> {
   return prpc<{ ok: boolean; id: string; assignees: number }>("hr_admin_create_field_task", {
     p_title: input.title, p_description: input.description ?? null, p_location: input.location ?? null,
+    p_maps_url: input.mapsUrl ?? null, p_city: input.city ?? null,
+    p_client_name: input.clientName ?? null, p_project_name: input.projectName ?? null,
+    p_task_type: input.taskType ?? "other", p_priority: input.priority ?? "normal",
+    p_equipment: input.equipment ?? null, p_requirements: input.requirements ?? null,
+    p_exec_notes: input.execNotes ?? null,
     p_expected_start: input.expectedStart ?? null, p_expected_end: input.expectedEnd ?? null,
     p_assignees: input.assignees,
   });
+}
+/** الحقول المرسلة قيم نهائية: undefined/فارغ ⇒ مسح الحقل في القاعدة (النموذج يرسل كل الحقول). */
+export function hrAdminUpdateTask(taskId: string, input: HrTaskInput): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_update_field_task", {
+    p_task: taskId,
+    p_title: input.title, p_description: input.description ?? null, p_location: input.location ?? null,
+    p_maps_url: input.mapsUrl ?? null, p_city: input.city ?? null,
+    p_client_name: input.clientName ?? null, p_project_name: input.projectName ?? null,
+    p_task_type: input.taskType ?? null, p_priority: input.priority ?? null,
+    p_equipment: input.equipment ?? null, p_requirements: input.requirements ?? null,
+    p_exec_notes: input.execNotes ?? null,
+    p_expected_start: input.expectedStart ?? null, p_expected_end: input.expectedEnd ?? null,
+  });
+}
+export function hrGetSettings(): Promise<Result<HrSettings>> {
+  return prpc<HrSettings>("hr_get_settings", {});
+}
+export function hrAdminUpdateSettings(leaveEnabled: boolean): Promise<Result<{ ok: boolean; employee_leave_requests_enabled: boolean }>> {
+  return prpc<{ ok: boolean; employee_leave_requests_enabled: boolean }>("hr_admin_update_settings", { p_leave_enabled: leaveEnabled });
 }
 export function hrAdminCloseTask(taskId: string, action: "complete" | "cancel", note?: string): Promise<Result<boolean>> {
   return prpc<boolean>("hr_admin_close_task", { p_task: taskId, p_action: action, p_note: note ?? null });

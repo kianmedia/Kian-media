@@ -11,11 +11,13 @@ import { usePortal } from "@/components/portal/PortalShell";
 import {
   hrListEmployees, hrListAttendance, hrListLeaves, hrListTasks, hrListAssignees,
   hrListEmployeeEvents, hrAdminListStaff, hrAdminUpsertEmployee, hrOwnerDeleteEmployee,
-  hrAdminAdjustAttendance, hrAdminDecideLeave, hrAdminCreateTask, hrAdminCloseTask,
-  hrAdminAddEmployeeEvent, emitHrEvent, mapsLink,
-  LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
+  hrAdminAdjustAttendance, hrAdminDecideLeave, hrAdminCreateTask, hrAdminUpdateTask,
+  hrAdminCloseTask, hrAdminAddEmployeeEvent, hrGetSettings, hrAdminUpdateSettings,
+  emitHrEvent, mapsLink,
+  LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS, TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
   type HrEmployee, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
   type HrEvent, type HrStaffOption, type EmploymentStatus, type AttendanceStatus,
+  type TaskType, type TaskPriority,
 } from "@/lib/portal/hr";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
@@ -31,6 +33,13 @@ const fmtDT = (iso: string | null, isAr: boolean) =>
   iso ? new Date(iso).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : "—";
 const fmtT = (iso: string | null, isAr: boolean) =>
   iso ? new Date(iso).toLocaleTimeString(isAr ? "ar-SA" : "en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
+const toLocalInput = (iso: string | null) => {
+  // ISO → قيمة datetime-local بالمنطقة المحلية (لتعبئة نموذج التعديل)
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 
 type Tab = "overview" | "employees" | "attendance" | "leaves" | "tasks";
 
@@ -54,14 +63,15 @@ export default function HrAdminConsole() {
   const [attUser, setAttUser] = useState("");
   // عدّادات النظرة العامة تُحسب من جلبة "اليوم" المستقلة — لا تتأثر بفلتر تبويب الحضور.
   const [todayAttendance, setTodayAttendance] = useState<HrAttendance[]>([]);
+  const [leaveEnabled, setLeaveEnabled] = useState(false);
 
   const reload = useCallback(async () => {
     const td = todayRiyadh();
-    const [emp, st, att, tdAtt, lv, tk] = await Promise.all([
+    const [emp, st, att, tdAtt, lv, tk, cfg] = await Promise.all([
       hrListEmployees(), hrAdminListStaff(),
       hrListAttendance(attFrom, attTo, attUser || undefined),
       hrListAttendance(td, td),
-      hrListLeaves(), hrListTasks(),
+      hrListLeaves(), hrListTasks(), hrGetSettings(),
     ]);
     if (!emp.ok) { setPhase("error"); return; }
     setEmployees(emp.data);
@@ -70,6 +80,7 @@ export default function HrAdminConsole() {
     if (tdAtt.ok) setTodayAttendance(tdAtt.data);
     if (lv.ok) setLeaves(lv.data);
     if (tk.ok) setTasks(tk.data);
+    if (cfg.ok) setLeaveEnabled(cfg.data.employee_leave_requests_enabled === true);
     setPhase("ready");
   }, [attFrom, attTo, attUser]);
   useEffect(() => { void reload(); }, [reload]);
@@ -82,9 +93,10 @@ export default function HrAdminConsole() {
   const empName = (userId: string) => byUser[userId]?.full_name || userId.slice(0, 8);
 
   // ─── نظرة عامة (من جلبة اليوم المستقلة) ───
+  // v2: جلسات متعددة لكل موظف يوميًا — نعدّ الموظفين المميزين لا الصفوف.
   const activeCount = employees.filter((e) => e.employment_status === "active").length;
-  const presentNow = todayAttendance.filter((a) => a.check_in_at && !a.check_out_at).length;
-  const checkedToday = todayAttendance.filter((a) => a.check_in_at).length;
+  const presentNow = new Set(todayAttendance.filter((a) => a.check_in_at && !a.check_out_at).map((a) => a.user_id)).size;
+  const checkedToday = new Set(todayAttendance.filter((a) => a.check_in_at).map((a) => a.user_id)).size;
   const pendingLeaves = leaves.filter((l) => l.status === "pending");
   const openTasks = tasks.filter((x) => ["assigned", "in_progress", "submitted"].includes(x.status));
 
@@ -164,26 +176,88 @@ export default function HrAdminConsole() {
     flash(approve ? t({ ar: "اعتُمد الطلب.", en: "Approved." }) : t({ ar: "رُفض الطلب.", en: "Rejected." }));
   }
 
-  // ─── المهام ───
-  const [tf, setTf] = useState({ title: "", desc: "", location: "", start: "", end: "", assignees: [] as string[] });
-  const [openTask, setOpenTask] = useState<string | null>(null);
-  async function createTask() {
-    if (!tf.title.trim()) { flash(t({ ar: "عنوان المهمة مطلوب.", en: "Title required." })); return; }
-    if (tf.assignees.length === 0) { flash(t({ ar: "اختر موظفاً واحداً على الأقل.", en: "Pick at least one employee." })); return; }
+  // ─── إعدادات HR: إظهار طلبات الإجازة/الإذن للموظفين ───
+  async function toggleLeaveSetting() {
+    if (busy) return;
     setBusy(true);
-    const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
-    const r = await hrAdminCreateTask({
+    const next = !leaveEnabled;
+    const r = await hrAdminUpdateSettings(next);
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر تحديث الإعداد: ", en: "Couldn't update setting: " })) + r.error); return; }
+    setLeaveEnabled(r.data.employee_leave_requests_enabled === true);
+    emitHrEvent({
+      event: "hr_settings_updated", entity_id: "hr-settings-1",
+      title: next ? "تفعيل طلبات الإجازة/الإذن للموظفين" : "إيقاف طلبات الإجازة/الإذن للموظفين",
+    });
+    flash(next ? t({ ar: "فُعّلت طلبات الإجازة — القسم يظهر الآن للموظفين.", en: "Leave requests enabled." })
+      : t({ ar: "أُوقفت طلبات الإجازة — القسم مخفي عن الموظفين.", en: "Leave requests disabled." }));
+  }
+
+  // ─── المهام ───
+  const emptyTf = {
+    title: "", desc: "", location: "", mapsUrl: "", city: "", clientName: "", projectName: "",
+    taskType: "photo" as TaskType, priority: "normal" as TaskPriority,
+    equipment: "", requirements: "", execNotes: "", start: "", end: "", assignees: [] as string[],
+  };
+  const [tf, setTf] = useState(emptyTf);
+  const [tfId, setTfId] = useState<string | null>(null); // ≠ null ⇒ وضع تعديل مهمة قائمة
+  const [openTask, setOpenTask] = useState<string | null>(null);
+  async function saveTask() {
+    if (!tf.title.trim()) { flash(t({ ar: "عنوان المهمة مطلوب.", en: "Title required." })); return; }
+    if (!tfId && tf.assignees.length === 0) { flash(t({ ar: "اختر موظفاً واحداً على الأقل.", en: "Pick at least one employee." })); return; }
+    setBusy(true);
+    const base = {
       title: tf.title.trim(), description: tf.desc.trim() || undefined, location: tf.location.trim() || undefined,
+      mapsUrl: tf.mapsUrl.trim() || undefined, city: tf.city.trim() || undefined,
+      clientName: tf.clientName.trim() || undefined, projectName: tf.projectName.trim() || undefined,
+      taskType: tf.taskType, priority: tf.priority,
+      equipment: tf.equipment.trim() || undefined, requirements: tf.requirements.trim() || undefined,
+      execNotes: tf.execNotes.trim() || undefined,
       expectedStart: tf.start ? new Date(tf.start).toISOString() : null,
       expectedEnd: tf.end ? new Date(tf.end).toISOString() : null,
-      assignees: assignedIds,
-    });
+    };
+    if (tfId) {
+      // تعديل: نجلب المسندين (إن لم يكونوا محمّلين) حتى تصلهم إشعارات التحديث.
+      let ids = (assigneesByTask[tfId] ?? []).map((a) => a.user_id);
+      if (ids.length === 0) {
+        const ar = await hrListAssignees(tfId);
+        if (ar.ok) { setAssigneesByTask((p) => ({ ...p, [tfId]: ar.data })); ids = ar.data.map((a) => a.user_id); }
+      }
+      const r = await hrAdminUpdateTask(tfId, base);
+      setBusy(false);
+      if (!r.ok) {
+        const msg = /task_not_editable/.test(r.error)
+          ? t({ ar: "لا يمكن تعديل مهمة مُسلّمة أو مغلقة.", en: "Submitted/closed tasks can't be edited." })
+          : (t({ ar: "تعذّر التعديل: ", en: "Couldn't update: " })) + r.error;
+        flash(msg); return;
+      }
+      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(), employee_user_ids: ids });
+      setTf(emptyTf); setTfId(null);
+      await reload();
+      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون بالتحديث.", en: "Task updated & assignees notified." }));
+      return;
+    }
+    const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
+    const r = await hrAdminCreateTask({ ...base, assignees: assignedIds });
     setBusy(false);
     if (!r.ok) { flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
     emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(), employee_user_ids: assignedIds });
-    setTf({ title: "", desc: "", location: "", start: "", end: "", assignees: [] });
+    setTf(emptyTf);
     await reload();
     flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون.", en: "Task created & assignees notified." }));
+  }
+  function startEditTask(tk: HrTask) {
+    setTfId(tk.id);
+    setTf({
+      title: tk.title, desc: tk.description || "", location: tk.location_name || "",
+      mapsUrl: tk.maps_url || "", city: tk.city || "",
+      clientName: tk.client_name || "", projectName: tk.project_name || "",
+      taskType: (tk.task_type || "other") as TaskType, priority: (tk.priority || "normal") as TaskPriority,
+      equipment: tk.equipment_needed || "", requirements: tk.special_requirements || "",
+      execNotes: tk.execution_notes || "",
+      start: toLocalInput(tk.expected_start_at), end: toLocalInput(tk.expected_end_at), assignees: [],
+    });
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
   async function closeTask(tk: HrTask, action: "complete" | "cancel") {
     setBusy(true);
@@ -235,20 +309,46 @@ export default function HrAdminConsole() {
 
       {/* ═══ نظرة عامة ═══ */}
       {tab === "overview" && (
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
-          {[
-            { l: t({ ar: "موظفون نشطون", en: "Active staff" }), v: activeCount },
-            { l: t({ ar: "سجّلوا حضوراً اليوم", en: "Checked in today" }), v: `${checkedToday}/${activeCount}` },
-            { l: t({ ar: "حاضرون الآن", en: "Present now" }), v: presentNow },
-            { l: t({ ar: "إجازات معلّقة", en: "Pending leaves" }), v: pendingLeaves.length },
-            { l: t({ ar: "مهام مفتوحة", en: "Open tasks" }), v: openTasks.length },
-            { l: t({ ar: "لم يسجّلوا اليوم", en: "Not checked in" }), v: Math.max(activeCount - checkedToday, 0) },
-          ].map((c, i) => (
-            <div key={i} className={card + " text-center"}>
-              <div className="text-2xl font-bold text-white">{c.v}</div>
-              <div className="text-[11px] text-stone-500 mt-1">{c.l}</div>
+        <div className="space-y-4">
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+            {[
+              { l: t({ ar: "موظفون نشطون", en: "Active staff" }), v: activeCount },
+              { l: t({ ar: "سجّلوا حضوراً اليوم", en: "Checked in today" }), v: `${checkedToday}/${activeCount}` },
+              { l: t({ ar: "حاضرون الآن", en: "Present now" }), v: presentNow },
+              { l: t({ ar: "إجازات معلّقة", en: "Pending leaves" }), v: pendingLeaves.length },
+              { l: t({ ar: "مهام مفتوحة", en: "Open tasks" }), v: openTasks.length },
+              { l: t({ ar: "لم يسجّلوا اليوم", en: "Not checked in" }), v: Math.max(activeCount - checkedToday, 0) },
+            ].map((c, i) => (
+              <div key={i} className={card + " text-center"}>
+                <div className="text-2xl font-bold text-white">{c.v}</div>
+                <div className="text-[11px] text-stone-500 mt-1">{c.l}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* إعدادات الموارد البشرية */}
+          <section className={card}>
+            <h3 className="text-sm font-medium text-stone-100 mb-2">{t({ ar: "إعدادات الموارد البشرية", en: "HR settings" })}</h3>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button type="button" disabled={busy} onClick={() => void toggleLeaveSetting()}
+                className={`relative rounded-full transition-colors ${leaveEnabled ? "bg-red-600" : "bg-stone-700"} disabled:opacity-50`}
+                style={{ width: 48, height: 26 }} aria-pressed={leaveEnabled}>
+                <span className="absolute rounded-full bg-white transition-all"
+                  style={{ width: 22, height: 22, top: 2, insetInlineStart: leaveEnabled ? 24 : 2 }} />
+              </button>
+              <div className="flex-1 min-w-[200px]">
+                <div className="text-sm text-stone-200">{t({ ar: "إظهار طلبات الإجازة/الإذن للموظفين", en: "Show leave/permission requests to employees" })}</div>
+                <div className="text-[11px] text-stone-500 mt-0.5">
+                  {leaveEnabled
+                    ? t({ ar: "مفعّل — يظهر قسم الطلبات في بوابة الموظف ويُقبل الإرسال.", en: "Enabled — the requests section is visible and submissions are accepted." })
+                    : t({ ar: "موقوف (الافتراضي) — القسم مخفي وأي محاولة إرسال تُرفض.", en: "Disabled (default) — section hidden; any submission is rejected." })}
+                </div>
+              </div>
+              <span className={chip(leaveEnabled ? "bg-emerald-950 text-emerald-300 border-emerald-800" : "bg-stone-800 text-stone-400 border-stone-700")}>
+                {leaveEnabled ? t({ ar: "مفعّل", en: "On" }) : t({ ar: "موقوف", en: "Off" })}
+              </span>
             </div>
-          ))}
+          </section>
         </div>
       )}
 
@@ -446,33 +546,77 @@ export default function HrAdminConsole() {
       {tab === "tasks" && (
         <div className="space-y-4">
           <section className={card}>
-            <h3 className="text-sm font-medium text-stone-100 mb-3">{t({ ar: "إنشاء مهمة ميدانية", en: "Create field task" })}</h3>
+            <h3 className="text-sm font-medium text-stone-100 mb-3">
+              {tfId ? t({ ar: "تعديل مهمة ميدانية", en: "Edit field task" }) : t({ ar: "إنشاء مهمة ميدانية", en: "Create field task" })}
+            </h3>
             <div className="grid gap-2 sm:grid-cols-2">
               <input value={tf.title} onChange={(e) => setTf({ ...tf, title: e.target.value })} placeholder={t({ ar: "عنوان المهمة *", en: "Title *" })} className={inp} />
-              <input value={tf.location} onChange={(e) => setTf({ ...tf, location: e.target.value })} placeholder={t({ ar: "موقع المهمة (اسم/وصف)", en: "Location" })} className={inp} />
+              <input value={tf.clientName} onChange={(e) => setTf({ ...tf, clientName: e.target.value })} placeholder={t({ ar: "اسم العميل", en: "Client name" })} className={inp} />
+              <input value={tf.projectName} onChange={(e) => setTf({ ...tf, projectName: e.target.value })} placeholder={t({ ar: "اسم المشروع (اختياري)", en: "Project (optional)" })} className={inp} />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "نوع المهمة", en: "Type" })}</label>
+                  <select value={tf.taskType} onChange={(e) => setTf({ ...tf, taskType: e.target.value as TaskType })} className={inp}>
+                    {(Object.keys(TASK_TYPE_LABELS) as TaskType[]).map((k) => (
+                      <option key={k} value={k}>{isAr ? TASK_TYPE_LABELS[k].ar : TASK_TYPE_LABELS[k].en}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "الأولوية", en: "Priority" })}</label>
+                  <select value={tf.priority} onChange={(e) => setTf({ ...tf, priority: e.target.value as TaskPriority })} className={inp}>
+                    {(Object.keys(TASK_PRIORITY_LABELS) as TaskPriority[]).map((k) => (
+                      <option key={k} value={k}>{isAr ? TASK_PRIORITY_LABELS[k].ar : TASK_PRIORITY_LABELS[k].en}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <input value={tf.location} onChange={(e) => setTf({ ...tf, location: e.target.value })} placeholder={t({ ar: "اسم الموقع (مثل: استوديو العميل — حي الياسمين)", en: "Location name" })} className={inp} />
+              <input value={tf.city} onChange={(e) => setTf({ ...tf, city: e.target.value })} placeholder={t({ ar: "المدينة", en: "City" })} className={inp} />
+              <input value={tf.mapsUrl} onChange={(e) => setTf({ ...tf, mapsUrl: e.target.value })} placeholder={t({ ar: "رابط Google Maps (اختياري)", en: "Google Maps URL (optional)" })} dir="ltr" className={inp + " sm:col-span-2"} />
               <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "بداية متوقعة", en: "Expected start" })}</label>
                 <input type="datetime-local" value={tf.start} onChange={(e) => setTf({ ...tf, start: e.target.value })} className={inp} dir="ltr" /></div>
               <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "نهاية متوقعة", en: "Expected end" })}</label>
                 <input type="datetime-local" value={tf.end} onChange={(e) => setTf({ ...tf, end: e.target.value })} className={inp} dir="ltr" /></div>
             </div>
             <textarea value={tf.desc} onChange={(e) => setTf({ ...tf, desc: e.target.value })} rows={2}
-              placeholder={t({ ar: "تفاصيل / ملاحظات", en: "Details / notes" })} className={inp + " mt-2"} />
-            <div className="mt-2">
-              <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "المسندون *", en: "Assignees *" })}</div>
-              <div className="flex gap-1.5 flex-wrap">
-                {staff.map((s) => {
-                  const on = tf.assignees.includes(s.user_id);
-                  return (
-                    <button key={s.user_id} type="button"
-                      onClick={() => setTf({ ...tf, assignees: on ? tf.assignees.filter((x) => x !== s.user_id) : [...tf.assignees, s.user_id] })}
-                      className={`rounded-full border px-3 py-1 text-[11px] ${on ? "bg-red-600 border-red-600 text-white" : "bg-stone-900 border-stone-700 text-stone-300"}`}>
-                      {s.full_name || s.email}
-                    </button>
-                  );
-                })}
+              placeholder={t({ ar: "وصف المهمة / تفاصيل", en: "Description / details" })} className={inp + " mt-2"} />
+            <textarea value={tf.equipment} onChange={(e) => setTf({ ...tf, equipment: e.target.value })} rows={2}
+              placeholder={t({ ar: "المعدات المطلوبة (نصيًا — مثال: كاميرا A7S3، إضاءتان، ميكروفونان)", en: "Equipment needed (text)" })} className={inp + " mt-2"} />
+            <textarea value={tf.requirements} onChange={(e) => setTf({ ...tf, requirements: e.target.value })} rows={2}
+              placeholder={t({ ar: "متطلبات خاصة (اختياري)", en: "Special requirements (optional)" })} className={inp + " mt-2"} />
+            <textarea value={tf.execNotes} onChange={(e) => setTf({ ...tf, execNotes: e.target.value })} rows={2}
+              placeholder={t({ ar: "ملاحظات التنفيذ (اختياري)", en: "Execution notes (optional)" })} className={inp + " mt-2"} />
+            {!tfId && (
+              <div className="mt-2">
+                <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "المسندون *", en: "Assignees *" })}</div>
+                <div className="flex gap-1.5 flex-wrap">
+                  {staff.map((s) => {
+                    const on = tf.assignees.includes(s.user_id);
+                    return (
+                      <button key={s.user_id} type="button"
+                        onClick={() => setTf({ ...tf, assignees: on ? tf.assignees.filter((x) => x !== s.user_id) : [...tf.assignees, s.user_id] })}
+                        className={`rounded-full border px-3 py-1 text-[11px] ${on ? "bg-red-600 border-red-600 text-white" : "bg-stone-900 border-stone-700 text-stone-300"}`}>
+                        {s.full_name || s.email}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
+            )}
+            {tfId && (
+              <p className="mt-2 text-[11px] text-stone-500">{t({ ar: "الإسناد لا يتغير من نموذج التعديل — سيُشعر المسندون الحاليون بالتحديث.", en: "Assignment doesn't change here — current assignees will be notified." })}</p>
+            )}
+            <div className="flex gap-2 mt-3">
+              <button type="button" disabled={busy} onClick={() => void saveTask()} className={`${btnRed} px-5 py-2`}>
+                {tfId ? t({ ar: "حفظ التعديل وإشعار المسندين", en: "Save & notify assignees" }) : t({ ar: "إنشاء وإسناد", en: "Create & assign" })}
+              </button>
+              {tfId && (
+                <button type="button" onClick={() => { setTf(emptyTf); setTfId(null); }} className={`${btnGhost} px-4 py-2`}>
+                  {t({ ar: "إلغاء التعديل", en: "Cancel edit" })}
+                </button>
+              )}
             </div>
-            <button type="button" disabled={busy} onClick={() => void createTask()} className={`${btnRed} mt-3 px-5 py-2`}>{t({ ar: "إنشاء وإسناد", en: "Create & assign" })}</button>
           </section>
 
           <div className="space-y-2">
@@ -484,12 +628,29 @@ export default function HrAdminConsole() {
                   <button type="button" onClick={() => void toggleTask(tk.id)} className="w-full flex items-center gap-2 p-3 text-start flex-wrap">
                     <span className="text-sm font-medium text-stone-100">{tk.title}</span>
                     <span className={chip("bg-stone-800 text-stone-300 border-stone-700")}>{t(st)}</span>
+                    {tk.task_type && <span className={chip("bg-stone-800 text-sky-300 border-stone-700")}>{t(TASK_TYPE_LABELS[tk.task_type] ?? { ar: tk.task_type, en: tk.task_type })}</span>}
+                    {tk.priority && tk.priority !== "normal" && (
+                      <span className={chip(tk.priority === "urgent" ? "bg-red-950 text-red-300 border-red-800" : tk.priority === "high" ? "bg-amber-950 text-amber-300 border-amber-800" : "bg-stone-800 text-stone-400 border-stone-700")}>
+                        {t(TASK_PRIORITY_LABELS[tk.priority] ?? { ar: tk.priority, en: tk.priority })}
+                      </span>
+                    )}
+                    {tk.client_name && <span className="text-[11px] text-stone-500">{tk.client_name}</span>}
                     {tk.location_name && <span className="text-[11px] text-stone-500">📍 {tk.location_name}</span>}
                     <span className="ms-auto text-stone-500 text-xs">{open ? "▲" : "▼"}</span>
                   </button>
                   {open && (
                     <div className="px-3 pb-3 space-y-2">
+                      {(tk.project_name || tk.city || tk.maps_url) && (
+                        <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-stone-400">
+                          {tk.project_name && <span>{t({ ar: "المشروع: ", en: "Project: " })}<span className="text-stone-300">{tk.project_name}</span></span>}
+                          {tk.city && <span>{t({ ar: "المدينة: ", en: "City: " })}<span className="text-stone-300">{tk.city}</span></span>}
+                          {tk.maps_url && <a className="text-sky-400 underline" href={tk.maps_url} target="_blank" rel="noopener noreferrer">{t({ ar: "موقع المهمة على الخرائط", en: "Maps" })}</a>}
+                        </div>
+                      )}
                       {tk.description && <p className="text-xs text-stone-400">{tk.description}</p>}
+                      {tk.equipment_needed && <p className="text-[11px] text-stone-400">🎥 {t({ ar: "المعدات: ", en: "Equipment: " })}{tk.equipment_needed}</p>}
+                      {tk.special_requirements && <p className="text-[11px] text-amber-300/80">⚠️ {t({ ar: "متطلبات خاصة: ", en: "Requirements: " })}{tk.special_requirements}</p>}
+                      {tk.execution_notes && <p className="text-[11px] text-stone-400">📝 {t({ ar: "ملاحظات التنفيذ: ", en: "Exec notes: " })}{tk.execution_notes}</p>}
                       <div className="space-y-1">
                         {(assigneesByTask[tk.id] ?? []).map((a) => (
                           <div key={a.id} className="text-[11px] text-stone-400 flex gap-2 flex-wrap items-center border-t border-stone-800 pt-1.5">
@@ -505,6 +666,11 @@ export default function HrAdminConsole() {
                       </div>
                       {["assigned", "in_progress", "submitted"].includes(tk.status) && (
                         <div className="flex gap-2 flex-wrap pt-1">
+                          {["draft", "assigned", "in_progress"].includes(tk.status) && (
+                            <button type="button" disabled={busy} onClick={() => startEditTask(tk)} className={`${btnGhost} px-4 py-2 text-xs`}>
+                              {t({ ar: "تعديل المهمة", en: "Edit task" })}
+                            </button>
+                          )}
                           <button type="button" disabled={busy} onClick={() => void closeTask(tk, "complete")} className={`${btnRed} px-4 py-2 text-xs`}>
                             {t({ ar: "اعتماد الإغلاق", en: "Approve closure" })}
                           </button>
