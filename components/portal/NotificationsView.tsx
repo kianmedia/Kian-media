@@ -35,6 +35,17 @@ const TYPE_LABEL: Partial<Record<NotificationType, { ar: string; en: string }>> 
   custody_note_new:            { ar: "ملاحظة على عهدة",    en: "Custody Note" },
   custody_claim_pending:       { ar: "⚠ مطالبة مالية",     en: "⚠ Financial Claim" },
   custody_claim_acknowledged:  { ar: "توقيع تعهد سداد",    en: "Pledge Signed" },
+  // الموارد البشرية
+  hr_check_in:            { ar: "تسجيل حضور",          en: "Check-in" },
+  hr_check_out:           { ar: "تسجيل انصراف",        en: "Check-out" },
+  hr_leave_new:           { ar: "طلب إجازة جديد",      en: "New Leave Request" },
+  hr_leave_decided:       { ar: "قرار طلب إجازة",      en: "Leave Decision" },
+  hr_task_new:            { ar: "مهمة ميدانية جديدة",  en: "New Field Task" },
+  hr_task_started:        { ar: "بدء مهمة",            en: "Task Started" },
+  hr_task_submitted:      { ar: "تسليم مهمة",          en: "Task Submitted" },
+  hr_task_closed:         { ar: "إغلاق مهمة",          en: "Task Closed" },
+  hr_attendance_adjusted: { ar: "تعديل حضور إداري",    en: "Attendance Adjusted" },
+  hr_note_new:            { ar: "ملاحظة موارد بشرية",  en: "HR Note" },
 };
 
 /** Where a notification links to, from entity_type/entity_id (exact when possible). */
@@ -49,6 +60,7 @@ function routeFor(n: NotificationRow): string | null {
     case "project_note":   return "/client-portal/projects";
     case "opportunity":    return "/client-portal/opportunities";
     case "custody_record": return "/client-portal/equipment";
+    case "hr":             return "/client-portal/employee";
     case "whatsapp_conversation": return id ? `/client-portal/admin/whatsapp?conversation=${id}` : "/client-portal/admin/whatsapp";
     default:               return null;
   }
@@ -62,6 +74,7 @@ function sectionLabel(n: NotificationRow): { ar: string; en: string } | null {
     case "file_link":     return { ar: "فتح الملفات", en: "Open Files" };
     case "opportunity":   return { ar: "فتح مركز الفرص", en: "Open Opportunities" };
     case "custody_record": return { ar: "فتح العهدة والتأجير", en: "Open Custody & Rental" };
+    case "hr":             return { ar: "فتح بوابة الموظفين", en: "Open Employee Portal" };
     case "whatsapp_conversation": return n.entity_id
       ? { ar: "فتح المحادثة", en: "Open Conversation" }
       : { ar: "فتح صندوق واتساب", en: "Open WhatsApp Inbox" };

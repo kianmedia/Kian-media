@@ -49,7 +49,11 @@ export type NotificationType =
   | "custody_checkout_new" | "rental_request_new" | "custody_return_submitted"
   | "custody_return_shortage" | "custody_handover_approved" | "custody_closed"
   | "custody_rejected" | "custody_note_new"
-  | "custody_claim_pending" | "custody_claim_acknowledged";
+  | "custody_claim_pending" | "custody_claim_acknowledged"
+  // الموارد البشرية
+  | "hr_check_in" | "hr_check_out" | "hr_leave_new" | "hr_leave_decided"
+  | "hr_task_new" | "hr_task_started" | "hr_task_submitted" | "hr_task_closed"
+  | "hr_attendance_adjusted" | "hr_note_new";
 
 export type OfferAudience = "all" | "leads" | "clients";
 export type InternalCommentCategory = "editor" | "production" | "budget" | "qa" | "general";

@@ -1,0 +1,320 @@
+// ════════════════════════════════════════════════════════════════════════
+// Kian Portal — HR & Employee portal (الموارد البشرية وبوابة الموظفين).
+// Reads are RLS-scoped (employee sees own rows; can_manage_hr sees all —
+// hr_employee_profiles is HR-admin-read-only and the employee reads their own
+// profile via the hr_my_profile RPC which strips notes_internal).
+// EVERY write goes through a SECURITY DEFINER RPC — no table write grants.
+//
+// PRIVACY (لا تتبع مستمر): getPositionOnce() is called ONLY from an explicit
+// button press (check-in / check-out / task start / task end). No watchPosition,
+// no background refresh, no polling — one snapshot per explicit action.
+// Mirrors docs/portal_hr_employee_portal_RUNME.sql.
+// ════════════════════════════════════════════════════════════════════════
+import { pget, prpc, enc, type Result } from "@/lib/portal/client";
+import { getValidSession, SUPABASE_URL, SUPABASE_KEY } from "@/lib/portalAuth";
+
+// ─── Types ───
+export type EmploymentStatus = "active" | "suspended" | "left";
+export type LeaveType = "annual" | "sick" | "emergency" | "unpaid" | "permission" | "late" | "early_exit";
+export type LeaveStatus = "pending" | "approved" | "rejected" | "cancelled";
+export type TaskStatus = "draft" | "assigned" | "in_progress" | "submitted" | "completed" | "cancelled";
+export type AttendanceStatus = "present" | "late" | "absent" | "half_day" | "manual_adjusted";
+
+export interface HrMyProfile {
+  id: string; full_name: string; email: string | null; phone: string | null;
+  job_title: string | null; department: string | null; staff_role_snapshot: string | null;
+  employment_status: EmploymentStatus; joined_at: string | null;
+  notes_visible_to_employee: string | null;
+}
+export interface HrEmployee {
+  id: string; user_id: string | null; full_name: string; email: string | null; phone: string | null;
+  job_title: string | null; department: string | null; staff_role_snapshot: string | null;
+  employment_status: EmploymentStatus; joined_at: string | null; left_at: string | null;
+  notes_internal: string | null; notes_visible_to_employee: string | null;
+  is_deleted: boolean; created_at: string; updated_at: string;
+}
+export interface HrAttendance {
+  id: string; employee_id: string; user_id: string; work_date: string;
+  check_in_at: string | null; check_out_at: string | null;
+  check_in_lat: number | null; check_in_lng: number | null; check_in_accuracy: number | null;
+  check_out_lat: number | null; check_out_lng: number | null; check_out_accuracy: number | null;
+  status: AttendanceStatus; admin_adjusted_by: string | null; admin_adjustment_reason: string | null;
+  created_at: string; updated_at: string;
+}
+export interface HrLeave {
+  id: string; employee_id: string; user_id: string; leave_type: LeaveType;
+  start_date: string; end_date: string | null; start_time: string | null; end_time: string | null;
+  reason: string; attachment_url: string | null; status: LeaveStatus;
+  decided_by: string | null; decided_at: string | null; decision_note: string | null;
+  created_at: string; updated_at: string;
+}
+export interface HrTask {
+  id: string; title: string; description: string | null; location_name: string | null;
+  expected_start_at: string | null; expected_end_at: string | null; status: TaskStatus;
+  created_by: string | null; approved_by: string | null; approved_at: string | null;
+  created_at: string; updated_at: string;
+}
+export interface HrAssignee {
+  id: string; task_id: string; employee_id: string; user_id: string; status: TaskStatus | "assigned";
+  started_at: string | null; ended_at: string | null;
+  start_lat: number | null; start_lng: number | null; start_accuracy: number | null;
+  end_lat: number | null; end_lng: number | null; end_accuracy: number | null;
+  employee_note: string | null; admin_note: string | null;
+  created_at: string; updated_at: string;
+}
+export interface HrEvent {
+  id: string; employee_id: string; user_id: string | null; event_type: string;
+  title: string; description: string | null; visible_to_employee: boolean;
+  created_by: string | null; created_at: string;
+}
+export interface HrStaffOption { user_id: string; full_name: string | null; email: string | null; mobile: string | null; staff_role: string | null; }
+
+export const LEAVE_TYPE_LABELS: Record<LeaveType, { ar: string; en: string }> = {
+  annual:     { ar: "إجازة سنوية",   en: "Annual" },
+  sick:       { ar: "إجازة مرضية",   en: "Sick" },
+  emergency:  { ar: "إجازة اضطرارية", en: "Emergency" },
+  unpaid:     { ar: "بدون راتب",     en: "Unpaid" },
+  permission: { ar: "استئذان",       en: "Permission" },
+  late:       { ar: "تأخير",         en: "Late arrival" },
+  early_exit: { ar: "خروج مبكر",     en: "Early exit" },
+};
+export const LEAVE_STATUS_LABELS: Record<LeaveStatus, { ar: string; en: string }> = {
+  pending:   { ar: "قيد المراجعة", en: "Pending" },
+  approved:  { ar: "معتمدة",       en: "Approved" },
+  rejected:  { ar: "مرفوضة",       en: "Rejected" },
+  cancelled: { ar: "ملغاة",        en: "Cancelled" },
+};
+export const TASK_STATUS_LABELS: Record<TaskStatus, { ar: string; en: string }> = {
+  draft:       { ar: "مسودة",            en: "Draft" },
+  assigned:    { ar: "مُسندة",            en: "Assigned" },
+  in_progress: { ar: "قيد التنفيذ",       en: "In progress" },
+  submitted:   { ar: "مُسلّمة — للاعتماد", en: "Submitted" },
+  completed:   { ar: "مكتملة",           en: "Completed" },
+  cancelled:   { ar: "ملغاة",            en: "Cancelled" },
+};
+export const CONSENT_TEXT = {
+  ar: "يتم استخدام موقعك فقط عند تنفيذ عملية الحضور أو الانصراف أو بداية/نهاية المهمة، ولا يتم تتبعك بشكل مستمر.",
+  en: "Your location is used only at check-in, check-out, or task start/end — you are never tracked continuously.",
+};
+
+export const mapsLink = (lat: number | null, lng: number | null): string | null =>
+  lat != null && lng != null ? `https://maps.google.com/?q=${lat},${lng}` : null;
+
+// ─── Geolocation: ONE snapshot on explicit button press only ───
+export interface GeoFix { lat: number; lng: number; accuracy: number; }
+export function getPositionOnce(): Promise<Result<GeoFix>> {
+  return new Promise((resolve) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      resolve({ ok: false, error: "geolocation_unsupported" }); return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ ok: true, data: { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy } }),
+      (err) => resolve({ ok: false, error: err.code === 1 ? "permission_denied" : err.code === 3 ? "timeout" : "unavailable" }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  });
+}
+
+// ─── Reads (RLS-scoped) ───
+export function hrMyProfile(): Promise<Result<HrMyProfile>> {
+  return prpc<HrMyProfile>("hr_my_profile", {});
+}
+export function listMyAttendance(limit = 30): Promise<Result<HrAttendance[]>> {
+  return pget<HrAttendance[]>(`hr_attendance_records?select=*&order=work_date.desc&limit=${limit}`);
+}
+export async function myTodayAttendance(userId: string, today: string): Promise<Result<HrAttendance | null>> {
+  const r = await pget<HrAttendance[]>(`hr_attendance_records?user_id=eq.${enc(userId)}&work_date=eq.${enc(today)}&select=*&limit=1`);
+  if (!r.ok) return r;
+  return { ok: true, data: r.data[0] ?? null };
+}
+export function listMyLeaves(): Promise<Result<HrLeave[]>> {
+  return pget<HrLeave[]>(`hr_leave_requests?select=*&order=created_at.desc&limit=50`);
+}
+export function listMyAssignments(userId: string): Promise<Result<HrAssignee[]>> {
+  return pget<HrAssignee[]>(`hr_field_task_assignees?user_id=eq.${enc(userId)}&select=*&order=created_at.desc&limit=50`);
+}
+export function listTasksByIds(ids: string[]): Promise<Result<HrTask[]>> {
+  if (ids.length === 0) return Promise.resolve({ ok: true, data: [] });
+  return pget<HrTask[]>(`hr_field_tasks?id=in.(${ids.map(enc).join(",")})&select=*`);
+}
+export function listMyVisibleEvents(userId: string): Promise<Result<HrEvent[]>> {
+  return pget<HrEvent[]>(`hr_employee_events?user_id=eq.${enc(userId)}&visible_to_employee=eq.true&select=*&order=created_at.desc&limit=30`);
+}
+// HR admin reads:
+export function hrListEmployees(): Promise<Result<HrEmployee[]>> {
+  return pget<HrEmployee[]>(`hr_employee_profiles?is_deleted=eq.false&select=*&order=full_name.asc&limit=300`);
+}
+export function hrListAttendance(fromDate: string, toDate: string, userId?: string): Promise<Result<HrAttendance[]>> {
+  const extra = userId ? `&user_id=eq.${enc(userId)}` : "";
+  return pget<HrAttendance[]>(`hr_attendance_records?work_date=gte.${enc(fromDate)}&work_date=lte.${enc(toDate)}${extra}&select=*&order=work_date.desc,check_in_at.desc&limit=500`);
+}
+export function hrListLeaves(status?: LeaveStatus): Promise<Result<HrLeave[]>> {
+  const f = status ? `&status=eq.${status}` : "";
+  return pget<HrLeave[]>(`hr_leave_requests?select=*${f}&order=created_at.desc&limit=200`);
+}
+export function hrListTasks(): Promise<Result<HrTask[]>> {
+  return pget<HrTask[]>(`hr_field_tasks?is_deleted=eq.false&select=*&order=created_at.desc&limit=200`);
+}
+export function hrListAssignees(taskId: string): Promise<Result<HrAssignee[]>> {
+  return pget<HrAssignee[]>(`hr_field_task_assignees?task_id=eq.${enc(taskId)}&select=*&order=created_at.asc`);
+}
+export function hrListEmployeeEvents(employeeId: string): Promise<Result<HrEvent[]>> {
+  return pget<HrEvent[]>(`hr_employee_events?employee_id=eq.${enc(employeeId)}&select=*&order=created_at.desc&limit=100`);
+}
+export function hrAdminListStaff(): Promise<Result<HrStaffOption[]>> {
+  return prpc<HrStaffOption[]>("hr_admin_list_staff", {});
+}
+
+// ─── Writes (guarded RPCs only) ───
+export function hrCheckIn(fix: GeoFix): Promise<Result<{ ok: boolean; record_id: string }>> {
+  return prpc<{ ok: boolean; record_id: string }>("hr_check_in", {
+    p_lat: fix.lat, p_lng: fix.lng, p_accuracy: fix.accuracy,
+    p_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+  });
+}
+export function hrCheckOut(fix: GeoFix): Promise<Result<{ ok: boolean; record_id: string }>> {
+  return prpc<{ ok: boolean; record_id: string }>("hr_check_out", {
+    p_lat: fix.lat, p_lng: fix.lng, p_accuracy: fix.accuracy,
+    p_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+  });
+}
+export function hrSubmitLeave(input: {
+  type: LeaveType; start: string; end?: string | null; startTime?: string | null; endTime?: string | null;
+  reason: string; attachment?: string | null;
+}): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_submit_leave_request", {
+    p_type: input.type, p_start: input.start, p_end: input.end ?? null,
+    p_start_time: input.startTime ?? null, p_end_time: input.endTime ?? null,
+    p_reason: input.reason, p_attachment: input.attachment ?? null,
+  });
+}
+export function hrCancelMyLeave(id: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_cancel_my_leave_request", { p_id: id });
+}
+export function hrStartTask(taskId: string, fix: GeoFix): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_start_my_task", { p_task: taskId, p_lat: fix.lat, p_lng: fix.lng, p_accuracy: fix.accuracy });
+}
+export function hrCompleteTask(taskId: string, fix: GeoFix, note: string, photos: string[]): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_complete_my_task", {
+    p_task: taskId, p_lat: fix.lat, p_lng: fix.lng, p_accuracy: fix.accuracy,
+    p_note: note || null, p_photos: photos,
+  });
+}
+export function hrAdminUpsertEmployee(input: {
+  id?: string | null; userId?: string | null; fullName: string; email?: string; phone?: string;
+  jobTitle?: string; department?: string; status?: EmploymentStatus; joined?: string | null;
+  notesInternal?: string; notesVisible?: string;
+}): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_admin_upsert_employee", {
+    p_id: input.id ?? null, p_user: input.userId ?? null, p_full_name: input.fullName,
+    p_email: input.email ?? null, p_phone: input.phone ?? null,
+    p_job_title: input.jobTitle ?? null, p_department: input.department ?? null,
+    p_status: input.status ?? null, p_joined: input.joined ?? null,
+    p_notes_internal: input.notesInternal ?? null, p_notes_visible: input.notesVisible ?? null,
+  });
+}
+export function hrOwnerDeleteEmployee(id: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_owner_delete_employee", { p_id: id });
+}
+export function hrAdminAdjustAttendance(recordId: string, input: {
+  checkIn?: string | null; checkOut?: string | null; status?: AttendanceStatus | null; reason: string;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_adjust_attendance", {
+    p_record: recordId, p_check_in: input.checkIn ?? null, p_check_out: input.checkOut ?? null,
+    p_status: input.status ?? null, p_reason: input.reason,
+  });
+}
+export function hrAdminDecideLeave(id: string, approve: boolean, note?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_decide_leave", { p_id: id, p_approve: approve, p_note: note ?? null });
+}
+export function hrAdminCreateTask(input: {
+  title: string; description?: string; location?: string;
+  expectedStart?: string | null; expectedEnd?: string | null; assignees: string[];
+}): Promise<Result<{ ok: boolean; id: string; assignees: number }>> {
+  return prpc<{ ok: boolean; id: string; assignees: number }>("hr_admin_create_field_task", {
+    p_title: input.title, p_description: input.description ?? null, p_location: input.location ?? null,
+    p_expected_start: input.expectedStart ?? null, p_expected_end: input.expectedEnd ?? null,
+    p_assignees: input.assignees,
+  });
+}
+export function hrAdminCloseTask(taskId: string, action: "complete" | "cancel", note?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_close_task", { p_task: taskId, p_action: action, p_note: note ?? null });
+}
+export function hrAdminAddEmployeeEvent(employeeId: string, title: string, description?: string, visible = false): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_add_employee_event", {
+    p_employee: employeeId, p_title: title, p_description: description ?? null, p_visible: visible,
+  });
+}
+
+// ─── hr-files storage (task photos; owner-first paths; signed URLs) ───
+const BUCKET = "hr-files";
+export const MAX_HR_FILE_BYTES = 10 * 1024 * 1024;
+
+async function storageFetch(path: string, init: RequestInit): Promise<Response> {
+  const s = await getValidSession();
+  if (!s) throw new Error("not_authenticated");
+  const doFetch = (token: string) =>
+    fetch(`${SUPABASE_URL}/storage/v1${path}`, {
+      ...init,
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, ...(init.headers || {}) },
+    });
+  let res = await doFetch(s.access_token);
+  if (res.status === 401) {
+    const s2 = await getValidSession();
+    if (s2) res = await doFetch(s2.access_token);
+  }
+  return res;
+}
+export function hrFilePath(userId: string, taskId: string, key: string): string {
+  return `${userId}/${taskId}/${key}.jpg`;
+}
+export async function uploadHrFile(path: string, file: File | Blob): Promise<Result<boolean>> {
+  try {
+    if (file.size > MAX_HR_FILE_BYTES) return { ok: false, error: "file_too_large" };
+    const type = (file as File).type || "image/jpeg";
+    if (!/^image\/(jpeg|png|webp)$/.test(type)) return { ok: false, error: "invalid_file_type" };
+    const res = await storageFetch(`/object/${BUCKET}/${path}`, {
+      method: "POST", headers: { "Content-Type": type, "x-upsert": "true" }, body: file,
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* non-JSON */ }
+      return { ok: false, error: msg, status: res.status };
+    }
+    return { ok: true, data: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+export async function signHrFiles(paths: (string | null | undefined)[]): Promise<Record<string, string>> {
+  const list = Array.from(new Set(paths.filter((p): p is string => !!p)));
+  if (list.length === 0) return {};
+  try {
+    const res = await storageFetch(`/object/sign/${BUCKET}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expiresIn: 3600, paths: list }),
+    });
+    if (!res.ok) return {};
+    const rows = (await res.json()) as { path?: string; signedURL?: string }[];
+    const out: Record<string, string> = {};
+    for (const r of rows) if (r.path && r.signedURL) out[r.path] = `${SUPABASE_URL}/storage/v1${r.signedURL}`;
+    return out;
+  } catch { return {}; }
+}
+
+// ─── Email relay (fire-and-forget; portal rows already written by the RPCs) ───
+export function emitHrEvent(event: {
+  event: string; entity_id: string; title?: string; employee_name?: string;
+  employee_user_id?: string; employee_user_ids?: string[]; urgent?: boolean;
+}): void {
+  void (async () => {
+    try {
+      const s = await getValidSession();
+      if (!s) return;
+      await fetch("/api/integrations/hr/notify", {
+        method: "POST",
+        keepalive: true,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify(event),
+      });
+    } catch { /* relay failure never blocks the action — server logs carry the reason */ }
+  })();
+}
