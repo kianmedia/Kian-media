@@ -15,9 +15,9 @@ import {
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
   getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent,
   CONSENT_TEXT, LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
-  TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
+  TASK_TYPE_LABELS, TASK_PRIORITY_LABELS, DEFAULT_HR_SETTINGS,
   type HrMyProfile, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
-  type HrEvent, type LeaveType,
+  type HrEvent, type LeaveType, type HrSettings,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 
@@ -50,7 +50,7 @@ export default function EmployeeHome() {
 
   const [me, setMe] = useState<HrMyProfile | null>(null);
   const [sessions, setSessions] = useState<HrAttendance[]>([]);
-  const [leaveEnabled, setLeaveEnabled] = useState(false);
+  const [settings, setSettings] = useState<HrSettings>(DEFAULT_HR_SETTINGS);
   const [attendance, setAttendance] = useState<HrAttendance[]>([]);
   const [leaves, setLeaves] = useState<HrLeave[]>([]);
   const [assignments, setAssignments] = useState<HrAssignee[]>([]);
@@ -74,8 +74,8 @@ export default function EmployeeHome() {
     ]);
     if (att.ok) setAttendance(att.data);
     if (ses.ok) setSessions(ses.data);
-    // فشل قراءة الإعدادات (قبل تشغيل PATCH مثلاً) ⇒ يبقى قسم الإجازات مخفيًا (الافتراضي الآمن).
-    setLeaveEnabled(st.ok && st.data.employee_leave_requests_enabled === true);
+    // فشل قراءة الإعدادات (قبل تشغيل PATCH مثلاً) ⇒ الافتراضيات الآمنة (الإجازات مخفية، الصورة إلزامية).
+    setSettings(st.ok ? { ...DEFAULT_HR_SETTINGS, ...st.data } : DEFAULT_HR_SETTINGS);
     if (lv.ok) setLeaves(lv.data);
     if (ev.ok) setEvents(ev.data);
     if (cu.ok) setCustody(cu.data);
@@ -102,8 +102,10 @@ export default function EmployeeHome() {
     const r = kind === "in" ? await hrCheckIn(pos.data) : await hrCheckOut(pos.data);
     setBusy(false);
     if (!r.ok) {
-      const msg = /session_already_open|already_checked_in/.test(r.error)
+      const msg = /session_already_open/.test(r.error)
         ? t({ ar: "لديك جلسة حضور مفتوحة — سجّل الانصراف أولاً ثم يمكنك تسجيل حضور جديد.", en: "You have an open session — check out first." })
+        : /already_checked_in/.test(r.error)
+        ? t({ ar: "سجّلت حضورك اليوم — تعدد الجلسات غير مفعّل حاليًا.", en: "Already checked in today — multiple sessions are disabled." })
         : /no_open_check_in/.test(r.error) ? t({ ar: "لا توجد جلسة حضور مفتوحة لتسجيل الانصراف.", en: "No open check-in session." })
         : (t({ ar: "تعذّر: ", en: "Failed: " })) + r.error;
       flash(msg); return;
@@ -140,9 +142,9 @@ export default function EmployeeHome() {
 
   async function doCompleteTask(a: HrAssignee) {
     if (readOnly || busy) return;
-    // صورة واحدة على الأقل إلزامية لتسليم المهمة (والقاعدة تفرضها أيضًا).
+    // صورة واحدة على الأقل إلزامية لتسليم المهمة عند تفعيل الإعداد (والقاعدة تفرضها أيضًا).
     const files = taskFiles[a.task_id] ?? [];
-    if (files.length === 0) {
+    if (photoRequired && files.length === 0) {
       emitHrEvent({ event: "hr_task_completion_photo_required", entity_id: a.task_id, employee_name: me?.full_name || "" });
       flash(t({ ar: "لا يمكن إنهاء المهمة بدون صورة — أضف صورة واحدة على الأقل من موقع التنفيذ ثم أعد المحاولة.", en: "At least one photo is required to complete the task." }));
       return;
@@ -220,6 +222,10 @@ export default function EmployeeHome() {
   const todayStr = todayRiyadh();
   const todaySessions = sessions.filter((s) => s.work_date === todayStr).slice().reverse(); // زمنيًا تصاعديًا
   const openSession = findOpenSession(sessions);
+  const leaveEnabled = settings.employee_leave_requests_enabled === true;
+  const photoRequired = settings.task_completion_photo_required !== false;
+  // تعدد الجلسات موقوف؟ حضور واحد يوميًا — يُمنع حضور جديد بعد أول جلسة.
+  const dailyLimitReached = settings.multiple_attendance_sessions_enabled === false && todaySessions.length > 0;
   const myOpenTasks = assignments.filter((a) => a.status === "assigned" || a.status === "in_progress");
   const openCustody = custody.filter((c) => !["closed", "rejected"].includes(c.status));
 
@@ -240,7 +246,7 @@ export default function EmployeeHome() {
           <span className="ms-auto font-mono text-xs text-stone-500" dir="ltr">{todayStr}</span>
         </div>
         <div className="grid grid-cols-2 gap-2 mb-3">
-          <button type="button" disabled={busy || readOnly || !!openSession} onClick={() => void doAttendance("in")}
+          <button type="button" disabled={busy || readOnly || !!openSession || dailyLimitReached} onClick={() => void doAttendance("in")}
             className={`${btnRed} py-3.5 text-base`}>
             {busy ? "…" : t({ ar: "تسجيل حضور", en: "Check in" })}
           </button>
@@ -249,6 +255,9 @@ export default function EmployeeHome() {
             {busy ? "…" : t({ ar: "تسجيل انصراف", en: "Check out" })}
           </button>
         </div>
+        {dailyLimitReached && !openSession && (
+          <p className="text-[10.5px] text-stone-500 mb-2">{t({ ar: "سجّلت حضور اليوم — جلسة واحدة يوميًا حسب إعدادات الإدارة.", en: "One session per day per current settings." })}</p>
+        )}
         {/* جلسات اليوم — أوقات فقط. لا روابط/إحداثيات موقع هنا: تظهر للإدارة فقط. */}
         <div className="text-[11px] text-stone-500 space-y-1">
           <div className="text-stone-400 font-medium">
@@ -349,11 +358,15 @@ export default function EmployeeHome() {
                       ))}
                       <button type="button" onClick={() => { setPickFor(a.task_id); fileRef.current?.click(); }}
                         className="w-12 h-10 rounded-md border border-dashed border-stone-600 text-stone-400 text-lg">+</button>
-                      <span className="text-[10px] text-stone-500">{t({ ar: "الصور — صورة واحدة على الأقل إلزامية للإنهاء", en: "Photos — at least one is required to complete" })}</span>
+                      <span className="text-[10px] text-stone-500">
+                        {photoRequired
+                          ? t({ ar: "الصور — صورة واحدة على الأقل إلزامية للإنهاء", en: "Photos — at least one is required to complete" })
+                          : t({ ar: "الصور (اختيارية)", en: "Photos (optional)" })}
+                      </span>
                     </div>
                     <button type="button" disabled={busy || readOnly} onClick={() => void doCompleteTask(a)}
                       className={`${btnRed} w-full py-2.5`}>{t({ ar: "إنهاء المهمة (بموقعي الآن)", en: "Complete task (with my location)" })}</button>
-                    {(taskFiles[a.task_id] ?? []).length === 0 && (
+                    {photoRequired && (taskFiles[a.task_id] ?? []).length === 0 && (
                       <p className="text-[10.5px] text-amber-400/90">{t({ ar: "⚠️ أضف صورة من موقع التنفيذ قبل الإنهاء.", en: "⚠️ Add a photo before completing." })}</p>
                     )}
                   </div>

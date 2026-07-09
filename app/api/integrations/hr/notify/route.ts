@@ -24,13 +24,31 @@ const EVENTS = new Set([
   "hr_check_in", "hr_check_out", "hr_leave_new", "hr_leave_decided",
   "hr_task_new", "hr_task_started", "hr_task_submitted", "hr_task_closed",
   "hr_attendance_adjusted", "hr_note_new", "hr_task_updated", "hr_settings_updated",
-  "hr_task_completion_photo_required", // سجل فقط — لا بريد
+  // v3: حذف/إلغاء إداري + حالة الموظف + الأجهزة
+  "hr_leave_deleted", "hr_leave_updated", "hr_attendance_voided", "hr_task_deleted",
+  "hr_employee_status_updated", "hr_device_user_mapped",
+  "hr_device_event_imported", "hr_device_event_processed",
+  // سجل فقط — لا بريد
+  "hr_task_completion_photo_required", "hr_dashboard_filter_applied",
+  "hr_monthly_report_generated", "hr_device_event_unmatched",
 ]);
 // أحداث تشخيصية: تُسجَّل في اللوجز ولا تُرسل بريدًا ولا إشعارًا.
-const LOG_ONLY = new Set(["hr_task_completion_photo_required"]);
+const LOG_ONLY = new Set([
+  "hr_task_completion_photo_required", "hr_dashboard_filter_applied",
+  "hr_monthly_report_generated", "hr_device_event_unmatched",
+]);
 // أحداث تُرسل أيضاً لموظف محدد (قرارات تخصه أو مهام أُسندت له).
 const EMPLOYEE_TARGETED = new Set([
   "hr_leave_decided", "hr_task_new", "hr_task_updated", "hr_task_closed", "hr_attendance_adjusted", "hr_note_new",
+  "hr_leave_deleted", "hr_leave_updated", "hr_attendance_voided", "hr_task_deleted", "hr_employee_status_updated",
+]);
+// أحداث الحذف/الإلغاء الإداري — سجل موحّد إضافي hr_admin_soft_delete.
+const SOFT_DELETE_EVENTS = new Set(["hr_leave_deleted", "hr_attendance_voided", "hr_task_deleted"]);
+// أحداث يطلقها الموظف بنفسه من بوابته — كل ما عداها إداري ويتطلب صلاحية إدارة HR.
+// يمنع موظفًا عاديًا من إرسال إيميلات بصياغة إدارية (تغيير حالة/حذف/إسناد) لأي حساب.
+const EMPLOYEE_ALLOWED = new Set([
+  "hr_check_in", "hr_check_out", "hr_leave_new", "hr_task_started", "hr_task_submitted",
+  "hr_task_completion_photo_required",
 ]);
 
 /** GET — تشخيص آمن للبيئة المنشورة. */
@@ -69,6 +87,13 @@ export async function POST(req: Request) {
     log("hr_email_skipped", { reason: "caller_not_staff", event_type: event, entity_id: entityId });
     return NextResponse.json({ ok: false, error: "staff_only" }, { status: 403 });
   }
+  // الأحداث الإدارية: للمالك/super_admin/manager/hr فقط — الموظف العادي يطلق أحداثه الذاتية فقط.
+  const callerIsHrAdmin = me.data[0].account_type === "admin"
+    || ["super_admin", "manager", "hr"].includes(me.data[0].staff_role ?? "");
+  if (!EMPLOYEE_ALLOWED.has(event) && !callerIsHrAdmin) {
+    log("hr_email_skipped", { reason: "caller_not_hr_admin", event_type: event, entity_id: entityId, by: me.data[0].id });
+    return NextResponse.json({ ok: false, error: "hr_admin_only" }, { status: 403 });
+  }
 
   log("hr_notify_created", {
     event_type: event, entity_id: entityId,
@@ -79,8 +104,14 @@ export async function POST(req: Request) {
   if (event === "hr_check_in") log("hr_attendance_session_opened", { entity_id: entityId, by: me.data[0].id });
   if (event === "hr_check_out") log("hr_attendance_session_closed", { entity_id: entityId, by: me.data[0].id });
   if (event === "hr_settings_updated") log("hr_settings_updated", { entity_id: entityId, by: me.data[0].id, title: str(b.title) });
+  // v3: سجلات تشغيلية موحّدة.
+  if (SOFT_DELETE_EVENTS.has(event)) log("hr_admin_soft_delete", { event_type: event, entity_id: entityId, by: me.data[0].id });
+  if (event === "hr_employee_status_updated") log("hr_employee_status_updated", { entity_id: entityId, by: me.data[0].id, title: str(b.title) });
+  if (event === "hr_device_event_imported") log("hr_device_event_imported", { entity_id: entityId, by: me.data[0].id });
+  if (event === "hr_device_event_processed") log("hr_device_event_processed", { entity_id: entityId, by: me.data[0].id, title: str(b.title) });
+  if (event === "hr_note_new") log("hr_employee_timeline_event_created", { entity_id: entityId, by: me.data[0].id });
   if (LOG_ONLY.has(event)) {
-    log(event, { entity_id: entityId, by: me.data[0].id });
+    log(event, { entity_id: entityId, by: me.data[0].id, title: str(b.title) });
     return NextResponse.json({ ok: true, email: { sent: false, reason: "log_only" }, recipient_count: 0 }, { status: 200 });
   }
 

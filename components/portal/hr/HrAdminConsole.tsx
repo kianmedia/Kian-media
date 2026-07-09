@@ -10,15 +10,22 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   hrListEmployees, hrListAttendance, hrListLeaves, hrListTasks, hrListAssignees,
-  hrListEmployeeEvents, hrAdminListStaff, hrAdminUpsertEmployee, hrOwnerDeleteEmployee,
+  hrListEmployeeEvents, hrAdminListStaff, hrAdminUpsertEmployee,
   hrAdminAdjustAttendance, hrAdminDecideLeave, hrAdminCreateTask, hrAdminUpdateTask,
-  hrAdminCloseTask, hrAdminAddEmployeeEvent, hrGetSettings, hrAdminUpdateSettings,
-  emitHrEvent, mapsLink,
+  hrAdminCloseTask, hrAdminAddEmployeeEvent, hrGetSettings,
+  hrAdminSoftDeleteLeave, hrAdminUpdateLeave, hrAdminVoidAttendance, hrAdminSoftDeleteTask,
+  hrAdminUpdateEmployeeStatus, hrOwnerSoftDeleteEmployee, hrAdminReviewTask, hrListTaskReviews,
+  hrListDeviceUsers,
+  emitHrEvent, mapsLink, DEFAULT_HR_SETTINGS,
   LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS, TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
   type HrEmployee, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
   type HrEvent, type HrStaffOption, type EmploymentStatus, type AttendanceStatus,
-  type TaskType, type TaskPriority,
+  type TaskType, type TaskPriority, type HrSettings, type HrTaskReview, type HrDeviceUser,
 } from "@/lib/portal/hr";
+import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
+import HrSettingsPanel from "@/components/portal/hr/HrSettingsPanel";
+import HrMonthlyReport from "@/components/portal/hr/HrMonthlyReport";
+import HrDevices from "@/components/portal/hr/HrDevices";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
 const inp = "w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -41,7 +48,9 @@ const toLocalInput = (iso: string | null) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-type Tab = "overview" | "employees" | "attendance" | "leaves" | "tasks";
+type Tab = "overview" | "employees" | "attendance" | "leaves" | "tasks" | "monthly" | "devices" | "settings";
+type EmpFilter = "" | "active" | "not_today";
+type AttFilter = "" | "today" | "open_now";
 
 export default function HrAdminConsole() {
   const { t, isAr } = useI18n();
@@ -63,7 +72,12 @@ export default function HrAdminConsole() {
   const [attUser, setAttUser] = useState("");
   // عدّادات النظرة العامة تُحسب من جلبة "اليوم" المستقلة — لا تتأثر بفلتر تبويب الحضور.
   const [todayAttendance, setTodayAttendance] = useState<HrAttendance[]>([]);
-  const [leaveEnabled, setLeaveEnabled] = useState(false);
+  const [settings, setSettings] = useState<HrSettings>(DEFAULT_HR_SETTINGS);
+  // فلاتر الكروت التفاعلية (v3) — شارة أعلى كل تبويب + زر "عرض الكل".
+  const [empFilter, setEmpFilter] = useState<EmpFilter>("");
+  const [attFilter, setAttFilter] = useState<AttFilter>("");
+  const [leaveFilter, setLeaveFilter] = useState<"" | "pending">("");
+  const [taskFilter, setTaskFilter] = useState<"" | "open">("");
 
   const reload = useCallback(async () => {
     const td = todayRiyadh();
@@ -80,7 +94,8 @@ export default function HrAdminConsole() {
     if (tdAtt.ok) setTodayAttendance(tdAtt.data);
     if (lv.ok) setLeaves(lv.data);
     if (tk.ok) setTasks(tk.data);
-    if (cfg.ok) setLeaveEnabled(cfg.data.employee_leave_requests_enabled === true);
+    // فشل القراءة (قبل تشغيل PATCH) ⇒ القيم الافتراضية الآمنة.
+    setSettings(cfg.ok ? { ...DEFAULT_HR_SETTINGS, ...cfg.data } : DEFAULT_HR_SETTINGS);
     setPhase("ready");
   }, [attFrom, attTo, attUser]);
   useEffect(() => { void reload(); }, [reload]);
@@ -93,12 +108,22 @@ export default function HrAdminConsole() {
   const empName = (userId: string) => byUser[userId]?.full_name || userId.slice(0, 8);
 
   // ─── نظرة عامة (من جلبة اليوم المستقلة) ───
-  // v2: جلسات متعددة لكل موظف يوميًا — نعدّ الموظفين المميزين لا الصفوف.
+  // v2: جلسات متعددة لكل موظف يوميًا — نعدّ الموظفين المميزين لا الصفوف (بلا الملغاة).
   const activeCount = employees.filter((e) => e.employment_status === "active").length;
-  const presentNow = new Set(todayAttendance.filter((a) => a.check_in_at && !a.check_out_at).map((a) => a.user_id)).size;
-  const checkedToday = new Set(todayAttendance.filter((a) => a.check_in_at).map((a) => a.user_id)).size;
+  const checkedTodaySet = useMemo(
+    () => new Set(todayAttendance.filter((a) => a.check_in_at && !a.is_voided).map((a) => a.user_id)),
+    [todayAttendance]);
+  const presentNow = new Set(todayAttendance.filter((a) => a.check_in_at && !a.check_out_at && !a.is_voided).map((a) => a.user_id)).size;
+  const checkedToday = checkedTodaySet.size;
   const pendingLeaves = leaves.filter((l) => l.status === "pending");
   const openTasks = tasks.filter((x) => ["assigned", "in_progress", "submitted"].includes(x.status));
+
+  // كرت تفاعلي: ينتقل للتبويب الصحيح ويطبّق الفلتر ويسجّل الأثر (سجل فقط — لا بريد).
+  function openCard(target: Tab, apply: () => void, filterKey: string, label: string) {
+    apply();
+    setTab(target);
+    emitHrEvent({ event: "hr_dashboard_filter_applied", entity_id: filterKey, title: label });
+  }
 
   // ─── الموظفون ───
   const emptyForm = { id: "", userId: "", fullName: "", email: "", phone: "", jobTitle: "", department: "", status: "active" as EmploymentStatus, joined: "", notesInternal: "", notesVisible: "" };
@@ -176,21 +201,150 @@ export default function HrAdminConsole() {
     flash(approve ? t({ ar: "اعتُمد الطلب.", en: "Approved." }) : t({ ar: "رُفض الطلب.", en: "Rejected." }));
   }
 
-  // ─── إعدادات HR: إظهار طلبات الإجازة/الإذن للموظفين ───
-  async function toggleLeaveSetting() {
-    if (busy) return;
+  // ─── v3: حذف إداري لطلب إجازة (soft) + تعديل إداري ───
+  const [delLeave, setDelLeave] = useState<{ id: string; reason: string } | null>(null);
+  async function doDeleteLeave(l: HrLeave) {
+    const reason = (delLeave?.reason || "").trim();
+    if (!reason) { flash(t({ ar: "سبب الحذف إلزامي.", en: "Reason required." })); return; }
     setBusy(true);
-    const next = !leaveEnabled;
-    const r = await hrAdminUpdateSettings(next);
+    const r = await hrAdminSoftDeleteLeave(l.id, reason);
     setBusy(false);
-    if (!r.ok) { flash((t({ ar: "تعذّر تحديث الإعداد: ", en: "Couldn't update setting: " })) + r.error); return; }
-    setLeaveEnabled(r.data.employee_leave_requests_enabled === true);
-    emitHrEvent({
-      event: "hr_settings_updated", entity_id: "hr-settings-1",
-      title: next ? "تفعيل طلبات الإجازة/الإذن للموظفين" : "إيقاف طلبات الإجازة/الإذن للموظفين",
+    if (!r.ok) { flash((t({ ar: "تعذّر الحذف: ", en: "Delete failed: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_leave_deleted", entity_id: l.id, title: "حذف إداري لطلب إجازة — " + empName(l.user_id), employee_name: empName(l.user_id), employee_user_id: l.user_id });
+    setDelLeave(null);
+    await reload();
+    flash(t({ ar: "حُذف الطلب (حذف آمن موثّق).", en: "Soft-deleted." }));
+  }
+  const [lvEdit, setLvEdit] = useState<{ leave: HrLeave; type: string; start: string; end: string; startTime: string; endTime: string; note: string } | null>(null);
+  async function saveLeaveEdit() {
+    if (!lvEdit) return;
+    if (!lvEdit.start) { flash(t({ ar: "تاريخ البداية مطلوب.", en: "Start date required." })); return; }
+    setBusy(true);
+    const r = await hrAdminUpdateLeave(lvEdit.leave.id, {
+      type: lvEdit.type as HrLeave["leave_type"], start: lvEdit.start, end: lvEdit.end || null,
+      startTime: lvEdit.startTime || null, endTime: lvEdit.endTime || null, note: lvEdit.note.trim() || undefined,
     });
-    flash(next ? t({ ar: "فُعّلت طلبات الإجازة — القسم يظهر الآن للموظفين.", en: "Leave requests enabled." })
-      : t({ ar: "أُوقفت طلبات الإجازة — القسم مخفي عن الموظفين.", en: "Leave requests disabled." }));
+    setBusy(false);
+    if (!r.ok) {
+      const msg = /leave_not_editable/.test(r.error)
+        ? t({ ar: "يُعدَّل الطلب المعلّق فقط.", en: "Only pending requests can be edited." })
+        : (t({ ar: "تعذّر التعديل: ", en: "Edit failed: " })) + r.error;
+      flash(msg); return;
+    }
+    emitHrEvent({ event: "hr_leave_updated", entity_id: lvEdit.leave.id, title: "تعديل إداري لطلب إجازة — " + empName(lvEdit.leave.user_id), employee_user_id: lvEdit.leave.user_id });
+    setLvEdit(null);
+    await reload();
+    flash(t({ ar: "عُدّل الطلب وأُشعر الموظف.", en: "Updated & employee notified." }));
+  }
+
+  // ─── v3: إلغاء إداري لسجل حضور (لا حذف نهائي) ───
+  async function doVoidAttendance() {
+    if (!adjFor) return;
+    if (!adj.reason.trim()) { flash(t({ ar: "سبب الإلغاء إلزامي.", en: "Reason required." })); return; }
+    setBusy(true);
+    const r = await hrAdminVoidAttendance(adjFor.id, adj.reason.trim());
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر الإلغاء: ", en: "Void failed: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_attendance_voided", entity_id: adjFor.id, title: "إلغاء إداري لسجل حضور " + adjFor.work_date, employee_name: empName(adjFor.user_id), employee_user_id: adjFor.user_id });
+    setAdjFor(null); setAdj({ checkIn: "", checkOut: "", status: "", reason: "" });
+    await reload();
+    flash(t({ ar: "أُلغي السجل (يبقى موثّقًا بعلامة ملغى).", en: "Voided (kept for audit)." }));
+  }
+
+  // ─── v3: حذف مهمة (soft) + تقييم أداء ───
+  const [delTask, setDelTask] = useState<{ id: string; reason: string } | null>(null);
+  async function doDeleteTask(tk: HrTask) {
+    const reason = (delTask?.reason || "").trim();
+    if (!reason) { flash(t({ ar: "سبب الحذف إلزامي.", en: "Reason required." })); return; }
+    setBusy(true);
+    let ids = (assigneesByTask[tk.id] ?? []).map((a) => a.user_id);
+    if (ids.length === 0) {
+      const ar = await hrListAssignees(tk.id);
+      if (ar.ok) ids = ar.data.map((a) => a.user_id);
+    }
+    const r = await hrAdminSoftDeleteTask(tk.id, reason);
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر الحذف: ", en: "Delete failed: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_task_deleted", entity_id: tk.id, title: "حذف إداري لمهمة: " + tk.title, employee_user_ids: ids });
+    setDelTask(null);
+    await reload();
+    flash(t({ ar: "حُذفت المهمة (حذف آمن) وأُشعر المسندون.", en: "Task soft-deleted." }));
+  }
+  const [reviewsByTask, setReviewsByTask] = useState<Record<string, HrTaskReview[]>>({});
+  const [revFor, setRevFor] = useState<{ taskId: string; employeeId: string; userId: string } | null>(null);
+  const [revForm, setRevForm] = useState({ p: 0, q: 0, c: 0, note: "" });
+  async function saveReview() {
+    if (!revFor) return;
+    setBusy(true);
+    const r = await hrAdminReviewTask(revFor.taskId, revFor.employeeId, {
+      punctuality: revForm.p || null, quality: revForm.q || null,
+      communication: revForm.c || null, note: revForm.note.trim() || undefined,
+    });
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر حفظ التقييم: ", en: "Review failed: " })) + r.error); return; }
+    const rv = await hrListTaskReviews(revFor.taskId);
+    if (rv.ok) setReviewsByTask((p) => ({ ...p, [revFor.taskId]: rv.data }));
+    setRevFor(null); setRevForm({ p: 0, q: 0, c: 0, note: "" });
+    flash(t({ ar: "حُفظ التقييم (داخلي للإدارة).", en: "Review saved (internal)." }));
+  }
+
+  // ─── v3: حالة الموظف + حذف المالك بسبب + عهدة/أجهزة الموظف (قراءة فقط) ───
+  const [statusForm, setStatusForm] = useState<{ empId: string; status: EmploymentStatus; reason: string } | null>(null);
+  async function saveStatus(e: HrEmployee) {
+    if (!statusForm || !statusForm.reason.trim()) { flash(t({ ar: "سبب التغيير إلزامي.", en: "Reason required." })); return; }
+    setBusy(true);
+    const r = await hrAdminUpdateEmployeeStatus(e.id, statusForm.status, statusForm.reason.trim());
+    setBusy(false);
+    if (!r.ok) {
+      const msg = /status_unchanged/.test(r.error) ? t({ ar: "الحالة لم تتغير.", en: "Status unchanged." })
+        : (t({ ar: "تعذّر التغيير: ", en: "Failed: " })) + r.error;
+      flash(msg); return;
+    }
+    emitHrEvent({ event: "hr_employee_status_updated", entity_id: e.id, title: "تغيير حالة موظف: " + e.full_name + " ← " + statusForm.status, employee_name: e.full_name, employee_user_id: e.user_id || undefined });
+    setStatusForm(null);
+    await reload();
+    flash(t({ ar: "حُدّثت حالة الموظف ووُثّقت.", en: "Status updated." }));
+  }
+  const [delEmp, setDelEmp] = useState<{ id: string; reason: string } | null>(null);
+  async function doDeleteEmployee(e: HrEmployee) {
+    const reason = (delEmp?.reason || "").trim();
+    if (!reason) { flash(t({ ar: "سبب الحذف إلزامي.", en: "Reason required." })); return; }
+    setBusy(true);
+    const r = await hrOwnerSoftDeleteEmployee(e.id, reason);
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر الحذف: ", en: "Delete failed: " })) + r.error); return; }
+    setDelEmp(null); setOpenEmp(null);
+    await reload();
+    flash(t({ ar: "حُذف ملف الموظف (حذف آمن موثّق).", en: "Employee soft-deleted." }));
+  }
+  const [custodyByEmp, setCustodyByEmp] = useState<Record<string, CustodyRecord[] | "error">>({});
+  const [deviceUsersByEmp, setDeviceUsersByEmp] = useState<Record<string, HrDeviceUser[]>>({});
+  async function loadEmployeeExtras(e: HrEmployee) {
+    if (e.user_id && custodyByEmp[e.id] === undefined) {
+      const c = await listMyCustodyRecords("custody", e.user_id);
+      setCustodyByEmp((p) => ({ ...p, [e.id]: c.ok ? c.data : "error" }));
+    }
+    if (deviceUsersByEmp[e.id] === undefined) {
+      const d = await hrListDeviceUsers({ employeeId: e.id });
+      if (d.ok) setDeviceUsersByEmp((p) => ({ ...p, [e.id]: d.data }));
+    }
+  }
+  // فلاتر الـ Timeline داخل ملف الموظف.
+  const [evType, setEvType] = useState("");
+  const [evSearch, setEvSearch] = useState("");
+  function filterEvents(list: HrEvent[]): HrEvent[] {
+    return list.filter((ev) => {
+      const et = ev.event_type;
+      const typeOk = !evType
+        || (evType === "attendance" && (et.startsWith("attendance") || et.startsWith("device_check")))
+        || (evType === "leave" && et.startsWith("leave"))
+        || (evType === "task" && et.startsWith("task"))
+        || (evType === "note" && et === "hr_note")
+        || (evType === "status" && (et === "status_changed" || et === "employee_deleted"))
+        || (evType === "device" && et.startsWith("device"));
+      const q = evSearch.trim();
+      return typeOk && (!q || ev.title.includes(q) || (ev.description || "").includes(q));
+    });
   }
 
   // ─── المهام ───
@@ -281,18 +435,35 @@ export default function HrAdminConsole() {
       const r = await hrListAssignees(id);
       if (r.ok) setAssigneesByTask((p) => ({ ...p, [id]: r.data }));
     }
+    const tk = tasks.find((x) => x.id === id);
+    if (tk && ["completed", "cancelled"].includes(tk.status) && !reviewsByTask[id]) {
+      const rv = await hrListTaskReviews(id);
+      if (rv.ok) setReviewsByTask((p) => ({ ...p, [id]: rv.data }));
+    }
   }
 
   if (phase === "loading") return <p className="text-stone-500 text-sm">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
   if (phase === "error") return <p className="text-red-400 text-sm">{t({ ar: "تعذّر التحميل — شغّل ترحيل قاعدة البيانات (portal_hr_employee_portal_RUNME.sql) أولاً.", en: "Couldn't load — run the HR migration first." })}</p>;
 
   const TABS: { key: Tab; ar: string; en: string }[] = [
-    { key: "overview",   ar: "نظرة عامة", en: "Overview" },
-    { key: "employees",  ar: "الموظفون",  en: "Employees" },
-    { key: "attendance", ar: "الحضور",    en: "Attendance" },
-    { key: "leaves",     ar: "الإجازات",  en: "Leaves" },
-    { key: "tasks",      ar: "المهام",    en: "Tasks" },
+    { key: "overview",   ar: "نظرة عامة",     en: "Overview" },
+    { key: "employees",  ar: "الموظفون",      en: "Employees" },
+    { key: "attendance", ar: "الحضور",        en: "Attendance" },
+    { key: "leaves",     ar: "الإجازات",      en: "Leaves" },
+    { key: "tasks",      ar: "المهام",        en: "Tasks" },
+    { key: "monthly",    ar: "التقرير الشهري", en: "Monthly" },
+    { key: "devices",    ar: "أجهزة الحضور",  en: "Devices" },
+    { key: "settings",   ar: "الإعدادات",     en: "Settings" },
   ];
+  // شارة الفلتر النشط + زر "عرض الكل" — تظهر أعلى القائمة في التبويب المفلتر.
+  const FilterBadge = ({ label, onClear }: { label: string; onClear: () => void }) => (
+    <div className="flex items-center gap-2 flex-wrap bg-stone-900 border border-red-900/60 rounded-lg px-3 py-2">
+      <span className={chip("bg-red-950 text-red-300 border-red-800")}>🔎 {label}</span>
+      <button type="button" onClick={onClear} className="ms-auto text-xs text-stone-300 underline">
+        {t({ ar: "عرض الكل", en: "Show all" })}
+      </button>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -307,54 +478,43 @@ export default function HrAdminConsole() {
         ))}
       </div>
 
-      {/* ═══ نظرة عامة ═══ */}
+      {/* ═══ نظرة عامة — كروت تفاعلية: كل كرت يفتح تبويبه بفلتر حقيقي ═══ */}
       {tab === "overview" && (
         <div className="space-y-4">
-          <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
-            {[
-              { l: t({ ar: "موظفون نشطون", en: "Active staff" }), v: activeCount },
-              { l: t({ ar: "سجّلوا حضوراً اليوم", en: "Checked in today" }), v: `${checkedToday}/${activeCount}` },
-              { l: t({ ar: "حاضرون الآن", en: "Present now" }), v: presentNow },
-              { l: t({ ar: "إجازات معلّقة", en: "Pending leaves" }), v: pendingLeaves.length },
-              { l: t({ ar: "مهام مفتوحة", en: "Open tasks" }), v: openTasks.length },
-              { l: t({ ar: "لم يسجّلوا اليوم", en: "Not checked in" }), v: Math.max(activeCount - checkedToday, 0) },
-            ].map((c, i) => (
-              <div key={i} className={card + " text-center"}>
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+            {([
+              { l: t({ ar: "موظفون نشطون", en: "Active staff" }), v: activeCount,
+                go: () => openCard("employees", () => setEmpFilter("active"), "employees_active", "موظفون نشطون") },
+              { l: t({ ar: "سجّلوا حضوراً اليوم", en: "Checked in today" }), v: `${checkedToday}/${activeCount}`,
+                go: () => openCard("attendance", () => { setAttFrom(todayRiyadh()); setAttTo(todayRiyadh()); setAttUser(""); setAttFilter("today"); }, "attendance_today", "سجّلوا حضوراً اليوم") },
+              { l: t({ ar: "حاضرون الآن", en: "Present now" }), v: presentNow,
+                go: () => openCard("attendance", () => { setAttFrom(todayRiyadh()); setAttTo(todayRiyadh()); setAttUser(""); setAttFilter("open_now"); }, "attendance_open_now", "حاضرون الآن") },
+              { l: t({ ar: "إجازات معلّقة", en: "Pending leaves" }), v: pendingLeaves.length,
+                go: () => openCard("leaves", () => setLeaveFilter("pending"), "leaves_pending", "إجازات معلّقة") },
+              { l: t({ ar: "مهام مفتوحة", en: "Open tasks" }), v: openTasks.length,
+                go: () => openCard("tasks", () => setTaskFilter("open"), "tasks_open", "مهام مفتوحة") },
+              { l: t({ ar: "لم يسجّلوا اليوم", en: "Not checked in" }), v: Math.max(activeCount - employees.filter((e) => e.employment_status === "active" && e.user_id && checkedTodaySet.has(e.user_id)).length, 0),
+                go: () => openCard("employees", () => setEmpFilter("not_today"), "employees_not_today", "لم يسجّلوا اليوم") },
+            ] as { l: string; v: number | string; go: () => void }[]).map((c, i) => (
+              <button key={i} type="button" onClick={c.go}
+                className={card + " text-center transition-colors hover:border-red-800 focus:outline-none focus:ring-2 focus:ring-red-600 cursor-pointer"}>
                 <div className="text-2xl font-bold text-white">{c.v}</div>
                 <div className="text-[11px] text-stone-500 mt-1">{c.l}</div>
-              </div>
+                <div className="text-[10px] text-red-400/80 mt-1.5">{t({ ar: "اضغط للفتح ↗", en: "Open ↗" })}</div>
+              </button>
             ))}
           </div>
-
-          {/* إعدادات الموارد البشرية */}
-          <section className={card}>
-            <h3 className="text-sm font-medium text-stone-100 mb-2">{t({ ar: "إعدادات الموارد البشرية", en: "HR settings" })}</h3>
-            <div className="flex items-center gap-3 flex-wrap">
-              <button type="button" disabled={busy} onClick={() => void toggleLeaveSetting()}
-                className={`relative rounded-full transition-colors ${leaveEnabled ? "bg-red-600" : "bg-stone-700"} disabled:opacity-50`}
-                style={{ width: 48, height: 26 }} aria-pressed={leaveEnabled}>
-                <span className="absolute rounded-full bg-white transition-all"
-                  style={{ width: 22, height: 22, top: 2, insetInlineStart: leaveEnabled ? 24 : 2 }} />
-              </button>
-              <div className="flex-1 min-w-[200px]">
-                <div className="text-sm text-stone-200">{t({ ar: "إظهار طلبات الإجازة/الإذن للموظفين", en: "Show leave/permission requests to employees" })}</div>
-                <div className="text-[11px] text-stone-500 mt-0.5">
-                  {leaveEnabled
-                    ? t({ ar: "مفعّل — يظهر قسم الطلبات في بوابة الموظف ويُقبل الإرسال.", en: "Enabled — the requests section is visible and submissions are accepted." })
-                    : t({ ar: "موقوف (الافتراضي) — القسم مخفي وأي محاولة إرسال تُرفض.", en: "Disabled (default) — section hidden; any submission is rejected." })}
-                </div>
-              </div>
-              <span className={chip(leaveEnabled ? "bg-emerald-950 text-emerald-300 border-emerald-800" : "bg-stone-800 text-stone-400 border-stone-700")}>
-                {leaveEnabled ? t({ ar: "مفعّل", en: "On" }) : t({ ar: "موقوف", en: "Off" })}
-              </span>
-            </div>
-          </section>
         </div>
       )}
 
       {/* ═══ الموظفون ═══ */}
       {tab === "employees" && (
         <div className="space-y-4">
+          {empFilter && (
+            <FilterBadge
+              label={empFilter === "active" ? t({ ar: "الموظفون النشطون فقط", en: "Active only" }) : t({ ar: "لم يسجّلوا حضورًا اليوم", en: "Not checked in today" })}
+              onClear={() => setEmpFilter("")} />
+          )}
           <section className={card}>
             <h3 className="text-sm font-medium text-stone-100 mb-3">{form.id ? t({ ar: "تعديل ملف موظف", en: "Edit employee" }) : t({ ar: "إضافة موظف", en: "Add employee" })}</h3>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -391,10 +551,13 @@ export default function HrAdminConsole() {
           </section>
 
           <div className="space-y-2">
-            {employees.map((e) => (
+            {employees
+              .filter((e) => empFilter !== "active" || e.employment_status === "active")
+              .filter((e) => empFilter !== "not_today" || (e.employment_status === "active" && (!e.user_id || !checkedTodaySet.has(e.user_id))))
+              .map((e) => (
               <div key={e.id} className="bg-stone-900 border border-stone-800 rounded-xl overflow-hidden">
                 <button type="button" className="w-full flex items-center gap-2 p-3 text-start flex-wrap"
-                  onClick={() => { const v = openEmp === e.id ? null : e.id; setOpenEmp(v); if (v) void loadEvents(e.id); }}>
+                  onClick={() => { const v = openEmp === e.id ? null : e.id; setOpenEmp(v); if (v) { void loadEvents(e.id); void loadEmployeeExtras(e); } }}>
                   <span className="text-sm font-medium text-stone-100">{e.full_name}</span>
                   <span className="text-[11px] text-stone-500">{e.job_title || e.staff_role_snapshot || ""}</span>
                   <span className={chip(e.employment_status === "active" ? "bg-emerald-950 text-emerald-300 border-emerald-800" : e.employment_status === "suspended" ? "bg-amber-950 text-amber-300 border-amber-800" : "bg-stone-800 text-stone-400 border-stone-700")}>
@@ -409,24 +572,105 @@ export default function HrAdminConsole() {
                       <span dir="ltr">{e.phone || "—"}</span> • <span dir="ltr">{e.email || "—"}</span> • {t({ ar: "انضم", en: "Joined" })}: <span dir="ltr">{e.joined_at || "—"}</span>
                     </div>
                     {e.notes_internal && <div className="text-[11px] text-amber-300/80">{t({ ar: "داخلي: ", en: "Internal: " })}{e.notes_internal}</div>}
-                    <div className="flex gap-2 flex-wrap">
+                    <div className="flex gap-2 flex-wrap items-center">
                       <button type="button" className={`${btnGhost} px-3 py-1.5 text-xs`}
                         onClick={() => setForm({ id: e.id, userId: e.user_id || "", fullName: e.full_name, email: e.email || "", phone: e.phone || "", jobTitle: e.job_title || "", department: e.department || "", status: e.employment_status, joined: e.joined_at || "", notesInternal: e.notes_internal || "", notesVisible: e.notes_visible_to_employee || "" })}>
                         {t({ ar: "تعديل", en: "Edit" })}
                       </button>
+                      <button type="button" className={`${btnGhost} px-3 py-1.5 text-xs`}
+                        onClick={() => setStatusForm(statusForm?.empId === e.id ? null : { empId: e.id, status: e.employment_status, reason: "" })}>
+                        {t({ ar: "تغيير الحالة", en: "Change status" })}
+                      </button>
                       {caps.isOwner && (
                         <button type="button" disabled={busy} className="text-[11px] text-stone-500 hover:text-red-400 underline"
-                          onClick={() => { if (window.confirm(t({ ar: `حذف ملف ${e.full_name}؟`, en: `Delete ${e.full_name}?` }))) void (async () => { const r = await hrOwnerDeleteEmployee(e.id); if (r.ok) { await reload(); flash(t({ ar: "حُذف.", en: "Deleted." })); } else flash(r.error); })(); }}>
+                          onClick={() => setDelEmp(delEmp?.id === e.id ? null : { id: e.id, reason: "" })}>
                           {t({ ar: "حذف (للمالك)", en: "Delete (owner)" })}
                         </button>
                       )}
                     </div>
-                    {/* سجل الموظف + ملاحظة */}
+                    {/* تغيير الحالة الوظيفية — سبب إلزامي، يُوثّق ويُشعر */}
+                    {statusForm?.empId === e.id && (
+                      <div className="flex gap-2 flex-wrap items-center bg-stone-950 border border-stone-800 rounded-lg p-2">
+                        <select value={statusForm.status} onChange={(ev2) => setStatusForm({ ...statusForm, status: ev2.target.value as EmploymentStatus })}
+                          className={inp} style={{ width: "auto" }}>
+                          <option value="active">{t({ ar: "نشط", en: "Active" })}</option>
+                          <option value="suspended">{t({ ar: "موقوف", en: "Suspended" })}</option>
+                          <option value="left">{t({ ar: "انتهت خدمته", en: "Left" })}</option>
+                        </select>
+                        <input value={statusForm.reason} onChange={(ev2) => setStatusForm({ ...statusForm, reason: ev2.target.value })}
+                          placeholder={t({ ar: "سبب التغيير (إلزامي)", en: "Reason (required)" })} className={inp + " flex-1 min-w-[160px]"} style={{ width: "auto" }} />
+                        <button type="button" disabled={busy} onClick={() => void saveStatus(e)} className={`${btnRed} px-4 py-2 text-xs`}>{t({ ar: "حفظ", en: "Save" })}</button>
+                      </div>
+                    )}
+                    {/* حذف المالك — سبب إلزامي (soft delete) */}
+                    {caps.isOwner && delEmp?.id === e.id && (
+                      <div className="flex gap-2 flex-wrap items-center bg-red-950/30 border border-red-900 rounded-lg p-2">
+                        <input value={delEmp.reason} onChange={(ev2) => setDelEmp({ id: e.id, reason: ev2.target.value })}
+                          placeholder={t({ ar: "سبب حذف الملف (إلزامي)", en: "Delete reason (required)" })} className={inp + " flex-1 min-w-[160px]"} style={{ width: "auto" }} />
+                        <button type="button" disabled={busy} onClick={() => void doDeleteEmployee(e)} className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-xs px-4 py-2 disabled:opacity-50">
+                          {t({ ar: "تأكيد الحذف الآمن", en: "Confirm soft delete" })}
+                        </button>
+                      </div>
+                    )}
+                    {/* عهدة الموظف — قراءة فقط من نظام العهدة دون أي تعديل عليه */}
+                    <div className="bg-stone-950 border border-stone-800 rounded-lg p-2.5 text-[11px]">
+                      <span className="text-stone-400 font-medium">{t({ ar: "عهدة الموظف: ", en: "Custody: " })}</span>
+                      {!e.user_id || custodyByEmp[e.id] === "error" ? (
+                        <span className="text-stone-500">{t({ ar: "لا توجد عهد مرتبطة أو لا يمكن تحميلها الآن.", en: "No linked custody or unavailable." })}</span>
+                      ) : custodyByEmp[e.id] === undefined ? (
+                        <span className="text-stone-600">…</span>
+                      ) : (
+                        (() => {
+                          const list = custodyByEmp[e.id] as CustodyRecord[];
+                          const open = list.filter((c) => !["closed", "rejected"].includes(c.status)).length;
+                          const closed = list.filter((c) => c.status === "closed").length;
+                          const claims = list.reduce((s, c) => s + (c.claim_amount || 0), 0);
+                          return (
+                            <>
+                              <span className="text-stone-300">{t({ ar: `مفتوحة: ${open} · مقفلة: ${closed}`, en: `open: ${open} · closed: ${closed}` })}</span>
+                              {claims > 0 && <span className="text-amber-400"> · {t({ ar: "مطالبات: ", en: "claims: " })}{claims} ﷼</span>}
+                              <a href="/client-portal/equipment" className="text-sky-400 underline ms-2">{t({ ar: "فتح العهدة", en: "Open custody" })}</a>
+                            </>
+                          );
+                        })()
+                      )}
+                    </div>
+                    {/* معرفات أجهزة الحضور — للأدمن فقط */}
+                    {(deviceUsersByEmp[e.id] ?? []).length > 0 && (
+                      <div className="bg-stone-950 border border-stone-800 rounded-lg p-2.5 text-[11px]">
+                        <span className="text-stone-400 font-medium">{t({ ar: "معرفات الأجهزة: ", en: "Device IDs: " })}</span>
+                        {(deviceUsersByEmp[e.id] ?? []).map((du) => (
+                          <span key={du.id} className="font-mono text-stone-300 me-2" dir="ltr">
+                            {du.device_user_identifier}{du.card_id ? ` (💳 ${du.card_id})` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* Timeline الموظف — فلاتر بالنوع + بحث نصي + إضافة ملاحظة */}
                     <div className="border-t border-stone-800 pt-2 space-y-1">
-                      {(empEvents[e.id] ?? []).slice(0, 10).map((ev) => (
+                      <div className="flex gap-2 flex-wrap items-center pb-1">
+                        <span className="text-[11px] text-stone-400 font-medium">{t({ ar: "السجل الزمني", en: "Timeline" })}</span>
+                        <select value={evType} onChange={(ev2) => setEvType(ev2.target.value)} className={inp + " text-[11px]"} style={{ width: "auto", paddingTop: 4, paddingBottom: 4 }}>
+                          <option value="">{t({ ar: "— كل الأنواع —", en: "— All —" })}</option>
+                          <option value="attendance">{t({ ar: "حضور/انصراف", en: "Attendance" })}</option>
+                          <option value="leave">{t({ ar: "إجازات", en: "Leaves" })}</option>
+                          <option value="task">{t({ ar: "مهام", en: "Tasks" })}</option>
+                          <option value="note">{t({ ar: "ملاحظات", en: "Notes" })}</option>
+                          <option value="status">{t({ ar: "حالة الموظف", en: "Status" })}</option>
+                          <option value="device">{t({ ar: "أجهزة", en: "Devices" })}</option>
+                        </select>
+                        <input value={evSearch} onChange={(ev2) => setEvSearch(ev2.target.value)}
+                          placeholder={t({ ar: "بحث…", en: "Search…" })} className={inp + " text-[11px] flex-1 min-w-[100px]"}
+                          style={{ width: "auto", paddingTop: 4, paddingBottom: 4 }} />
+                      </div>
+                      {filterEvents(empEvents[e.id] ?? []).length === 0 && (
+                        <p className="text-[11px] text-stone-600">{t({ ar: "لا أحداث مطابقة.", en: "No matching events." })}</p>
+                      )}
+                      {filterEvents(empEvents[e.id] ?? []).slice(0, 30).map((ev) => (
                         <div key={ev.id} className="text-[11px] text-stone-500 flex gap-2 flex-wrap">
                           <span className="font-mono" dir="ltr">{fmtDT(ev.created_at, isAr)}</span>
                           <span className="text-stone-400">{ev.title}</span>
+                          {ev.description && <span className="text-stone-600">— {ev.description}</span>}
                           {ev.visible_to_employee && <span className="text-emerald-500">({t({ ar: "مرئي له", en: "visible" })})</span>}
                         </div>
                       ))}
@@ -451,6 +695,11 @@ export default function HrAdminConsole() {
       {/* ═══ الحضور ═══ */}
       {tab === "attendance" && (
         <div className="space-y-3">
+          {attFilter && (
+            <FilterBadge
+              label={attFilter === "open_now" ? t({ ar: "الجلسات المفتوحة الآن", en: "Open sessions now" }) : t({ ar: "حضور اليوم", en: "Today's attendance" })}
+              onClear={() => setAttFilter("")} />
+          )}
           <div className={card}>
             <div className="grid gap-2 sm:grid-cols-3">
               <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "من", en: "From" })}</label>
@@ -466,11 +715,15 @@ export default function HrAdminConsole() {
           </div>
           {attendance.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا سجلات في هذا النطاق.", en: "No records in range." })}</p>}
           <div className="space-y-1.5">
-            {attendance.map((a) => (
-              <div key={a.id} className="bg-stone-900 border border-stone-800 rounded-lg px-3 py-2 flex items-center gap-3 flex-wrap text-xs">
+            {attendance
+              .filter((a) => attFilter !== "open_now" || (!!a.check_in_at && !a.check_out_at && !a.is_voided))
+              .map((a) => (
+              <div key={a.id} className={`bg-stone-900 border rounded-lg px-3 py-2 flex items-center gap-3 flex-wrap text-xs ${a.is_voided ? "border-stone-800 opacity-60" : "border-stone-800"}`}>
                 <span className="text-stone-100 font-medium">{empName(a.user_id)}</span>
                 <span className="font-mono text-stone-500" dir="ltr">{a.work_date}</span>
                 <span className="font-mono text-stone-400" dir="ltr">{fmtT(a.check_in_at, isAr)} → {fmtT(a.check_out_at, isAr)}</span>
+                {a.source === "device" && <span className={chip("bg-stone-800 text-sky-300 border-stone-700")}>{t({ ar: "جهاز", en: "device" })}</span>}
+                {a.is_voided && <span className={chip("bg-red-950 text-red-300 border-red-800")}>{t({ ar: "ملغى", en: "voided" })}{a.void_reason ? ` — ${a.void_reason}` : ""}</span>}
                 {mapsLink(a.check_in_lat, a.check_in_lng) && (
                   <a className="text-sky-400 underline" href={mapsLink(a.check_in_lat, a.check_in_lng)!} target="_blank" rel="noopener noreferrer">{t({ ar: "موقع الحضور", en: "In loc" })}</a>
                 )}
@@ -478,8 +731,10 @@ export default function HrAdminConsole() {
                   <a className="text-sky-400 underline" href={mapsLink(a.check_out_lat, a.check_out_lng)!} target="_blank" rel="noopener noreferrer">{t({ ar: "موقع الانصراف", en: "Out loc" })}</a>
                 )}
                 {a.status === "manual_adjusted" && <span className="text-amber-400">{t({ ar: "مُعدّل", en: "Adjusted" })}</span>}
-                <button type="button" onClick={() => { setAdjFor(a); setAdj({ checkIn: "", checkOut: "", status: "", reason: "" }); }}
-                  className="ms-auto text-red-300 underline">{t({ ar: "تعديل إداري", en: "Adjust" })}</button>
+                {!a.is_voided && (
+                  <button type="button" onClick={() => { setAdjFor(a); setAdj({ checkIn: "", checkOut: "", status: "", reason: "" }); }}
+                    className="ms-auto text-red-300 underline">{t({ ar: "تعديل / إلغاء", en: "Adjust / void" })}</button>
+                )}
               </div>
             ))}
           </div>
@@ -502,9 +757,13 @@ export default function HrAdminConsole() {
                   <option value="half_day">{t({ ar: "نصف يوم", en: "Half day" })}</option>
                 </select>
                 <textarea value={adj.reason} onChange={(e) => setAdj({ ...adj, reason: e.target.value })} rows={2}
-                  placeholder={t({ ar: "سبب التعديل (إلزامي — يُوثّق ويُشعر الموظف)", en: "Reason (required — audited & employee notified)" })} className={inp} />
-                <div className="flex gap-2">
+                  placeholder={t({ ar: "السبب (إلزامي للتعديل وللإلغاء — يُوثّق ويُشعر الموظف)", en: "Reason (required — audited & employee notified)" })} className={inp} />
+                <div className="flex gap-2 flex-wrap">
                   <button type="button" disabled={busy} onClick={() => void saveAdjust()} className={`${btnRed} flex-1 py-2`}>{t({ ar: "حفظ التعديل", en: "Save" })}</button>
+                  <button type="button" disabled={busy} onClick={() => void doVoidAttendance()}
+                    className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-xs px-4 py-2 disabled:opacity-50">
+                    {t({ ar: "إلغاء السجل (voided)", en: "Void record" })}
+                  </button>
                   <button type="button" onClick={() => setAdjFor(null)} className={`${btnGhost} px-4 py-2`}>{t({ ar: "إغلاق", en: "Close" })}</button>
                 </div>
               </div>
@@ -516,8 +775,11 @@ export default function HrAdminConsole() {
       {/* ═══ الإجازات ═══ */}
       {tab === "leaves" && (
         <div className="space-y-2">
+          {leaveFilter === "pending" && (
+            <FilterBadge label={t({ ar: "الطلبات المعلّقة فقط", en: "Pending only" })} onClear={() => setLeaveFilter("")} />
+          )}
           {leaves.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا توجد طلبات.", en: "No requests." })}</p>}
-          {[...pendingLeaves, ...leaves.filter((l) => l.status !== "pending")].map((l) => (
+          {(leaveFilter === "pending" ? pendingLeaves : [...pendingLeaves, ...leaves.filter((l) => l.status !== "pending")]).map((l) => (
             <div key={l.id} className="bg-stone-900 border border-stone-800 rounded-xl p-3 space-y-2">
               <div className="flex items-center gap-2 flex-wrap text-xs">
                 <span className="text-stone-100 font-medium">{empName(l.user_id)}</span>
@@ -535,16 +797,72 @@ export default function HrAdminConsole() {
                     placeholder={t({ ar: "ملاحظة القرار (إلزامية عند الرفض)", en: "Decision note (required to reject)" })} className={inp + " flex-1 min-w-[180px]"} style={{ width: "auto" }} />
                   <button type="button" disabled={busy} onClick={() => void decide(l, true)} className={`${btnRed} px-4 py-2 text-xs`}>{t({ ar: "اعتماد", en: "Approve" })}</button>
                   <button type="button" disabled={busy} onClick={() => void decide(l, false)} className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-xs px-4 py-2 disabled:opacity-50">{t({ ar: "رفض", en: "Reject" })}</button>
+                  <button type="button" disabled={busy} className={`${btnGhost} px-3 py-2 text-xs`}
+                    onClick={() => setLvEdit({ leave: l, type: l.leave_type, start: l.start_date, end: l.end_date || "", startTime: l.start_time || "", endTime: l.end_time || "", note: "" })}>
+                    {t({ ar: "تعديل", en: "Edit" })}
+                  </button>
                 </div>
               )}
+              {/* حذف إداري آمن — سبب إلزامي، متاح لأي حالة */}
+              <div className="flex gap-2 flex-wrap items-center">
+                <button type="button" disabled={busy} className="text-[11px] text-stone-500 hover:text-red-400 underline"
+                  onClick={() => setDelLeave(delLeave?.id === l.id ? null : { id: l.id, reason: "" })}>
+                  {t({ ar: "حذف السجل (آمن)", en: "Soft delete" })}
+                </button>
+                {delLeave?.id === l.id && (
+                  <>
+                    <input value={delLeave.reason} onChange={(e) => setDelLeave({ id: l.id, reason: e.target.value })}
+                      placeholder={t({ ar: "سبب الحذف (إلزامي)", en: "Reason (required)" })} className={inp + " flex-1 min-w-[160px]"} style={{ width: "auto" }} />
+                    <button type="button" disabled={busy} onClick={() => void doDeleteLeave(l)}
+                      className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-[11px] px-3 py-1.5 disabled:opacity-50">
+                      {t({ ar: "تأكيد الحذف", en: "Confirm" })}
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
+
+          {/* تعديل إداري لطلب معلّق */}
+          {lvEdit && (
+            <div className="fixed inset-0 z-[90] bg-black/80 flex items-center justify-center p-4" onClick={() => setLvEdit(null)}>
+              <div className={card + " w-full max-w-md space-y-2"} onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-sm font-medium text-stone-100">
+                  {t({ ar: "تعديل طلب إجازة — ", en: "Edit leave — " })}{empName(lvEdit.leave.user_id)}
+                </h3>
+                <select value={lvEdit.type} onChange={(e) => setLvEdit({ ...lvEdit, type: e.target.value })} className={inp}>
+                  {(Object.keys(LEAVE_TYPE_LABELS) as HrLeave["leave_type"][]).map((k) => (
+                    <option key={k} value={k}>{t(LEAVE_TYPE_LABELS[k])}</option>
+                  ))}
+                </select>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "من", en: "From" })}</label>
+                    <input type="date" value={lvEdit.start} onChange={(e) => setLvEdit({ ...lvEdit, start: e.target.value })} className={inp} dir="ltr" /></div>
+                  <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "إلى", en: "To" })}</label>
+                    <input type="date" value={lvEdit.end} onChange={(e) => setLvEdit({ ...lvEdit, end: e.target.value })} className={inp} dir="ltr" /></div>
+                  <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "من الساعة", en: "From time" })}</label>
+                    <input type="time" value={lvEdit.startTime} onChange={(e) => setLvEdit({ ...lvEdit, startTime: e.target.value })} className={inp} dir="ltr" /></div>
+                  <div><label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "إلى الساعة", en: "To time" })}</label>
+                    <input type="time" value={lvEdit.endTime} onChange={(e) => setLvEdit({ ...lvEdit, endTime: e.target.value })} className={inp} dir="ltr" /></div>
+                </div>
+                <input value={lvEdit.note} onChange={(e) => setLvEdit({ ...lvEdit, note: e.target.value })}
+                  placeholder={t({ ar: "ملاحظة التعديل (تظهر للموظف)", en: "Edit note (shown to employee)" })} className={inp} />
+                <div className="flex gap-2">
+                  <button type="button" disabled={busy} onClick={() => void saveLeaveEdit()} className={`${btnRed} flex-1 py-2`}>{t({ ar: "حفظ وإشعار الموظف", en: "Save & notify" })}</button>
+                  <button type="button" onClick={() => setLvEdit(null)} className={`${btnGhost} px-4 py-2`}>{t({ ar: "إغلاق", en: "Close" })}</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ═══ المهام ═══ */}
       {tab === "tasks" && (
         <div className="space-y-4">
+          {taskFilter === "open" && (
+            <FilterBadge label={t({ ar: "المهام المفتوحة فقط (مُسندة/قيد التنفيذ/مُسلّمة)", en: "Open tasks only" })} onClear={() => setTaskFilter("")} />
+          )}
           <section className={card}>
             <h3 className="text-sm font-medium text-stone-100 mb-3">
               {tfId ? t({ ar: "تعديل مهمة ميدانية", en: "Edit field task" }) : t({ ar: "إنشاء مهمة ميدانية", en: "Create field task" })}
@@ -620,7 +938,9 @@ export default function HrAdminConsole() {
           </section>
 
           <div className="space-y-2">
-            {tasks.map((tk) => {
+            {tasks
+              .filter((tk) => taskFilter !== "open" || ["assigned", "in_progress", "submitted"].includes(tk.status))
+              .map((tk) => {
               const st = TASK_STATUS_LABELS[tk.status] ?? { ar: tk.status, en: tk.status };
               const open = openTask === tk.id;
               return (
@@ -679,6 +999,78 @@ export default function HrAdminConsole() {
                           </button>
                         </div>
                       )}
+                      {/* حذف إداري آمن للمهمة — سبب إلزامي */}
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <button type="button" disabled={busy} className="text-[11px] text-stone-500 hover:text-red-400 underline"
+                          onClick={() => setDelTask(delTask?.id === tk.id ? null : { id: tk.id, reason: "" })}>
+                          {t({ ar: "حذف المهمة (آمن)", en: "Soft delete task" })}
+                        </button>
+                        {delTask?.id === tk.id && (
+                          <>
+                            <input value={delTask.reason} onChange={(e) => setDelTask({ id: tk.id, reason: e.target.value })}
+                              placeholder={t({ ar: "سبب الحذف (إلزامي)", en: "Reason (required)" })} className={inp + " flex-1 min-w-[160px]"} style={{ width: "auto" }} />
+                            <button type="button" disabled={busy} onClick={() => void doDeleteTask(tk)}
+                              className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-[11px] px-3 py-1.5 disabled:opacity-50">
+                              {t({ ar: "تأكيد الحذف", en: "Confirm" })}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {/* تقييم الأداء (داخلي) — بعد إغلاق المهمة */}
+                      {["completed", "cancelled"].includes(tk.status) && (
+                        <div className="border-t border-stone-800 pt-2 space-y-1.5">
+                          <div className="text-[11px] text-stone-400 font-medium">
+                            {t({ ar: "تقييم الأداء (داخلي للإدارة)", en: "Performance review (internal)" })}
+                            {!settings.show_performance_reviews_enabled && (
+                              <span className="text-stone-600"> — {t({ ar: "مخفي عن الموظفين", en: "hidden from employees" })}</span>
+                            )}
+                          </div>
+                          {(assigneesByTask[tk.id] ?? []).map((a) => {
+                            const rv = (reviewsByTask[tk.id] ?? []).find((x) => x.employee_id === a.employee_id);
+                            const active = revFor?.taskId === tk.id && revFor?.employeeId === a.employee_id;
+                            return (
+                              <div key={a.id} className="text-[11px] text-stone-400 space-y-1">
+                                <div className="flex gap-2 flex-wrap items-center">
+                                  <span className="text-stone-200">{empName(a.user_id)}</span>
+                                  {rv ? (
+                                    <span className="font-mono text-amber-300">
+                                      ⏱{rv.punctuality_rating ?? "—"} · 🎯{rv.quality_rating ?? "—"} · 💬{rv.communication_rating ?? "—"}
+                                    </span>
+                                  ) : <span className="text-stone-600">{t({ ar: "بلا تقييم", en: "no review" })}</span>}
+                                  {rv?.admin_review_note && <span className="text-stone-500">— {rv.admin_review_note}</span>}
+                                  <button type="button" disabled={busy} className="text-red-300 underline"
+                                    onClick={() => {
+                                      if (active) { setRevFor(null); return; }
+                                      setRevFor({ taskId: tk.id, employeeId: a.employee_id, userId: a.user_id });
+                                      setRevForm({ p: rv?.punctuality_rating ?? 0, q: rv?.quality_rating ?? 0, c: rv?.communication_rating ?? 0, note: rv?.admin_review_note ?? "" });
+                                    }}>
+                                    {rv ? t({ ar: "تعديل التقييم", en: "Edit review" }) : t({ ar: "تقييم", en: "Review" })}
+                                  </button>
+                                </div>
+                                {active && (
+                                  <div className="flex gap-2 flex-wrap items-center bg-stone-950 border border-stone-800 rounded-lg p-2">
+                                    {([["p", "الانضباط"], ["q", "الجودة"], ["c", "التواصل"]] as const).map(([k, lbl]) => (
+                                      <label key={k} className="flex items-center gap-1 text-[11px] text-stone-400">
+                                        {lbl}
+                                        <select value={revForm[k]} onChange={(e) => setRevForm({ ...revForm, [k]: Number(e.target.value) })}
+                                          className={inp} style={{ width: "auto", paddingTop: 4, paddingBottom: 4 }}>
+                                          <option value={0}>—</option>
+                                          {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+                                        </select>
+                                      </label>
+                                    ))}
+                                    <input value={revForm.note} onChange={(e) => setRevForm({ ...revForm, note: e.target.value })}
+                                      placeholder={t({ ar: "ملاحظة التقييم", en: "Note" })} className={inp + " flex-1 min-w-[120px]"} style={{ width: "auto", paddingTop: 4, paddingBottom: 4 }} />
+                                    <button type="button" disabled={busy} onClick={() => void saveReview()} className={`${btnRed} px-3 py-1.5 text-[11px]`}>
+                                      {t({ ar: "حفظ", en: "Save" })}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -686,6 +1078,21 @@ export default function HrAdminConsole() {
             })}
           </div>
         </div>
+      )}
+
+      {/* ═══ التقرير الشهري ═══ */}
+      {tab === "monthly" && (
+        <HrMonthlyReport employees={employees} busy={busy} setBusy={setBusy} flash={flash} />
+      )}
+
+      {/* ═══ أجهزة الحضور ═══ */}
+      {tab === "devices" && (
+        <HrDevices employees={employees} settings={settings} busy={busy} setBusy={setBusy} flash={flash} />
+      )}
+
+      {/* ═══ الإعدادات ═══ */}
+      {tab === "settings" && (
+        <HrSettingsPanel settings={settings} busy={busy} setBusy={setBusy} flash={flash} onSaved={reload} />
       )}
 
       {toast && (

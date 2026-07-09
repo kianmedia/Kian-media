@@ -41,6 +41,7 @@ export interface HrAttendance {
   check_in_lat: number | null; check_in_lng: number | null; check_in_accuracy: number | null;
   check_out_lat: number | null; check_out_lng: number | null; check_out_accuracy: number | null;
   status: AttendanceStatus; admin_adjusted_by: string | null; admin_adjustment_reason: string | null;
+  is_voided?: boolean; void_reason?: string | null; source?: "app" | "device" | "admin";
   created_at: string; updated_at: string;
 }
 export interface HrLeave {
@@ -48,6 +49,7 @@ export interface HrLeave {
   start_date: string; end_date: string | null; start_time: string | null; end_time: string | null;
   reason: string; attachment_url: string | null; status: LeaveStatus;
   decided_by: string | null; decided_at: string | null; decision_note: string | null;
+  is_deleted?: boolean; delete_reason?: string | null;
   created_at: string; updated_at: string;
 }
 export interface HrTask {
@@ -59,7 +61,62 @@ export interface HrTask {
   created_by: string | null; approved_by: string | null; approved_at: string | null;
   created_at: string; updated_at: string;
 }
-export interface HrSettings { employee_leave_requests_enabled: boolean; }
+export interface HrSettings {
+  employee_leave_requests_enabled: boolean;
+  multiple_attendance_sessions_enabled: boolean;
+  task_completion_photo_required: boolean;
+  late_grace_minutes: number;
+  default_work_start_time: string | null;
+  default_work_end_time: string | null;
+  show_performance_reviews_enabled: boolean;
+  device_attendance_enabled: boolean;
+  manual_device_import_enabled: boolean;
+}
+/** القيم الافتراضية الآمنة — تُستخدم قبل تشغيل SQL v3 أو عند فشل القراءة. */
+export const DEFAULT_HR_SETTINGS: HrSettings = {
+  employee_leave_requests_enabled: false,
+  multiple_attendance_sessions_enabled: true,
+  task_completion_photo_required: true,
+  late_grace_minutes: 15,
+  default_work_start_time: null,
+  default_work_end_time: null,
+  show_performance_reviews_enabled: false,
+  device_attendance_enabled: false,
+  manual_device_import_enabled: true,
+};
+export type DeviceType = "smart_lock" | "biometric" | "nfc_reader" | "qr_station" | "manual_import" | "other";
+export type DeviceConnectionMode = "pending" | "manual" | "csv" | "webhook" | "api";
+export type DeviceEventType = "unlock" | "check_in" | "check_out" | "unknown";
+export type DeviceEventStatus = "pending" | "processed" | "ignored" | "failed";
+export interface HrDevice {
+  id: string; name: string; device_type: DeviceType; brand: string | null; model: string | null;
+  location_name: string | null; connection_mode: DeviceConnectionMode; is_active: boolean;
+  notes: string | null; is_deleted: boolean; created_at: string; updated_at: string;
+}
+export interface HrDeviceUser {
+  id: string; device_id: string; employee_id: string; user_id: string | null;
+  device_user_identifier: string; card_id: string | null; pin_label: string | null;
+  fingerprint_label: string | null; is_active: boolean; created_at: string; updated_at: string;
+}
+export interface HrDeviceEvent {
+  id: string; device_id: string; employee_id: string | null; user_id: string | null;
+  device_user_identifier: string | null; event_type: DeviceEventType; event_time: string;
+  note: string | null; processed_status: DeviceEventStatus; processed_at: string | null;
+  attendance_record_id: string | null; error_message: string | null; created_at: string;
+}
+export interface HrTaskReview {
+  id: string; task_id: string; employee_id: string; user_id: string;
+  punctuality_rating: number | null; quality_rating: number | null; communication_rating: number | null;
+  admin_review_note: string | null; reviewed_by: string | null; reviewed_at: string;
+}
+export interface HrMonthlyReportRow {
+  employee_id: string; user_id: string | null; full_name: string; employment_status: EmploymentStatus;
+  present_days: number; session_count: number; total_hours: number; absent_days: number;
+  late_count: number; approved_leaves: number; approved_leave_days: number; tasks_done: number;
+}
+export interface HrMonthlyReport {
+  year: number; month: number; workdays_elapsed: number; generated_at: string; rows: HrMonthlyReportRow[];
+}
 export interface HrAssignee {
   id: string; task_id: string; employee_id: string; user_id: string; status: TaskStatus | "assigned";
   started_at: string | null; ended_at: string | null;
@@ -141,27 +198,35 @@ export function getPositionOnce(): Promise<Result<GeoFix>> {
 export function hrMyProfile(): Promise<Result<HrMyProfile>> {
   return prpc<HrMyProfile>("hr_my_profile", {});
 }
-export function listMyAttendance(limit = 30): Promise<Result<HrAttendance[]>> {
-  return pget<HrAttendance[]>(`hr_attendance_records?select=*&order=work_date.desc,check_in_at.desc&limit=${limit}`);
+// فلترة الملغى/المحذوف تتم في الكود لا في الاستعلام: عمودا is_voided/is_deleted
+// يُنشئهما PATCH v3 — الفلترة client-side تُبقي الواجهة تعمل حتى لو فُتحت قبل تشغيله.
+const notVoided = (rows: HrAttendance[]) => rows.filter((r) => r.is_voided !== true);
+const notDeletedLeaves = (rows: HrLeave[]) => rows.filter((r) => r.is_deleted !== true);
+
+export async function listMyAttendance(limit = 30): Promise<Result<HrAttendance[]>> {
+  const r = await pget<HrAttendance[]>(`hr_attendance_records?select=*&order=work_date.desc,check_in_at.desc&limit=${limit}`);
+  return r.ok ? { ok: true, data: notVoided(r.data) } : r;
 }
-/** جلسات اليوم + أمس (لالتقاط جلسة مفتوحة عبر منتصف الليل) — الأحدث أولاً. */
-export function listMyRecentSessions(userId: string, sinceDate: string): Promise<Result<HrAttendance[]>> {
-  return pget<HrAttendance[]>(`hr_attendance_records?user_id=eq.${enc(userId)}&work_date=gte.${enc(sinceDate)}&select=*&order=check_in_at.desc&limit=20`);
+/** جلسات اليوم + أمس (لالتقاط جلسة مفتوحة عبر منتصف الليل) — الأحدث أولاً، بلا الملغاة. */
+export async function listMyRecentSessions(userId: string, sinceDate: string): Promise<Result<HrAttendance[]>> {
+  const r = await pget<HrAttendance[]>(`hr_attendance_records?user_id=eq.${enc(userId)}&work_date=gte.${enc(sinceDate)}&select=*&order=check_in_at.desc&limit=20`);
+  return r.ok ? { ok: true, data: notVoided(r.data) } : r;
 }
 /** الجلسة المفتوحة (حضور بلا انصراف خلال ٢٠ ساعة) — تعكس حارس SQL نفسه. */
 export function findOpenSession(rows: HrAttendance[]): HrAttendance | null {
   const cutoff = Date.now() - 20 * 3600 * 1000;
   return rows.find((r) => r.check_in_at && !r.check_out_at && new Date(r.check_in_at).getTime() > cutoff) ?? null;
 }
-export function listMyLeaves(): Promise<Result<HrLeave[]>> {
-  return pget<HrLeave[]>(`hr_leave_requests?select=*&order=created_at.desc&limit=50`);
+export async function listMyLeaves(): Promise<Result<HrLeave[]>> {
+  const r = await pget<HrLeave[]>(`hr_leave_requests?select=*&order=created_at.desc&limit=50`);
+  return r.ok ? { ok: true, data: notDeletedLeaves(r.data) } : r;
 }
 export function listMyAssignments(userId: string): Promise<Result<HrAssignee[]>> {
   return pget<HrAssignee[]>(`hr_field_task_assignees?user_id=eq.${enc(userId)}&select=*&order=created_at.desc&limit=50`);
 }
 export function listTasksByIds(ids: string[]): Promise<Result<HrTask[]>> {
   if (ids.length === 0) return Promise.resolve({ ok: true, data: [] });
-  return pget<HrTask[]>(`hr_field_tasks?id=in.(${ids.map(enc).join(",")})&select=*`);
+  return pget<HrTask[]>(`hr_field_tasks?id=in.(${ids.map(enc).join(",")})&is_deleted=eq.false&select=*`);
 }
 export function listMyVisibleEvents(userId: string): Promise<Result<HrEvent[]>> {
   return pget<HrEvent[]>(`hr_employee_events?user_id=eq.${enc(userId)}&visible_to_employee=eq.true&select=*&order=created_at.desc&limit=30`);
@@ -174,9 +239,10 @@ export function hrListAttendance(fromDate: string, toDate: string, userId?: stri
   const extra = userId ? `&user_id=eq.${enc(userId)}` : "";
   return pget<HrAttendance[]>(`hr_attendance_records?work_date=gte.${enc(fromDate)}&work_date=lte.${enc(toDate)}${extra}&select=*&order=work_date.desc,check_in_at.desc&limit=500`);
 }
-export function hrListLeaves(status?: LeaveStatus): Promise<Result<HrLeave[]>> {
+export async function hrListLeaves(status?: LeaveStatus): Promise<Result<HrLeave[]>> {
   const f = status ? `&status=eq.${status}` : "";
-  return pget<HrLeave[]>(`hr_leave_requests?select=*${f}&order=created_at.desc&limit=200`);
+  const r = await pget<HrLeave[]>(`hr_leave_requests?select=*${f}&order=created_at.desc&limit=200`);
+  return r.ok ? { ok: true, data: notDeletedLeaves(r.data) } : r;
 }
 export function hrListTasks(): Promise<Result<HrTask[]>> {
   return pget<HrTask[]>(`hr_field_tasks?is_deleted=eq.false&select=*&order=created_at.desc&limit=200`);
@@ -239,9 +305,6 @@ export function hrAdminUpsertEmployee(input: {
     p_notes_internal: input.notesInternal ?? null, p_notes_visible: input.notesVisible ?? null,
   });
 }
-export function hrOwnerDeleteEmployee(id: string): Promise<Result<boolean>> {
-  return prpc<boolean>("hr_owner_delete_employee", { p_id: id });
-}
 export function hrAdminAdjustAttendance(recordId: string, input: {
   checkIn?: string | null; checkOut?: string | null; status?: AttendanceStatus | null; reason: string;
 }): Promise<Result<boolean>> {
@@ -287,8 +350,98 @@ export function hrAdminUpdateTask(taskId: string, input: HrTaskInput): Promise<R
 export function hrGetSettings(): Promise<Result<HrSettings>> {
   return prpc<HrSettings>("hr_get_settings", {});
 }
-export function hrAdminUpdateSettings(leaveEnabled: boolean): Promise<Result<{ ok: boolean; employee_leave_requests_enabled: boolean }>> {
-  return prpc<{ ok: boolean; employee_leave_requests_enabled: boolean }>("hr_admin_update_settings", { p_leave_enabled: leaveEnabled });
+/** تحديث جزئي: يُرسل المفاتيح المتغيرة فقط — يعيد الإعدادات كاملة بعد الحفظ. */
+export function hrAdminUpdateSettings(patch: Partial<HrSettings>): Promise<Result<HrSettings>> {
+  return prpc<HrSettings>("hr_admin_update_settings", { p_patch: patch });
+}
+// ─── تحكم إداري v3: حذف/إلغاء آمن + حالة الموظف ───
+export function hrAdminSoftDeleteLeave(id: string, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_soft_delete_leave_request", { p_id: id, p_reason: reason });
+}
+export function hrAdminUpdateLeave(id: string, input: {
+  type: LeaveType; start: string; end?: string | null; startTime?: string | null; endTime?: string | null; note?: string;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_update_leave_request", {
+    p_id: id, p_type: input.type, p_start: input.start, p_end: input.end ?? null,
+    p_start_time: input.startTime ?? null, p_end_time: input.endTime ?? null, p_note: input.note ?? null,
+  });
+}
+export function hrAdminVoidAttendance(recordId: string, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_void_attendance_record", { p_record: recordId, p_reason: reason });
+}
+export function hrAdminSoftDeleteTask(taskId: string, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_soft_delete_field_task", { p_task: taskId, p_reason: reason });
+}
+export function hrAdminUpdateEmployeeStatus(id: string, status: EmploymentStatus, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_update_employee_status", { p_id: id, p_status: status, p_reason: reason });
+}
+export function hrOwnerSoftDeleteEmployee(id: string, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_owner_soft_delete_employee", { p_id: id, p_reason: reason });
+}
+// ─── تقييم الأداء (داخلي — يظهر للموظف فقط عند تفعيل الميزة) ───
+export function hrAdminReviewTask(taskId: string, employeeId: string, input: {
+  punctuality?: number | null; quality?: number | null; communication?: number | null; note?: string;
+}): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_review_task_assignee", {
+    p_task: taskId, p_employee: employeeId,
+    p_punctuality: input.punctuality ?? null, p_quality: input.quality ?? null,
+    p_communication: input.communication ?? null, p_note: input.note ?? null,
+  });
+}
+export function hrListTaskReviews(taskId: string): Promise<Result<HrTaskReview[]>> {
+  return pget<HrTaskReview[]>(`hr_task_reviews?task_id=eq.${enc(taskId)}&select=*`);
+}
+// ─── التقرير الشهري ───
+export function hrAdminMonthlyReport(year: number, month: number, userId?: string): Promise<Result<HrMonthlyReport>> {
+  return prpc<HrMonthlyReport>("hr_admin_monthly_report", { p_year: year, p_month: month, p_user: userId ?? null });
+}
+// ─── أجهزة الحضور (قراءة عبر RLS للأدمن؛ كتابة عبر RPC فقط) ───
+export function hrListDevices(): Promise<Result<HrDevice[]>> {
+  return pget<HrDevice[]>(`hr_attendance_devices?is_deleted=eq.false&select=*&order=created_at.asc&limit=100`);
+}
+export function hrListDeviceUsers(filter?: { deviceId?: string; employeeId?: string }): Promise<Result<HrDeviceUser[]>> {
+  const f = filter?.deviceId ? `&device_id=eq.${enc(filter.deviceId)}`
+    : filter?.employeeId ? `&employee_id=eq.${enc(filter.employeeId)}` : "";
+  return pget<HrDeviceUser[]>(`hr_attendance_device_users?select=*${f}&order=created_at.desc&limit=300`);
+}
+export function hrListDeviceEvents(status?: DeviceEventStatus): Promise<Result<HrDeviceEvent[]>> {
+  const f = status ? `&processed_status=eq.${status}` : "";
+  return pget<HrDeviceEvent[]>(`hr_attendance_device_events?select=*${f}&order=event_time.desc&limit=200`);
+}
+export function hrAdminUpsertDevice(input: {
+  id?: string | null; name: string; type: DeviceType; brand?: string; model?: string;
+  location?: string; mode: DeviceConnectionMode; active: boolean; notes?: string;
+}): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_admin_upsert_attendance_device", {
+    p_id: input.id ?? null, p_name: input.name, p_type: input.type,
+    p_brand: input.brand ?? null, p_model: input.model ?? null,
+    p_location: input.location ?? null, p_mode: input.mode,
+    p_active: input.active, p_notes: input.notes ?? null,
+  });
+}
+export function hrAdminMapDeviceUser(input: {
+  deviceId: string; employeeId: string; identifier: string;
+  cardId?: string; pinLabel?: string; fingerprintLabel?: string; active?: boolean;
+}): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_admin_map_device_user_to_employee", {
+    p_device: input.deviceId, p_employee: input.employeeId, p_identifier: input.identifier,
+    p_card: input.cardId ?? null, p_pin: input.pinLabel ?? null,
+    p_fingerprint: input.fingerprintLabel ?? null, p_active: input.active ?? true,
+  });
+}
+export function hrAdminImportDeviceEvent(input: {
+  deviceId: string; identifier: string; eventType: DeviceEventType; eventTime: string; note?: string;
+}): Promise<Result<{ ok: boolean; id: string; matched: boolean }>> {
+  return prpc<{ ok: boolean; id: string; matched: boolean }>("hr_admin_import_device_event", {
+    p_device: input.deviceId, p_identifier: input.identifier,
+    p_event_type: input.eventType, p_event_time: input.eventTime, p_note: input.note ?? null,
+  });
+}
+export function hrAdminProcessDeviceEvent(eventId: string): Promise<Result<{
+  ok: boolean; matched: boolean; status: string; action?: string; reason?: string; attendance_record_id?: string;
+}>> {
+  return prpc<{ ok: boolean; matched: boolean; status: string; action?: string; reason?: string; attendance_record_id?: string }>(
+    "hr_admin_process_device_event", { p_event: eventId });
 }
 export function hrAdminCloseTask(taskId: string, action: "complete" | "cancel", note?: string): Promise<Result<boolean>> {
   return prpc<boolean>("hr_admin_close_task", { p_task: taskId, p_action: action, p_note: note ?? null });

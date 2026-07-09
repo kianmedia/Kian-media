@@ -56,6 +56,14 @@ const EVENT_SUBJECTS: Record<string, string> = {
   hr_note_new:            "ملاحظة موارد بشرية جديدة — كيان",
   hr_task_updated:        "تحديث مهمة ميدانية — كيان",
   hr_settings_updated:    "تحديث إعدادات الموارد البشرية — كيان",
+  hr_leave_deleted:       "حذف إداري لطلب إجازة — كيان",
+  hr_leave_updated:       "تعديل إداري لطلب إجازة — كيان",
+  hr_attendance_voided:   "إلغاء إداري لسجل حضور — كيان",
+  hr_task_deleted:        "حذف إداري لمهمة ميدانية — كيان",
+  hr_employee_status_updated: "تغيير حالة موظف — كيان",
+  hr_device_user_mapped:  "ربط جهاز حضور بموظف — كيان",
+  hr_device_event_imported:  "استيراد حدث جهاز حضور — كيان",
+  hr_device_event_processed: "معالجة حدث جهاز حضور — كيان",
 };
 
 /** POSTs the portal_notify email payload. ALWAYS logs the outcome. */
