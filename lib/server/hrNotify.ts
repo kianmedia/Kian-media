@@ -64,6 +64,12 @@ const EVENT_SUBJECTS: Record<string, string> = {
   hr_device_user_mapped:  "ربط جهاز حضور بموظف — كيان",
   hr_device_event_imported:  "استيراد حدث جهاز حضور — كيان",
   hr_device_event_processed: "معالجة حدث جهاز حضور — كيان",
+  hr_correction_new:      "طلب تعديل حضور جديد — كيان",
+  hr_correction_decided:  "قرار طلب تعديل حضور — كيان",
+  hr_calendar_updated:    "تحديث تقويم الموارد البشرية — كيان",
+  hr_document_added:      "وثيقة موظف — كيان",
+  hr_supervisor_link_updated: "تحديث الإشراف الميداني — كيان",
+  hr_supervisor_note:     "ملاحظة مشرف ميداني — كيان",
 };
 
 /** POSTs the portal_notify email payload. ALWAYS logs the outcome. */

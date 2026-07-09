@@ -71,8 +71,14 @@ export interface HrSettings {
   show_performance_reviews_enabled: boolean;
   device_attendance_enabled: boolean;
   manual_device_import_enabled: boolean;
+  // v3.1: خصومات (عرض فقط — لا خصم مالي فعلي) + تنبيه الجلسات الطويلة
+  late_deduction_enabled: boolean;
+  absence_deduction_enabled: boolean;
+  early_exit_deduction_enabled: boolean;
+  deduction_notes: string | null;
+  open_session_alert_hours: number;
 }
-/** القيم الافتراضية الآمنة — تُستخدم قبل تشغيل SQL v3 أو عند فشل القراءة. */
+/** القيم الافتراضية الآمنة — تُستخدم قبل تشغيل SQL أو عند فشل القراءة. */
 export const DEFAULT_HR_SETTINGS: HrSettings = {
   employee_leave_requests_enabled: false,
   multiple_attendance_sessions_enabled: true,
@@ -83,7 +89,72 @@ export const DEFAULT_HR_SETTINGS: HrSettings = {
   show_performance_reviews_enabled: false,
   device_attendance_enabled: false,
   manual_device_import_enabled: true,
+  late_deduction_enabled: false,
+  absence_deduction_enabled: false,
+  early_exit_deduction_enabled: false,
+  deduction_notes: null,
+  open_session_alert_hours: 10,
 };
+
+// ─── v3.1 types ───
+export type CorrectionType = "missed_check_in" | "missed_check_out" | "wrong_time" | "field_task" | "other";
+export type CorrectionStatus = "pending" | "approved" | "rejected" | "cancelled";
+export interface HrCorrectionRequest {
+  id: string; employee_id: string; user_id: string; request_type: CorrectionType;
+  correction_date: string; proposed_time: string | null; employee_note: string | null;
+  task_id: string | null; attachment_url: string | null; status: CorrectionStatus;
+  decided_by: string | null; decided_at: string | null; decision_note: string | null;
+  attendance_record_id: string | null; is_deleted: boolean; created_at: string; updated_at: string;
+}
+export type HolidayType = "public_holiday" | "company_holiday" | "special_workday" | "closed_day";
+export interface HrHoliday {
+  id: string; title: string; holiday_date: string; type: HolidayType;
+  description: string | null; is_deleted: boolean; created_at: string; updated_at: string;
+}
+export interface HrCalendar { weekend_days: number[]; default_timezone: string; }
+export type DocumentType = "national_id" | "iqama" | "contract" | "driving_license" | "iban" | "certificate" | "medical_insurance" | "other";
+export type DocumentVisibility = "admin_only" | "employee_visible";
+export interface HrDocument {
+  id: string; employee_id: string; user_id: string | null; document_type: DocumentType;
+  title: string; document_number: string | null; issue_date: string | null; expiry_date: string | null;
+  file_url: string | null; visibility: DocumentVisibility; notes: string | null;
+  is_deleted: boolean; created_at: string; updated_at: string;
+}
+export interface HrExpiringDoc {
+  id: string; employee_id: string; full_name: string; document_type: DocumentType;
+  title: string; expiry_date: string; visibility: DocumentVisibility; days_left: number;
+}
+export interface HrSupervisorLink {
+  id: string; supervisor_employee_id: string; employee_id: string; is_active: boolean; created_at: string;
+}
+export interface HrTeamMember {
+  employee_id: string; user_id: string | null; full_name: string; job_title: string | null;
+  employment_status: EmploymentStatus; checked_in_today: boolean; open_session: boolean;
+}
+export interface HrTeamTask {
+  task_id: string; title: string; status: TaskStatus; task_type: TaskType; priority: TaskPriority;
+  city: string | null; client_name: string | null; expected_start_at: string | null;
+}
+export interface HrAuditRow {
+  id: string; employee_id: string; employee_name: string; event_type: string;
+  title: string; description: string | null; visible_to_employee: boolean;
+  actor_id: string | null; actor_name: string | null; created_at: string;
+}
+export interface HrLongOpenSession {
+  record_id: string; employee_id: string; user_id: string; full_name: string;
+  check_in_at: string; hours_open: number;
+}
+export interface HrPayrollRow {
+  employee_id: string; user_id: string | null; full_name: string; employment_status: EmploymentStatus;
+  expected_workdays: number; present_days: number; absent_days: number;
+  late_count: number; late_minutes: number; early_exit_count: number; early_exit_minutes: number;
+  total_hours: number; approved_leave_days: number; approved_corrections: number; tasks_done: number;
+}
+export interface HrPayrollReport {
+  year: number; month: number; workdays_expected: number; generated_at: string;
+  deduction_flags: { late: boolean; absence: boolean; early_exit: boolean; notes: string | null };
+  rows: HrPayrollRow[];
+}
 export type DeviceType = "smart_lock" | "biometric" | "nfc_reader" | "qr_station" | "manual_import" | "other";
 export type DeviceConnectionMode = "pending" | "manual" | "csv" | "webhook" | "api";
 export type DeviceEventType = "unlock" | "check_in" | "check_out" | "unknown";
@@ -450,6 +521,140 @@ export function hrAdminAddEmployeeEvent(employeeId: string, title: string, descr
   return prpc<boolean>("hr_admin_add_employee_event", {
     p_employee: employeeId, p_title: title, p_description: description ?? null, p_visible: visible,
   });
+}
+
+// ════════ v3.1 — طلبات تعديل الحضور ════════
+export const CORRECTION_TYPE_LABELS: Record<CorrectionType, { ar: string; en: string }> = {
+  missed_check_in:  { ar: "نسيت تسجيل حضور",  en: "Missed check-in" },
+  missed_check_out: { ar: "نسيت تسجيل انصراف", en: "Missed check-out" },
+  wrong_time:       { ar: "وقت خاطئ",          en: "Wrong time" },
+  field_task:       { ar: "كنت في مهمة ميدانية", en: "On a field task" },
+  other:            { ar: "سبب آخر",           en: "Other" },
+};
+export const HOLIDAY_TYPE_LABELS: Record<HolidayType, { ar: string; en: string }> = {
+  public_holiday:  { ar: "عطلة رسمية",   en: "Public holiday" },
+  company_holiday: { ar: "عطلة الشركة",  en: "Company holiday" },
+  special_workday: { ar: "يوم عمل خاص",  en: "Special workday" },
+  closed_day:      { ar: "يوم إغلاق",    en: "Closed day" },
+};
+export const DOCUMENT_TYPE_LABELS: Record<DocumentType, { ar: string; en: string }> = {
+  national_id:       { ar: "الهوية الوطنية", en: "National ID" },
+  iqama:             { ar: "الإقامة",         en: "Iqama" },
+  contract:          { ar: "العقد",           en: "Contract" },
+  driving_license:   { ar: "رخصة القيادة",    en: "Driving license" },
+  iban:              { ar: "الآيبان",         en: "IBAN" },
+  certificate:       { ar: "شهادة",           en: "Certificate" },
+  medical_insurance: { ar: "التأمين الطبي",   en: "Medical insurance" },
+  other:             { ar: "وثيقة أخرى",      en: "Other" },
+};
+export function hrSubmitCorrection(input: {
+  type: CorrectionType; date: string; proposedTime?: string | null; note: string; taskId?: string | null; attachment?: string | null;
+}): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_submit_attendance_correction_request", {
+    p_type: input.type, p_date: input.date, p_proposed_time: input.proposedTime ?? null,
+    p_note: input.note, p_task: input.taskId ?? null, p_attachment: input.attachment ?? null,
+  });
+}
+export function hrCancelMyCorrection(id: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_cancel_my_attendance_correction_request", { p_id: id });
+}
+export function hrAdminDecideCorrection(id: string, approve: boolean, note?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_decide_attendance_correction_request", { p_id: id, p_approve: approve, p_note: note ?? null });
+}
+async function stripDeletedCorr(r: Result<HrCorrectionRequest[]>): Promise<Result<HrCorrectionRequest[]>> {
+  return r.ok ? { ok: true, data: r.data.filter((x) => x.is_deleted !== true) } : r;
+}
+export async function listMyCorrections(userId: string): Promise<Result<HrCorrectionRequest[]>> {
+  return stripDeletedCorr(await pget<HrCorrectionRequest[]>(
+    `hr_attendance_correction_requests?user_id=eq.${enc(userId)}&select=*&order=created_at.desc&limit=50`));
+}
+export async function hrListCorrections(status?: CorrectionStatus): Promise<Result<HrCorrectionRequest[]>> {
+  const f = status ? `&status=eq.${status}` : "";
+  return stripDeletedCorr(await pget<HrCorrectionRequest[]>(
+    `hr_attendance_correction_requests?select=*${f}&order=created_at.desc&limit=300`));
+}
+
+// ════════ v3.1 — التقويم ════════
+export function hrGetCalendar(): Promise<Result<HrCalendar>> {
+  return prpc<HrCalendar>("hr_get_calendar", {});
+}
+export function hrAdminSetWeekendDays(days: number[]): Promise<Result<HrCalendar>> {
+  return prpc<HrCalendar>("hr_admin_set_weekend_days", { p_days: days });
+}
+export async function hrListHolidays(): Promise<Result<HrHoliday[]>> {
+  const r = await pget<HrHoliday[]>(`hr_holidays?is_deleted=eq.false&select=*&order=holiday_date.desc&limit=300`);
+  return r.ok ? { ok: true, data: r.data } : r;
+}
+export function hrAdminUpsertHoliday(input: {
+  id?: string | null; title: string; date: string; type: HolidayType; description?: string;
+}): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_admin_upsert_holiday", {
+    p_id: input.id ?? null, p_title: input.title, p_date: input.date, p_type: input.type, p_description: input.description ?? null,
+  });
+}
+export function hrAdminDeleteHoliday(id: string, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_soft_delete_holiday", { p_id: id, p_reason: reason });
+}
+
+// ════════ v3.1 — تقرير الرواتب/الخصومات ════════
+export function hrAdminPayrollReport(year: number, month: number, userId?: string): Promise<Result<HrPayrollReport>> {
+  return prpc<HrPayrollReport>("hr_admin_payroll_report", { p_year: year, p_month: month, p_user: userId ?? null });
+}
+
+// ════════ v3.1 — وثائق الموظف ════════
+export function hrListEmployeeDocuments(employeeId: string): Promise<Result<HrDocument[]>> {
+  return pget<HrDocument[]>(`hr_employee_documents?employee_id=eq.${enc(employeeId)}&is_deleted=eq.false&select=*&order=created_at.desc&limit=100`);
+}
+export function listMyDocuments(userId: string): Promise<Result<HrDocument[]>> {
+  return pget<HrDocument[]>(`hr_employee_documents?user_id=eq.${enc(userId)}&visibility=eq.employee_visible&is_deleted=eq.false&select=*&order=created_at.desc&limit=100`);
+}
+export function hrAdminUpsertDocument(input: {
+  id?: string | null; employeeId: string; type: DocumentType; title: string; number?: string;
+  issue?: string | null; expiry?: string | null; fileUrl?: string; visibility: DocumentVisibility; notes?: string;
+}): Promise<Result<{ ok: boolean; id: string; created: boolean }>> {
+  return prpc<{ ok: boolean; id: string; created: boolean }>("hr_admin_upsert_employee_document", {
+    p_id: input.id ?? null, p_employee: input.employeeId, p_type: input.type, p_title: input.title,
+    p_number: input.number ?? null, p_issue: input.issue ?? null, p_expiry: input.expiry ?? null,
+    p_file_url: input.fileUrl ?? null, p_visibility: input.visibility, p_notes: input.notes ?? null,
+  });
+}
+export function hrAdminDeleteDocument(id: string, reason: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_soft_delete_employee_document", { p_id: id, p_reason: reason });
+}
+export function hrAdminExpiringDocuments(days = 90): Promise<Result<{ as_of: string; window_days: number; rows: HrExpiringDoc[] }>> {
+  return prpc<{ as_of: string; window_days: number; rows: HrExpiringDoc[] }>("hr_admin_list_expiring_documents", { p_days: days });
+}
+
+// ════════ v3.1 — المشرف الميداني ════════
+export function hrListSupervisorLinks(): Promise<Result<HrSupervisorLink[]>> {
+  return pget<HrSupervisorLink[]>(`hr_employee_supervisor_links?is_active=eq.true&select=*&limit=500`);
+}
+export function hrAdminSetSupervisorLink(supervisorEmployeeId: string, employeeId: string, active: boolean): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_admin_set_supervisor_link", {
+    p_supervisor: supervisorEmployeeId, p_employee: employeeId, p_active: active,
+  });
+}
+export function hrSupervisorMyTeam(): Promise<Result<{ rows: HrTeamMember[] }>> {
+  return prpc<{ rows: HrTeamMember[] }>("hr_supervisor_my_team", {});
+}
+export function hrSupervisorTeamTasks(): Promise<Result<{ rows: HrTeamTask[] }>> {
+  return prpc<{ rows: HrTeamTask[] }>("hr_supervisor_team_tasks", {});
+}
+export function hrSupervisorAddNote(employeeId: string, note: string, visible = false): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_supervisor_add_note", { p_employee: employeeId, p_note: note, p_visible: visible });
+}
+
+// ════════ v3.1 — سجل العمليات + الجلسات الطويلة ════════
+export function hrAdminAuditLog(input: {
+  userId?: string | null; types?: string[] | null; from?: string | null; to?: string | null; search?: string | null; limit?: number;
+}): Promise<Result<{ rows: HrAuditRow[] }>> {
+  return prpc<{ rows: HrAuditRow[] }>("hr_admin_list_audit_log", {
+    p_user: input.userId ?? null, p_types: input.types ?? null,
+    p_from: input.from ?? null, p_to: input.to ?? null, p_search: input.search ?? null, p_limit: input.limit ?? 300,
+  });
+}
+export function hrAdminLongOpenSessions(): Promise<Result<{ threshold_hours: number; rows: HrLongOpenSession[] }>> {
+  return prpc<{ threshold_hours: number; rows: HrLongOpenSession[] }>("hr_admin_long_open_sessions", {});
 }
 
 // ─── hr-files storage (task photos; owner-first paths; signed URLs) ───

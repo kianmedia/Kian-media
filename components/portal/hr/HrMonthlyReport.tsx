@@ -91,8 +91,8 @@ export default function HrMonthlyReport({ employees, busy, setBusy, flash }: {
           </div>
         </div>
         <p className="text-[11px] text-stone-500 mt-2 leading-relaxed">
-          {t({ ar: "المنطق: توقيت الرياض؛ أيام العمل = أيام الشهر المنقضية عدا الجمعة والسبت؛ الغياب = أيام العمل − الحضور − الإجازات المعتمدة (الأنواع اليومية)؛ التأخير يُحسب فقط عند ضبط بداية الدوام في الإعدادات.",
-               en: "Riyadh time; workdays exclude Fri/Sat; absence = workdays − present − approved day-leaves; lateness needs a configured work start." })}
+          {t({ ar: "المنطق: توقيت الرياض؛ أيام العمل تُحتسب وفق تقويم الموارد البشرية (أيام العطلة الأسبوعية + العطل الرسمية + أيام العمل الخاصة)؛ الغياب = أيام العمل − الحضور − الإجازات المعتمدة؛ التأخير يُحسب فقط عند ضبط بداية الدوام في الإعدادات.",
+               en: "Riyadh time; workdays follow the HR calendar (weekend days + holidays + special workdays); absence = workdays − present − approved leaves; lateness needs a configured work start." })}
         </p>
       </section>
 

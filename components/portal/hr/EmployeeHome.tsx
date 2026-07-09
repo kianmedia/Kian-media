@@ -13,11 +13,15 @@ import {
   hrMyProfile, listMyRecentSessions, findOpenSession, listMyAttendance, listMyLeaves,
   listMyAssignments, listTasksByIds, listMyVisibleEvents, hrCheckIn, hrCheckOut,
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
+  listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments,
+  hrSupervisorMyTeam, hrSupervisorAddNote,
   getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent,
   CONSENT_TEXT, LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
   TASK_TYPE_LABELS, TASK_PRIORITY_LABELS, DEFAULT_HR_SETTINGS,
+  CORRECTION_TYPE_LABELS, DOCUMENT_TYPE_LABELS,
   type HrMyProfile, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
-  type HrEvent, type LeaveType, type HrSettings,
+  type HrEvent, type LeaveType, type HrSettings, type HrCorrectionRequest,
+  type CorrectionType, type HrDocument, type HrTeamMember,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 
@@ -57,6 +61,9 @@ export default function EmployeeHome() {
   const [tasks, setTasks] = useState<Record<string, HrTask>>({});
   const [events, setEvents] = useState<HrEvent[]>([]);
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
+  const [corrections, setCorrections] = useState<HrCorrectionRequest[]>([]);
+  const [documents, setDocuments] = useState<HrDocument[]>([]);
+  const [team, setTeam] = useState<HrTeamMember[]>([]);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [errDetail, setErrDetail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,10 +74,11 @@ export default function EmployeeHome() {
     const prof = await hrMyProfile();
     if (!prof.ok) { setErrDetail(prof.error); setPhase("error"); return; }
     setMe(prof.data);
-    const [att, ses, st, lv, asg, ev, cu] = await Promise.all([
+    const [att, ses, st, lv, asg, ev, cu, corr, docs, tm] = await Promise.all([
       listMyAttendance(20), listMyRecentSessions(uid, daysAgoRiyadh(1)), hrGetSettings(), listMyLeaves(),
       listMyAssignments(uid), listMyVisibleEvents(uid),
       listMyCustodyRecords("custody", uid),
+      listMyCorrections(uid), listMyDocuments(uid), hrSupervisorMyTeam(),
     ]);
     if (att.ok) setAttendance(att.data);
     if (ses.ok) setSessions(ses.data);
@@ -79,6 +87,9 @@ export default function EmployeeHome() {
     if (lv.ok) setLeaves(lv.data);
     if (ev.ok) setEvents(ev.data);
     if (cu.ok) setCustody(cu.data);
+    if (corr.ok) setCorrections(corr.data);
+    if (docs.ok) setDocuments(docs.data);
+    setTeam(tm.ok ? tm.data.rows : []);
     if (asg.ok) {
       setAssignments(asg.data);
       const ids = Array.from(new Set(asg.data.map((a) => a.task_id)));
@@ -211,6 +222,54 @@ export default function EmployeeHome() {
     await reload(); flash(t({ ar: "أُلغي الطلب.", en: "Cancelled." }));
   }
 
+  // ─── طلبات تعديل الحضور (v3.1) ───
+  const [cf, setCf] = useState<{ type: CorrectionType; date: string; time: string; note: string }>({
+    type: "missed_check_in", date: todayRiyadh(), time: "", note: "",
+  });
+  const cfNeedsTime = cf.type === "missed_check_in" || cf.type === "missed_check_out" || cf.type === "wrong_time";
+  async function doSubmitCorrection() {
+    if (readOnly || busy) return;
+    if (!cf.date) { flash(t({ ar: "حدد التاريخ.", en: "Pick a date." })); return; }
+    if (cfNeedsTime && !cf.time) { flash(t({ ar: "حدد الوقت المقترح.", en: "Pick the proposed time." })); return; }
+    if (!cf.note.trim()) { flash(t({ ar: "اكتب ملاحظة/سبب الطلب.", en: "Write a note." })); return; }
+    setBusy(true);
+    const r = await hrSubmitCorrection({ type: cf.type, date: cf.date, proposedTime: cfNeedsTime ? (cf.time || null) : null, note: cf.note.trim() });
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_correction_new", entity_id: r.data.id, title: "طلب تعديل حضور من " + (me?.full_name || ""), employee_name: me?.full_name || "" });
+    setCf({ type: "missed_check_in", date: todayRiyadh(), time: "", note: "" });
+    await reload();
+    flash(t({ ar: "أُرسل طلب تعديل الحضور — سيُراجع من الإدارة.", en: "Correction request sent." }));
+  }
+  async function doCancelCorrection(id: string) {
+    if (busy || readOnly) return;
+    setBusy(true); const r = await hrCancelMyCorrection(id); setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر الإلغاء: ", en: "Couldn't cancel: " })) + r.error); return; }
+    await reload(); flash(t({ ar: "أُلغي الطلب.", en: "Cancelled." }));
+  }
+
+  // ─── ملاحظة المشرف على فرد من فريقه ───
+  const [noteFor, setNoteFor] = useState<string | null>(null);
+  const [teamNote, setTeamNote] = useState("");
+  const [teamNoteVisible, setTeamNoteVisible] = useState(false);
+  async function doTeamNote(employeeId: string) {
+    if (busy || readOnly) return;
+    if (!teamNote.trim()) { flash(t({ ar: "اكتب الملاحظة.", en: "Write the note." })); return; }
+    setBusy(true);
+    const r = await hrSupervisorAddNote(employeeId, teamNote.trim(), teamNoteVisible);
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_supervisor_note", entity_id: employeeId, title: "ملاحظة مشرف ميداني", employee_user_id: team.find((m) => m.employee_id === employeeId)?.user_id || undefined });
+    setNoteFor(null); setTeamNote(""); setTeamNoteVisible(false);
+    flash(t({ ar: "أُرسلت الملاحظة.", en: "Note sent." }));
+  }
+
+  // ─── شريط الجوال السريع ───
+  function quickAction(action: string, go: () => void) {
+    emitHrEvent({ event: "hr_mobile_quick_action_used", entity_id: action, title: "شريط سريع: " + action });
+    go();
+  }
+
   if (phase === "loading") return <p className="text-stone-500 text-sm">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
   if (phase === "error") return (
     <div className="text-red-400 text-sm">
@@ -282,7 +341,7 @@ export default function EmployeeHome() {
       </section>
 
       {/* ═══ مهامي ═══ */}
-      <section className={card}>
+      <section id="emp-tasks" className={card}>
         <h2 className="text-base font-medium text-stone-100 mb-3">
           {t({ ar: "مهامي الميدانية", en: "My field tasks" })}
           <span className="text-stone-500 text-xs font-normal"> ({myOpenTasks.length} {t({ ar: "مفتوحة", en: "open" })})</span>
@@ -387,6 +446,122 @@ export default function EmployeeHome() {
           }} />
       </section>
 
+      {/* ═══ طلبات تعديل الحضور ═══ */}
+      <section id="emp-corrections" className={card}>
+        <h2 className="text-base font-medium text-stone-100 mb-1">{t({ ar: "طلبات تعديل الحضور", en: "Attendance corrections" })}</h2>
+        <p className="text-[11px] text-stone-500 mb-3">{t({ ar: "لتصحيح حضور/انصراف منسي أو وقت خاطئ — يُراجَع من الإدارة قبل تعديل سجلك.", en: "Fix a missed or wrong attendance entry — reviewed by admin." })}</p>
+        <div className="space-y-2 mb-4">
+          <select value={cf.type} onChange={(e) => setCf({ ...cf, type: e.target.value as CorrectionType })} className={inp}>
+            {(Object.keys(CORRECTION_TYPE_LABELS) as CorrectionType[]).map((k) => (
+              <option key={k} value={k}>{isAr ? CORRECTION_TYPE_LABELS[k].ar : CORRECTION_TYPE_LABELS[k].en}</option>
+            ))}
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "التاريخ", en: "Date" })}</label>
+              <input type="date" value={cf.date} onChange={(e) => setCf({ ...cf, date: e.target.value })} className={inp} dir="ltr" />
+            </div>
+            {cfNeedsTime && (
+              <div>
+                <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "الوقت المقترح", en: "Proposed time" })}</label>
+                <input type="time" value={cf.time} onChange={(e) => setCf({ ...cf, time: e.target.value })} className={inp} dir="ltr" />
+              </div>
+            )}
+          </div>
+          <textarea value={cf.note} onChange={(e) => setCf({ ...cf, note: e.target.value })} rows={2}
+            placeholder={t({ ar: "ملاحظة / سبب الطلب…", en: "Note / reason…" })} className={inp} />
+          <button type="button" disabled={busy || readOnly} onClick={() => void doSubmitCorrection()} className={`${btnRed} w-full py-2.5`}>
+            {busy ? "…" : t({ ar: "إرسال طلب التعديل", en: "Submit correction" })}
+          </button>
+        </div>
+        {corrections.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا طلبات سابقة.", en: "No previous requests." })}</p>}
+        <div className="space-y-1.5">
+          {corrections.map((c) => (
+            <div key={c.id} className="flex items-center gap-2 flex-wrap bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-xs">
+              <span className="text-stone-200">{t(CORRECTION_TYPE_LABELS[c.request_type] ?? { ar: c.request_type, en: c.request_type })}</span>
+              <span className="font-mono text-stone-500" dir="ltr">{c.correction_date}{c.proposed_time ? ` · ${c.proposed_time.slice(0, 5)}` : ""}</span>
+              <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] ${
+                c.status === "approved" ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                : c.status === "rejected" ? "bg-red-950 text-red-300 border-red-800"
+                : c.status === "cancelled" ? "bg-stone-800 text-stone-400 border-stone-700"
+                : "bg-sky-950 text-sky-300 border-sky-800"}`}>
+                {c.status === "approved" ? t({ ar: "معتمد", en: "Approved" }) : c.status === "rejected" ? t({ ar: "مرفوض", en: "Rejected" }) : c.status === "cancelled" ? t({ ar: "ملغى", en: "Cancelled" }) : t({ ar: "قيد المراجعة", en: "Pending" })}
+              </span>
+              {c.decision_note && <span className="text-stone-500">— {c.decision_note}</span>}
+              {c.status === "pending" && (
+                <button type="button" disabled={busy || readOnly} onClick={() => void doCancelCorrection(c.id)}
+                  className="ms-auto text-red-400 underline text-[11px] disabled:opacity-50">{t({ ar: "إلغاء", en: "Cancel" })}</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ═══ فريقي (يظهر للمشرف الميداني فقط) ═══ */}
+      {team.length > 0 && (
+        <section className={card}>
+          <h2 className="text-base font-medium text-stone-100 mb-1">{t({ ar: "فريقي الميداني", en: "My field team" })}</h2>
+          <p className="text-[11px] text-stone-500 mb-3">{t({ ar: "حضور فريقك اليوم (بلا مواقع/وثائق/رواتب). يمكنك إضافة ملاحظة ميدانية.", en: "Your team's attendance today. You can add a field note." })}</p>
+          <div className="space-y-1.5">
+            {team.map((m) => (
+              <div key={m.employee_id} className="bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-xs space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-stone-100">{m.full_name}</span>
+                  {m.job_title && <span className="text-stone-500 text-[11px]">{m.job_title}</span>}
+                  <span className={`ms-auto inline-block rounded-full border px-2 py-0.5 text-[10px] ${
+                    m.open_session ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                    : m.checked_in_today ? "bg-stone-800 text-stone-300 border-stone-700"
+                    : "bg-amber-950 text-amber-300 border-amber-800"}`}>
+                    {m.open_session ? t({ ar: "حاضر الآن", en: "Present now" }) : m.checked_in_today ? t({ ar: "سجّل اليوم", en: "Checked in" }) : t({ ar: "لم يسجّل", en: "Not in" })}
+                  </span>
+                  <button type="button" className="text-red-300 underline text-[11px]"
+                    onClick={() => setNoteFor(noteFor === m.employee_id ? null : m.employee_id)}>
+                    {t({ ar: "ملاحظة", en: "Note" })}
+                  </button>
+                </div>
+                {noteFor === m.employee_id && (
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <input value={teamNote} onChange={(e) => setTeamNote(e.target.value)}
+                      placeholder={t({ ar: "ملاحظة ميدانية…", en: "Field note…" })} className={inp + " flex-1 min-w-[140px]"} style={{ width: "auto" }} />
+                    <label className="flex items-center gap-1 text-[10px] text-stone-400">
+                      <input type="checkbox" checked={teamNoteVisible} onChange={(e) => setTeamNoteVisible(e.target.checked)} className="accent-red-600" />
+                      {t({ ar: "تظهر له", en: "Visible" })}
+                    </label>
+                    <button type="button" disabled={busy} onClick={() => void doTeamNote(m.employee_id)} className={`${btnRed} px-3 py-1.5 text-[11px]`}>{t({ ar: "إرسال", en: "Send" })}</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ═══ وثائقي (الظاهرة فقط) ═══ */}
+      {documents.length > 0 && (
+        <section className={card}>
+          <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "وثائقي", en: "My documents" })}</h2>
+          <div className="space-y-1.5">
+            {documents.map((d) => {
+              const dl = d.expiry_date ? Math.round((new Date(d.expiry_date + "T00:00:00").getTime() - Date.now()) / 86400000) : null;
+              return (
+                <div key={d.id} className="flex items-center gap-2 flex-wrap bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-xs">
+                  <span className="inline-block rounded-full border border-stone-700 bg-stone-800 px-2 py-0.5 text-[10px] text-sky-300">
+                    {t(DOCUMENT_TYPE_LABELS[d.document_type] ?? { ar: d.document_type, en: d.document_type })}
+                  </span>
+                  <span className="text-stone-200">{d.title}</span>
+                  {d.expiry_date && (
+                    <span className={`font-mono ms-auto ${dl != null && dl <= 30 ? "text-red-400" : dl != null && dl <= 90 ? "text-amber-400" : "text-stone-500"}`} dir="ltr">
+                      ⏳ {d.expiry_date}{dl != null ? ` (${dl}${t({ ar: "ي", en: "d" })})` : ""}
+                    </span>
+                  )}
+                  {d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">{t({ ar: "ملف", en: "File" })}</a>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* ═══ طلباتي — يظهر فقط عندما تفعّله الإدارة (hr_settings) ═══ */}
       {leaveEnabled && (
       <section className={card}>
@@ -448,7 +623,7 @@ export default function EmployeeHome() {
       )}
 
       {/* ═══ ملفي + عهدتي + آخر الحضور ═══ */}
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div id="emp-profile" className="grid gap-4 sm:grid-cols-2">
         <section className={card}>
           <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "ملفي", en: "My profile" })}</h2>
           <div className="text-xs text-stone-400 leading-loose">
@@ -505,8 +680,44 @@ export default function EmployeeHome() {
         </div>
       </section>
 
+      {/* مساحة سفلية حتى لا يغطي الشريط السريع آخر بطاقة على الجوال */}
+      <div className="h-16 sm:hidden" aria-hidden />
+
+      {/* ═══ الشريط السريع (الجوال فقط) — لا يظهر في وضع الأدمن (readOnly) ═══ */}
+      {!readOnly && (
+        <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-black/95 border-t border-stone-800 backdrop-blur"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <div className="flex items-stretch justify-around">
+            <button type="button" disabled={busy || (!!openSession ? false : dailyLimitReached)}
+              onClick={() => quickAction(openSession ? "check_out" : "check_in", () => void doAttendance(openSession ? "out" : "in"))}
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] ${openSession ? "text-red-300" : "text-emerald-300"} disabled:opacity-40`}>
+              <span className="text-base leading-none">{openSession ? "⏹" : "▶"}</span>
+              {openSession ? t({ ar: "انصراف", en: "Out" }) : t({ ar: "حضور", en: "In" })}
+            </button>
+            <button type="button" onClick={() => quickAction("tasks", () => document.getElementById("emp-tasks")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">📋</span>{t({ ar: "مهامي", en: "Tasks" })}
+              {myOpenTasks.length > 0 && <span className="absolute mt-[-2px] ms-6 bg-red-600 text-white rounded-full text-[8px] px-1">{myOpenTasks.length}</span>}
+            </button>
+            <button type="button" onClick={() => quickAction("correction", () => document.getElementById("emp-corrections")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">🕐</span>{t({ ar: "تعديل حضور", en: "Fix" })}
+            </button>
+            <Link href="/client-portal/equipment" onClick={() => quickAction("custody", () => {})}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">🎒</span>{t({ ar: "عهدتي", en: "Custody" })}
+            </Link>
+            <button type="button" onClick={() => quickAction("profile", () => document.getElementById("emp-profile")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">👤</span>{t({ ar: "ملفي", en: "Me" })}
+            </button>
+          </div>
+        </nav>
+      )}
+
       {toast && (
-        <div className="fixed bottom-5 z-50 bg-black/90 border border-stone-700 rounded-xl px-4 py-2.5 text-sm text-white max-w-sm" style={{ insetInlineEnd: 20 }}>
+        <div className="fixed z-50 bg-black/90 border border-stone-700 rounded-xl px-4 py-2.5 text-sm text-white max-w-sm"
+          style={{ insetInlineEnd: 20, bottom: readOnly ? 20 : 76 }}>
           {toast}
         </div>
       )}
