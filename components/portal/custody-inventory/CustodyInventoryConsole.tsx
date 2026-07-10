@@ -373,7 +373,7 @@ function CustodyTab({ assignments, busy, setBusy, flash, err, t, empName, locs, 
     if (up.ok) { setPhotoCount((p) => ({ ...p, [itemId]: (p[itemId] ?? 0) + 1 })); flash("أُضيفت صورة الفحص."); } else err(up, "تعذّر رفع الصورة: ");
   }
   async function submitInspect(a: CivAssignment) {
-    const its = (items[a.id] ?? []).filter((i) => ["return_requested", "active"].includes(i.status));
+    const its = (items[a.id] ?? []).filter((i) => i.status === "return_requested");
     const chosen = its.filter((i) => insp[i.id]);
     if (chosen.length === 0) return flash("اختر نتيجة لكل بند مُرجَع.");
     if (chosen.some((i) => (photoCount[i.id] ?? 0) < 1)) return flash("صورة فحص واحدة على الأقل لكل بند.");
@@ -382,8 +382,9 @@ function CustodyTab({ assignments, busy, setBusy, flash, err, t, empName, locs, 
     const r = await civInspectReturn(a.id, payload);
     setBusy(false);
     if (!r.ok) return err(r, "تعذّر الفحص: ");
-    void civEmitEvent("civ_return_accepted", { assignment_id: a.id, title: "فحص إرجاع عهدة " + a.assignment_number });
-    setInsp({}); await reload(); flash(`تم الفحص. ${r.data.assignment_closed ? "أُغلقت العهدة." : "إرجاع جزئي."}`);
+    void civEmitEvent(r.data.status === "rejected" ? "civ_return_rejected" : "civ_return_accepted", { assignment_id: a.id, title: "فحص إرجاع عهدة " + a.assignment_number });
+    setInsp({}); await reload();
+    flash(r.data.closed ? "تم الفحص وأُغلقت العهدة." : r.data.status === "rejected" ? "رُفض الإرجاع وأُعيد للموظف." : "تم الفحص — إرجاع جزئي.");
   }
 
   const RESULTS: { v: CivInspectResult; ar: string }[] = [
@@ -403,11 +404,12 @@ function CustodyTab({ assignments, busy, setBusy, flash, err, t, empName, locs, 
           {(items[a.id] ?? []).map((i) => (
             <div key={i.id} className="bg-stone-950 border border-stone-800 rounded-lg p-2 space-y-2">
               <div className="text-sm text-stone-200">{i.asset_name} <span className="text-stone-500 text-xs" dir="ltr">({i.asset_code})</span> × {i.quantity} — <span className="text-[10px]">{i.status}</span></div>
+              {(i.condition_at_return || i.return_notes) && <div className="text-[11px] text-amber-400/80">الموظف: {i.condition_at_return ?? ""}{i.return_notes ? ` — ${i.return_notes}` : ""}</div>}
               {/* صور الاستلام والإرجاع */}
               <div className="flex gap-1 flex-wrap">
                 {(ev[a.id] ?? []).filter((e) => e.item === i.id && e.url).map((e, k) => <a key={k} href={e.url} target="_blank" rel="noreferrer"><img src={e.url} className="w-12 h-12 object-cover rounded border border-stone-700" alt={e.stage} title={e.stage} /></a>)}
               </div>
-              {canInspect && ["return_requested", "active"].includes(i.status) && (
+              {canInspect && i.status === "return_requested" && (
                 <div className="grid grid-cols-2 gap-2">
                   <select className={inp} value={insp[i.id]?.result ?? ""} onChange={(e) => setInsp((p) => ({ ...p, [i.id]: { assignment_item_id: i.id, result: e.target.value as CivInspectResult, note: p[i.id]?.note } }))}>
                     <option value="">اختر النتيجة</option>{RESULTS.map((r) => <option key={r.v} value={r.v}>{r.ar}</option>)}
