@@ -438,6 +438,37 @@ export interface HrTaskInput {
   equipment?: string; requirements?: string; execNotes?: string; evidenceMode?: EvidenceMode;
   expectedStart?: string | null; expectedEnd?: string | null;
 }
+export interface AssignDispatchResult {
+  ok: boolean; task_id: string; assignment_saved: boolean;
+  portal: { employees: number; supervisors: number; admins: number };
+  email: { employees_resolved: number; employees_sent: number; supervisors_sent: number; admins_sent: number;
+    employee_email_source: string; skipped: string[] };
+}
+/** الإسناد + التوزيع كعملية خادمية واحدة تُنتظر (لا emitHrEvent هش من المتصفح). */
+export async function hrTaskAssignDispatch(input: {
+  action: "create" | "update" | "resend"; task_id?: string; assignees?: string[]; evidence_mode?: EvidenceMode | "";
+} & Partial<HrTaskInput>): Promise<Result<AssignDispatchResult>> {
+  try {
+    const s = await getValidSession();
+    if (!s) return { ok: false, error: "not_authenticated" };
+    const body = {
+      action: input.action, task_id: input.task_id, assignees: input.assignees,
+      title: input.title, description: input.description, location: input.location, maps_url: input.mapsUrl,
+      city: input.city, client_name: input.clientName, project_name: input.projectName,
+      task_type: input.taskType, priority: input.priority, equipment: input.equipment,
+      requirements: input.requirements, exec_notes: input.execNotes,
+      evidence_mode: input.evidence_mode ?? input.evidenceMode,
+      expected_start: input.expectedStart, expected_end: input.expectedEnd,
+    };
+    const res = await fetch("/api/integrations/hr/tasks/assign", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify(body),
+    });
+    const j = (await res.json()) as AssignDispatchResult & { error?: string };
+    if (!res.ok || !j.ok) return { ok: false, error: j.error || `HTTP ${res.status}`, status: res.status };
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
 // وضع دليل التسليم لكل مهمة (يُستدعى بعد الإنشاء/التعديل — آمن للنشر: فشله لا يمنع الحفظ).
 // "" = حسب الإعداد العام (يُخزّن null فلا يتغيّر سلوك المهام القديمة/الافتراضي).
 export function hrAdminSetTaskEvidenceMode(taskId: string, mode: EvidenceMode | ""): Promise<Result<boolean>> {

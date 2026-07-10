@@ -11,13 +11,13 @@ import { usePortal } from "@/components/portal/PortalShell";
 import {
   hrListEmployees, hrListAttendance, hrListLeaves, hrListTasks, hrListAssignees,
   hrListEmployeeEvents, hrAdminListStaff, hrAdminUpsertEmployee,
-  hrAdminAdjustAttendance, hrAdminDecideLeave, hrAdminCreateTask, hrAdminUpdateTask,
+  hrAdminAdjustAttendance, hrAdminDecideLeave,
   hrAdminCloseTask, hrAdminAddEmployeeEvent, hrGetSettings,
   hrAdminSoftDeleteLeave, hrAdminUpdateLeave, hrAdminVoidAttendance, hrAdminSoftDeleteTask,
   hrAdminUpdateEmployeeStatus, hrOwnerSoftDeleteEmployee, hrAdminReviewTask, hrListTaskReviews,
   hrListDeviceUsers, hrListCorrections, hrAdminLongOpenSessions, hrAdminExpiringDocuments,
-  hrListSupervisorLinks, hrAdminSetSupervisorLink,
-  hrAdminSetTaskEvidenceMode, hrAdminRequestRevision, hrListTaskEvidence, signHrFiles, hrNotifyTaskSupervisors,
+  hrListSupervisorLinks, hrAdminSetSupervisorLink, hrTaskAssignDispatch,
+  hrAdminRequestRevision, hrListTaskEvidence, signHrFiles,
   emitHrEvent, mapsLink, DEFAULT_HR_SETTINGS,
   LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS, TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
   DOCUMENT_TYPE_LABELS, EVIDENCE_MODE_LABELS,
@@ -427,20 +427,6 @@ export default function HrAdminConsole() {
   const [tf, setTf] = useState(emptyTf);
   const [tfId, setTfId] = useState<string | null>(null); // ≠ null ⇒ وضع تعديل مهمة قائمة
   const [openTask, setOpenTask] = useState<string | null>(null);
-  // تفاصيل المهمة لنص البريد (اسم/عميل/مشروع/موقع/وقت/متطلبات).
-  function taskDetailLines(): string {
-    const L: string[] = [];
-    L.push("المهمة: " + tf.title.trim());
-    if (tf.clientName.trim()) L.push("العميل: " + tf.clientName.trim());
-    if (tf.projectName.trim()) L.push("المشروع: " + tf.projectName.trim());
-    const loc = [tf.location.trim(), tf.city.trim()].filter(Boolean).join(" — ");
-    if (loc) L.push("الموقع: " + loc);
-    if (tf.start) L.push("الوقت المتوقع: " + new Date(tf.start).toLocaleString("ar-SA", { dateStyle: "short", timeStyle: "short" })
-      + (tf.end ? " ← " + new Date(tf.end).toLocaleString("ar-SA", { dateStyle: "short", timeStyle: "short" }) : ""));
-    if (tf.requirements.trim()) L.push("متطلبات: " + tf.requirements.trim());
-    if (tf.equipment.trim()) L.push("المعدات: " + tf.equipment.trim());
-    return L.join("\n");
-  }
   async function saveTask() {
     if (!tf.title.trim()) { flash(t({ ar: "عنوان المهمة مطلوب.", en: "Title required." })); return; }
     if (!tfId && tf.assignees.length === 0) { flash(t({ ar: "اختر موظفاً واحداً على الأقل.", en: "Pick at least one employee." })); return; }
@@ -455,49 +441,40 @@ export default function HrAdminConsole() {
       expectedStart: tf.start ? new Date(tf.start).toISOString() : null,
       expectedEnd: tf.end ? new Date(tf.end).toISOString() : null,
     };
-    if (tfId) {
-      // تعديل: نجلب المسندين (إن لم يكونوا محمّلين) حتى تصلهم إشعارات التحديث.
-      let ids = (assigneesByTask[tfId] ?? []).map((a) => a.user_id);
-      if (ids.length === 0) {
-        const ar = await hrListAssignees(tfId);
-        if (ar.ok) { setAssigneesByTask((p) => ({ ...p, [tfId]: ar.data })); ids = ar.data.map((a) => a.user_id); }
-      }
-      const r = await hrAdminUpdateTask(tfId, base);
-      if (!r.ok) {
-        setBusy(false);
-        const msg = /task_not_editable/.test(r.error)
-          ? t({ ar: "لا يمكن تعديل مهمة مُسلّمة أو مغلقة.", en: "Submitted/closed tasks can't be edited." })
-          : (t({ ar: "تعذّر التعديل: ", en: "Couldn't update: " })) + r.error;
-        flash(msg); return;
-      }
-      // وضع دليل التسليم + إشعار مشرفي الفريق في البوابة (فشلهما لا يمنع التعديل — آمن للنشر).
-      await hrAdminSetTaskEvidenceMode(tfId, tf.evidenceMode);
-      void hrNotifyTaskSupervisors(tfId);
-      setBusy(false);
-      const det = taskDetailLines();
-      // توزيع واحد: الخادم يحلّ الموظفين/الإدارة/المشرفين ويرسل رسائل مفصولة بلا تكرار.
-      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: tf.title.trim(),
-        employee_user_ids: ids, message: det });
-      setTf(emptyTf); setTfId(null);
-      await reload();
-      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون والإدارة والمشرفون بالتحديث.", en: "Task updated & notified." }));
-      return;
-    }
-    const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
-    const evMode = tf.evidenceMode;
-    const det = taskDetailLines();
-    const r = await hrAdminCreateTask({ ...base, assignees: assignedIds });
-    if (!r.ok) { setBusy(false); flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
-    // وضع دليل التسليم + إشعار مشرفي الفريق في البوابة (فشلهما لا يمنع الإنشاء — آمن للنشر).
-    await hrAdminSetTaskEvidenceMode(r.data.id, evMode);
-    void hrNotifyTaskSupervisors(r.data.id);
+    // عملية خادمية واحدة تُنتظر: تحفظ المهمة/المسندين ثم توزّع الإشعارات (بوابة+بريد)
+    // من الخادم — لا اعتماد على emitHrEvent الهش من المتصفح.
+    const r = await hrTaskAssignDispatch({
+      action: tfId ? "update" : "create", task_id: tfId ?? undefined,
+      assignees: tfId ? undefined : [...tf.assignees], evidence_mode: tf.evidenceMode, ...base,
+    });
     setBusy(false);
-    // توزيع واحد: الخادم يحلّ المستلمين الثلاثة (موظف/إدارة/مشرف) ويرسل رسائل مفصولة بلا تكرار.
-    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: tf.title.trim(),
-      employee_user_ids: assignedIds, message: det });
-    setTf(emptyTf);
+    if (!r.ok) {
+      const msg = /task_not_editable/.test(r.error) ? t({ ar: "لا يمكن تعديل مهمة مُسلّمة أو مغلقة.", en: "Submitted/closed tasks can't be edited." })
+        : /not_authorized/.test(r.error) ? t({ ar: "لا تملك صلاحية إدارة المهام.", en: "Not authorized." })
+        : (t({ ar: "تعذّر: ", en: "Failed: " })) + r.error;
+      flash(msg); return;
+    }
+    const e = r.data.email;
+    setTf(emptyTf); setTfId(null);
     await reload();
-    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون والإدارة والمشرفون.", en: "Task created & notified." }));
+    flash(t({
+      ar: `${tfId ? "عُدّلت المهمة" : "أُنشئت المهمة"} — بريد: موظفون ${e.employees_sent}، مشرفون ${e.supervisors_sent}، إدارة ${e.admins_sent}${e.employees_resolved === 0 ? " (لا بريد للموظف — أُنشئ إشعار بوابة)" : ""}`,
+      en: `${tfId ? "Updated" : "Created"} — email emp ${e.employees_sent}/sup ${e.supervisors_sent}/admin ${e.admins_sent}`,
+    }));
+  }
+  // زر الأدمن: إعادة إرسال إشعار الإسناد لمهمة قائمة (بلا إعادة إنشاء) — لاختبار الإيميل.
+  async function doResendAssignment(tk: HrTask) {
+    if (busy) return;
+    setBusy(true);
+    const r = await hrTaskAssignDispatch({ action: "resend", task_id: tk.id, title: tk.title,
+      clientName: tk.client_name || undefined, projectName: tk.project_name || undefined,
+      location: tk.location_name || undefined, city: tk.city || undefined, priority: tk.priority });
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّرت إعادة الإرسال: ", en: "Resend failed: " })) + r.error); return; }
+    const e = r.data.email;
+    flash(e.employees_resolved === 0
+      ? t({ ar: "لا يوجد بريد للموظف — أُنشئ إشعار بوابة فقط.", en: "No employee email — portal notification only." })
+      : t({ ar: `أُعيد الإرسال — موظفون: ${e.employees_sent}، مشرفون: ${e.supervisors_sent}، إدارة: ${e.admins_sent}`, en: `Resent — emp ${e.employees_sent}/sup ${e.supervisors_sent}/admin ${e.admins_sent}` }));
   }
   function startEditTask(tk: HrTask) {
     setTfId(tk.id);
@@ -1233,6 +1210,11 @@ export default function HrAdminConsole() {
                           )}
                           <button type="button" disabled={busy} onClick={() => void closeTask(tk, "cancel")} className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-xs px-4 py-2 disabled:opacity-50">
                             {t({ ar: "إلغاء المهمة", en: "Cancel task" })}
+                          </button>
+                          {/* إعادة توزيع إشعار الإسناد (بوابة+بريد) من الخادم — دون إعادة إنشاء المهمة */}
+                          <button type="button" disabled={busy} onClick={() => void doResendAssignment(tk)} className={`${btnGhost} px-4 py-2 text-xs`}
+                            title={t({ ar: "إعادة إرسال إشعار الإسناد للموظف والمشرف والإدارة", en: "Re-send assignment notification" })}>
+                            {t({ ar: "إعادة إرسال الإشعار", en: "Re-send notice" })}
                           </button>
                         </div>
                       )}
