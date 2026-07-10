@@ -143,7 +143,7 @@ export const civRequestReturn = (assignmentId: string, items: CivReturnItem[], n
   prpc<boolean>("custody_inv_employee_request_return", { p_assignment: assignmentId, p_items: items, p_note: note ?? null });
 export interface CivInspectItem { assignment_item_id: string; result: CivInspectResult; quantity?: number; note?: string; to_location_id?: string; damage_value?: number }
 export const civInspectReturn = (assignmentId: string, items: CivInspectItem[]) =>
-  prpc<{ ok: boolean; accepted: number; other: number; assignment_closed: boolean }>("custody_inv_admin_inspect_return", { p_assignment: assignmentId, p_items: items });
+  prpc<{ ok: boolean; status: string; accepted: number; resolved: number; rejected: number; closed: boolean }>("custody_inv_admin_inspect_return", { p_assignment: assignmentId, p_items: items });
 
 export const civAdjustStock = (assetId: string, newTotal: number | null, newAvailable: number | null, reason: string) =>
   prpc<boolean>("custody_inv_admin_adjust_stock", { p_asset: assetId, p_new_total: newTotal, p_new_available: newAvailable, p_reason: reason });
@@ -234,4 +234,30 @@ export async function civSignFiles(bucket: string, paths: string[]): Promise<Rec
     for (const r of arr) if (r.path && r.signedURL) out[r.path] = `${SUPABASE_URL}/storage/v1${r.signedURL}`;
     return out;
   } catch { return {}; }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Employee Self-Service — الموظف يصرف بنفسه فورًا، والإرجاع يُغلق بعد فحص المسؤول.
+// ════════════════════════════════════════════════════════════════════════
+export interface CivAvailableAsset {
+  id: string; asset_code: string; asset_name: string; serial_number: string | null;
+  asset_type: CivAssetType; quantity_available: number; unit: string;
+  category: string | null; location: string | null; photo_path: string | null;
+}
+export const civEmployeeListAvailable = (q?: string) =>
+  prpc<CivAvailableAsset[]>("custody_inv_employee_list_available", { p_q: q ?? null });
+
+export interface CivSelfIssueItem { asset_id: string; quantity?: number; condition_at_issue?: string; item_photos: string[] }
+export const civEmployeeSelfIssue = (data: { items: CivSelfIssueItem[]; group_photos: string[]; note?: string }) =>
+  prpc<{ ok: boolean; id: string; assignment_number: string; items: number }>("custody_inv_employee_self_issue", { p_data: data });
+
+export interface CivSubmitReturnItem { assignment_item_id: string; quantity?: number; condition: string; note?: string; item_photos: string[] }
+export const civEmployeeSubmitReturn = (
+  assignmentId: string, items: CivSubmitReturnItem[], group: { general_condition?: string; note?: string; group_photos: string[] }) =>
+  prpc<{ ok: boolean; items: number }>("custody_inv_employee_submit_return", { p_assignment: assignmentId, p_items: items, p_group: group });
+
+/** مسار دليل الصرف الذاتي (قبل وجود assignment) — يبدأ بـ uid الموظف (سياسة foldername). */
+export function civSelfEvidencePath(uid: string, token: string, stage: string, fileName: string): string {
+  const uniq = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  return `${uid}/self/${token}/${stage}/${uniq}_${safeName(fileName)}`;
 }

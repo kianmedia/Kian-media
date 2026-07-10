@@ -18,6 +18,7 @@ const enc = (v: string) => encodeURIComponent(v);
 
 // الأحداث المسموح إطلاقها + عنوان البريد لكل حدث.
 const SUBJECTS: Record<string, string> = {
+  civ_self_issue: "تم صرف عهدة ذاتية جديدة — كيان",
   civ_assignment_created: "تم صرف عهدة مسجلة جديدة — كيان",
   civ_confirm_pending: "عهدة بانتظار تأكيد استلامك — كيان",
   civ_employee_confirmed: "تأكيد استلام عهدة — كيان",
@@ -33,11 +34,11 @@ const SUBJECTS: Record<string, string> = {
   civ_audit_approved: "اعتماد جرد — كيان",
 };
 const AUDIENCE_MANAGERS = new Set([
-  "civ_assignment_created", "civ_employee_confirmed", "civ_employee_rejected", "civ_return_requested",
+  "civ_self_issue", "civ_assignment_created", "civ_employee_confirmed", "civ_employee_rejected", "civ_return_requested",
   "civ_asset_created", "civ_stock_correction", "civ_audit_started", "civ_audit_approved",
   "civ_maintenance_opened", "civ_maintenance_closed",
 ]);
-const AUDIENCE_EMPLOYEE = new Set(["civ_confirm_pending", "civ_return_accepted", "civ_return_rejected", "civ_assignment_created"]);
+const AUDIENCE_EMPLOYEE = new Set(["civ_self_issue", "civ_confirm_pending", "civ_return_accepted", "civ_return_rejected", "civ_assignment_created"]);
 
 export async function GET() {
   return NextResponse.json({
