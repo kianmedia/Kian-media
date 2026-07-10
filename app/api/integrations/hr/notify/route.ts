@@ -13,6 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { selectAsUser, selectAsService, rpcAsUser, authAdminEmails, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { canManageHr } from "@/lib/server/hrAuth";
 import { sendHrEmail, hrEmailEnabled, hrEmailEndpoint, hrEmailEndpointHost, hrRuntimeEnv } from "@/lib/server/hrNotify";
 
 export const runtime = "nodejs";
@@ -114,12 +115,18 @@ export async function POST(req: Request) {
     log("hr_email_skipped", { reason: "caller_not_staff", event_type: event, entity_id: entityId });
     return NextResponse.json({ ok: false, error: "staff_only" }, { status: 403 });
   }
-  // الأحداث الإدارية: للمالك/super_admin/manager/hr فقط — الموظف العادي يطلق أحداثه الذاتية فقط.
-  const callerIsHrAdmin = me.data[0].account_type === "admin"
-    || ["super_admin", "manager", "hr"].includes(me.data[0].staff_role ?? "");
-  if (!EMPLOYEE_ALLOWED.has(event) && !callerIsHrAdmin) {
-    log("hr_email_skipped", { reason: "caller_not_hr_admin", event_type: event, entity_id: entityId, by: me.data[0].id });
-    return NextResponse.json({ ok: false, error: "hr_admin_only" }, { status: 403 });
+  // الأحداث الإدارية: القرار من can_manage_hr() في القاعدة (نفس assertHrAdmin — لا تكرار
+  // لمنطق الأدوار). عطل التحقق المؤقت يُرجع 503 (لا 403) فلا يظهر كرفض صلاحية.
+  if (!EMPLOYEE_ALLOWED.has(event)) {
+    const cm = await canManageHr(bearer);
+    if (!cm.ok) {
+      log("hr_email_skipped", { reason: "auth_check_failed", event_type: event, entity_id: entityId, status: cm.status });
+      return NextResponse.json({ ok: false, error: "auth_check_failed" }, { status: cm.status === 401 ? 401 : 503 });
+    }
+    if (!cm.can) {
+      log("hr_email_skipped", { reason: "caller_not_hr_admin", event_type: event, entity_id: entityId, by: me.data[0].id });
+      return NextResponse.json({ ok: false, error: "hr_admin_only" }, { status: 403 });
+    }
   }
 
   log("hr_notify_created", {

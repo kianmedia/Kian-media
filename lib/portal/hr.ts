@@ -438,8 +438,10 @@ export interface HrTaskInput {
   equipment?: string; requirements?: string; execNotes?: string; evidenceMode?: EvidenceMode;
   expectedStart?: string | null; expectedEnd?: string | null;
 }
+export interface AssignStage { status: "ok" | "failed" | "skipped"; count?: number; reason?: string }
 export interface AssignDispatchResult {
-  ok: boolean; task_id: string; assignment_saved: boolean;
+  ok: boolean; complete?: boolean; incomplete_stages?: string[]; task_id: string; assignment_saved: boolean;
+  stages?: Record<string, AssignStage>;
   portal: { employees: number; supervisors: number; admins: number };
   email: { employees_resolved: number; employees_sent: number; supervisors_sent: number; admins_sent: number;
     employee_email_source: string; skipped: string[] };

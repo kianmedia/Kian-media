@@ -450,16 +450,21 @@ export default function HrAdminConsole() {
     setBusy(false);
     if (!r.ok) {
       const msg = /task_not_editable/.test(r.error) ? t({ ar: "لا يمكن تعديل مهمة مُسلّمة أو مغلقة.", en: "Submitted/closed tasks can't be edited." })
+        // 503 auth_check_failed = تعذّر التحقق مؤقتًا (عطل بنية تحتية) — ليس رفض صلاحية.
+        : /auth_check_failed/.test(r.error) ? t({ ar: "تعذّر التحقق من الصلاحية مؤقتًا — أعد المحاولة بعد لحظات.", en: "Permission check temporarily unavailable — retry." })
         : /not_authorized/.test(r.error) ? t({ ar: "لا تملك صلاحية إدارة المهام.", en: "Not authorized." })
         : (t({ ar: "تعذّر: ", en: "Failed: " })) + r.error;
       flash(msg); return;
     }
     const e = r.data.email;
+    const incomplete = (r.data.incomplete_stages ?? []).join("، ");
     setTf(emptyTf); setTfId(null);
     await reload();
     flash(t({
-      ar: `${tfId ? "عُدّلت المهمة" : "أُنشئت المهمة"} — بريد: موظفون ${e.employees_sent}، مشرفون ${e.supervisors_sent}، إدارة ${e.admins_sent}${e.employees_resolved === 0 ? " (لا بريد للموظف — أُنشئ إشعار بوابة)" : ""}`,
-      en: `${tfId ? "Updated" : "Created"} — email emp ${e.employees_sent}/sup ${e.supervisors_sent}/admin ${e.admins_sent}`,
+      ar: `${tfId ? "عُدّلت المهمة" : "أُنشئت المهمة"} — بريد: موظفون ${e.employees_sent}، مشرفون ${e.supervisors_sent}، إدارة ${e.admins_sent}` +
+        (r.data.complete ? " — اكتملت كل المراحل" : incomplete ? ` — مراحل لم تكتمل: ${incomplete}` : "") +
+        (e.employees_resolved === 0 ? " (لا بريد للموظف — أُنشئ إشعار بوابة)" : ""),
+      en: `${tfId ? "Updated" : "Created"} — email emp ${e.employees_sent}/sup ${e.supervisors_sent}/admin ${e.admins_sent}${r.data.complete ? " — all stages ok" : incomplete ? ` — incomplete: ${incomplete}` : ""}`,
     }));
   }
   // زر الأدمن: إعادة إرسال إشعار الإسناد لمهمة قائمة (بلا إعادة إنشاء) — لاختبار الإيميل.
@@ -470,7 +475,12 @@ export default function HrAdminConsole() {
       clientName: tk.client_name || undefined, projectName: tk.project_name || undefined,
       location: tk.location_name || undefined, city: tk.city || undefined, priority: tk.priority });
     setBusy(false);
-    if (!r.ok) { flash((t({ ar: "تعذّرت إعادة الإرسال: ", en: "Resend failed: " })) + r.error); return; }
+    if (!r.ok) {
+      const msg = /auth_check_failed/.test(r.error) ? t({ ar: "تعذّر التحقق من الصلاحية مؤقتًا — أعد المحاولة.", en: "Permission check temporarily unavailable — retry." })
+        : /not_authorized/.test(r.error) ? t({ ar: "لا تملك صلاحية إدارة المهام.", en: "Not authorized." })
+        : (t({ ar: "تعذّرت إعادة الإرسال: ", en: "Resend failed: " })) + r.error;
+      flash(msg); return;
+    }
     const e = r.data.email;
     flash(e.employees_resolved === 0
       ? t({ ar: "لا يوجد بريد للموظف — أُنشئ إشعار بوابة فقط.", en: "No employee email — portal notification only." })
