@@ -315,6 +315,14 @@ export function listTasksByIds(ids: string[]): Promise<Result<HrTask[]>> {
   if (ids.length === 0) return Promise.resolve({ ok: true, data: [] });
   return pget<HrTask[]>(`hr_field_tasks?id=in.(${ids.map(enc).join(",")})&is_deleted=eq.false&select=*`);
 }
+/** HOTFIX: تفاصيل مهام الموظف مضمونة عبر RPC (يتجاوز أي هشاشة في قراءة الجدول مباشرة). */
+export function hrGetMyFieldTasks(): Promise<Result<{ assignments: HrAssignee[]; tasks: HrTask[] }>> {
+  return prpc<{ assignments: HrAssignee[]; tasks: HrTask[] }>("hr_get_my_field_tasks", {});
+}
+/** إشعار بوابة للمشرفين الميدانيين لمسندي المهمة (يُستدعى بعد الإنشاء — فشله لا يمنع شيئًا). */
+export function hrNotifyTaskSupervisors(taskId: string): Promise<Result<number>> {
+  return prpc<number>("hr_notify_task_supervisors", { p_task: taskId });
+}
 export function listMyVisibleEvents(userId: string): Promise<Result<HrEvent[]>> {
   return pget<HrEvent[]>(`hr_employee_events?user_id=eq.${enc(userId)}&visible_to_employee=eq.true&select=*&order=created_at.desc&limit=30`);
 }

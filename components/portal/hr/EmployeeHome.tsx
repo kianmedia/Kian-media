@@ -11,7 +11,7 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   hrMyProfile, listMyRecentSessions, findOpenSession, listMyAttendance, listMyLeaves,
-  listMyAssignments, listTasksByIds, listMyVisibleEvents, hrCheckIn, hrCheckOut,
+  listMyAssignments, listTasksByIds, hrGetMyFieldTasks, listMyVisibleEvents, hrCheckIn, hrCheckOut,
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
   listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments, signHrDoc,
   hrSupervisorMyTeam, hrSupervisorAddNote,
@@ -92,24 +92,30 @@ export default function EmployeeHome() {
     if (corr.ok) setCorrections(corr.data);
     if (docs.ok) setDocuments(docs.data);
     setTeam(tm.ok ? tm.data.rows : []);
-    if (asg.ok) {
-      setAssignments(asg.data);
+    // HOTFIX: تفاصيل مهام الموظف عبر RPC مضمون (يُرجع assignments + tasks كاملة).
+    // عند فشله (قبل تشغيل الـ HOTFIX SQL) نرجع للمسار القديم — آمن للنشر.
+    const mf = await hrGetMyFieldTasks();
+    let myAssignments: HrAssignee[] = [];
+    const taskMap: Record<string, HrTask> = {};
+    if (mf.ok && Array.isArray(mf.data?.assignments)) {
+      myAssignments = mf.data.assignments;
+      (mf.data.tasks || []).forEach((x) => { taskMap[x.id] = x; });
+    } else if (asg.ok) {
+      myAssignments = asg.data;
       const ids = Array.from(new Set(asg.data.map((a) => a.task_id)));
       const tk = await listTasksByIds(ids);
-      if (tk.ok) {
-        const map: Record<string, HrTask> = {};
-        tk.data.forEach((x) => { map[x.id] = x; });
-        setTasks(map);
-      }
-      // أدلة التسليم (ملف/رابط) للمهام الجارية (فشلها الآمن قبل تشغيل SQL لا يعطّل شيئًا).
-      const inProg = asg.data.filter((x) => x.status === "in_progress").map((x) => x.task_id);
-      const evMap: Record<string, HrTaskEvidence[]> = {};
-      await Promise.all(Array.from(new Set(inProg)).map(async (tid) => {
-        const er = await listMyTaskEvidence(tid, uid);
-        if (er.ok) evMap[tid] = er.data;
-      }));
-      setTaskEvidence(evMap);
+      if (tk.ok) tk.data.forEach((x) => { taskMap[x.id] = x; });
     }
+    setAssignments(myAssignments);
+    setTasks(taskMap);
+    // أدلة التسليم (ملف/رابط) للمهام الجارية (فشلها الآمن قبل تشغيل SQL لا يعطّل شيئًا).
+    const inProg = myAssignments.filter((x) => x.status === "in_progress").map((x) => x.task_id);
+    const evMap: Record<string, HrTaskEvidence[]> = {};
+    await Promise.all(Array.from(new Set(inProg)).map(async (tid) => {
+      const er = await listMyTaskEvidence(tid, uid);
+      if (er.ok) evMap[tid] = er.data;
+    }));
+    setTaskEvidence(evMap);
     setPhase("ready");
   }, [uid]);
   useEffect(() => { void reload(); }, [reload]);
@@ -144,6 +150,7 @@ export default function EmployeeHome() {
 
   // ─── المهام ───
   const [taskNote, setTaskNote] = useState<Record<string, string>>({});
+  const [showDetails, setShowDetails] = useState<Record<string, boolean>>({});
   const [taskFiles, setTaskFiles] = useState<Record<string, { file: File; preview: string }[]>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const [pickFor, setPickFor] = useState<string | null>(null);
@@ -462,19 +469,33 @@ export default function EmployeeHome() {
                   </div>
                 )}
                 {tk?.description && <p className="text-xs text-stone-400 leading-relaxed">{tk.description}</p>}
-                {tk?.equipment_needed && (
-                  <p className="text-[11px] text-stone-400">🎥 {t({ ar: "المعدات المطلوبة: ", en: "Equipment: " })}{tk.equipment_needed}</p>
+                {/* زر عرض التفاصيل الكاملة — التفاصيل تظهر دائمًا عند الطلب، بلا اختفاء */}
+                {tk && (tk.equipment_needed || tk.special_requirements || tk.execution_notes || tk.expected_start_at || tk.expected_end_at || tk.completion_evidence_mode) && (
+                  <button type="button" onClick={() => setShowDetails((p) => ({ ...p, [a.task_id]: !p[a.task_id] }))}
+                    className="text-[11px] text-red-300 underline">
+                    {showDetails[a.task_id] ? t({ ar: "إخفاء التفاصيل", en: "Hide details" }) : t({ ar: "عرض تفاصيل المهمة", en: "Show task details" })}
+                  </button>
                 )}
-                {tk?.special_requirements && (
-                  <p className="text-[11px] text-amber-300/80">⚠️ {t({ ar: "متطلبات خاصة: ", en: "Special requirements: " })}{tk.special_requirements}</p>
-                )}
-                {tk?.execution_notes && (
-                  <p className="text-[11px] text-stone-400">📝 {t({ ar: "ملاحظات التنفيذ: ", en: "Execution notes: " })}{tk.execution_notes}</p>
-                )}
-                {(tk?.expected_start_at || tk?.expected_end_at) && (
-                  <div className="text-[10.5px] font-mono text-stone-500" dir="ltr">
-                    {tk?.expected_start_at ? new Date(tk.expected_start_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
-                    {tk?.expected_end_at ? " ← " + new Date(tk.expected_end_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
+                {showDetails[a.task_id] && (
+                  <div className="space-y-1 border-t border-stone-800 pt-1.5">
+                    {tk?.equipment_needed && (
+                      <p className="text-[11px] text-stone-400">🎥 {t({ ar: "المعدات المطلوبة: ", en: "Equipment: " })}{tk.equipment_needed}</p>
+                    )}
+                    {tk?.special_requirements && (
+                      <p className="text-[11px] text-amber-300/80">⚠️ {t({ ar: "متطلبات خاصة: ", en: "Special requirements: " })}{tk.special_requirements}</p>
+                    )}
+                    {tk?.execution_notes && (
+                      <p className="text-[11px] text-stone-400">📝 {t({ ar: "تعليمات التنفيذ: ", en: "Execution notes: " })}{tk.execution_notes}</p>
+                    )}
+                    {tk?.completion_evidence_mode && (
+                      <p className="text-[11px] text-sky-300/90">📌 {t({ ar: "دليل التسليم المطلوب: ", en: "Required evidence: " })}{t(EVIDENCE_MODE_LABELS[tk.completion_evidence_mode] ?? { ar: tk.completion_evidence_mode, en: tk.completion_evidence_mode })}</p>
+                    )}
+                    {(tk?.expected_start_at || tk?.expected_end_at) && (
+                      <div className="text-[10.5px] font-mono text-stone-500" dir="ltr">
+                        ⏱ {tk?.expected_start_at ? new Date(tk.expected_start_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
+                        {tk?.expected_end_at ? " ← " + new Date(tk.expected_end_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
+                      </div>
+                    )}
                   </div>
                 )}
                 {a.status === "assigned" && (

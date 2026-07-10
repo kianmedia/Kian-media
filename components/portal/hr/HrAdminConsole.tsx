@@ -17,7 +17,7 @@ import {
   hrAdminUpdateEmployeeStatus, hrOwnerSoftDeleteEmployee, hrAdminReviewTask, hrListTaskReviews,
   hrListDeviceUsers, hrListCorrections, hrAdminLongOpenSessions, hrAdminExpiringDocuments,
   hrListSupervisorLinks, hrAdminSetSupervisorLink,
-  hrAdminSetTaskEvidenceMode, hrAdminRequestRevision, hrListTaskEvidence, signHrFiles,
+  hrAdminSetTaskEvidenceMode, hrAdminRequestRevision, hrListTaskEvidence, signHrFiles, hrNotifyTaskSupervisors,
   emitHrEvent, mapsLink, DEFAULT_HR_SETTINGS,
   LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS, TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
   DOCUMENT_TYPE_LABELS, EVIDENCE_MODE_LABELS,
@@ -441,9 +441,6 @@ export default function HrAdminConsole() {
     if (tf.equipment.trim()) L.push("المعدات: " + tf.equipment.trim());
     return L.join("\n");
   }
-  function assigneeNames(ids: string[]): string {
-    return ids.map((id) => staff.find((s) => s.user_id === id)?.full_name || employees.find((e) => e.user_id === id)?.full_name || "").filter(Boolean).join("، ");
-  }
   async function saveTask() {
     if (!tf.title.trim()) { flash(t({ ar: "عنوان المهمة مطلوب.", en: "Title required." })); return; }
     if (!tfId && tf.assignees.length === 0) { flash(t({ ar: "اختر موظفاً واحداً على الأقل.", en: "Pick at least one employee." })); return; }
@@ -473,22 +470,17 @@ export default function HrAdminConsole() {
           : (t({ ar: "تعذّر التعديل: ", en: "Couldn't update: " })) + r.error;
         flash(msg); return;
       }
-      // وضع دليل التسليم (فشله لا يمنع التعديل — آمن للنشر قبل تشغيل SQL).
+      // وضع دليل التسليم + إشعار مشرفي الفريق في البوابة (فشلهما لا يمنع التعديل — آمن للنشر).
       await hrAdminSetTaskEvidenceMode(tfId, tf.evidenceMode);
+      void hrNotifyTaskSupervisors(tfId);
       setBusy(false);
       const det = taskDetailLines();
-      // بريد للموظفين المسندين (محتوى موجّه لهم) + بريد منفصل للإدارة.
-      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
-        audience: "employee", employee_user_ids: ids,
-        subject: "تم تحديث مهمة مُسندة إليك — كيان",
-        message: "تم تحديث تفاصيل مهمتك:\n" + det + "\n\nافتح بوابة الموظف لمراجعة التفاصيل." });
-      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
-        audience: "admin",
-        subject: "تم تعديل مهمة ميدانية — كيان",
-        message: "عُدّلت مهمة ميدانية:\n" + det + "\nالمسندون: " + (assigneeNames(ids) || "—") });
+      // توزيع واحد: الخادم يحلّ الموظفين/الإدارة/المشرفين ويرسل رسائل مفصولة بلا تكرار.
+      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: tf.title.trim(),
+        employee_user_ids: ids, message: det });
       setTf(emptyTf); setTfId(null);
       await reload();
-      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون والإدارة بالتحديث.", en: "Task updated & notified." }));
+      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون والإدارة والمشرفون بالتحديث.", en: "Task updated & notified." }));
       return;
     }
     const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
@@ -496,21 +488,16 @@ export default function HrAdminConsole() {
     const det = taskDetailLines();
     const r = await hrAdminCreateTask({ ...base, assignees: assignedIds });
     if (!r.ok) { setBusy(false); flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
-    // وضع دليل التسليم (فشله لا يمنع الإنشاء — آمن للنشر قبل تشغيل SQL).
+    // وضع دليل التسليم + إشعار مشرفي الفريق في البوابة (فشلهما لا يمنع الإنشاء — آمن للنشر).
     await hrAdminSetTaskEvidenceMode(r.data.id, evMode);
+    void hrNotifyTaskSupervisors(r.data.id);
     setBusy(false);
-    // بريد للموظف المسند (عنوان "تم إسناد مهمة جديدة لك") + بريد منفصل للإدارة.
-    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
-      audience: "employee", employee_user_ids: assignedIds,
-      subject: "تم إسناد مهمة جديدة لك — كيان",
-      message: "تم إسناد مهمة ميدانية جديدة لك:\n" + det + "\n\nافتح بوابة الموظف لبدء المهمة." });
-    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
-      audience: "admin",
-      subject: "تم إنشاء/إسناد مهمة ميدانية — كيان",
-      message: "أُنشئت مهمة ميدانية وأُسندت:\n" + det + "\nالموظفون المسندون: " + (assigneeNames(assignedIds) || "—") });
+    // توزيع واحد: الخادم يحلّ المستلمين الثلاثة (موظف/إدارة/مشرف) ويرسل رسائل مفصولة بلا تكرار.
+    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: tf.title.trim(),
+      employee_user_ids: assignedIds, message: det });
     setTf(emptyTf);
     await reload();
-    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون والإدارة.", en: "Task created & notified." }));
+    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون والإدارة والمشرفون.", en: "Task created & notified." }));
   }
   function startEditTask(tk: HrTask) {
     setTfId(tk.id);
