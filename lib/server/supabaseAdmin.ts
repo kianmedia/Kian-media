@@ -83,6 +83,22 @@ export async function selectAsService<T>(query: string): Promise<AdminResult<T>>
   return { ok: true, data: body as T };
 }
 
+/** Return the AUTHENTICATED user's own id from their JWT via GoTrue /auth/v1/user
+ *  (SERVER-ONLY). Immune to RLS/profiles-policy quirks — the token identifies itself,
+ *  so admin callers resolve to THEIR OWN id (not an arbitrary profiles row). */
+export async function authGetUserId(bearer: string): Promise<string | null> {
+  if (SUPABASE_URL.length === 0 || ANON_KEY.length === 0 || !bearer) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: ANON_KEY, Authorization: `Bearer ${bearer}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const u = (await res.json()) as { id?: string };
+    return u && typeof u.id === "string" ? u.id : null;
+  } catch { return null; }
+}
+
 /** Resolve emails from auth.users by user_id via the Supabase Auth Admin API
  *  (service-role, SERVER-ONLY). Field staff often have an email in auth.users but
  *  NOT in public.profiles, so HR task-assignment mail must resolve here. Returns a

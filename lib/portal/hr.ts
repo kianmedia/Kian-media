@@ -319,6 +319,27 @@ export function listTasksByIds(ids: string[]): Promise<Result<HrTask[]>> {
 export function hrGetMyFieldTasks(): Promise<Result<{ assignments: HrAssignee[]; tasks: HrTask[] }>> {
   return prpc<{ assignments: HrAssignee[]; tasks: HrTask[] }>("hr_get_my_field_tasks", {});
 }
+export interface MyTasksBundle {
+  assignments: HrAssignee[]; tasks: HrTask[];
+  teammates: Record<string, string[]>; supervisorName: string | null;
+  attachments: Record<string, { file_path: string; file_type: string | null }[]>;
+  evidence: Record<string, { id: string; kind: "file" | "link"; file_path: string | null; link_url: string | null; file_name: string | null }[]>;
+}
+/** مسار خادمي بمفتاح الخدمة — يتجاوز أي عائق في طبقة القراءة، مقيّد بهوية الموظف.
+ *  الحل الحاسم لعطل التفاصيل (يعمل بنشر الكود وحده دون انتظار SQL). */
+export async function fetchMyFieldTasks(): Promise<Result<MyTasksBundle>> {
+  try {
+    const s = await getValidSession();
+    if (!s) return { ok: false, error: "not_authenticated" };
+    const res = await fetch("/api/integrations/hr/my-tasks", {
+      headers: { Authorization: `Bearer ${s.access_token}` }, cache: "no-store",
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, status: res.status };
+    const j = (await res.json()) as { ok: boolean } & MyTasksBundle;
+    if (!j.ok) return { ok: false, error: "server_error" };
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
 /** إشعار بوابة للمشرفين الميدانيين لمسندي المهمة (يُستدعى بعد الإنشاء — فشله لا يمنع شيئًا). */
 export function hrNotifyTaskSupervisors(taskId: string): Promise<Result<number>> {
   return prpc<number>("hr_notify_task_supervisors", { p_task: taskId });

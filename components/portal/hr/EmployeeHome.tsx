@@ -11,7 +11,7 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   hrMyProfile, listMyRecentSessions, findOpenSession, listMyAttendance, listMyLeaves,
-  listMyAssignments, listTasksByIds, hrGetMyFieldTasks, listMyVisibleEvents, hrCheckIn, hrCheckOut,
+  listMyAssignments, listTasksByIds, hrGetMyFieldTasks, fetchMyFieldTasks, listMyVisibleEvents, hrCheckIn, hrCheckOut,
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
   listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments, signHrDoc,
   hrSupervisorMyTeam, hrSupervisorAddNote,
@@ -63,6 +63,9 @@ export default function EmployeeHome() {
   const [tasks, setTasks] = useState<Record<string, HrTask>>({});
   const [events, setEvents] = useState<HrEvent[]>([]);
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
+  const [teammates, setTeammates] = useState<Record<string, string[]>>({});
+  const [supervisorName, setSupervisorName] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<Record<string, { file_path: string; file_type: string | null }[]>>({});
   const [corrections, setCorrections] = useState<HrCorrectionRequest[]>([]);
   const [documents, setDocuments] = useState<HrDocument[]>([]);
   const [team, setTeam] = useState<HrTeamMember[]>([]);
@@ -92,19 +95,29 @@ export default function EmployeeHome() {
     if (corr.ok) setCorrections(corr.data);
     if (docs.ok) setDocuments(docs.data);
     setTeam(tm.ok ? tm.data.rows : []);
-    // HOTFIX: تفاصيل مهام الموظف عبر RPC مضمون (يُرجع assignments + tasks كاملة).
-    // عند فشله (قبل تشغيل الـ HOTFIX SQL) نرجع للمسار القديم — آمن للنشر.
-    const mf = await hrGetMyFieldTasks();
+    // الحل الحاسم لعطل التفاصيل: مسار خادمي بمفتاح الخدمة (يعمل بنشر الكود وحده).
+    // ثم RPC المضمون، ثم المسار القديم — كلها fallback آمن.
+    const bundle = await fetchMyFieldTasks();
     let myAssignments: HrAssignee[] = [];
     const taskMap: Record<string, HrTask> = {};
-    if (mf.ok && Array.isArray(mf.data?.assignments)) {
-      myAssignments = mf.data.assignments;
-      (mf.data.tasks || []).forEach((x) => { taskMap[x.id] = x; });
-    } else if (asg.ok) {
-      myAssignments = asg.data;
-      const ids = Array.from(new Set(asg.data.map((a) => a.task_id)));
-      const tk = await listTasksByIds(ids);
-      if (tk.ok) tk.data.forEach((x) => { taskMap[x.id] = x; });
+    // نجاح المسار الخادمي (حتى لو بلا مهام) ⇒ نعتمده. فشله (ok:false) ⇒ fallback.
+    if (bundle.ok && bundle.data && Array.isArray(bundle.data.assignments) && Array.isArray(bundle.data.tasks)) {
+      myAssignments = bundle.data.assignments;
+      bundle.data.tasks.forEach((x) => { taskMap[x.id] = x; });
+      setTeammates(bundle.data.teammates || {});
+      setSupervisorName(bundle.data.supervisorName ?? null);
+      setAttachments(bundle.data.attachments || {});
+    } else {
+      const mf = await hrGetMyFieldTasks();
+      if (mf.ok && Array.isArray(mf.data?.assignments)) {
+        myAssignments = mf.data.assignments;
+        (mf.data.tasks || []).forEach((x) => { taskMap[x.id] = x; });
+      } else if (asg.ok) {
+        myAssignments = asg.data;
+        const ids = Array.from(new Set(asg.data.map((a) => a.task_id)));
+        const tk = await listTasksByIds(ids);
+        if (tk.ok) tk.data.forEach((x) => { taskMap[x.id] = x; });
+      }
     }
     setAssignments(myAssignments);
     setTasks(taskMap);
@@ -470,7 +483,7 @@ export default function EmployeeHome() {
                 )}
                 {tk?.description && <p className="text-xs text-stone-400 leading-relaxed">{tk.description}</p>}
                 {/* زر عرض التفاصيل الكاملة — التفاصيل تظهر دائمًا عند الطلب، بلا اختفاء */}
-                {tk && (tk.equipment_needed || tk.special_requirements || tk.execution_notes || tk.expected_start_at || tk.expected_end_at || tk.completion_evidence_mode) && (
+                {tk && (tk.equipment_needed || tk.special_requirements || tk.execution_notes || tk.expected_start_at || tk.expected_end_at || tk.completion_evidence_mode || (teammates[a.task_id] ?? []).length > 0 || supervisorName || (attachments[a.task_id] ?? []).length > 0) && (
                   <button type="button" onClick={() => setShowDetails((p) => ({ ...p, [a.task_id]: !p[a.task_id] }))}
                     className="text-[11px] text-red-300 underline">
                     {showDetails[a.task_id] ? t({ ar: "إخفاء التفاصيل", en: "Hide details" }) : t({ ar: "عرض تفاصيل المهمة", en: "Show task details" })}
@@ -495,6 +508,15 @@ export default function EmployeeHome() {
                         ⏱ {tk?.expected_start_at ? new Date(tk.expected_start_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
                         {tk?.expected_end_at ? " ← " + new Date(tk.expected_end_at).toLocaleString(isAr ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" }) : ""}
                       </div>
+                    )}
+                    {(teammates[a.task_id] ?? []).length > 0 && (
+                      <p className="text-[11px] text-stone-400">👥 {t({ ar: "أعضاء الفريق: ", en: "Team: " })}{(teammates[a.task_id] ?? []).join("، ")}</p>
+                    )}
+                    {supervisorName && (
+                      <p className="text-[11px] text-stone-400">🧭 {t({ ar: "المشرف المسؤول: ", en: "Supervisor: " })}{supervisorName}</p>
+                    )}
+                    {(attachments[a.task_id] ?? []).length > 0 && (
+                      <p className="text-[11px] text-stone-400">📎 {t({ ar: "المرفقات: ", en: "Attachments: " })}{(attachments[a.task_id] ?? []).length}</p>
                     )}
                   </div>
                 )}
