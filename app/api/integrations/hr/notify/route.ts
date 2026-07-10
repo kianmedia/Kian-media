@@ -12,7 +12,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { NextResponse } from "next/server";
-import { selectAsUser, selectAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { selectAsUser, selectAsService, rpcAsUser, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { sendHrEmail, hrEmailEnabled, hrEmailEndpoint, hrEmailEndpointHost, hrRuntimeEnv } from "@/lib/server/hrNotify";
 
 export const runtime = "nodejs";
@@ -143,10 +143,76 @@ export async function POST(req: Request) {
   // audience: يحصر مستلمي البريد — "employee" (المسندون فقط) / "admin" (الإدارة فقط) / "both".
   const audience = str(b.audience) || "both";
   const isTaskEvent = event === "hr_task_new" || event === "hr_task_updated";
-  if (isTaskEvent) log("hr_task_notify_created", { event, entity_id: entityId, audience, by: me.data[0].id, service_key_present: adminConfigured() });
-  if (event === "hr_task_new") {
-    log("hr_task_assignment_started", { entity_id: entityId, audience, by: me.data[0].id });
-    log("hr_task_portal_notify_created", { entity_id: entityId, audience, by: me.data[0].id });
+
+  // ════════ توزيع إشعار الإسناد (موظفون/إدارة/مشرفون) — رسائل مفصولة بلا تكرار ════
+  // HOTFIX: يحلّ المستلمين الثلاثة من القاعدة (RPC) لا من حالة الواجهة، ويرسل ثلاث
+  // رسائل مفصولة الجمهور مع إزالة تكرار البريد. fallback قبل تشغيل الـ HOTFIX SQL.
+  if (isTaskEvent) {
+    log("hr_task_assignment_dispatch_started", { event, entity_id: entityId, by: me.data[0].id, service_key_present: adminConfigured() });
+    type Rec = { user_id?: string; email?: string | null; full_name?: string | null };
+    let employees: Rec[] = [], admins: Rec[] = [], supervisors: Rec[] = [];
+    const rec = await rpcAsUser<{ employees: Rec[]; admins: Rec[]; supervisors: Rec[] }>(
+      "hr_task_assignment_recipients", { p_task: entityId }, bearer);
+    if (rec.ok && rec.data) {
+      employees = rec.data.employees || []; admins = rec.data.admins || []; supervisors = rec.data.supervisors || [];
+    } else {
+      // fallback: الإدارة عبر استعلام الأدوار + الموظفون عبر employee_user_ids من الواجهة.
+      log("hr_task_recipients_fallback", { reason: rec.error, event, entity_id: entityId });
+      if (adminConfigured()) {
+        const staff = await selectAsService<Rec[]>(
+          `profiles?select=id,email,full_name&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,hr))`);
+        if (staff.ok) admins = staff.data;
+        const ids: string[] = [];
+        const one = str(b.employee_user_id); if (one) ids.push(one);
+        if (Array.isArray(b.employee_user_ids)) (b.employee_user_ids as unknown[]).forEach((x) => { const s = str(x); if (s) ids.push(s); });
+        if (ids.length) {
+          const inList = Array.from(new Set(ids)).map((x) => encodeURIComponent(x)).join(",");
+          const emp = await selectAsService<Rec[]>(`profiles?select=id,email,full_name&id=in.(${inList})`);
+          if (emp.ok) employees = emp.data;
+        }
+      }
+    }
+    const valid = (e?: string | null): e is string => !!e && e.includes("@");
+    const uniq = (arr: string[]) => Array.from(new Set(arr));
+    const empEmails = uniq(employees.map((x) => x.email).filter(valid));
+    const supEmails = uniq(supervisors.map((x) => x.email).filter(valid)).filter((e) => !empEmails.includes(e));
+    const adminEmails = uniq(admins.map((x) => x.email).filter(valid)).filter((e) => !empEmails.includes(e) && !supEmails.includes(e));
+    log("hr_task_assignment_recipients_resolved", {
+      event, entity_id: entityId,
+      assigned_user_count: employees.length, employee_email_count: empEmails.length,
+      admin_email_count: adminEmails.length, supervisor_email_count: supEmails.length,
+      deduplicated_email_count: empEmails.length + supEmails.length + adminEmails.length,
+      service_key_present: adminConfigured(), endpoint_present: hrEmailEndpoint().startsWith("https://"),
+    });
+
+    const details = str(b.message) || str(b.title) || "";
+    const link = "\n\n" ; // الرابط يُضاف داخل sendHrEmail
+    const sends: { audience: string; res: { sent: boolean; reason?: string } }[] = [];
+    if (empEmails.length) {
+      log("hr_task_assignment_email_attempt", { event, entity_id: entityId, audience: "employee", recipient_count: empEmails.length });
+      const r1 = await sendHrEmail({ event, entity_id: entityId, subject: "تم إسناد مهمة جديدة لك — كيان",
+        title: str(b.title) || undefined, message: "تم إسناد مهمة ميدانية جديدة لك:\n" + details + link + "افتح بوابة الموظف لبدء المهمة.", recipients: empEmails });
+      sends.push({ audience: "employee", res: r1 });
+      log(r1.sent ? "hr_task_assignment_email_success" : "hr_task_assignment_email_failed", { event, entity_id: entityId, audience: "employee", recipient_count: empEmails.length, reason: r1.reason });
+    } else {
+      log("hr_task_assignment_email_skipped", { event, entity_id: entityId, audience: "employee", reason: "no_employee_email" });
+    }
+    if (supEmails.length) {
+      log("hr_task_assignment_email_attempt", { event, entity_id: entityId, audience: "supervisor", recipient_count: supEmails.length });
+      const r2 = await sendHrEmail({ event, entity_id: entityId, subject: "تم إسناد مهمة جديدة لأحد أفراد فريقك — كيان",
+        title: str(b.title) || undefined, message: "أُسندت مهمة ميدانية لأحد أفراد فريقك:\n" + details + link + "افتح لوحة مهام الفريق.", recipients: supEmails });
+      sends.push({ audience: "supervisor", res: r2 });
+      log(r2.sent ? "hr_task_assignment_email_success" : "hr_task_assignment_email_failed", { event, entity_id: entityId, audience: "supervisor", recipient_count: supEmails.length, reason: r2.reason });
+    }
+    if (adminEmails.length) {
+      log("hr_task_assignment_email_attempt", { event, entity_id: entityId, audience: "admin", recipient_count: adminEmails.length });
+      const r3 = await sendHrEmail({ event, entity_id: entityId, subject: "تم إنشاء وإسناد مهمة جديدة — كيان",
+        title: str(b.title) || undefined, message: "أُنشئت مهمة ميدانية وأُسندت:\n" + details + link + "افتح لوحة الموارد البشرية.", recipients: adminEmails });
+      sends.push({ audience: "admin", res: r3 });
+      log(r3.sent ? "hr_task_assignment_email_success" : "hr_task_assignment_email_failed", { event, entity_id: entityId, audience: "admin", recipient_count: adminEmails.length, reason: r3.reason });
+    }
+    log("hr_task_assignment_dispatch_completed", { event, entity_id: entityId, audiences_sent: sends.filter((s) => s.res.sent).map((s) => s.audience), total_recipients: empEmails.length + supEmails.length + adminEmails.length });
+    return NextResponse.json({ ok: true, dispatch: { employee: empEmails.length, supervisor: supEmails.length, admin: adminEmails.length } }, { status: 200 });
   }
 
   // المستلمون: مجموعة إدارة HR + الموظف المستهدف إن وُجد (قراءة فقط بمفتاح الخدمة).
