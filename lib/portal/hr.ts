@@ -118,6 +118,8 @@ export interface HrDocument {
   id: string; employee_id: string; user_id: string | null; document_type: DocumentType;
   title: string; document_number: string | null; issue_date: string | null; expiry_date: string | null;
   file_url: string | null; visibility: DocumentVisibility; notes: string | null;
+  // v3.1 FIX: ملف مرفوع خاص في bucket hr-docs (يُقرأ عبر signed URL فقط)
+  file_path: string | null; file_name: string | null; file_mime_type: string | null; file_size_bytes: number | null;
   is_deleted: boolean; created_at: string; updated_at: string;
 }
 export interface HrExpiringDoc {
@@ -621,6 +623,11 @@ export function hrAdminUpsertDocument(input: {
 export function hrAdminDeleteDocument(id: string, reason: string): Promise<Result<boolean>> {
   return prpc<boolean>("hr_admin_soft_delete_employee_document", { p_id: id, p_reason: reason });
 }
+export function hrAdminAttachDocumentFile(id: string, path: string, name: string, mime: string, size: number): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_attach_document_file", {
+    p_id: id, p_file_path: path, p_file_name: name, p_mime: mime, p_size: size,
+  });
+}
 export function hrAdminExpiringDocuments(days = 90): Promise<Result<{ as_of: string; window_days: number; rows: HrExpiringDoc[] }>> {
   return prpc<{ as_of: string; window_days: number; rows: HrExpiringDoc[] }>("hr_admin_list_expiring_documents", { p_days: days });
 }
@@ -711,10 +718,57 @@ export async function signHrFiles(paths: (string | null | undefined)[]): Promise
   } catch { return {}; }
 }
 
+// ─── hr-docs storage (وثائق الموظف الخاصة: صور + PDF؛ رفع الإدارة؛ signed URL) ───
+const DOCS_BUCKET = "hr-docs";
+export const MAX_HR_DOC_BYTES = 10 * 1024 * 1024;
+export const HR_DOC_MIME = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+/** مفتاح فريد للمسار (متصفح فقط — لا يُستدعى في سياقات workflow). */
+export function hrDocKey(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+export function hrDocPath(employeeId: string, key: string, filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase().replace(/[^.a-z0-9]/g, "") : "";
+  const base = (dot >= 0 ? filename.slice(0, dot) : filename).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40) || "file";
+  return `${employeeId}/${key}/${base}${ext}`;
+}
+export async function uploadHrDoc(path: string, file: File | Blob): Promise<Result<boolean>> {
+  try {
+    if (file.size > MAX_HR_DOC_BYTES) return { ok: false, error: "file_too_large" };
+    const type = (file as File).type || "application/octet-stream";
+    if (!HR_DOC_MIME.includes(type)) return { ok: false, error: "invalid_file_type" };
+    const res = await storageFetch(`/object/${DOCS_BUCKET}/${path}`, {
+      method: "POST", headers: { "Content-Type": type, "x-upsert": "true" }, body: file,
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* non-JSON */ }
+      return { ok: false, error: msg, status: res.status };
+    }
+    return { ok: true, data: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+export async function signHrDoc(path: string | null | undefined): Promise<string | null> {
+  if (!path) return null;
+  try {
+    const res = await storageFetch(`/object/sign/${DOCS_BUCKET}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expiresIn: 3600, paths: [path] }),
+    });
+    if (!res.ok) return null;
+    const rows = (await res.json()) as { path?: string; signedURL?: string }[];
+    const u = rows.find((r) => r.signedURL)?.signedURL;
+    return u ? `${SUPABASE_URL}/storage/v1${u}` : null;
+  } catch { return null; }
+}
+
 // ─── Email relay (fire-and-forget; portal rows already written by the RPCs) ───
+// audience: يحصر مستلمي البريد — "employee" (المسندون فقط) / "admin" (الإدارة فقط)
+// / "both" (الافتراضي). message/subject: محتوى بريد مخصّص (مثل تفاصيل المهمة).
 export function emitHrEvent(event: {
   event: string; entity_id: string; title?: string; employee_name?: string;
   employee_user_id?: string; employee_user_ids?: string[]; urgent?: boolean;
+  message?: string; subject?: string; audience?: "employee" | "admin" | "both";
 }): void {
   void (async () => {
     try {

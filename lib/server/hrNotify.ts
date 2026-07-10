@@ -22,6 +22,8 @@ export interface HrEventPayload {
   title?: string;          // human line (e.g. "حضور: خالد — 08:55")
   employee_name?: string;
   urgent?: boolean;
+  message?: string;        // v3.1 FIX: نص بريد مخصّص (تفاصيل المهمة) — يتجاوز الافتراضي
+  subject?: string;        // عنوان بريد مخصّص — يتجاوز EVENT_SUBJECTS
 }
 
 const log = (tag: string, extra: Record<string, unknown>) =>
@@ -98,12 +100,12 @@ export async function sendHrEmail(input: HrEventPayload & { recipients: string[]
       body: JSON.stringify({
         _type: "portal_notify",
         To: to.join(","),                                  // فارغة ⇒ البريد الاحتياطي في السكربت
-        Subject: EVENT_SUBJECTS[input.event] || "تحديث الموارد البشرية — كيان",
+        Subject: input.subject || EVENT_SUBJECTS[input.event] || "تحديث الموارد البشرية — كيان",
         Event: input.event,
         Record: input.title ?? record,
         Party: input.employee_name ?? "",
         Urgent: input.urgent ? "URGENT" : "",
-        Message: "حدث تحديث في بوابة الموظفين. افتح البوابة للتفاصيل.",
+        Message: input.message || "حدث تحديث في بوابة الموظفين. افتح البوابة للتفاصيل.",
         Link: `${publicBase()}/client-portal/employee`,
       }),
       cache: "no-store",

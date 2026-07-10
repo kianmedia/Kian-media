@@ -3,10 +3,11 @@
 // وثائق موظف داخل ملفه (owner/manager/hr) — إضافة/تعديل/حذف soft بسبب. تخزين
 // URL فقط (لا رفع ملف هنا — لا كسر للبنية). visibility يتحكم بظهورها للموظف.
 // ════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  hrListEmployeeDocuments, hrAdminUpsertDocument, hrAdminDeleteDocument, emitHrEvent,
+  hrListEmployeeDocuments, hrAdminUpsertDocument, hrAdminDeleteDocument, hrAdminAttachDocumentFile,
+  uploadHrDoc, signHrDoc, hrDocPath, hrDocKey, HR_DOC_MIME, MAX_HR_DOC_BYTES, emitHrEvent,
   DOCUMENT_TYPE_LABELS, type HrDocument, type DocumentType, type DocumentVisibility, type HrEmployee,
 } from "@/lib/portal/hr";
 
@@ -28,6 +29,8 @@ export default function HrEmployeeDocuments({ employee, busy, setBusy, flash }: 
   const empty = { id: "", type: "national_id" as DocumentType, title: "", number: "", issue: "", expiry: "", fileUrl: "", visibility: "admin_only" as DocumentVisibility, notes: "" };
   const [f, setF] = useState(empty);
   const [del, setDel] = useState<{ id: string; reason: string } | null>(null);
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
     const r = await hrListEmployeeDocuments(employee.id);
@@ -35,21 +38,40 @@ export default function HrEmployeeDocuments({ employee, busy, setBusy, flash }: 
   }, [employee.id]);
   useEffect(() => { void reload(); }, [reload]);
 
+  async function viewFile(d: HrDocument) {
+    if (!d.file_path) return;
+    setBusy(true);
+    const url = await signHrDoc(d.file_path);
+    setBusy(false);
+    if (!url) { flash(t({ ar: "تعذّر فتح الملف — تأكد من تشغيل ترحيل الرفع.", en: "Couldn't open file." })); return; }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   async function save() {
     if (!f.title.trim()) { flash(t({ ar: "عنوان الوثيقة مطلوب.", en: "Title required." })); return; }
+    if (pickedFile && !HR_DOC_MIME.includes(pickedFile.type)) { flash(t({ ar: "نوع الملف غير مسموح (صور أو PDF فقط).", en: "Only images or PDF allowed." })); return; }
+    if (pickedFile && pickedFile.size > MAX_HR_DOC_BYTES) { flash(t({ ar: "حجم الملف يتجاوز 10 ميغابايت.", en: "File exceeds 10MB." })); return; }
     setBusy(true);
     const r = await hrAdminUpsertDocument({
       id: f.id || null, employeeId: employee.id, type: f.type, title: f.title.trim(),
       number: f.number.trim() || undefined, issue: f.issue || null, expiry: f.expiry || null,
       fileUrl: f.fileUrl.trim() || undefined, visibility: f.visibility, notes: f.notes.trim() || undefined,
     });
+    if (!r.ok) { setBusy(false); flash(t({ ar: "تعذّر الحفظ: ", en: "Failed: " }) + r.error); return; }
+    // رفع الملف (إن اختير) إلى bucket hr-docs الخاص ثم ربطه بالوثيقة.
+    if (pickedFile) {
+      const path = hrDocPath(employee.id, hrDocKey(), pickedFile.name || "document");
+      const up = await uploadHrDoc(path, pickedFile);
+      if (!up.ok) { setBusy(false); flash(t({ ar: "حُفظت البيانات لكن تعذّر رفع الملف: ", en: "Saved but upload failed: " }) + up.error); await reload(); return; }
+      const at = await hrAdminAttachDocumentFile(r.data.id, path, pickedFile.name || "document", pickedFile.type, pickedFile.size);
+      if (!at.ok) { setBusy(false); flash(t({ ar: "رُفع الملف لكن تعذّر ربطه: ", en: "Uploaded but attach failed: " }) + at.error); await reload(); return; }
+    }
     setBusy(false);
-    if (!r.ok) { flash(t({ ar: "تعذّر الحفظ: ", en: "Failed: " }) + r.error); return; }
     emitHrEvent({
       event: "hr_document_added", entity_id: r.data.id, title: "وثيقة: " + f.title.trim(),
       employee_name: employee.full_name, employee_user_id: f.visibility === "employee_visible" ? (employee.user_id || undefined) : undefined,
     });
-    setF(empty);
+    setF(empty); setPickedFile(null); if (fileRef.current) fileRef.current.value = "";
     await reload();
     flash(t({ ar: "حُفظت الوثيقة.", en: "Document saved." }));
   }
@@ -84,9 +106,14 @@ export default function HrEmployeeDocuments({ employee, busy, setBusy, flash }: 
             <span className={chip(d.visibility === "employee_visible" ? "bg-emerald-950 text-emerald-300 border-emerald-800" : "bg-stone-800 text-stone-400 border-stone-700")}>
               {d.visibility === "employee_visible" ? t({ ar: "ظاهرة للموظف", en: "Visible" }) : t({ ar: "إدارية", en: "Admin only" })}
             </span>
-            {d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">{t({ ar: "ملف", en: "File" })}</a>}
+            {d.file_path && (
+              <button type="button" className="text-sky-400 underline" onClick={() => void viewFile(d)}>
+                {t({ ar: "عرض/تحميل", en: "View/Download" })}{d.file_mime_type === "application/pdf" ? " (PDF)" : ""}
+              </button>
+            )}
+            {!d.file_path && d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">{t({ ar: "رابط", en: "Link" })}</a>}
             <button type="button" className="text-stone-500 hover:text-red-400 underline"
-              onClick={() => setF({ id: d.id, type: d.document_type, title: d.title, number: d.document_number || "", issue: d.issue_date || "", expiry: d.expiry_date || "", fileUrl: d.file_url || "", visibility: d.visibility, notes: d.notes || "" })}>
+              onClick={() => { setPickedFile(null); if (fileRef.current) fileRef.current.value = ""; setF({ id: d.id, type: d.document_type, title: d.title, number: d.document_number || "", issue: d.issue_date || "", expiry: d.expiry_date || "", fileUrl: d.file_url || "", visibility: d.visibility, notes: d.notes || "" }); }}>
               {t({ ar: "تعديل", en: "Edit" })}
             </button>
             <button type="button" className="text-stone-500 hover:text-red-400 underline" onClick={() => setDel(del?.id === d.id ? null : { id: d.id, reason: "" })}>
@@ -115,14 +142,22 @@ export default function HrEmployeeDocuments({ employee, busy, setBusy, flash }: 
         <div><label className="block text-[10px] text-stone-500 mb-0.5">{t({ ar: "الانتهاء", en: "Expiry" })}</label>
           <input type="date" value={f.expiry} onChange={(e) => setF({ ...f, expiry: e.target.value })} className={inp} dir="ltr" /></div>
         <select value={f.visibility} onChange={(e) => setF({ ...f, visibility: e.target.value as DocumentVisibility })} className={inp}>
-          <option value="admin_only">{t({ ar: "إدارية فقط", en: "Admin only" })}</option>
+          <option value="admin_only">{t({ ar: "إدارية فقط (لا تظهر للموظف)", en: "Admin only" })}</option>
           <option value="employee_visible">{t({ ar: "ظاهرة للموظف", en: "Employee visible" })}</option>
         </select>
         <input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder={t({ ar: "ملاحظات", en: "Notes" })} className={inp} />
       </div>
+      {/* رفع ملف خاص (صورة/PDF) — يُخزّن في bucket خاص ويُقرأ بـ signed URL فقط */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+          onChange={(e) => setPickedFile(e.target.files?.[0] ?? null)}
+          className="text-[11px] text-stone-400 file:me-2 file:rounded-lg file:border-0 file:bg-stone-800 file:text-stone-200 file:px-3 file:py-1.5 file:text-[11px]" />
+        {pickedFile && <span className="text-[10.5px] text-stone-500">{pickedFile.name} ({Math.round(pickedFile.size / 1024)}KB)</span>}
+        <span className="text-[10px] text-stone-600">{t({ ar: "صور أو PDF، حتى 10MB — خاصة (الهوية/العقد لا تظهر للموظف)", en: "Images/PDF up to 10MB — private" })}</span>
+      </div>
       <div className="flex gap-2">
         <button type="button" disabled={busy} onClick={() => void save()} className={`${btnRed} px-4 py-1.5 text-xs`}>{f.id ? t({ ar: "حفظ التعديل", en: "Save" }) : t({ ar: "إضافة وثيقة", en: "Add document" })}</button>
-        {f.id && <button type="button" onClick={() => setF(empty)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>}
+        {f.id && <button type="button" onClick={() => { setF(empty); setPickedFile(null); if (fileRef.current) fileRef.current.value = ""; }} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>}
       </div>
     </div>
   );

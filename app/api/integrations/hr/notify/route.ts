@@ -132,37 +132,68 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, email: { sent: false, reason: "log_only" }, recipient_count: 0 }, { status: 200 });
   }
 
+  // audience: يحصر مستلمي البريد — "employee" (المسندون فقط) / "admin" (الإدارة فقط) / "both".
+  const audience = str(b.audience) || "both";
+  const isTaskEvent = event === "hr_task_new" || event === "hr_task_updated";
+  if (isTaskEvent) log("hr_task_notify_created", { event, entity_id: entityId, audience, by: me.data[0].id, service_key_present: adminConfigured() });
+
   // المستلمون: مجموعة إدارة HR + الموظف المستهدف إن وُجد (قراءة فقط بمفتاح الخدمة).
   const recipients: string[] = [];
+  let adminCount = 0, employeeCount = 0;
   if (hrEmailEnabled()) {
-    const staff = await selectAsService<{ email: string | null }[]>(
-      `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,hr))`);
-    if (staff.ok) staff.data.forEach((p) => { if (p.email) recipients.push(p.email); });
-    else log("hr_email_recipients_partial", { reason: "staff_query_failed", detail: staff.error, service_key_present: adminConfigured() });
+    if (audience !== "employee") {
+      const staff = await selectAsService<{ email: string | null }[]>(
+        `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,hr))`);
+      if (staff.ok) staff.data.forEach((p) => { if (p.email) { recipients.push(p.email); adminCount++; } });
+      else log("hr_email_recipients_partial", { reason: "staff_query_failed", detail: staff.error, service_key_present: adminConfigured(), event });
+    }
 
     // موظف مستهدف واحد أو قائمة (مسندو المهام) — استعلام واحد in.(...)
-    const targets: string[] = [];
-    const one = str(b.employee_user_id);
-    if (one) targets.push(one);
-    if (Array.isArray(b.employee_user_ids)) {
-      (b.employee_user_ids as unknown[]).forEach((x) => { const s = str(x); if (s) targets.push(s); });
-    }
-    if (targets.length > 0 && EMPLOYEE_TARGETED.has(event)) {
-      const inList = Array.from(new Set(targets)).map((x) => encodeURIComponent(x)).join(",");
-      const target = await selectAsService<{ email: string | null }[]>(
-        `profiles?select=email&id=in.(${inList})`);
-      if (target.ok) target.data.forEach((p) => { if (p.email) recipients.push(p.email); });
-      else log("hr_email_recipients_partial", { reason: "target_query_failed", detail: target.error });
+    if (audience !== "admin") {
+      const targets: string[] = [];
+      const one = str(b.employee_user_id);
+      if (one) targets.push(one);
+      if (Array.isArray(b.employee_user_ids)) {
+        (b.employee_user_ids as unknown[]).forEach((x) => { const s = str(x); if (s) targets.push(s); });
+      }
+      if (targets.length > 0 && EMPLOYEE_TARGETED.has(event)) {
+        const inList = Array.from(new Set(targets)).map((x) => encodeURIComponent(x)).join(",");
+        const target = await selectAsService<{ email: string | null }[]>(
+          `profiles?select=email&id=in.(${inList})`);
+        if (target.ok) target.data.forEach((p) => { if (p.email) { recipients.push(p.email); employeeCount++; } });
+        else log("hr_email_recipients_partial", { reason: "target_query_failed", detail: target.error, event });
+      }
     }
   }
+
+  // سجل واضح لتشخيص إشعارات المهام: من طُلبوا وكم تم حلّه فعليًا.
+  if (isTaskEvent) {
+    log("hr_task_assigned", { event, entity_id: entityId, audience, employee_ids: Array.isArray(b.employee_user_ids) ? (b.employee_user_ids as unknown[]).length : (str(b.employee_user_id) ? 1 : 0) });
+    log("hr_task_recipients_resolved", { event, entity_id: entityId, audience, admin_count: adminCount, employee_count: employeeCount, total: recipients.length, email_enabled: hrEmailEnabled(), service_key_present: adminConfigured() });
+  }
+
+  // بريد موجّه لجمهور محدّد (employee/admin) بلا مستلمين قابلين للحل ⇒ لا نُرسل
+  // (وإلا ذهب البريد الموجّه للموظف إلى صندوق الإدارة الاحتياطي بعنوان خاطئ).
+  if (recipients.length === 0 && audience !== "both") {
+    if (isTaskEvent) log("hr_task_email_skipped", { event, entity_id: entityId, audience, reason: "no_recipients" });
+    return NextResponse.json({ ok: true, email: { sent: false, reason: "no_recipients" }, recipient_count: 0 }, { status: 200 });
+  }
+  if (isTaskEvent) log("hr_task_email_attempt", { event, entity_id: entityId, audience, recipient_count: recipients.length });
 
   const email = await sendHrEmail({
     event, entity_id: entityId,
     title: str(b.title) || undefined,
     employee_name: str(b.employee_name) || me.data[0].full_name || me.data[0].email || "",
     urgent: b.urgent === true,
+    message: str(b.message) || undefined,
+    subject: str(b.subject) || undefined,
     recipients,
   });
+
+  if (isTaskEvent) {
+    log(email.sent ? "hr_task_email_success" : "hr_task_email_failed",
+      { event, entity_id: entityId, audience, recipient_count: recipients.length, reason: email.reason });
+  }
 
   return NextResponse.json({ ok: true, email, recipient_count: recipients.length }, { status: 200 });
 }

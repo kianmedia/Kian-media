@@ -13,7 +13,7 @@ import {
   hrMyProfile, listMyRecentSessions, findOpenSession, listMyAttendance, listMyLeaves,
   listMyAssignments, listTasksByIds, listMyVisibleEvents, hrCheckIn, hrCheckOut,
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
-  listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments,
+  listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments, signHrDoc,
   hrSupervisorMyTeam, hrSupervisorAddNote,
   getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent,
   CONSENT_TEXT, LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
@@ -262,6 +262,16 @@ export default function EmployeeHome() {
     emitHrEvent({ event: "hr_supervisor_note", entity_id: employeeId, title: "ملاحظة مشرف ميداني", employee_user_id: team.find((m) => m.employee_id === employeeId)?.user_id || undefined });
     setNoteFor(null); setTeamNote(""); setTeamNoteVisible(false);
     flash(t({ ar: "أُرسلت الملاحظة.", en: "Note sent." }));
+  }
+
+  // ─── فتح وثيقة خاصة ظاهرة للموظف عبر signed URL (لا رابط تخزين مباشر) ───
+  async function openMyDoc(d: HrDocument) {
+    if (busy || !d.file_path) return;
+    setBusy(true);
+    const url = await signHrDoc(d.file_path);
+    setBusy(false);
+    if (!url) { flash(t({ ar: "تعذّر فتح الملف.", en: "Couldn't open the file." })); return; }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   // ─── شريط الجوال السريع ───
@@ -554,7 +564,11 @@ export default function EmployeeHome() {
                       ⏳ {d.expiry_date}{dl != null ? ` (${dl}${t({ ar: "ي", en: "d" })})` : ""}
                     </span>
                   )}
-                  {d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">{t({ ar: "ملف", en: "File" })}</a>}
+                  {d.file_path && (
+                    <button type="button" disabled={busy} className="text-sky-400 underline"
+                      onClick={() => void openMyDoc(d)}>{t({ ar: "عرض/تحميل", en: "View" })}</button>
+                  )}
+                  {!d.file_path && d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">{t({ ar: "رابط", en: "Link" })}</a>}
                 </div>
               );
             })}

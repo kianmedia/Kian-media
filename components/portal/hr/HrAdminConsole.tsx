@@ -424,6 +424,23 @@ export default function HrAdminConsole() {
   const [tf, setTf] = useState(emptyTf);
   const [tfId, setTfId] = useState<string | null>(null); // ≠ null ⇒ وضع تعديل مهمة قائمة
   const [openTask, setOpenTask] = useState<string | null>(null);
+  // تفاصيل المهمة لنص البريد (اسم/عميل/مشروع/موقع/وقت/متطلبات).
+  function taskDetailLines(): string {
+    const L: string[] = [];
+    L.push("المهمة: " + tf.title.trim());
+    if (tf.clientName.trim()) L.push("العميل: " + tf.clientName.trim());
+    if (tf.projectName.trim()) L.push("المشروع: " + tf.projectName.trim());
+    const loc = [tf.location.trim(), tf.city.trim()].filter(Boolean).join(" — ");
+    if (loc) L.push("الموقع: " + loc);
+    if (tf.start) L.push("الوقت المتوقع: " + new Date(tf.start).toLocaleString("ar-SA", { dateStyle: "short", timeStyle: "short" })
+      + (tf.end ? " ← " + new Date(tf.end).toLocaleString("ar-SA", { dateStyle: "short", timeStyle: "short" }) : ""));
+    if (tf.requirements.trim()) L.push("متطلبات: " + tf.requirements.trim());
+    if (tf.equipment.trim()) L.push("المعدات: " + tf.equipment.trim());
+    return L.join("\n");
+  }
+  function assigneeNames(ids: string[]): string {
+    return ids.map((id) => staff.find((s) => s.user_id === id)?.full_name || employees.find((e) => e.user_id === id)?.full_name || "").filter(Boolean).join("، ");
+  }
   async function saveTask() {
     if (!tf.title.trim()) { flash(t({ ar: "عنوان المهمة مطلوب.", en: "Title required." })); return; }
     if (!tfId && tf.assignees.length === 0) { flash(t({ ar: "اختر موظفاً واحداً على الأقل.", en: "Pick at least one employee." })); return; }
@@ -453,20 +470,38 @@ export default function HrAdminConsole() {
           : (t({ ar: "تعذّر التعديل: ", en: "Couldn't update: " })) + r.error;
         flash(msg); return;
       }
-      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(), employee_user_ids: ids });
+      const det = taskDetailLines();
+      // بريد للموظفين المسندين (محتوى موجّه لهم) + بريد منفصل للإدارة.
+      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
+        audience: "employee", employee_user_ids: ids,
+        subject: "تم تحديث مهمة مُسندة إليك — كيان",
+        message: "تم تحديث تفاصيل مهمتك:\n" + det + "\n\nافتح بوابة الموظف لمراجعة التفاصيل." });
+      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
+        audience: "admin",
+        subject: "تم تعديل مهمة ميدانية — كيان",
+        message: "عُدّلت مهمة ميدانية:\n" + det + "\nالمسندون: " + (assigneeNames(ids) || "—") });
       setTf(emptyTf); setTfId(null);
       await reload();
-      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون بالتحديث.", en: "Task updated & assignees notified." }));
+      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون والإدارة بالتحديث.", en: "Task updated & notified." }));
       return;
     }
     const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
+    const det = taskDetailLines();
     const r = await hrAdminCreateTask({ ...base, assignees: assignedIds });
     setBusy(false);
     if (!r.ok) { flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
-    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(), employee_user_ids: assignedIds });
+    // بريد للموظف المسند (عنوان "تم إسناد مهمة جديدة لك") + بريد منفصل للإدارة.
+    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
+      audience: "employee", employee_user_ids: assignedIds,
+      subject: "تم إسناد مهمة جديدة لك — كيان",
+      message: "تم إسناد مهمة ميدانية جديدة لك:\n" + det + "\n\nافتح بوابة الموظف لبدء المهمة." });
+    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
+      audience: "admin",
+      subject: "تم إنشاء/إسناد مهمة ميدانية — كيان",
+      message: "أُنشئت مهمة ميدانية وأُسندت:\n" + det + "\nالموظفون المسندون: " + (assigneeNames(assignedIds) || "—") });
     setTf(emptyTf);
     await reload();
-    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون.", en: "Task created & assignees notified." }));
+    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون والإدارة.", en: "Task created & notified." }));
   }
   function startEditTask(tk: HrTask) {
     setTfId(tk.id);
