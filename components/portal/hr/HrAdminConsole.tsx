@@ -15,17 +15,27 @@ import {
   hrAdminCloseTask, hrAdminAddEmployeeEvent, hrGetSettings,
   hrAdminSoftDeleteLeave, hrAdminUpdateLeave, hrAdminVoidAttendance, hrAdminSoftDeleteTask,
   hrAdminUpdateEmployeeStatus, hrOwnerSoftDeleteEmployee, hrAdminReviewTask, hrListTaskReviews,
-  hrListDeviceUsers,
+  hrListDeviceUsers, hrListCorrections, hrAdminLongOpenSessions, hrAdminExpiringDocuments,
+  hrListSupervisorLinks, hrAdminSetSupervisorLink,
+  hrAdminSetTaskEvidenceMode, hrAdminRequestRevision, hrListTaskEvidence, signHrFiles,
   emitHrEvent, mapsLink, DEFAULT_HR_SETTINGS,
   LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS, TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
+  DOCUMENT_TYPE_LABELS, EVIDENCE_MODE_LABELS,
   type HrEmployee, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
   type HrEvent, type HrStaffOption, type EmploymentStatus, type AttendanceStatus,
   type TaskType, type TaskPriority, type HrSettings, type HrTaskReview, type HrDeviceUser,
+  type HrLongOpenSession, type HrExpiringDoc, type HrSupervisorLink,
+  type EvidenceMode, type HrTaskEvidence,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 import HrSettingsPanel from "@/components/portal/hr/HrSettingsPanel";
 import HrMonthlyReport from "@/components/portal/hr/HrMonthlyReport";
 import HrDevices from "@/components/portal/hr/HrDevices";
+import HrCorrectionRequests from "@/components/portal/hr/HrCorrectionRequests";
+import HrCalendar from "@/components/portal/hr/HrCalendar";
+import HrPayrollReport from "@/components/portal/hr/HrPayrollReport";
+import HrAuditLog from "@/components/portal/hr/HrAuditLog";
+import HrEmployeeDocuments from "@/components/portal/hr/HrEmployeeDocuments";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
 const inp = "w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -48,7 +58,8 @@ const toLocalInput = (iso: string | null) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-type Tab = "overview" | "employees" | "attendance" | "leaves" | "tasks" | "monthly" | "devices" | "settings";
+type Tab = "overview" | "employees" | "attendance" | "corrections" | "leaves" | "tasks"
+  | "monthly" | "payroll" | "documents" | "devices" | "calendar" | "audit" | "supervisors" | "settings";
 type EmpFilter = "" | "active" | "not_today";
 type AttFilter = "" | "today" | "open_now";
 
@@ -78,14 +89,21 @@ export default function HrAdminConsole() {
   const [attFilter, setAttFilter] = useState<AttFilter>("");
   const [leaveFilter, setLeaveFilter] = useState<"" | "pending">("");
   const [taskFilter, setTaskFilter] = useState<"" | "open">("");
+  const [corrPendingOnly, setCorrPendingOnly] = useState(false);
+  // عدّادات/بيانات v3.1 التشغيلية.
+  const [pendingCorrections, setPendingCorrections] = useState(0);
+  const [longOpen, setLongOpen] = useState<HrLongOpenSession[]>([]);
+  const [expiring, setExpiring] = useState<HrExpiringDoc[]>([]);
+  const [supLinks, setSupLinks] = useState<HrSupervisorLink[]>([]);
 
   const reload = useCallback(async () => {
     const td = todayRiyadh();
-    const [emp, st, att, tdAtt, lv, tk, cfg] = await Promise.all([
+    const [emp, st, att, tdAtt, lv, tk, cfg, corr, lo, exp, sl] = await Promise.all([
       hrListEmployees(), hrAdminListStaff(),
       hrListAttendance(attFrom, attTo, attUser || undefined),
       hrListAttendance(td, td),
       hrListLeaves(), hrListTasks(), hrGetSettings(),
+      hrListCorrections("pending"), hrAdminLongOpenSessions(), hrAdminExpiringDocuments(90), hrListSupervisorLinks(),
     ]);
     if (!emp.ok) { setPhase("error"); return; }
     setEmployees(emp.data);
@@ -96,9 +114,21 @@ export default function HrAdminConsole() {
     if (tk.ok) setTasks(tk.data);
     // فشل القراءة (قبل تشغيل PATCH) ⇒ القيم الافتراضية الآمنة.
     setSettings(cfg.ok ? { ...DEFAULT_HR_SETTINGS, ...cfg.data } : DEFAULT_HR_SETTINGS);
+    setPendingCorrections(corr.ok ? corr.data.length : 0);
+    setLongOpen(lo.ok ? lo.data.rows : []);
+    setExpiring(exp.ok ? exp.data.rows : []);
+    setSupLinks(sl.ok ? sl.data : []);
     setPhase("ready");
   }, [attFrom, attTo, attUser]);
   useEffect(() => { void reload(); }, [reload]);
+  // سجل تشغيلي مرة واحدة عند أول تحميل: جلسات مفتوحة طويلة + وثائق قرب انتهائها (بلا جدولة).
+  const [opsLogged, setOpsLogged] = useState(false);
+  useEffect(() => {
+    if (opsLogged || phase !== "ready") return;
+    if (longOpen.length > 0) emitHrEvent({ event: "hr_long_open_session_detected", entity_id: "overview", title: `${longOpen.length} جلسة مفتوحة طويلة` });
+    if (expiring.length > 0) emitHrEvent({ event: "hr_document_expiring", entity_id: "overview", title: `${expiring.length} وثيقة قرب الانتهاء` });
+    setOpsLogged(true);
+  }, [phase, longOpen, expiring, opsLogged]);
 
   const byUser = useMemo(() => {
     const m: Record<string, HrEmployee> = {};
@@ -123,6 +153,23 @@ export default function HrAdminConsole() {
     apply();
     setTab(target);
     emitHrEvent({ event: "hr_dashboard_filter_applied", entity_id: filterKey, title: label });
+  }
+  // فتح نموذج التعديل/الإلغاء لجلسة مفتوحة طويلة — نُركّب سجلًا من بيانات التنبيه
+  // لأن الجلسة قد تكون بتاريخ سابق غير محمّل في جلبة حضور اليوم.
+  function openLongSession(s: HrLongOpenSession) {
+    const wd = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh" }).format(new Date(s.check_in_at));
+    const synthetic: HrAttendance = {
+      id: s.record_id, employee_id: s.employee_id, user_id: s.user_id, work_date: wd,
+      check_in_at: s.check_in_at, check_out_at: null,
+      check_in_lat: null, check_in_lng: null, check_in_accuracy: null,
+      check_out_lat: null, check_out_lng: null, check_out_accuracy: null,
+      status: "present", admin_adjusted_by: null, admin_adjustment_reason: null,
+      is_voided: false, source: "app", created_at: s.check_in_at, updated_at: s.check_in_at,
+    };
+    setAdjFor(synthetic);
+    setAdj({ checkIn: "", checkOut: "", status: "", reason: "" });
+    setTab("attendance");
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // ─── الموظفون ───
@@ -317,6 +364,29 @@ export default function HrAdminConsole() {
     await reload();
     flash(t({ ar: "حُذف ملف الموظف (حذف آمن موثّق).", en: "Employee soft-deleted." }));
   }
+  // ─── المشرف الميداني لكل موظف (mapping) ───
+  const [supFor, setSupFor] = useState<Record<string, string>>({});
+  const currentSupervisorOf = (employeeId: string): string =>
+    supLinks.find((l) => l.employee_id === employeeId && l.is_active)?.supervisor_employee_id ?? "";
+  async function saveSupervisor(e: HrEmployee) {
+    const chosen = supFor[e.id] ?? currentSupervisorOf(e.id);
+    const prev = currentSupervisorOf(e.id);
+    if (chosen === prev) { flash(t({ ar: "لا تغيير على المشرف.", en: "No change." })); return; }
+    setBusy(true);
+    // أوقف رابط المشرف السابق أولاً (وإلا يظل نشطًا ويصبح للموظف مشرفان)، ثم فعّل الجديد.
+    if (prev) {
+      const d = await hrAdminSetSupervisorLink(prev, e.id, false);
+      if (!d.ok) { setBusy(false); flash((t({ ar: "تعذّر إيقاف الإشراف السابق: ", en: "Failed to unset previous: " })) + d.error); return; }
+    }
+    if (chosen) {
+      const r = await hrAdminSetSupervisorLink(chosen, e.id, true);
+      if (!r.ok) { setBusy(false); flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
+    }
+    setBusy(false);
+    emitHrEvent({ event: "hr_supervisor_link_updated", entity_id: e.id, title: "تحديث إشراف: " + e.full_name, employee_name: e.full_name, employee_user_id: e.user_id || undefined });
+    await reload();
+    flash(t({ ar: "حُدّث الإشراف الميداني.", en: "Supervisor updated." }));
+  }
   const [custodyByEmp, setCustodyByEmp] = useState<Record<string, CustodyRecord[] | "error">>({});
   const [deviceUsersByEmp, setDeviceUsersByEmp] = useState<Record<string, HrDeviceUser[]>>({});
   async function loadEmployeeExtras(e: HrEmployee) {
@@ -351,11 +421,29 @@ export default function HrAdminConsole() {
   const emptyTf = {
     title: "", desc: "", location: "", mapsUrl: "", city: "", clientName: "", projectName: "",
     taskType: "photo" as TaskType, priority: "normal" as TaskPriority,
+    evidenceMode: "" as EvidenceMode | "",   // "" = حسب الإعداد العام (لا يتغيّر سلوك المهام الافتراضي)
     equipment: "", requirements: "", execNotes: "", start: "", end: "", assignees: [] as string[],
   };
   const [tf, setTf] = useState(emptyTf);
   const [tfId, setTfId] = useState<string | null>(null); // ≠ null ⇒ وضع تعديل مهمة قائمة
   const [openTask, setOpenTask] = useState<string | null>(null);
+  // تفاصيل المهمة لنص البريد (اسم/عميل/مشروع/موقع/وقت/متطلبات).
+  function taskDetailLines(): string {
+    const L: string[] = [];
+    L.push("المهمة: " + tf.title.trim());
+    if (tf.clientName.trim()) L.push("العميل: " + tf.clientName.trim());
+    if (tf.projectName.trim()) L.push("المشروع: " + tf.projectName.trim());
+    const loc = [tf.location.trim(), tf.city.trim()].filter(Boolean).join(" — ");
+    if (loc) L.push("الموقع: " + loc);
+    if (tf.start) L.push("الوقت المتوقع: " + new Date(tf.start).toLocaleString("ar-SA", { dateStyle: "short", timeStyle: "short" })
+      + (tf.end ? " ← " + new Date(tf.end).toLocaleString("ar-SA", { dateStyle: "short", timeStyle: "short" }) : ""));
+    if (tf.requirements.trim()) L.push("متطلبات: " + tf.requirements.trim());
+    if (tf.equipment.trim()) L.push("المعدات: " + tf.equipment.trim());
+    return L.join("\n");
+  }
+  function assigneeNames(ids: string[]): string {
+    return ids.map((id) => staff.find((s) => s.user_id === id)?.full_name || employees.find((e) => e.user_id === id)?.full_name || "").filter(Boolean).join("، ");
+  }
   async function saveTask() {
     if (!tf.title.trim()) { flash(t({ ar: "عنوان المهمة مطلوب.", en: "Title required." })); return; }
     if (!tfId && tf.assignees.length === 0) { flash(t({ ar: "اختر موظفاً واحداً على الأقل.", en: "Pick at least one employee." })); return; }
@@ -378,27 +466,51 @@ export default function HrAdminConsole() {
         if (ar.ok) { setAssigneesByTask((p) => ({ ...p, [tfId]: ar.data })); ids = ar.data.map((a) => a.user_id); }
       }
       const r = await hrAdminUpdateTask(tfId, base);
-      setBusy(false);
       if (!r.ok) {
+        setBusy(false);
         const msg = /task_not_editable/.test(r.error)
           ? t({ ar: "لا يمكن تعديل مهمة مُسلّمة أو مغلقة.", en: "Submitted/closed tasks can't be edited." })
           : (t({ ar: "تعذّر التعديل: ", en: "Couldn't update: " })) + r.error;
         flash(msg); return;
       }
-      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(), employee_user_ids: ids });
+      // وضع دليل التسليم (فشله لا يمنع التعديل — آمن للنشر قبل تشغيل SQL).
+      await hrAdminSetTaskEvidenceMode(tfId, tf.evidenceMode);
+      setBusy(false);
+      const det = taskDetailLines();
+      // بريد للموظفين المسندين (محتوى موجّه لهم) + بريد منفصل للإدارة.
+      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
+        audience: "employee", employee_user_ids: ids,
+        subject: "تم تحديث مهمة مُسندة إليك — كيان",
+        message: "تم تحديث تفاصيل مهمتك:\n" + det + "\n\nافتح بوابة الموظف لمراجعة التفاصيل." });
+      emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
+        audience: "admin",
+        subject: "تم تعديل مهمة ميدانية — كيان",
+        message: "عُدّلت مهمة ميدانية:\n" + det + "\nالمسندون: " + (assigneeNames(ids) || "—") });
       setTf(emptyTf); setTfId(null);
       await reload();
-      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون بالتحديث.", en: "Task updated & assignees notified." }));
+      flash(t({ ar: "عُدّلت المهمة وأُشعر المسندون والإدارة بالتحديث.", en: "Task updated & notified." }));
       return;
     }
     const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
+    const evMode = tf.evidenceMode;
+    const det = taskDetailLines();
     const r = await hrAdminCreateTask({ ...base, assignees: assignedIds });
+    if (!r.ok) { setBusy(false); flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
+    // وضع دليل التسليم (فشله لا يمنع الإنشاء — آمن للنشر قبل تشغيل SQL).
+    await hrAdminSetTaskEvidenceMode(r.data.id, evMode);
     setBusy(false);
-    if (!r.ok) { flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
-    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(), employee_user_ids: assignedIds });
+    // بريد للموظف المسند (عنوان "تم إسناد مهمة جديدة لك") + بريد منفصل للإدارة.
+    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
+      audience: "employee", employee_user_ids: assignedIds,
+      subject: "تم إسناد مهمة جديدة لك — كيان",
+      message: "تم إسناد مهمة ميدانية جديدة لك:\n" + det + "\n\nافتح بوابة الموظف لبدء المهمة." });
+    emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
+      audience: "admin",
+      subject: "تم إنشاء/إسناد مهمة ميدانية — كيان",
+      message: "أُنشئت مهمة ميدانية وأُسندت:\n" + det + "\nالموظفون المسندون: " + (assigneeNames(assignedIds) || "—") });
     setTf(emptyTf);
     await reload();
-    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون.", en: "Task created & assignees notified." }));
+    flash(t({ ar: "أُنشئت المهمة وأُشعر المسندون والإدارة.", en: "Task created & notified." }));
   }
   function startEditTask(tk: HrTask) {
     setTfId(tk.id);
@@ -407,6 +519,7 @@ export default function HrAdminConsole() {
       mapsUrl: tk.maps_url || "", city: tk.city || "",
       clientName: tk.client_name || "", projectName: tk.project_name || "",
       taskType: (tk.task_type || "other") as TaskType, priority: (tk.priority || "normal") as TaskPriority,
+      evidenceMode: (tk.completion_evidence_mode || "") as EvidenceMode | "",
       equipment: tk.equipment_needed || "", requirements: tk.special_requirements || "",
       execNotes: tk.execution_notes || "",
       start: toLocalInput(tk.expected_start_at), end: toLocalInput(tk.expected_end_at), assignees: [],
@@ -428,12 +541,51 @@ export default function HrAdminConsole() {
     await reload();
     flash(action === "complete" ? t({ ar: "أُغلقت المهمة.", en: "Closed." }) : t({ ar: "أُلغيت المهمة.", en: "Cancelled." }));
   }
+  // ─── طلب تعديل + أدلة التسليم (ملف/رابط) ───
+  const [revFor2, setRevFor2] = useState<{ id: string; note: string } | null>(null);
+  const [evidenceByTask, setEvidenceByTask] = useState<Record<string, HrTaskEvidence[]>>({});
+  async function doRequestRevision(tk: HrTask) {
+    const note = (revFor2?.note || "").trim();
+    if (!note) { flash(t({ ar: "ملاحظة التعديل إلزامية.", en: "Revision note required." })); return; }
+    setBusy(true);
+    let ids = (assigneesByTask[tk.id] ?? []).map((a) => a.user_id);
+    if (ids.length === 0) {
+      const ar = await hrListAssignees(tk.id);
+      if (ar.ok) ids = ar.data.map((a) => a.user_id);
+    }
+    const r = await hrAdminRequestRevision(tk.id, note);
+    setBusy(false);
+    if (!r.ok) {
+      const msg = /task_not_revisable/.test(r.error) ? t({ ar: "لا يمكن طلب تعديل لهذه المهمة الآن.", en: "Task not revisable." })
+        : (t({ ar: "تعذّر: ", en: "Failed: " })) + r.error;
+      flash(msg); return;
+    }
+    emitHrEvent({ event: "hr_task_revision_requested", entity_id: tk.id, title: "طلب تعديل: " + tk.title,
+      employee_user_ids: ids, subject: "طلب تعديل على مهمتك — كيان",
+      message: "طُلب تعديل على مهمتك: " + tk.title + "\nالملاحظة: " + note + "\n\nافتح بوابة الموظف لإعادة التنفيذ." });
+    setRevFor2(null);
+    await reload();
+    flash(t({ ar: "أُرسل طلب التعديل وأُعيدت المهمة للتنفيذ.", en: "Revision requested." }));
+  }
+  async function openEvidenceFile(ev: HrTaskEvidence) {
+    if (!ev.file_path) return;
+    setBusy(true);
+    const map = await signHrFiles([ev.file_path]);
+    setBusy(false);
+    const url = map[ev.file_path];
+    if (!url) { flash(t({ ar: "تعذّر فتح الملف.", en: "Couldn't open file." })); return; }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
   async function toggleTask(id: string) {
     if (openTask === id) { setOpenTask(null); return; }
     setOpenTask(id);
     if (!assigneesByTask[id]) {
       const r = await hrListAssignees(id);
       if (r.ok) setAssigneesByTask((p) => ({ ...p, [id]: r.data }));
+    }
+    if (!evidenceByTask[id]) {
+      const ev = await hrListTaskEvidence(id);
+      if (ev.ok) setEvidenceByTask((p) => ({ ...p, [id]: ev.data }));
     }
     const tk = tasks.find((x) => x.id === id);
     if (tk && ["completed", "cancelled"].includes(tk.status) && !reviewsByTask[id]) {
@@ -445,15 +597,21 @@ export default function HrAdminConsole() {
   if (phase === "loading") return <p className="text-stone-500 text-sm">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
   if (phase === "error") return <p className="text-red-400 text-sm">{t({ ar: "تعذّر التحميل — شغّل ترحيل قاعدة البيانات (portal_hr_employee_portal_RUNME.sql) أولاً.", en: "Couldn't load — run the HR migration first." })}</p>;
 
-  const TABS: { key: Tab; ar: string; en: string }[] = [
-    { key: "overview",   ar: "نظرة عامة",     en: "Overview" },
-    { key: "employees",  ar: "الموظفون",      en: "Employees" },
-    { key: "attendance", ar: "الحضور",        en: "Attendance" },
-    { key: "leaves",     ar: "الإجازات",      en: "Leaves" },
-    { key: "tasks",      ar: "المهام",        en: "Tasks" },
-    { key: "monthly",    ar: "التقرير الشهري", en: "Monthly" },
-    { key: "devices",    ar: "أجهزة الحضور",  en: "Devices" },
-    { key: "settings",   ar: "الإعدادات",     en: "Settings" },
+  const TABS: { key: Tab; ar: string; en: string; badge?: number }[] = [
+    { key: "overview",    ar: "نظرة عامة",      en: "Overview" },
+    { key: "employees",   ar: "الموظفون",       en: "Employees" },
+    { key: "attendance",  ar: "الحضور",         en: "Attendance" },
+    { key: "corrections", ar: "تعديل الحضور",   en: "Corrections", badge: pendingCorrections },
+    { key: "leaves",      ar: "الإجازات",       en: "Leaves", badge: pendingLeaves.length },
+    { key: "tasks",       ar: "المهام",         en: "Tasks" },
+    { key: "monthly",     ar: "التقرير الشهري",  en: "Monthly" },
+    { key: "payroll",     ar: "الخصومات",       en: "Payroll" },
+    { key: "documents",   ar: "الوثائق",        en: "Documents" },
+    { key: "devices",     ar: "الأجهزة",        en: "Devices" },
+    { key: "calendar",    ar: "التقويم",        en: "Calendar" },
+    { key: "audit",       ar: "سجل العمليات",   en: "Audit log" },
+    { key: "supervisors", ar: "المشرفون",       en: "Supervisors" },
+    { key: "settings",    ar: "الإعدادات",      en: "Settings" },
   ];
   // شارة الفلتر النشط + زر "عرض الكل" — تظهر أعلى القائمة في التبويب المفلتر.
   const FilterBadge = ({ label, onClear }: { label: string; onClear: () => void }) => (
@@ -467,13 +625,20 @@ export default function HrAdminConsole() {
 
   return (
     <div className="space-y-4">
-      {/* sub-tabs */}
-      <div className="flex gap-1.5 flex-wrap">
+      {/* sub-tabs — قائمة منسدلة على الجوال (تبويبات كثيرة)، أزرار على الشاشات الأكبر */}
+      <div className="sm:hidden">
+        <select value={tab} onChange={(e) => setTab(e.target.value as Tab)} className={inp}>
+          {TABS.map((x) => (
+            <option key={x.key} value={x.key}>{t({ ar: x.ar, en: x.en })}{x.badge ? ` (${x.badge})` : ""}</option>
+          ))}
+        </select>
+      </div>
+      <div className="hidden sm:flex gap-1.5 flex-wrap">
         {TABS.map((x) => (
           <button key={x.key} type="button" onClick={() => setTab(x.key)}
             className={`rounded-lg px-3.5 py-2 text-xs font-medium border ${tab === x.key ? "bg-red-600 border-red-600 text-white" : "bg-stone-900 border-stone-700 text-stone-300"}`}>
             {t({ ar: x.ar, en: x.en })}
-            {x.key === "leaves" && pendingLeaves.length > 0 && <span className="ms-1.5 bg-white/20 rounded-full px-1.5">{pendingLeaves.length}</span>}
+            {x.badge ? <span className="ms-1.5 bg-white/20 rounded-full px-1.5">{x.badge}</span> : null}
           </button>
         ))}
       </div>
@@ -495,6 +660,16 @@ export default function HrAdminConsole() {
                 go: () => openCard("tasks", () => setTaskFilter("open"), "tasks_open", "مهام مفتوحة") },
               { l: t({ ar: "لم يسجّلوا اليوم", en: "Not checked in" }), v: Math.max(activeCount - employees.filter((e) => e.employment_status === "active" && e.user_id && checkedTodaySet.has(e.user_id)).length, 0),
                 go: () => openCard("employees", () => setEmpFilter("not_today"), "employees_not_today", "لم يسجّلوا اليوم") },
+              { l: t({ ar: "طلبات تعديل حضور معلّقة", en: "Correction requests" }), v: pendingCorrections,
+                go: () => openCard("corrections", () => setCorrPendingOnly(true), "corrections_pending", "طلبات تعديل حضور معلّقة") },
+              { l: t({ ar: "وثائق ستنتهي قريبًا", en: "Docs expiring soon" }), v: expiring.filter((d) => d.days_left <= 30).length,
+                go: () => openCard("documents", () => {}, "docs_expiring", "وثائق ستنتهي قريبًا") },
+              { l: t({ ar: "جلسات مفتوحة طويلة", en: "Long open sessions" }), v: longOpen.length,
+                go: () => openCard("overview", () => { if (typeof document !== "undefined") document.getElementById("long-open-section")?.scrollIntoView({ behavior: "smooth" }); }, "long_open", "جلسات مفتوحة طويلة") },
+              { l: t({ ar: "روابط إشراف ميداني", en: "Supervisor links" }), v: supLinks.length,
+                go: () => openCard("supervisors", () => {}, "supervisors", "المشرفون الميدانيون") },
+              { l: t({ ar: "سجل العمليات", en: "Audit log" }), v: "↗",
+                go: () => openCard("audit", () => {}, "audit_open", "سجل العمليات") },
             ] as { l: string; v: number | string; go: () => void }[]).map((c, i) => (
               <button key={i} type="button" onClick={c.go}
                 className={card + " text-center transition-colors hover:border-red-800 focus:outline-none focus:ring-2 focus:ring-red-600 cursor-pointer"}>
@@ -504,6 +679,54 @@ export default function HrAdminConsole() {
               </button>
             ))}
           </div>
+
+          {/* جلسات مفتوحة طويلة */}
+          {longOpen.length > 0 && (
+            <section id="long-open-section" className={card}>
+              <h3 className="text-sm font-medium text-stone-100 mb-2">
+                ⏱ {t({ ar: "جلسات مفتوحة طويلة", en: "Long open sessions" })}
+                <span className="text-stone-500 text-xs font-normal"> ({t({ ar: "أكثر من", en: "over" })} {settings.open_session_alert_hours} {t({ ar: "ساعة", en: "h" })})</span>
+              </h3>
+              <div className="space-y-1.5">
+                {longOpen.map((s) => (
+                  <div key={s.record_id} className="flex items-center gap-2 flex-wrap bg-stone-950 border border-amber-900/40 rounded-lg px-3 py-2 text-xs">
+                    <span className="text-stone-100 font-medium">{s.full_name}</span>
+                    <span className="font-mono text-stone-500" dir="ltr">{fmtDT(s.check_in_at, isAr)}</span>
+                    <span className="text-amber-400 font-mono">{s.hours_open} {t({ ar: "ساعة مفتوحة", en: "h open" })}</span>
+                    <button type="button" className="ms-auto text-red-300 underline"
+                      onClick={() => openLongSession(s)}>
+                      {t({ ar: "تعديل/إغلاق", en: "Adjust/close" })}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* وثائق ستنتهي قريبًا */}
+          {expiring.length > 0 && (
+            <section className={card}>
+              <h3 className="text-sm font-medium text-stone-100 mb-2">📄 {t({ ar: "وثائق قريبة من الانتهاء", en: "Documents expiring soon" })}</h3>
+              <div className="flex gap-1.5 flex-wrap mb-2 text-[10.5px]">
+                <span className={chip("bg-red-950 text-red-300 border-red-800")}>≤30 {t({ ar: "يوم", en: "d" })}: {expiring.filter((d) => d.days_left <= 30).length}</span>
+                <span className={chip("bg-amber-950 text-amber-300 border-amber-800")}>≤60: {expiring.filter((d) => d.days_left <= 60).length}</span>
+                <span className={chip("bg-stone-800 text-stone-400 border-stone-700")}>≤90: {expiring.length}</span>
+              </div>
+              <div className="space-y-1">
+                {expiring.slice(0, 12).map((d) => (
+                  <div key={d.id} className="flex items-center gap-2 flex-wrap text-[11.5px] border-t border-stone-800 py-1">
+                    <span className="text-stone-200">{d.full_name}</span>
+                    <span className={chip("bg-stone-800 text-sky-300 border-stone-700")}>{t(DOCUMENT_TYPE_LABELS[d.document_type] ?? { ar: d.document_type, en: d.document_type })}</span>
+                    <span className="text-stone-400">{d.title}</span>
+                    <span className={`font-mono ms-auto ${d.days_left <= 30 ? "text-red-400" : d.days_left <= 60 ? "text-amber-400" : "text-stone-500"}`} dir="ltr">
+                      {d.expiry_date} · {d.days_left} {t({ ar: "يوم", en: "d" })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10.5px] text-stone-600 mt-2">{t({ ar: "تظهر هنا عند فتح اللوحة (بلا جدولة تلقائية).", en: "Shown on panel open (no scheduled job)." })}</p>
+            </section>
+          )}
         </div>
       )}
 
@@ -646,6 +869,18 @@ export default function HrAdminConsole() {
                         ))}
                       </div>
                     )}
+                    {/* المشرف الميداني لهذا الموظف */}
+                    <div className="bg-stone-950 border border-stone-800 rounded-lg p-2.5 text-[11px] flex gap-2 flex-wrap items-center">
+                      <span className="text-stone-400 font-medium">{t({ ar: "المشرف الميداني:", en: "Supervisor:" })}</span>
+                      <select value={supFor[e.id] ?? currentSupervisorOf(e.id)} onChange={(ev2) => setSupFor((p) => ({ ...p, [e.id]: ev2.target.value }))}
+                        className={inp + " text-[11px]"} style={{ width: "auto", paddingTop: 4, paddingBottom: 4 }}>
+                        <option value="">{t({ ar: "— بلا مشرف —", en: "— None —" })}</option>
+                        {employees.filter((s) => s.id !== e.id).map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                      </select>
+                      <button type="button" disabled={busy} onClick={() => void saveSupervisor(e)} className={`${btnGhost} px-3 py-1 text-[11px]`}>{t({ ar: "حفظ", en: "Save" })}</button>
+                    </div>
+                    {/* وثائق الموظف */}
+                    <HrEmployeeDocuments employee={e} busy={busy} setBusy={setBusy} flash={flash} />
                     {/* Timeline الموظف — فلاتر بالنوع + بحث نصي + إضافة ملاحظة */}
                     <div className="border-t border-stone-800 pt-2 space-y-1">
                       <div className="flex gap-2 flex-wrap items-center pb-1">
@@ -905,6 +1140,15 @@ export default function HrAdminConsole() {
               placeholder={t({ ar: "متطلبات خاصة (اختياري)", en: "Special requirements (optional)" })} className={inp + " mt-2"} />
             <textarea value={tf.execNotes} onChange={(e) => setTf({ ...tf, execNotes: e.target.value })} rows={2}
               placeholder={t({ ar: "ملاحظات التنفيذ (اختياري)", en: "Execution notes (optional)" })} className={inp + " mt-2"} />
+            <div className="mt-2">
+              <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "دليل التسليم المطلوب من الموظف", en: "Required delivery evidence" })}</label>
+              <select value={tf.evidenceMode} onChange={(e) => setTf({ ...tf, evidenceMode: e.target.value as EvidenceMode | "" })} className={inp}>
+                <option value="">{t({ ar: "حسب الإعداد العام (افتراضي)", en: "Follow global setting (default)" })}</option>
+                {(Object.keys(EVIDENCE_MODE_LABELS) as EvidenceMode[]).map((k) => (
+                  <option key={k} value={k}>{isAr ? EVIDENCE_MODE_LABELS[k].ar : EVIDENCE_MODE_LABELS[k].en}</option>
+                ))}
+              </select>
+            </div>
             {!tfId && (
               <div className="mt-2">
                 <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "المسندون *", en: "Assignees *" })}</div>
@@ -994,9 +1238,38 @@ export default function HrAdminConsole() {
                           <button type="button" disabled={busy} onClick={() => void closeTask(tk, "complete")} className={`${btnRed} px-4 py-2 text-xs`}>
                             {t({ ar: "اعتماد الإغلاق", en: "Approve closure" })}
                           </button>
+                          {["submitted", "in_progress"].includes(tk.status) && (
+                            <button type="button" disabled={busy} className={`${btnGhost} px-4 py-2 text-xs`}
+                              onClick={() => setRevFor2(revFor2?.id === tk.id ? null : { id: tk.id, note: "" })}>
+                              {t({ ar: "طلب تعديل", en: "Request revision" })}
+                            </button>
+                          )}
                           <button type="button" disabled={busy} onClick={() => void closeTask(tk, "cancel")} className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-xs px-4 py-2 disabled:opacity-50">
                             {t({ ar: "إلغاء المهمة", en: "Cancel task" })}
                           </button>
+                        </div>
+                      )}
+                      {/* طلب تعديل — يُعيد المهمة للتنفيذ بملاحظة إلزامية */}
+                      {revFor2?.id === tk.id && (
+                        <div className="flex gap-2 flex-wrap items-center bg-stone-950 border border-stone-800 rounded-lg p-2">
+                          <input value={revFor2.note} onChange={(e) => setRevFor2({ id: tk.id, note: e.target.value })}
+                            placeholder={t({ ar: "ملاحظة التعديل المطلوب (إلزامية)", en: "Revision note (required)" })} className={inp + " flex-1 min-w-[180px]"} style={{ width: "auto" }} />
+                          <button type="button" disabled={busy} onClick={() => void doRequestRevision(tk)} className={`${btnRed} px-4 py-1.5 text-xs`}>
+                            {t({ ar: "إرسال طلب التعديل", en: "Send revision" })}
+                          </button>
+                        </div>
+                      )}
+                      {/* أدلة التسليم (صور/ملفات/روابط) */}
+                      {(evidenceByTask[tk.id] ?? []).length > 0 && (
+                        <div className="flex gap-1.5 flex-wrap items-center text-[11px] border-t border-stone-800 pt-1.5">
+                          <span className="text-stone-500">{t({ ar: "أدلة التسليم:", en: "Evidence:" })}</span>
+                          {(evidenceByTask[tk.id] ?? []).map((ev) => ev.kind === "link" ? (
+                            <a key={ev.id} href={ev.link_url || "#"} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">🔗 {t({ ar: "رابط", en: "Link" })}</a>
+                          ) : (
+                            <button key={ev.id} type="button" className="text-sky-400 underline" onClick={() => void openEvidenceFile(ev)}>
+                              📎 {ev.file_name || t({ ar: "ملف", en: "File" })}
+                            </button>
+                          ))}
                         </div>
                       )}
                       {/* حذف إداري آمن للمهمة — سبب إلزامي */}
@@ -1080,14 +1353,93 @@ export default function HrAdminConsole() {
         </div>
       )}
 
+      {/* ═══ طلبات تعديل الحضور ═══ */}
+      {tab === "corrections" && (
+        <HrCorrectionRequests employees={employees} pendingOnly={corrPendingOnly}
+          onClearFilter={() => setCorrPendingOnly(false)} busy={busy} setBusy={setBusy} flash={flash} onChanged={reload} />
+      )}
+
       {/* ═══ التقرير الشهري ═══ */}
       {tab === "monthly" && (
         <HrMonthlyReport employees={employees} busy={busy} setBusy={setBusy} flash={flash} />
       )}
 
+      {/* ═══ الخصومات / الرواتب ═══ */}
+      {tab === "payroll" && (
+        <HrPayrollReport employees={employees} busy={busy} setBusy={setBusy} flash={flash} />
+      )}
+
+      {/* ═══ الوثائق — عرض الوثائق القريبة من الانتهاء + إدارتها من ملف الموظف ═══ */}
+      {tab === "documents" && (
+        <div className="space-y-3">
+          <section className={card}>
+            <h3 className="text-sm font-medium text-stone-100 mb-2">📄 {t({ ar: "وثائق قريبة من الانتهاء (خلال 90 يومًا)", en: "Documents expiring within 90 days" })}</h3>
+            {expiring.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا وثائق قريبة من الانتهاء.", en: "No documents expiring soon." })}</p>}
+            <div className="space-y-1">
+              {expiring.map((d) => (
+                <div key={d.id} className="flex items-center gap-2 flex-wrap text-[11.5px] border-t border-stone-800 py-1.5">
+                  <span className="text-stone-100">{d.full_name}</span>
+                  <span className={chip("bg-stone-800 text-sky-300 border-stone-700")}>{t(DOCUMENT_TYPE_LABELS[d.document_type] ?? { ar: d.document_type, en: d.document_type })}</span>
+                  <span className="text-stone-400">{d.title}</span>
+                  <span className={`font-mono ms-auto ${d.days_left <= 30 ? "text-red-400" : d.days_left <= 60 ? "text-amber-400" : "text-stone-500"}`} dir="ltr">
+                    {d.expiry_date} · {d.days_left} {t({ ar: "يوم", en: "d" })}
+                  </span>
+                  <button type="button" className="text-red-300 underline text-[11px]"
+                    onClick={() => { setTab("employees"); setEmpFilter(""); setOpenEmp(d.employee_id); const emp = employees.find((x) => x.id === d.employee_id); if (emp) void loadEmployeeExtras(emp); void loadEvents(d.employee_id); }}>
+                    {t({ ar: "فتح ملف الموظف", en: "Open file" })}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+          <p className="text-[11px] text-stone-500">{t({ ar: "لإضافة/تعديل وثائق موظف افتح تبويب «الموظفون» ثم ملف الموظف.", en: "Add/edit documents from the Employees tab → employee file." })}</p>
+        </div>
+      )}
+
       {/* ═══ أجهزة الحضور ═══ */}
       {tab === "devices" && (
         <HrDevices employees={employees} settings={settings} busy={busy} setBusy={setBusy} flash={flash} />
+      )}
+
+      {/* ═══ التقويم ═══ */}
+      {tab === "calendar" && (
+        <HrCalendar busy={busy} setBusy={setBusy} flash={flash} onChanged={reload} />
+      )}
+
+      {/* ═══ سجل العمليات ═══ */}
+      {tab === "audit" && (
+        <HrAuditLog employees={employees} busy={busy} setBusy={setBusy} flash={flash} />
+      )}
+
+      {/* ═══ المشرفون الميدانيون ═══ */}
+      {tab === "supervisors" && (
+        <div className="space-y-3">
+          <section className={card}>
+            <h3 className="text-sm font-medium text-stone-100 mb-2">👥 {t({ ar: "بنية الإشراف الميداني", en: "Field supervision" })}</h3>
+            <p className="text-[11px] text-stone-500 mb-3">{t({ ar: "لتعيين مشرف لموظف: افتح تبويب «الموظفون» ← ملف الموظف ← المشرف الميداني. المشرف يرى فريقه فقط في بوابته (بلا وثائق/رواتب/مواقع).",
+                 en: "Assign supervisors from a staff file. A supervisor sees only their team in the portal." })}</p>
+            {supLinks.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا روابط إشراف نشطة.", en: "No active supervisor links." })}</p>}
+            <div className="space-y-3">
+              {Array.from(new Set(supLinks.map((l) => l.supervisor_employee_id))).map((supId) => {
+                const sup = employees.find((e) => e.id === supId);
+                const team = supLinks.filter((l) => l.supervisor_employee_id === supId);
+                return (
+                  <div key={supId} className="bg-stone-950 border border-stone-800 rounded-lg p-3">
+                    <div className="text-sm text-stone-100 mb-1.5">🧭 {sup?.full_name || supId.slice(0, 8)}
+                      <span className="text-stone-500 text-xs font-normal"> — {team.length} {t({ ar: "من الفريق", en: "team member(s)" })}</span>
+                    </div>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {team.map((l) => {
+                        const m = employees.find((e) => e.id === l.employee_id);
+                        return <span key={l.id} className={chip("bg-stone-800 text-stone-300 border-stone-700")}>{m?.full_name || l.employee_id.slice(0, 8)}</span>;
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
       )}
 
       {/* ═══ الإعدادات ═══ */}

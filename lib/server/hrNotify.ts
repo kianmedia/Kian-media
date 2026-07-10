@@ -22,6 +22,8 @@ export interface HrEventPayload {
   title?: string;          // human line (e.g. "حضور: خالد — 08:55")
   employee_name?: string;
   urgent?: boolean;
+  message?: string;        // v3.1 FIX: نص بريد مخصّص (تفاصيل المهمة) — يتجاوز الافتراضي
+  subject?: string;        // عنوان بريد مخصّص — يتجاوز EVENT_SUBJECTS
 }
 
 const log = (tag: string, extra: Record<string, unknown>) =>
@@ -64,6 +66,13 @@ const EVENT_SUBJECTS: Record<string, string> = {
   hr_device_user_mapped:  "ربط جهاز حضور بموظف — كيان",
   hr_device_event_imported:  "استيراد حدث جهاز حضور — كيان",
   hr_device_event_processed: "معالجة حدث جهاز حضور — كيان",
+  hr_correction_new:      "طلب تعديل حضور جديد — كيان",
+  hr_correction_decided:  "قرار طلب تعديل حضور — كيان",
+  hr_calendar_updated:    "تحديث تقويم الموارد البشرية — كيان",
+  hr_document_added:      "وثيقة موظف — كيان",
+  hr_supervisor_link_updated: "تحديث الإشراف الميداني — كيان",
+  hr_supervisor_note:     "ملاحظة مشرف ميداني — كيان",
+  hr_task_revision_requested: "طلب تعديل على مهمة — كيان",
 };
 
 /** POSTs the portal_notify email payload. ALWAYS logs the outcome. */
@@ -92,12 +101,12 @@ export async function sendHrEmail(input: HrEventPayload & { recipients: string[]
       body: JSON.stringify({
         _type: "portal_notify",
         To: to.join(","),                                  // فارغة ⇒ البريد الاحتياطي في السكربت
-        Subject: EVENT_SUBJECTS[input.event] || "تحديث الموارد البشرية — كيان",
+        Subject: input.subject || EVENT_SUBJECTS[input.event] || "تحديث الموارد البشرية — كيان",
         Event: input.event,
         Record: input.title ?? record,
         Party: input.employee_name ?? "",
         Urgent: input.urgent ? "URGENT" : "",
-        Message: "حدث تحديث في بوابة الموظفين. افتح البوابة للتفاصيل.",
+        Message: input.message || "حدث تحديث في بوابة الموظفين. افتح البوابة للتفاصيل.",
         Link: `${publicBase()}/client-portal/employee`,
       }),
       cache: "no-store",

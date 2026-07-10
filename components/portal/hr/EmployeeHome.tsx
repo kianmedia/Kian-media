@@ -13,11 +13,17 @@ import {
   hrMyProfile, listMyRecentSessions, findOpenSession, listMyAttendance, listMyLeaves,
   listMyAssignments, listTasksByIds, listMyVisibleEvents, hrCheckIn, hrCheckOut,
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
+  listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments, signHrDoc,
+  hrSupervisorMyTeam, hrSupervisorAddNote,
+  hrAddTaskFileEvidence, hrAddTaskLinkEvidence, hrRemoveMyTaskEvidence, listMyTaskEvidence,
+  uploadHrTaskFile, hrTaskFilePath, HR_TASK_FILE_MIME, MAX_HR_FILE_BYTES,
   getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent,
   CONSENT_TEXT, LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
   TASK_TYPE_LABELS, TASK_PRIORITY_LABELS, DEFAULT_HR_SETTINGS,
+  CORRECTION_TYPE_LABELS, DOCUMENT_TYPE_LABELS, EVIDENCE_MODE_LABELS,
   type HrMyProfile, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
-  type HrEvent, type LeaveType, type HrSettings,
+  type HrEvent, type LeaveType, type HrSettings, type HrCorrectionRequest,
+  type CorrectionType, type HrDocument, type HrTeamMember, type HrTaskEvidence, type EvidenceMode,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 
@@ -57,6 +63,9 @@ export default function EmployeeHome() {
   const [tasks, setTasks] = useState<Record<string, HrTask>>({});
   const [events, setEvents] = useState<HrEvent[]>([]);
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
+  const [corrections, setCorrections] = useState<HrCorrectionRequest[]>([]);
+  const [documents, setDocuments] = useState<HrDocument[]>([]);
+  const [team, setTeam] = useState<HrTeamMember[]>([]);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [errDetail, setErrDetail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,10 +76,11 @@ export default function EmployeeHome() {
     const prof = await hrMyProfile();
     if (!prof.ok) { setErrDetail(prof.error); setPhase("error"); return; }
     setMe(prof.data);
-    const [att, ses, st, lv, asg, ev, cu] = await Promise.all([
+    const [att, ses, st, lv, asg, ev, cu, corr, docs, tm] = await Promise.all([
       listMyAttendance(20), listMyRecentSessions(uid, daysAgoRiyadh(1)), hrGetSettings(), listMyLeaves(),
       listMyAssignments(uid), listMyVisibleEvents(uid),
       listMyCustodyRecords("custody", uid),
+      listMyCorrections(uid), listMyDocuments(uid), hrSupervisorMyTeam(),
     ]);
     if (att.ok) setAttendance(att.data);
     if (ses.ok) setSessions(ses.data);
@@ -79,6 +89,9 @@ export default function EmployeeHome() {
     if (lv.ok) setLeaves(lv.data);
     if (ev.ok) setEvents(ev.data);
     if (cu.ok) setCustody(cu.data);
+    if (corr.ok) setCorrections(corr.data);
+    if (docs.ok) setDocuments(docs.data);
+    setTeam(tm.ok ? tm.data.rows : []);
     if (asg.ok) {
       setAssignments(asg.data);
       const ids = Array.from(new Set(asg.data.map((a) => a.task_id)));
@@ -88,6 +101,14 @@ export default function EmployeeHome() {
         tk.data.forEach((x) => { map[x.id] = x; });
         setTasks(map);
       }
+      // أدلة التسليم (ملف/رابط) للمهام الجارية (فشلها الآمن قبل تشغيل SQL لا يعطّل شيئًا).
+      const inProg = asg.data.filter((x) => x.status === "in_progress").map((x) => x.task_id);
+      const evMap: Record<string, HrTaskEvidence[]> = {};
+      await Promise.all(Array.from(new Set(inProg)).map(async (tid) => {
+        const er = await listMyTaskEvidence(tid, uid);
+        if (er.ok) evMap[tid] = er.data;
+      }));
+      setTaskEvidence(evMap);
     }
     setPhase("ready");
   }, [uid]);
@@ -126,6 +147,52 @@ export default function EmployeeHome() {
   const [taskFiles, setTaskFiles] = useState<Record<string, { file: File; preview: string }[]>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const [pickFor, setPickFor] = useState<string | null>(null);
+  // أدلة التسليم المرنة (ملف/رابط) — تُحفظ فورًا؛ الصور تُرفع عند الإنهاء.
+  const [taskEvidence, setTaskEvidence] = useState<Record<string, HrTaskEvidence[]>>({});
+  const [linkInput, setLinkInput] = useState<Record<string, string>>({});
+  const evFileRef = useRef<HTMLInputElement>(null);
+  const [evPickFor, setEvPickFor] = useState<string | null>(null);
+
+  async function refreshEvidence(taskId: string) {
+    const r = await listMyTaskEvidence(taskId, uid);
+    if (r.ok) setTaskEvidence((p) => ({ ...p, [taskId]: r.data }));
+  }
+  async function addFileEvidence(taskId: string, file: File) {
+    if (busy || readOnly) return;
+    if (!HR_TASK_FILE_MIME.includes(file.type)) { flash(t({ ar: "نوع الملف غير مسموح (صور أو PDF فقط).", en: "Only images or PDF." })); return; }
+    if (file.size > MAX_HR_FILE_BYTES) { flash(t({ ar: "حجم الملف يتجاوز 10 ميغابايت.", en: "File exceeds 10MB." })); return; }
+    setBusy(true);
+    const path = hrTaskFilePath(uid, taskId, Date.now().toString(36), file.name || "file");
+    const up = await uploadHrTaskFile(path, file);
+    if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الملف: ", en: "Upload failed: " }) + up.error); return; }
+    const r = await hrAddTaskFileEvidence(taskId, path, file.name || "file", file.type, file.size);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّر إضافة الملف: ", en: "Couldn't attach: " }) + r.error); return; }
+    emitHrEvent({ event: "hr_task_evidence_uploaded", entity_id: taskId, employee_name: me?.full_name || "" });
+    await refreshEvidence(taskId);
+    flash(t({ ar: "أُضيف الملف كدليل تسليم.", en: "File added." }));
+  }
+  async function addLinkEvidence(taskId: string) {
+    if (busy || readOnly) return;
+    const url = (linkInput[taskId] || "").trim();
+    if (!/^https?:\/\//i.test(url)) { flash(t({ ar: "أدخل رابطًا صحيحًا يبدأ بـ http.", en: "Enter a valid http(s) link." })); return; }
+    setBusy(true);
+    const r = await hrAddTaskLinkEvidence(taskId, url);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّر إضافة الرابط: ", en: "Couldn't add link: " }) + r.error); return; }
+    emitHrEvent({ event: "hr_task_evidence_link_added", entity_id: taskId, employee_name: me?.full_name || "" });
+    setLinkInput((p) => ({ ...p, [taskId]: "" }));
+    await refreshEvidence(taskId);
+    flash(t({ ar: "أُضيف الرابط كدليل تسليم.", en: "Link added." }));
+  }
+  async function removeEvidence(id: string, taskId: string) {
+    if (busy || readOnly) return;
+    setBusy(true);
+    const r = await hrRemoveMyTaskEvidence(id);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّر الحذف: ", en: "Couldn't remove: " }) + r.error); return; }
+    await refreshEvidence(taskId);
+  }
 
   async function doStartTask(a: HrAssignee) {
     if (readOnly || busy) return;
@@ -142,12 +209,22 @@ export default function EmployeeHome() {
 
   async function doCompleteTask(a: HrAssignee) {
     if (readOnly || busy) return;
-    // صورة واحدة على الأقل إلزامية لتسليم المهمة عند تفعيل الإعداد (والقاعدة تفرضها أيضًا).
+    // تحقق دليل التسليم حسب وضع المهمة (والقاعدة تفرضه أيضًا). null ⇒ السلوك القديم (صورة).
     const files = taskFiles[a.task_id] ?? [];
-    if (photoRequired && files.length === 0) {
-      emitHrEvent({ event: "hr_task_completion_photo_required", entity_id: a.task_id, employee_name: me?.full_name || "" });
-      flash(t({ ar: "لا يمكن إنهاء المهمة بدون صورة — أضف صورة واحدة على الأقل من موقع التنفيذ ثم أعد المحاولة.", en: "At least one photo is required to complete the task." }));
-      return;
+    const ev = taskEvidence[a.task_id] ?? [];
+    const nFiles = ev.filter((e) => e.kind === "file").length;
+    const nLinks = ev.filter((e) => e.kind === "link").length;
+    const mode = tasks[a.task_id]?.completion_evidence_mode ?? null;
+    const need = (m: EvidenceMode): boolean =>
+      m === "photo" ? files.length < 1 : m === "file" ? nFiles < 1 : m === "link" ? nLinks < 1
+      : m === "any" ? (files.length + nFiles + nLinks) < 1 : false;
+    if (mode === null ? (photoRequired && files.length === 0) : need(mode)) {
+      if (mode === null || mode === "photo") emitHrEvent({ event: "hr_task_completion_photo_required", entity_id: a.task_id, employee_name: me?.full_name || "" });
+      const msg = mode === "file" ? t({ ar: "هذه المهمة تتطلب رفع ملف كدليل تسليم.", en: "This task requires a file." })
+        : mode === "link" ? t({ ar: "هذه المهمة تتطلب إضافة رابط كدليل تسليم.", en: "This task requires a link." })
+        : mode === "any" ? t({ ar: "أضف دليل تسليم (صورة أو ملف أو رابط) قبل الإنهاء.", en: "Add any evidence before completing." })
+        : t({ ar: "لا يمكن إنهاء المهمة بدون صورة — أضف صورة واحدة على الأقل ثم أعد المحاولة.", en: "At least one photo is required." });
+      flash(msg); return;
     }
     setBusy(true);
     const pos = await getPositionOnce();
@@ -165,8 +242,10 @@ export default function EmployeeHome() {
     const r = await hrCompleteTask(a.task_id, pos.data, (taskNote[a.task_id] || "").trim(), paths);
     setBusy(false);
     if (!r.ok) {
-      const msg = /completion_photo_required/.test(r.error)
-        ? t({ ar: "لا يمكن إنهاء المهمة بدون صورة واحدة على الأقل.", en: "A photo is required to complete the task." })
+      const msg = /completion_photo_required/.test(r.error) ? t({ ar: "لا يمكن إنهاء المهمة بدون صورة واحدة على الأقل.", en: "A photo is required." })
+        : /completion_file_required/.test(r.error) ? t({ ar: "هذه المهمة تتطلب رفع ملف كدليل تسليم.", en: "A file is required." })
+        : /completion_link_required/.test(r.error) ? t({ ar: "هذه المهمة تتطلب إضافة رابط كدليل تسليم.", en: "A link is required." })
+        : /completion_evidence_required/.test(r.error) ? t({ ar: "أضف دليل تسليم (صورة/ملف/رابط) قبل الإنهاء.", en: "Add evidence before completing." })
         : (t({ ar: "تعذّر إنهاء المهمة: ", en: "Couldn't complete: " })) + r.error;
       flash(msg); return;
     }
@@ -209,6 +288,64 @@ export default function EmployeeHome() {
     setBusy(true); const r = await hrCancelMyLeave(id); setBusy(false);
     if (!r.ok) { flash((t({ ar: "تعذّر الإلغاء: ", en: "Couldn't cancel: " })) + r.error); return; }
     await reload(); flash(t({ ar: "أُلغي الطلب.", en: "Cancelled." }));
+  }
+
+  // ─── طلبات تعديل الحضور (v3.1) ───
+  const [cf, setCf] = useState<{ type: CorrectionType; date: string; time: string; note: string }>({
+    type: "missed_check_in", date: todayRiyadh(), time: "", note: "",
+  });
+  const cfNeedsTime = cf.type === "missed_check_in" || cf.type === "missed_check_out" || cf.type === "wrong_time";
+  async function doSubmitCorrection() {
+    if (readOnly || busy) return;
+    if (!cf.date) { flash(t({ ar: "حدد التاريخ.", en: "Pick a date." })); return; }
+    if (cfNeedsTime && !cf.time) { flash(t({ ar: "حدد الوقت المقترح.", en: "Pick the proposed time." })); return; }
+    if (!cf.note.trim()) { flash(t({ ar: "اكتب ملاحظة/سبب الطلب.", en: "Write a note." })); return; }
+    setBusy(true);
+    const r = await hrSubmitCorrection({ type: cf.type, date: cf.date, proposedTime: cfNeedsTime ? (cf.time || null) : null, note: cf.note.trim() });
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_correction_new", entity_id: r.data.id, title: "طلب تعديل حضور من " + (me?.full_name || ""), employee_name: me?.full_name || "" });
+    setCf({ type: "missed_check_in", date: todayRiyadh(), time: "", note: "" });
+    await reload();
+    flash(t({ ar: "أُرسل طلب تعديل الحضور — سيُراجع من الإدارة.", en: "Correction request sent." }));
+  }
+  async function doCancelCorrection(id: string) {
+    if (busy || readOnly) return;
+    setBusy(true); const r = await hrCancelMyCorrection(id); setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر الإلغاء: ", en: "Couldn't cancel: " })) + r.error); return; }
+    await reload(); flash(t({ ar: "أُلغي الطلب.", en: "Cancelled." }));
+  }
+
+  // ─── ملاحظة المشرف على فرد من فريقه ───
+  const [noteFor, setNoteFor] = useState<string | null>(null);
+  const [teamNote, setTeamNote] = useState("");
+  const [teamNoteVisible, setTeamNoteVisible] = useState(false);
+  async function doTeamNote(employeeId: string) {
+    if (busy || readOnly) return;
+    if (!teamNote.trim()) { flash(t({ ar: "اكتب الملاحظة.", en: "Write the note." })); return; }
+    setBusy(true);
+    const r = await hrSupervisorAddNote(employeeId, teamNote.trim(), teamNoteVisible);
+    setBusy(false);
+    if (!r.ok) { flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
+    emitHrEvent({ event: "hr_supervisor_note", entity_id: employeeId, title: "ملاحظة مشرف ميداني", employee_user_id: team.find((m) => m.employee_id === employeeId)?.user_id || undefined });
+    setNoteFor(null); setTeamNote(""); setTeamNoteVisible(false);
+    flash(t({ ar: "أُرسلت الملاحظة.", en: "Note sent." }));
+  }
+
+  // ─── فتح وثيقة خاصة ظاهرة للموظف عبر signed URL (لا رابط تخزين مباشر) ───
+  async function openMyDoc(d: HrDocument) {
+    if (busy || !d.file_path) return;
+    setBusy(true);
+    const url = await signHrDoc(d.file_path);
+    setBusy(false);
+    if (!url) { flash(t({ ar: "تعذّر فتح الملف.", en: "Couldn't open the file." })); return; }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  // ─── شريط الجوال السريع ───
+  function quickAction(action: string, go: () => void) {
+    emitHrEvent({ event: "hr_mobile_quick_action_used", entity_id: action, title: "شريط سريع: " + action });
+    go();
   }
 
   if (phase === "loading") return <p className="text-stone-500 text-sm">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
@@ -282,7 +419,7 @@ export default function EmployeeHome() {
       </section>
 
       {/* ═══ مهامي ═══ */}
-      <section className={card}>
+      <section id="emp-tasks" className={card}>
         <h2 className="text-base font-medium text-stone-100 mb-3">
           {t({ ar: "مهامي الميدانية", en: "My field tasks" })}
           <span className="text-stone-500 text-xs font-normal"> ({myOpenTasks.length} {t({ ar: "مفتوحة", en: "open" })})</span>
@@ -344,33 +481,64 @@ export default function EmployeeHome() {
                   <button type="button" disabled={busy || readOnly} onClick={() => void doStartTask(a)}
                     className={`${btnRed} w-full py-2.5`}>{t({ ar: "بدء المهمة (بموقعي الآن)", en: "Start task (with my location)" })}</button>
                 )}
-                {a.status === "in_progress" && (
+                {a.status === "in_progress" && (() => {
+                  const mode = (tk?.completion_evidence_mode ?? null) as EvidenceMode | null;
+                  const wantPhoto = mode === null ? true : (mode === "photo" || mode === "any");
+                  const wantFile = mode === "file" || mode === "any";
+                  const wantLink = mode === "link" || mode === "any";
+                  const evList = taskEvidence[a.task_id] ?? [];
+                  return (
                   <div className="space-y-2">
+                    {mode && (
+                      <p className="text-[10.5px] text-sky-300/90">📌 {t({ ar: "دليل التسليم المطلوب: ", en: "Required evidence: " })}{t(EVIDENCE_MODE_LABELS[mode])}</p>
+                    )}
                     <textarea value={taskNote[a.task_id] || ""} onChange={(e) => setTaskNote((p) => ({ ...p, [a.task_id]: e.target.value }))}
                       rows={2} placeholder={t({ ar: "ملاحظة عن التنفيذ (اختياري)", en: "Completion note (optional)" })} className={inp} />
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {(taskFiles[a.task_id] ?? []).map((f, i) => (
-                        <span key={i} className="relative">
-                          <img src={f.preview} alt="" className="w-12 h-10 rounded-md object-cover border border-red-500" />
-                          <button type="button" onClick={() => setTaskFiles((p) => ({ ...p, [a.task_id]: (p[a.task_id] ?? []).filter((_, k) => k !== i) }))}
-                            className="absolute -top-1.5 -end-1.5 w-4 h-4 rounded-full bg-stone-900 border border-stone-600 text-stone-300 text-[9px] leading-none">×</button>
-                        </span>
-                      ))}
-                      <button type="button" onClick={() => { setPickFor(a.task_id); fileRef.current?.click(); }}
-                        className="w-12 h-10 rounded-md border border-dashed border-stone-600 text-stone-400 text-lg">+</button>
-                      <span className="text-[10px] text-stone-500">
-                        {photoRequired
-                          ? t({ ar: "الصور — صورة واحدة على الأقل إلزامية للإنهاء", en: "Photos — at least one is required to complete" })
-                          : t({ ar: "الصور (اختيارية)", en: "Photos (optional)" })}
-                      </span>
-                    </div>
+                    {wantPhoto && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {(taskFiles[a.task_id] ?? []).map((f, i) => (
+                          <span key={i} className="relative">
+                            <img src={f.preview} alt="" className="w-12 h-10 rounded-md object-cover border border-red-500" />
+                            <button type="button" onClick={() => setTaskFiles((p) => ({ ...p, [a.task_id]: (p[a.task_id] ?? []).filter((_, k) => k !== i) }))}
+                              className="absolute -top-1.5 -end-1.5 w-4 h-4 rounded-full bg-stone-900 border border-stone-600 text-stone-300 text-[9px] leading-none">×</button>
+                          </span>
+                        ))}
+                        <button type="button" onClick={() => { setPickFor(a.task_id); fileRef.current?.click(); }}
+                          className="w-12 h-10 rounded-md border border-dashed border-stone-600 text-stone-400 text-lg">+</button>
+                        <span className="text-[10px] text-stone-500">{t({ ar: "صور", en: "Photos" })}</span>
+                      </div>
+                    )}
+                    {/* أدلة الملف/الرابط المحفوظة */}
+                    {evList.length > 0 && (
+                      <div className="flex gap-1.5 flex-wrap">
+                        {evList.map((e) => (
+                          <span key={e.id} className="inline-flex items-center gap-1 bg-stone-800 border border-stone-700 rounded-lg px-2 py-1 text-[10.5px] text-stone-300">
+                            {e.kind === "link" ? "🔗" : "📎"} {e.kind === "link" ? (e.link_url || "").slice(0, 28) : (e.file_name || "ملف")}
+                            <button type="button" onClick={() => void removeEvidence(e.id, a.task_id)} className="text-stone-500 hover:text-red-400">×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {(wantFile || wantLink) && (
+                      <div className="flex gap-1.5 flex-wrap items-center">
+                        {wantFile && (
+                          <button type="button" disabled={busy} onClick={() => { setEvPickFor(a.task_id); evFileRef.current?.click(); }}
+                            className={`${btnGhost} px-3 py-1.5 text-[11px]`}>{t({ ar: "+ ملف (صورة/PDF)", en: "+ File" })}</button>
+                        )}
+                        {wantLink && (
+                          <>
+                            <input value={linkInput[a.task_id] || ""} onChange={(e) => setLinkInput((p) => ({ ...p, [a.task_id]: e.target.value }))}
+                              placeholder={t({ ar: "رابط التسليم (https://…)", en: "Delivery link" })} dir="ltr" className={inp + " flex-1 min-w-[140px]"} style={{ width: "auto" }} />
+                            <button type="button" disabled={busy} onClick={() => void addLinkEvidence(a.task_id)} className={`${btnGhost} px-3 py-1.5 text-[11px]`}>{t({ ar: "إضافة رابط", en: "Add link" })}</button>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <button type="button" disabled={busy || readOnly} onClick={() => void doCompleteTask(a)}
                       className={`${btnRed} w-full py-2.5`}>{t({ ar: "إنهاء المهمة (بموقعي الآن)", en: "Complete task (with my location)" })}</button>
-                    {photoRequired && (taskFiles[a.task_id] ?? []).length === 0 && (
-                      <p className="text-[10.5px] text-amber-400/90">{t({ ar: "⚠️ أضف صورة من موقع التنفيذ قبل الإنهاء.", en: "⚠️ Add a photo before completing." })}</p>
-                    )}
                   </div>
-                )}
+                  );
+                })()}
                 {a.employee_note && a.status !== "in_progress" && (
                   <p className="text-[11px] text-stone-500">{t({ ar: "ملاحظتي: ", en: "My note: " })}{a.employee_note}</p>
                 )}
@@ -385,7 +553,133 @@ export default function EmployeeHome() {
             if (f && pickFor) setTaskFiles((p) => ({ ...p, [pickFor]: [...(p[pickFor] ?? []), { file: f, preview: URL.createObjectURL(f) }] }));
             e.target.value = "";
           }} />
+        <input ref={evFileRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f && evPickFor) void addFileEvidence(evPickFor, f);
+            e.target.value = "";
+          }} />
       </section>
+
+      {/* ═══ طلبات تعديل الحضور ═══ */}
+      <section id="emp-corrections" className={card}>
+        <h2 className="text-base font-medium text-stone-100 mb-1">{t({ ar: "طلبات تعديل الحضور", en: "Attendance corrections" })}</h2>
+        <p className="text-[11px] text-stone-500 mb-3">{t({ ar: "لتصحيح حضور/انصراف منسي أو وقت خاطئ — يُراجَع من الإدارة قبل تعديل سجلك.", en: "Fix a missed or wrong attendance entry — reviewed by admin." })}</p>
+        <div className="space-y-2 mb-4">
+          <select value={cf.type} onChange={(e) => setCf({ ...cf, type: e.target.value as CorrectionType })} className={inp}>
+            {(Object.keys(CORRECTION_TYPE_LABELS) as CorrectionType[]).map((k) => (
+              <option key={k} value={k}>{isAr ? CORRECTION_TYPE_LABELS[k].ar : CORRECTION_TYPE_LABELS[k].en}</option>
+            ))}
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "التاريخ", en: "Date" })}</label>
+              <input type="date" value={cf.date} onChange={(e) => setCf({ ...cf, date: e.target.value })} className={inp} dir="ltr" />
+            </div>
+            {cfNeedsTime && (
+              <div>
+                <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "الوقت المقترح", en: "Proposed time" })}</label>
+                <input type="time" value={cf.time} onChange={(e) => setCf({ ...cf, time: e.target.value })} className={inp} dir="ltr" />
+              </div>
+            )}
+          </div>
+          <textarea value={cf.note} onChange={(e) => setCf({ ...cf, note: e.target.value })} rows={2}
+            placeholder={t({ ar: "ملاحظة / سبب الطلب…", en: "Note / reason…" })} className={inp} />
+          <button type="button" disabled={busy || readOnly} onClick={() => void doSubmitCorrection()} className={`${btnRed} w-full py-2.5`}>
+            {busy ? "…" : t({ ar: "إرسال طلب التعديل", en: "Submit correction" })}
+          </button>
+        </div>
+        {corrections.length === 0 && <p className="text-stone-500 text-sm">{t({ ar: "لا طلبات سابقة.", en: "No previous requests." })}</p>}
+        <div className="space-y-1.5">
+          {corrections.map((c) => (
+            <div key={c.id} className="flex items-center gap-2 flex-wrap bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-xs">
+              <span className="text-stone-200">{t(CORRECTION_TYPE_LABELS[c.request_type] ?? { ar: c.request_type, en: c.request_type })}</span>
+              <span className="font-mono text-stone-500" dir="ltr">{c.correction_date}{c.proposed_time ? ` · ${c.proposed_time.slice(0, 5)}` : ""}</span>
+              <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] ${
+                c.status === "approved" ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                : c.status === "rejected" ? "bg-red-950 text-red-300 border-red-800"
+                : c.status === "cancelled" ? "bg-stone-800 text-stone-400 border-stone-700"
+                : "bg-sky-950 text-sky-300 border-sky-800"}`}>
+                {c.status === "approved" ? t({ ar: "معتمد", en: "Approved" }) : c.status === "rejected" ? t({ ar: "مرفوض", en: "Rejected" }) : c.status === "cancelled" ? t({ ar: "ملغى", en: "Cancelled" }) : t({ ar: "قيد المراجعة", en: "Pending" })}
+              </span>
+              {c.decision_note && <span className="text-stone-500">— {c.decision_note}</span>}
+              {c.status === "pending" && (
+                <button type="button" disabled={busy || readOnly} onClick={() => void doCancelCorrection(c.id)}
+                  className="ms-auto text-red-400 underline text-[11px] disabled:opacity-50">{t({ ar: "إلغاء", en: "Cancel" })}</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ═══ فريقي (يظهر للمشرف الميداني فقط) ═══ */}
+      {team.length > 0 && (
+        <section className={card}>
+          <h2 className="text-base font-medium text-stone-100 mb-1">{t({ ar: "فريقي الميداني", en: "My field team" })}</h2>
+          <p className="text-[11px] text-stone-500 mb-3">{t({ ar: "حضور فريقك اليوم (بلا مواقع/وثائق/رواتب). يمكنك إضافة ملاحظة ميدانية.", en: "Your team's attendance today. You can add a field note." })}</p>
+          <div className="space-y-1.5">
+            {team.map((m) => (
+              <div key={m.employee_id} className="bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-xs space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-stone-100">{m.full_name}</span>
+                  {m.job_title && <span className="text-stone-500 text-[11px]">{m.job_title}</span>}
+                  <span className={`ms-auto inline-block rounded-full border px-2 py-0.5 text-[10px] ${
+                    m.open_session ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                    : m.checked_in_today ? "bg-stone-800 text-stone-300 border-stone-700"
+                    : "bg-amber-950 text-amber-300 border-amber-800"}`}>
+                    {m.open_session ? t({ ar: "حاضر الآن", en: "Present now" }) : m.checked_in_today ? t({ ar: "سجّل اليوم", en: "Checked in" }) : t({ ar: "لم يسجّل", en: "Not in" })}
+                  </span>
+                  <button type="button" className="text-red-300 underline text-[11px]"
+                    onClick={() => setNoteFor(noteFor === m.employee_id ? null : m.employee_id)}>
+                    {t({ ar: "ملاحظة", en: "Note" })}
+                  </button>
+                </div>
+                {noteFor === m.employee_id && (
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <input value={teamNote} onChange={(e) => setTeamNote(e.target.value)}
+                      placeholder={t({ ar: "ملاحظة ميدانية…", en: "Field note…" })} className={inp + " flex-1 min-w-[140px]"} style={{ width: "auto" }} />
+                    <label className="flex items-center gap-1 text-[10px] text-stone-400">
+                      <input type="checkbox" checked={teamNoteVisible} onChange={(e) => setTeamNoteVisible(e.target.checked)} className="accent-red-600" />
+                      {t({ ar: "تظهر له", en: "Visible" })}
+                    </label>
+                    <button type="button" disabled={busy} onClick={() => void doTeamNote(m.employee_id)} className={`${btnRed} px-3 py-1.5 text-[11px]`}>{t({ ar: "إرسال", en: "Send" })}</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ═══ وثائقي (الظاهرة فقط) ═══ */}
+      {documents.length > 0 && (
+        <section className={card}>
+          <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "وثائقي", en: "My documents" })}</h2>
+          <div className="space-y-1.5">
+            {documents.map((d) => {
+              const dl = d.expiry_date ? Math.round((new Date(d.expiry_date + "T00:00:00").getTime() - Date.now()) / 86400000) : null;
+              return (
+                <div key={d.id} className="flex items-center gap-2 flex-wrap bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-xs">
+                  <span className="inline-block rounded-full border border-stone-700 bg-stone-800 px-2 py-0.5 text-[10px] text-sky-300">
+                    {t(DOCUMENT_TYPE_LABELS[d.document_type] ?? { ar: d.document_type, en: d.document_type })}
+                  </span>
+                  <span className="text-stone-200">{d.title}</span>
+                  {d.expiry_date && (
+                    <span className={`font-mono ms-auto ${dl != null && dl <= 30 ? "text-red-400" : dl != null && dl <= 90 ? "text-amber-400" : "text-stone-500"}`} dir="ltr">
+                      ⏳ {d.expiry_date}{dl != null ? ` (${dl}${t({ ar: "ي", en: "d" })})` : ""}
+                    </span>
+                  )}
+                  {d.file_path && (
+                    <button type="button" disabled={busy} className="text-sky-400 underline"
+                      onClick={() => void openMyDoc(d)}>{t({ ar: "عرض/تحميل", en: "View" })}</button>
+                  )}
+                  {!d.file_path && d.file_url && <a href={d.file_url} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">{t({ ar: "رابط", en: "Link" })}</a>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* ═══ طلباتي — يظهر فقط عندما تفعّله الإدارة (hr_settings) ═══ */}
       {leaveEnabled && (
@@ -448,7 +742,7 @@ export default function EmployeeHome() {
       )}
 
       {/* ═══ ملفي + عهدتي + آخر الحضور ═══ */}
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div id="emp-profile" className="grid gap-4 sm:grid-cols-2">
         <section className={card}>
           <h2 className="text-base font-medium text-stone-100 mb-3">{t({ ar: "ملفي", en: "My profile" })}</h2>
           <div className="text-xs text-stone-400 leading-loose">
@@ -505,8 +799,44 @@ export default function EmployeeHome() {
         </div>
       </section>
 
+      {/* مساحة سفلية حتى لا يغطي الشريط السريع آخر بطاقة على الجوال */}
+      <div className="h-16 sm:hidden" aria-hidden />
+
+      {/* ═══ الشريط السريع (الجوال فقط) — لا يظهر في وضع الأدمن (readOnly) ═══ */}
+      {!readOnly && (
+        <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-black/95 border-t border-stone-800 backdrop-blur"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <div className="flex items-stretch justify-around">
+            <button type="button" disabled={busy || (!!openSession ? false : dailyLimitReached)}
+              onClick={() => quickAction(openSession ? "check_out" : "check_in", () => void doAttendance(openSession ? "out" : "in"))}
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] ${openSession ? "text-red-300" : "text-emerald-300"} disabled:opacity-40`}>
+              <span className="text-base leading-none">{openSession ? "⏹" : "▶"}</span>
+              {openSession ? t({ ar: "انصراف", en: "Out" }) : t({ ar: "حضور", en: "In" })}
+            </button>
+            <button type="button" onClick={() => quickAction("tasks", () => document.getElementById("emp-tasks")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">📋</span>{t({ ar: "مهامي", en: "Tasks" })}
+              {myOpenTasks.length > 0 && <span className="absolute mt-[-2px] ms-6 bg-red-600 text-white rounded-full text-[8px] px-1">{myOpenTasks.length}</span>}
+            </button>
+            <button type="button" onClick={() => quickAction("correction", () => document.getElementById("emp-corrections")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">🕐</span>{t({ ar: "تعديل حضور", en: "Fix" })}
+            </button>
+            <Link href="/client-portal/equipment" onClick={() => quickAction("custody", () => {})}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">🎒</span>{t({ ar: "عهدتي", en: "Custody" })}
+            </Link>
+            <button type="button" onClick={() => quickAction("profile", () => document.getElementById("emp-profile")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] text-stone-300">
+              <span className="text-base leading-none">👤</span>{t({ ar: "ملفي", en: "Me" })}
+            </button>
+          </div>
+        </nav>
+      )}
+
       {toast && (
-        <div className="fixed bottom-5 z-50 bg-black/90 border border-stone-700 rounded-xl px-4 py-2.5 text-sm text-white max-w-sm" style={{ insetInlineEnd: 20 }}>
+        <div className="fixed z-50 bg-black/90 border border-stone-700 rounded-xl px-4 py-2.5 text-sm text-white max-w-sm"
+          style={{ insetInlineEnd: 20, bottom: readOnly ? 20 : 76 }}>
           {toast}
         </div>
       )}
