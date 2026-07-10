@@ -83,6 +83,29 @@ export async function selectAsService<T>(query: string): Promise<AdminResult<T>>
   return { ok: true, data: body as T };
 }
 
+/** Resolve emails from auth.users by user_id via the Supabase Auth Admin API
+ *  (service-role, SERVER-ONLY). Field staff often have an email in auth.users but
+ *  NOT in public.profiles, so HR task-assignment mail must resolve here. Returns a
+ *  { user_id: email } map; ids that fail/have no email are simply omitted. Never
+ *  log the returned emails — callers log counts only. */
+export async function authAdminEmails(ids: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (!adminConfigured()) return out;
+  const uniqueIds = Array.from(new Set(ids.filter((x) => !!x)));
+  await Promise.all(uniqueIds.map(async (id) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const u = (await res.json()) as { email?: string | null };
+      if (u && typeof u.email === "string" && u.email.includes("@")) out[id] = u.email;
+    } catch { /* omit on failure — never blocks the dispatch */ }
+  }));
+  return out;
+}
+
 /** Read rows via PostgREST AS THE LOGGED-IN USER (their JWT) — RLS applies, so the
  *  query only returns rows that user may see. Used to confirm a staff member can
  *  actually read a quote row before acting on it server-side. */

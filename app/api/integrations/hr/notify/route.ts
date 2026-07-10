@@ -12,7 +12,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { NextResponse } from "next/server";
-import { selectAsUser, selectAsService, rpcAsUser, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { selectAsUser, selectAsService, rpcAsUser, authAdminEmails, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { sendHrEmail, hrEmailEnabled, hrEmailEndpoint, hrEmailEndpointHost, hrRuntimeEnv } from "@/lib/server/hrNotify";
 
 export const runtime = "nodejs";
@@ -149,6 +149,7 @@ export async function POST(req: Request) {
   // رسائل مفصولة الجمهور مع إزالة تكرار البريد. fallback قبل تشغيل الـ HOTFIX SQL.
   if (isTaskEvent) {
     log("hr_task_assignment_dispatch_started", { event, entity_id: entityId, by: me.data[0].id, service_key_present: adminConfigured() });
+    log("hr_task_assignment_event_received", { event, entity_id: entityId, has_employee_ids: Array.isArray(b.employee_user_ids) });
     type Rec = { user_id?: string; email?: string | null; full_name?: string | null };
     let employees: Rec[] = [], admins: Rec[] = [], supervisors: Rec[] = [];
     const rec = await rpcAsUser<{ employees: Rec[]; admins: Rec[]; supervisors: Rec[] }>(
@@ -156,27 +157,38 @@ export async function POST(req: Request) {
     if (rec.ok && rec.data) {
       employees = rec.data.employees || []; admins = rec.data.admins || []; supervisors = rec.data.supervisors || [];
     } else {
-      // fallback: الإدارة عبر استعلام الأدوار + الموظفون عبر employee_user_ids من الواجهة.
+      // fallback: الإدارة عبر استعلام الأدوار + الموظفون عبر employee_user_ids من الواجهة
+      // (بلا بريد — يُحلّ لاحقًا من auth.users). قبل تشغيل الـ HOTFIX SQL.
       log("hr_task_recipients_fallback", { reason: rec.error, event, entity_id: entityId });
       if (adminConfigured()) {
         const staff = await selectAsService<Rec[]>(
           `profiles?select=id,email,full_name&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,hr))`);
-        if (staff.ok) admins = staff.data;
-        const ids: string[] = [];
-        const one = str(b.employee_user_id); if (one) ids.push(one);
-        if (Array.isArray(b.employee_user_ids)) (b.employee_user_ids as unknown[]).forEach((x) => { const s = str(x); if (s) ids.push(s); });
-        if (ids.length) {
-          const inList = Array.from(new Set(ids)).map((x) => encodeURIComponent(x)).join(",");
-          const emp = await selectAsService<Rec[]>(`profiles?select=id,email,full_name&id=in.(${inList})`);
-          if (emp.ok) employees = emp.data;
-        }
+        if (staff.ok) admins = staff.data.map((x) => ({ user_id: (x as { id?: string }).id, email: x.email, full_name: x.full_name }));
       }
+      const ids: string[] = [];
+      const one = str(b.employee_user_id); if (one) ids.push(one);
+      if (Array.isArray(b.employee_user_ids)) (b.employee_user_ids as unknown[]).forEach((x) => { const s = str(x); if (s) ids.push(s); });
+      employees = Array.from(new Set(ids)).map((id) => ({ user_id: id }));
     }
     const valid = (e?: string | null): e is string => !!e && e.includes("@");
     const uniq = (arr: string[]) => Array.from(new Set(arr));
-    const empEmails = uniq(employees.map((x) => x.email).filter(valid));
-    const supEmails = uniq(supervisors.map((x) => x.email).filter(valid)).filter((e) => !empEmails.includes(e));
-    const adminEmails = uniq(admins.map((x) => x.email).filter(valid)).filter((e) => !empEmails.includes(e) && !supEmails.includes(e));
+    // بريد الموظف من auth.users أولًا (موظفو الميدان بلا بريد في profiles غالبًا) —
+    // نملأ أي بريد ناقص لكل الجماهير عبر Auth Admin API (خادم فقط، لا يُكشف).
+    const needAuth = uniq([...employees, ...supervisors, ...admins].filter((r) => r.user_id && !valid(r.email)).map((r) => r.user_id as string));
+    const authMap = needAuth.length ? await authAdminEmails(needAuth) : {};
+    // توحيد البريد لأحرف صغيرة قبل إزالة التكرار: auth.users يخزّنه صغيرًا بينما
+    // profiles قد يكون مختلطًا — فلا يتلقّى شخص واحد رسالتَي جمهورين.
+    const emailOf = (r: Rec): string | undefined => {
+      const e = valid(r.email) ? r.email : (r.user_id ? authMap[r.user_id] : undefined);
+      return valid(e) ? e.toLowerCase() : undefined;
+    };
+    const empEmails = uniq(employees.map(emailOf).filter(valid));
+    const supEmails = uniq(supervisors.map(emailOf).filter(valid)).filter((e) => !empEmails.includes(e));
+    const adminEmails = uniq(admins.map(emailOf).filter(valid)).filter((e) => !empEmails.includes(e) && !supEmails.includes(e));
+    log("hr_task_assignment_employee_email_resolved", { event, entity_id: entityId, assigned_user_count: employees.length, employee_email_count: empEmails.length, auth_lookup_count: needAuth.length });
+    // إشعارات البوابة تُنشأ في القاعدة: المسندون + الإدارة عبر RPC الإنشاء، والمشرفون
+    // عبر hr_notify_task_supervisors (تُستدعى من الواجهة). نسجّل الأعداد المتوقّعة.
+    log("hr_task_assignment_portal_created", { event, entity_id: entityId, employee_portal_count: employees.length, admin_portal_count: admins.length, supervisor_portal_count: supervisors.length });
     log("hr_task_assignment_recipients_resolved", {
       event, entity_id: entityId,
       assigned_user_count: employees.length, employee_email_count: empEmails.length,
