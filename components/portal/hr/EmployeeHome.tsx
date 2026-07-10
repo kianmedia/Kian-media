@@ -15,13 +15,15 @@ import {
   hrSubmitLeave, hrCancelMyLeave, hrStartTask, hrCompleteTask, hrGetSettings,
   listMyCorrections, hrSubmitCorrection, hrCancelMyCorrection, listMyDocuments, signHrDoc,
   hrSupervisorMyTeam, hrSupervisorAddNote,
+  hrAddTaskFileEvidence, hrAddTaskLinkEvidence, hrRemoveMyTaskEvidence, listMyTaskEvidence,
+  uploadHrTaskFile, hrTaskFilePath, HR_TASK_FILE_MIME, MAX_HR_FILE_BYTES,
   getPositionOnce, uploadHrFile, hrFilePath, emitHrEvent,
   CONSENT_TEXT, LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS,
   TASK_TYPE_LABELS, TASK_PRIORITY_LABELS, DEFAULT_HR_SETTINGS,
-  CORRECTION_TYPE_LABELS, DOCUMENT_TYPE_LABELS,
+  CORRECTION_TYPE_LABELS, DOCUMENT_TYPE_LABELS, EVIDENCE_MODE_LABELS,
   type HrMyProfile, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
   type HrEvent, type LeaveType, type HrSettings, type HrCorrectionRequest,
-  type CorrectionType, type HrDocument, type HrTeamMember,
+  type CorrectionType, type HrDocument, type HrTeamMember, type HrTaskEvidence, type EvidenceMode,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 
@@ -99,6 +101,14 @@ export default function EmployeeHome() {
         tk.data.forEach((x) => { map[x.id] = x; });
         setTasks(map);
       }
+      // أدلة التسليم (ملف/رابط) للمهام الجارية (فشلها الآمن قبل تشغيل SQL لا يعطّل شيئًا).
+      const inProg = asg.data.filter((x) => x.status === "in_progress").map((x) => x.task_id);
+      const evMap: Record<string, HrTaskEvidence[]> = {};
+      await Promise.all(Array.from(new Set(inProg)).map(async (tid) => {
+        const er = await listMyTaskEvidence(tid, uid);
+        if (er.ok) evMap[tid] = er.data;
+      }));
+      setTaskEvidence(evMap);
     }
     setPhase("ready");
   }, [uid]);
@@ -137,6 +147,52 @@ export default function EmployeeHome() {
   const [taskFiles, setTaskFiles] = useState<Record<string, { file: File; preview: string }[]>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const [pickFor, setPickFor] = useState<string | null>(null);
+  // أدلة التسليم المرنة (ملف/رابط) — تُحفظ فورًا؛ الصور تُرفع عند الإنهاء.
+  const [taskEvidence, setTaskEvidence] = useState<Record<string, HrTaskEvidence[]>>({});
+  const [linkInput, setLinkInput] = useState<Record<string, string>>({});
+  const evFileRef = useRef<HTMLInputElement>(null);
+  const [evPickFor, setEvPickFor] = useState<string | null>(null);
+
+  async function refreshEvidence(taskId: string) {
+    const r = await listMyTaskEvidence(taskId, uid);
+    if (r.ok) setTaskEvidence((p) => ({ ...p, [taskId]: r.data }));
+  }
+  async function addFileEvidence(taskId: string, file: File) {
+    if (busy || readOnly) return;
+    if (!HR_TASK_FILE_MIME.includes(file.type)) { flash(t({ ar: "نوع الملف غير مسموح (صور أو PDF فقط).", en: "Only images or PDF." })); return; }
+    if (file.size > MAX_HR_FILE_BYTES) { flash(t({ ar: "حجم الملف يتجاوز 10 ميغابايت.", en: "File exceeds 10MB." })); return; }
+    setBusy(true);
+    const path = hrTaskFilePath(uid, taskId, Date.now().toString(36), file.name || "file");
+    const up = await uploadHrTaskFile(path, file);
+    if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الملف: ", en: "Upload failed: " }) + up.error); return; }
+    const r = await hrAddTaskFileEvidence(taskId, path, file.name || "file", file.type, file.size);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّر إضافة الملف: ", en: "Couldn't attach: " }) + r.error); return; }
+    emitHrEvent({ event: "hr_task_evidence_uploaded", entity_id: taskId, employee_name: me?.full_name || "" });
+    await refreshEvidence(taskId);
+    flash(t({ ar: "أُضيف الملف كدليل تسليم.", en: "File added." }));
+  }
+  async function addLinkEvidence(taskId: string) {
+    if (busy || readOnly) return;
+    const url = (linkInput[taskId] || "").trim();
+    if (!/^https?:\/\//i.test(url)) { flash(t({ ar: "أدخل رابطًا صحيحًا يبدأ بـ http.", en: "Enter a valid http(s) link." })); return; }
+    setBusy(true);
+    const r = await hrAddTaskLinkEvidence(taskId, url);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّر إضافة الرابط: ", en: "Couldn't add link: " }) + r.error); return; }
+    emitHrEvent({ event: "hr_task_evidence_link_added", entity_id: taskId, employee_name: me?.full_name || "" });
+    setLinkInput((p) => ({ ...p, [taskId]: "" }));
+    await refreshEvidence(taskId);
+    flash(t({ ar: "أُضيف الرابط كدليل تسليم.", en: "Link added." }));
+  }
+  async function removeEvidence(id: string, taskId: string) {
+    if (busy || readOnly) return;
+    setBusy(true);
+    const r = await hrRemoveMyTaskEvidence(id);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّر الحذف: ", en: "Couldn't remove: " }) + r.error); return; }
+    await refreshEvidence(taskId);
+  }
 
   async function doStartTask(a: HrAssignee) {
     if (readOnly || busy) return;
@@ -153,12 +209,22 @@ export default function EmployeeHome() {
 
   async function doCompleteTask(a: HrAssignee) {
     if (readOnly || busy) return;
-    // صورة واحدة على الأقل إلزامية لتسليم المهمة عند تفعيل الإعداد (والقاعدة تفرضها أيضًا).
+    // تحقق دليل التسليم حسب وضع المهمة (والقاعدة تفرضه أيضًا). null ⇒ السلوك القديم (صورة).
     const files = taskFiles[a.task_id] ?? [];
-    if (photoRequired && files.length === 0) {
-      emitHrEvent({ event: "hr_task_completion_photo_required", entity_id: a.task_id, employee_name: me?.full_name || "" });
-      flash(t({ ar: "لا يمكن إنهاء المهمة بدون صورة — أضف صورة واحدة على الأقل من موقع التنفيذ ثم أعد المحاولة.", en: "At least one photo is required to complete the task." }));
-      return;
+    const ev = taskEvidence[a.task_id] ?? [];
+    const nFiles = ev.filter((e) => e.kind === "file").length;
+    const nLinks = ev.filter((e) => e.kind === "link").length;
+    const mode = tasks[a.task_id]?.completion_evidence_mode ?? null;
+    const need = (m: EvidenceMode): boolean =>
+      m === "photo" ? files.length < 1 : m === "file" ? nFiles < 1 : m === "link" ? nLinks < 1
+      : m === "any" ? (files.length + nFiles + nLinks) < 1 : false;
+    if (mode === null ? (photoRequired && files.length === 0) : need(mode)) {
+      if (mode === null || mode === "photo") emitHrEvent({ event: "hr_task_completion_photo_required", entity_id: a.task_id, employee_name: me?.full_name || "" });
+      const msg = mode === "file" ? t({ ar: "هذه المهمة تتطلب رفع ملف كدليل تسليم.", en: "This task requires a file." })
+        : mode === "link" ? t({ ar: "هذه المهمة تتطلب إضافة رابط كدليل تسليم.", en: "This task requires a link." })
+        : mode === "any" ? t({ ar: "أضف دليل تسليم (صورة أو ملف أو رابط) قبل الإنهاء.", en: "Add any evidence before completing." })
+        : t({ ar: "لا يمكن إنهاء المهمة بدون صورة — أضف صورة واحدة على الأقل ثم أعد المحاولة.", en: "At least one photo is required." });
+      flash(msg); return;
     }
     setBusy(true);
     const pos = await getPositionOnce();
@@ -176,8 +242,10 @@ export default function EmployeeHome() {
     const r = await hrCompleteTask(a.task_id, pos.data, (taskNote[a.task_id] || "").trim(), paths);
     setBusy(false);
     if (!r.ok) {
-      const msg = /completion_photo_required/.test(r.error)
-        ? t({ ar: "لا يمكن إنهاء المهمة بدون صورة واحدة على الأقل.", en: "A photo is required to complete the task." })
+      const msg = /completion_photo_required/.test(r.error) ? t({ ar: "لا يمكن إنهاء المهمة بدون صورة واحدة على الأقل.", en: "A photo is required." })
+        : /completion_file_required/.test(r.error) ? t({ ar: "هذه المهمة تتطلب رفع ملف كدليل تسليم.", en: "A file is required." })
+        : /completion_link_required/.test(r.error) ? t({ ar: "هذه المهمة تتطلب إضافة رابط كدليل تسليم.", en: "A link is required." })
+        : /completion_evidence_required/.test(r.error) ? t({ ar: "أضف دليل تسليم (صورة/ملف/رابط) قبل الإنهاء.", en: "Add evidence before completing." })
         : (t({ ar: "تعذّر إنهاء المهمة: ", en: "Couldn't complete: " })) + r.error;
       flash(msg); return;
     }
@@ -413,33 +481,64 @@ export default function EmployeeHome() {
                   <button type="button" disabled={busy || readOnly} onClick={() => void doStartTask(a)}
                     className={`${btnRed} w-full py-2.5`}>{t({ ar: "بدء المهمة (بموقعي الآن)", en: "Start task (with my location)" })}</button>
                 )}
-                {a.status === "in_progress" && (
+                {a.status === "in_progress" && (() => {
+                  const mode = (tk?.completion_evidence_mode ?? null) as EvidenceMode | null;
+                  const wantPhoto = mode === null ? true : (mode === "photo" || mode === "any");
+                  const wantFile = mode === "file" || mode === "any";
+                  const wantLink = mode === "link" || mode === "any";
+                  const evList = taskEvidence[a.task_id] ?? [];
+                  return (
                   <div className="space-y-2">
+                    {mode && (
+                      <p className="text-[10.5px] text-sky-300/90">📌 {t({ ar: "دليل التسليم المطلوب: ", en: "Required evidence: " })}{t(EVIDENCE_MODE_LABELS[mode])}</p>
+                    )}
                     <textarea value={taskNote[a.task_id] || ""} onChange={(e) => setTaskNote((p) => ({ ...p, [a.task_id]: e.target.value }))}
                       rows={2} placeholder={t({ ar: "ملاحظة عن التنفيذ (اختياري)", en: "Completion note (optional)" })} className={inp} />
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {(taskFiles[a.task_id] ?? []).map((f, i) => (
-                        <span key={i} className="relative">
-                          <img src={f.preview} alt="" className="w-12 h-10 rounded-md object-cover border border-red-500" />
-                          <button type="button" onClick={() => setTaskFiles((p) => ({ ...p, [a.task_id]: (p[a.task_id] ?? []).filter((_, k) => k !== i) }))}
-                            className="absolute -top-1.5 -end-1.5 w-4 h-4 rounded-full bg-stone-900 border border-stone-600 text-stone-300 text-[9px] leading-none">×</button>
-                        </span>
-                      ))}
-                      <button type="button" onClick={() => { setPickFor(a.task_id); fileRef.current?.click(); }}
-                        className="w-12 h-10 rounded-md border border-dashed border-stone-600 text-stone-400 text-lg">+</button>
-                      <span className="text-[10px] text-stone-500">
-                        {photoRequired
-                          ? t({ ar: "الصور — صورة واحدة على الأقل إلزامية للإنهاء", en: "Photos — at least one is required to complete" })
-                          : t({ ar: "الصور (اختيارية)", en: "Photos (optional)" })}
-                      </span>
-                    </div>
+                    {wantPhoto && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {(taskFiles[a.task_id] ?? []).map((f, i) => (
+                          <span key={i} className="relative">
+                            <img src={f.preview} alt="" className="w-12 h-10 rounded-md object-cover border border-red-500" />
+                            <button type="button" onClick={() => setTaskFiles((p) => ({ ...p, [a.task_id]: (p[a.task_id] ?? []).filter((_, k) => k !== i) }))}
+                              className="absolute -top-1.5 -end-1.5 w-4 h-4 rounded-full bg-stone-900 border border-stone-600 text-stone-300 text-[9px] leading-none">×</button>
+                          </span>
+                        ))}
+                        <button type="button" onClick={() => { setPickFor(a.task_id); fileRef.current?.click(); }}
+                          className="w-12 h-10 rounded-md border border-dashed border-stone-600 text-stone-400 text-lg">+</button>
+                        <span className="text-[10px] text-stone-500">{t({ ar: "صور", en: "Photos" })}</span>
+                      </div>
+                    )}
+                    {/* أدلة الملف/الرابط المحفوظة */}
+                    {evList.length > 0 && (
+                      <div className="flex gap-1.5 flex-wrap">
+                        {evList.map((e) => (
+                          <span key={e.id} className="inline-flex items-center gap-1 bg-stone-800 border border-stone-700 rounded-lg px-2 py-1 text-[10.5px] text-stone-300">
+                            {e.kind === "link" ? "🔗" : "📎"} {e.kind === "link" ? (e.link_url || "").slice(0, 28) : (e.file_name || "ملف")}
+                            <button type="button" onClick={() => void removeEvidence(e.id, a.task_id)} className="text-stone-500 hover:text-red-400">×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {(wantFile || wantLink) && (
+                      <div className="flex gap-1.5 flex-wrap items-center">
+                        {wantFile && (
+                          <button type="button" disabled={busy} onClick={() => { setEvPickFor(a.task_id); evFileRef.current?.click(); }}
+                            className={`${btnGhost} px-3 py-1.5 text-[11px]`}>{t({ ar: "+ ملف (صورة/PDF)", en: "+ File" })}</button>
+                        )}
+                        {wantLink && (
+                          <>
+                            <input value={linkInput[a.task_id] || ""} onChange={(e) => setLinkInput((p) => ({ ...p, [a.task_id]: e.target.value }))}
+                              placeholder={t({ ar: "رابط التسليم (https://…)", en: "Delivery link" })} dir="ltr" className={inp + " flex-1 min-w-[140px]"} style={{ width: "auto" }} />
+                            <button type="button" disabled={busy} onClick={() => void addLinkEvidence(a.task_id)} className={`${btnGhost} px-3 py-1.5 text-[11px]`}>{t({ ar: "إضافة رابط", en: "Add link" })}</button>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <button type="button" disabled={busy || readOnly} onClick={() => void doCompleteTask(a)}
                       className={`${btnRed} w-full py-2.5`}>{t({ ar: "إنهاء المهمة (بموقعي الآن)", en: "Complete task (with my location)" })}</button>
-                    {photoRequired && (taskFiles[a.task_id] ?? []).length === 0 && (
-                      <p className="text-[10.5px] text-amber-400/90">{t({ ar: "⚠️ أضف صورة من موقع التنفيذ قبل الإنهاء.", en: "⚠️ Add a photo before completing." })}</p>
-                    )}
                   </div>
-                )}
+                  );
+                })()}
                 {a.employee_note && a.status !== "in_progress" && (
                   <p className="text-[11px] text-stone-500">{t({ ar: "ملاحظتي: ", en: "My note: " })}{a.employee_note}</p>
                 )}
@@ -452,6 +551,12 @@ export default function EmployeeHome() {
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f && pickFor) setTaskFiles((p) => ({ ...p, [pickFor]: [...(p[pickFor] ?? []), { file: f, preview: URL.createObjectURL(f) }] }));
+            e.target.value = "";
+          }} />
+        <input ref={evFileRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f && evPickFor) void addFileEvidence(evPickFor, f);
             e.target.value = "";
           }} />
       </section>

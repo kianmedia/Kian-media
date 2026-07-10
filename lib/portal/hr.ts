@@ -52,15 +52,29 @@ export interface HrLeave {
   is_deleted?: boolean; delete_reason?: string | null;
   created_at: string; updated_at: string;
 }
+export type EvidenceMode = "photo" | "file" | "link" | "any" | "none";
 export interface HrTask {
   id: string; title: string; description: string | null; location_name: string | null;
   maps_url: string | null; city: string | null; client_name: string | null; project_name: string | null;
   task_type: TaskType; priority: TaskPriority;
   equipment_needed: string | null; special_requirements: string | null; execution_notes: string | null;
+  completion_evidence_mode: EvidenceMode | null;
   expected_start_at: string | null; expected_end_at: string | null; status: TaskStatus;
   created_by: string | null; approved_by: string | null; approved_at: string | null;
   created_at: string; updated_at: string;
 }
+export interface HrTaskEvidence {
+  id: string; task_id: string; employee_id: string; user_id: string; kind: "file" | "link";
+  file_path: string | null; link_url: string | null; file_name: string | null;
+  file_mime_type: string | null; file_size_bytes: number | null; is_deleted: boolean; created_at: string;
+}
+export const EVIDENCE_MODE_LABELS: Record<EvidenceMode, { ar: string; en: string }> = {
+  photo: { ar: "صورة إلزامية",       en: "Photo required" },
+  file:  { ar: "ملف إلزامي",         en: "File required" },
+  link:  { ar: "رابط إلزامي",        en: "Link required" },
+  any:   { ar: "أي دليل (صورة/ملف/رابط)", en: "Any evidence" },
+  none:  { ar: "بدون دليل",          en: "No evidence" },
+};
 export interface HrSettings {
   employee_leave_requests_enabled: boolean;
   multiple_attendance_sessions_enabled: boolean;
@@ -392,8 +406,39 @@ export function hrAdminDecideLeave(id: string, approve: boolean, note?: string):
 export interface HrTaskInput {
   title: string; description?: string; location?: string; mapsUrl?: string; city?: string;
   clientName?: string; projectName?: string; taskType?: TaskType; priority?: TaskPriority;
-  equipment?: string; requirements?: string; execNotes?: string;
+  equipment?: string; requirements?: string; execNotes?: string; evidenceMode?: EvidenceMode;
   expectedStart?: string | null; expectedEnd?: string | null;
+}
+// وضع دليل التسليم لكل مهمة (يُستدعى بعد الإنشاء/التعديل — آمن للنشر: فشله لا يمنع الحفظ).
+// "" = حسب الإعداد العام (يُخزّن null فلا يتغيّر سلوك المهام القديمة/الافتراضي).
+export function hrAdminSetTaskEvidenceMode(taskId: string, mode: EvidenceMode | ""): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_set_task_evidence_mode", { p_task: taskId, p_mode: mode || null });
+}
+export function hrAdminRequestRevision(taskId: string, note: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_admin_request_task_revision", { p_task: taskId, p_note: note });
+}
+// أدلة التسليم (ملف/رابط) — الصور تبقى عبر مسار الإنهاء (hrCompleteTask).
+export function hrAddTaskFileEvidence(taskId: string, filePath: string, name: string, mime: string, size: number): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_add_task_evidence", {
+    p_task: taskId, p_kind: "file", p_file_path: filePath, p_link_url: null,
+    p_file_name: name, p_mime: mime, p_size: size,
+  });
+}
+export function hrAddTaskLinkEvidence(taskId: string, url: string): Promise<Result<{ ok: boolean; id: string }>> {
+  return prpc<{ ok: boolean; id: string }>("hr_add_task_evidence", {
+    p_task: taskId, p_kind: "link", p_file_path: null, p_link_url: url,
+    p_file_name: null, p_mime: null, p_size: null,
+  });
+}
+export function hrRemoveMyTaskEvidence(id: string): Promise<Result<boolean>> {
+  return prpc<boolean>("hr_remove_my_task_evidence", { p_id: id });
+}
+/** أدلة الموظف نفسه فقط — فلتر user_id ليطابق عدّ الخادم (auth.uid()) حتى لو كان المستخدم أدمن-مسندًا. */
+export function listMyTaskEvidence(taskId: string, userId: string): Promise<Result<HrTaskEvidence[]>> {
+  return pget<HrTaskEvidence[]>(`hr_task_evidence?task_id=eq.${enc(taskId)}&user_id=eq.${enc(userId)}&is_deleted=eq.false&select=*&order=created_at.asc&limit=50`);
+}
+export function hrListTaskEvidence(taskId: string): Promise<Result<HrTaskEvidence[]>> {
+  return pget<HrTaskEvidence[]>(`hr_task_evidence?task_id=eq.${enc(taskId)}&is_deleted=eq.false&select=*&order=created_at.asc&limit=100`);
 }
 export function hrAdminCreateTask(input: HrTaskInput & { assignees: string[] }): Promise<Result<{ ok: boolean; id: string; assignees: number }>> {
   return prpc<{ ok: boolean; id: string; assignees: number }>("hr_admin_create_field_task", {
@@ -691,6 +736,29 @@ export async function uploadHrFile(path: string, file: File | Blob): Promise<Res
     if (file.size > MAX_HR_FILE_BYTES) return { ok: false, error: "file_too_large" };
     const type = (file as File).type || "image/jpeg";
     if (!/^image\/(jpeg|png|webp)$/.test(type)) return { ok: false, error: "invalid_file_type" };
+    const res = await storageFetch(`/object/${BUCKET}/${path}`, {
+      method: "POST", headers: { "Content-Type": type, "x-upsert": "true" }, body: file,
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* non-JSON */ }
+      return { ok: false, error: msg, status: res.status };
+    }
+    return { ok: true, data: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+// رفع ملف دليل تسليم (صورة أو PDF) إلى hr-files (owner-first) — للنوع file.
+export const HR_TASK_FILE_MIME = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+export function hrTaskFilePath(userId: string, taskId: string, key: string, filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase().replace(/[^.a-z0-9]/g, "") : "";
+  return `${userId}/${taskId}/file-${key}${ext}`;
+}
+export async function uploadHrTaskFile(path: string, file: File | Blob): Promise<Result<boolean>> {
+  try {
+    if (file.size > MAX_HR_FILE_BYTES) return { ok: false, error: "file_too_large" };
+    const type = (file as File).type || "application/octet-stream";
+    if (!HR_TASK_FILE_MIME.includes(type)) return { ok: false, error: "invalid_file_type" };
     const res = await storageFetch(`/object/${BUCKET}/${path}`, {
       method: "POST", headers: { "Content-Type": type, "x-upsert": "true" }, body: file,
     });

@@ -17,13 +17,15 @@ import {
   hrAdminUpdateEmployeeStatus, hrOwnerSoftDeleteEmployee, hrAdminReviewTask, hrListTaskReviews,
   hrListDeviceUsers, hrListCorrections, hrAdminLongOpenSessions, hrAdminExpiringDocuments,
   hrListSupervisorLinks, hrAdminSetSupervisorLink,
+  hrAdminSetTaskEvidenceMode, hrAdminRequestRevision, hrListTaskEvidence, signHrFiles,
   emitHrEvent, mapsLink, DEFAULT_HR_SETTINGS,
   LEAVE_TYPE_LABELS, LEAVE_STATUS_LABELS, TASK_STATUS_LABELS, TASK_TYPE_LABELS, TASK_PRIORITY_LABELS,
-  DOCUMENT_TYPE_LABELS,
+  DOCUMENT_TYPE_LABELS, EVIDENCE_MODE_LABELS,
   type HrEmployee, type HrAttendance, type HrLeave, type HrTask, type HrAssignee,
   type HrEvent, type HrStaffOption, type EmploymentStatus, type AttendanceStatus,
   type TaskType, type TaskPriority, type HrSettings, type HrTaskReview, type HrDeviceUser,
   type HrLongOpenSession, type HrExpiringDoc, type HrSupervisorLink,
+  type EvidenceMode, type HrTaskEvidence,
 } from "@/lib/portal/hr";
 import { listMyCustodyRecords, type CustodyRecord } from "@/lib/portal/custody";
 import HrSettingsPanel from "@/components/portal/hr/HrSettingsPanel";
@@ -419,6 +421,7 @@ export default function HrAdminConsole() {
   const emptyTf = {
     title: "", desc: "", location: "", mapsUrl: "", city: "", clientName: "", projectName: "",
     taskType: "photo" as TaskType, priority: "normal" as TaskPriority,
+    evidenceMode: "" as EvidenceMode | "",   // "" = حسب الإعداد العام (لا يتغيّر سلوك المهام الافتراضي)
     equipment: "", requirements: "", execNotes: "", start: "", end: "", assignees: [] as string[],
   };
   const [tf, setTf] = useState(emptyTf);
@@ -463,13 +466,16 @@ export default function HrAdminConsole() {
         if (ar.ok) { setAssigneesByTask((p) => ({ ...p, [tfId]: ar.data })); ids = ar.data.map((a) => a.user_id); }
       }
       const r = await hrAdminUpdateTask(tfId, base);
-      setBusy(false);
       if (!r.ok) {
+        setBusy(false);
         const msg = /task_not_editable/.test(r.error)
           ? t({ ar: "لا يمكن تعديل مهمة مُسلّمة أو مغلقة.", en: "Submitted/closed tasks can't be edited." })
           : (t({ ar: "تعذّر التعديل: ", en: "Couldn't update: " })) + r.error;
         flash(msg); return;
       }
+      // وضع دليل التسليم (فشله لا يمنع التعديل — آمن للنشر قبل تشغيل SQL).
+      await hrAdminSetTaskEvidenceMode(tfId, tf.evidenceMode);
+      setBusy(false);
       const det = taskDetailLines();
       // بريد للموظفين المسندين (محتوى موجّه لهم) + بريد منفصل للإدارة.
       emitHrEvent({ event: "hr_task_updated", entity_id: tfId, title: "تحديث مهمة: " + tf.title.trim(),
@@ -486,10 +492,13 @@ export default function HrAdminConsole() {
       return;
     }
     const assignedIds = [...tf.assignees];   // نلتقطها قبل تصفير النموذج — لإيميلات المسندين
+    const evMode = tf.evidenceMode;
     const det = taskDetailLines();
     const r = await hrAdminCreateTask({ ...base, assignees: assignedIds });
+    if (!r.ok) { setBusy(false); flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
+    // وضع دليل التسليم (فشله لا يمنع الإنشاء — آمن للنشر قبل تشغيل SQL).
+    await hrAdminSetTaskEvidenceMode(r.data.id, evMode);
     setBusy(false);
-    if (!r.ok) { flash((t({ ar: "تعذّر: ", en: "Failed: " })) + r.error); return; }
     // بريد للموظف المسند (عنوان "تم إسناد مهمة جديدة لك") + بريد منفصل للإدارة.
     emitHrEvent({ event: "hr_task_new", entity_id: r.data.id, title: "مهمة جديدة: " + tf.title.trim(),
       audience: "employee", employee_user_ids: assignedIds,
@@ -510,6 +519,7 @@ export default function HrAdminConsole() {
       mapsUrl: tk.maps_url || "", city: tk.city || "",
       clientName: tk.client_name || "", projectName: tk.project_name || "",
       taskType: (tk.task_type || "other") as TaskType, priority: (tk.priority || "normal") as TaskPriority,
+      evidenceMode: (tk.completion_evidence_mode || "") as EvidenceMode | "",
       equipment: tk.equipment_needed || "", requirements: tk.special_requirements || "",
       execNotes: tk.execution_notes || "",
       start: toLocalInput(tk.expected_start_at), end: toLocalInput(tk.expected_end_at), assignees: [],
@@ -531,12 +541,51 @@ export default function HrAdminConsole() {
     await reload();
     flash(action === "complete" ? t({ ar: "أُغلقت المهمة.", en: "Closed." }) : t({ ar: "أُلغيت المهمة.", en: "Cancelled." }));
   }
+  // ─── طلب تعديل + أدلة التسليم (ملف/رابط) ───
+  const [revFor2, setRevFor2] = useState<{ id: string; note: string } | null>(null);
+  const [evidenceByTask, setEvidenceByTask] = useState<Record<string, HrTaskEvidence[]>>({});
+  async function doRequestRevision(tk: HrTask) {
+    const note = (revFor2?.note || "").trim();
+    if (!note) { flash(t({ ar: "ملاحظة التعديل إلزامية.", en: "Revision note required." })); return; }
+    setBusy(true);
+    let ids = (assigneesByTask[tk.id] ?? []).map((a) => a.user_id);
+    if (ids.length === 0) {
+      const ar = await hrListAssignees(tk.id);
+      if (ar.ok) ids = ar.data.map((a) => a.user_id);
+    }
+    const r = await hrAdminRequestRevision(tk.id, note);
+    setBusy(false);
+    if (!r.ok) {
+      const msg = /task_not_revisable/.test(r.error) ? t({ ar: "لا يمكن طلب تعديل لهذه المهمة الآن.", en: "Task not revisable." })
+        : (t({ ar: "تعذّر: ", en: "Failed: " })) + r.error;
+      flash(msg); return;
+    }
+    emitHrEvent({ event: "hr_task_revision_requested", entity_id: tk.id, title: "طلب تعديل: " + tk.title,
+      employee_user_ids: ids, subject: "طلب تعديل على مهمتك — كيان",
+      message: "طُلب تعديل على مهمتك: " + tk.title + "\nالملاحظة: " + note + "\n\nافتح بوابة الموظف لإعادة التنفيذ." });
+    setRevFor2(null);
+    await reload();
+    flash(t({ ar: "أُرسل طلب التعديل وأُعيدت المهمة للتنفيذ.", en: "Revision requested." }));
+  }
+  async function openEvidenceFile(ev: HrTaskEvidence) {
+    if (!ev.file_path) return;
+    setBusy(true);
+    const map = await signHrFiles([ev.file_path]);
+    setBusy(false);
+    const url = map[ev.file_path];
+    if (!url) { flash(t({ ar: "تعذّر فتح الملف.", en: "Couldn't open file." })); return; }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
   async function toggleTask(id: string) {
     if (openTask === id) { setOpenTask(null); return; }
     setOpenTask(id);
     if (!assigneesByTask[id]) {
       const r = await hrListAssignees(id);
       if (r.ok) setAssigneesByTask((p) => ({ ...p, [id]: r.data }));
+    }
+    if (!evidenceByTask[id]) {
+      const ev = await hrListTaskEvidence(id);
+      if (ev.ok) setEvidenceByTask((p) => ({ ...p, [id]: ev.data }));
     }
     const tk = tasks.find((x) => x.id === id);
     if (tk && ["completed", "cancelled"].includes(tk.status) && !reviewsByTask[id]) {
@@ -1091,6 +1140,15 @@ export default function HrAdminConsole() {
               placeholder={t({ ar: "متطلبات خاصة (اختياري)", en: "Special requirements (optional)" })} className={inp + " mt-2"} />
             <textarea value={tf.execNotes} onChange={(e) => setTf({ ...tf, execNotes: e.target.value })} rows={2}
               placeholder={t({ ar: "ملاحظات التنفيذ (اختياري)", en: "Execution notes (optional)" })} className={inp + " mt-2"} />
+            <div className="mt-2">
+              <label className="block text-[11px] text-stone-500 mb-1">{t({ ar: "دليل التسليم المطلوب من الموظف", en: "Required delivery evidence" })}</label>
+              <select value={tf.evidenceMode} onChange={(e) => setTf({ ...tf, evidenceMode: e.target.value as EvidenceMode | "" })} className={inp}>
+                <option value="">{t({ ar: "حسب الإعداد العام (افتراضي)", en: "Follow global setting (default)" })}</option>
+                {(Object.keys(EVIDENCE_MODE_LABELS) as EvidenceMode[]).map((k) => (
+                  <option key={k} value={k}>{isAr ? EVIDENCE_MODE_LABELS[k].ar : EVIDENCE_MODE_LABELS[k].en}</option>
+                ))}
+              </select>
+            </div>
             {!tfId && (
               <div className="mt-2">
                 <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "المسندون *", en: "Assignees *" })}</div>
@@ -1180,9 +1238,38 @@ export default function HrAdminConsole() {
                           <button type="button" disabled={busy} onClick={() => void closeTask(tk, "complete")} className={`${btnRed} px-4 py-2 text-xs`}>
                             {t({ ar: "اعتماد الإغلاق", en: "Approve closure" })}
                           </button>
+                          {["submitted", "in_progress"].includes(tk.status) && (
+                            <button type="button" disabled={busy} className={`${btnGhost} px-4 py-2 text-xs`}
+                              onClick={() => setRevFor2(revFor2?.id === tk.id ? null : { id: tk.id, note: "" })}>
+                              {t({ ar: "طلب تعديل", en: "Request revision" })}
+                            </button>
+                          )}
                           <button type="button" disabled={busy} onClick={() => void closeTask(tk, "cancel")} className="rounded-lg bg-stone-900 border border-red-900 text-red-400 text-xs px-4 py-2 disabled:opacity-50">
                             {t({ ar: "إلغاء المهمة", en: "Cancel task" })}
                           </button>
+                        </div>
+                      )}
+                      {/* طلب تعديل — يُعيد المهمة للتنفيذ بملاحظة إلزامية */}
+                      {revFor2?.id === tk.id && (
+                        <div className="flex gap-2 flex-wrap items-center bg-stone-950 border border-stone-800 rounded-lg p-2">
+                          <input value={revFor2.note} onChange={(e) => setRevFor2({ id: tk.id, note: e.target.value })}
+                            placeholder={t({ ar: "ملاحظة التعديل المطلوب (إلزامية)", en: "Revision note (required)" })} className={inp + " flex-1 min-w-[180px]"} style={{ width: "auto" }} />
+                          <button type="button" disabled={busy} onClick={() => void doRequestRevision(tk)} className={`${btnRed} px-4 py-1.5 text-xs`}>
+                            {t({ ar: "إرسال طلب التعديل", en: "Send revision" })}
+                          </button>
+                        </div>
+                      )}
+                      {/* أدلة التسليم (صور/ملفات/روابط) */}
+                      {(evidenceByTask[tk.id] ?? []).length > 0 && (
+                        <div className="flex gap-1.5 flex-wrap items-center text-[11px] border-t border-stone-800 pt-1.5">
+                          <span className="text-stone-500">{t({ ar: "أدلة التسليم:", en: "Evidence:" })}</span>
+                          {(evidenceByTask[tk.id] ?? []).map((ev) => ev.kind === "link" ? (
+                            <a key={ev.id} href={ev.link_url || "#"} target="_blank" rel="noopener noreferrer" className="text-sky-400 underline">🔗 {t({ ar: "رابط", en: "Link" })}</a>
+                          ) : (
+                            <button key={ev.id} type="button" className="text-sky-400 underline" onClick={() => void openEvidenceFile(ev)}>
+                              📎 {ev.file_name || t({ ar: "ملف", en: "File" })}
+                            </button>
+                          ))}
                         </div>
                       )}
                       {/* حذف إداري آمن للمهمة — سبب إلزامي */}

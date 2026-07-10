@@ -31,6 +31,8 @@ const EVENTS = new Set([
   // v3.1: تعديل حضور + تقويم + وثائق + مشرف ميداني
   "hr_correction_new", "hr_correction_decided", "hr_calendar_updated",
   "hr_document_added", "hr_supervisor_link_updated", "hr_supervisor_note",
+  // v3.1 delivery: طلب تعديل + أدلة تسليم
+  "hr_task_revision_requested", "hr_task_evidence_uploaded", "hr_task_evidence_link_added",
   // سجل فقط — لا بريد
   "hr_task_completion_photo_required", "hr_dashboard_filter_applied",
   "hr_monthly_report_generated", "hr_device_event_unmatched",
@@ -43,12 +45,14 @@ const LOG_ONLY = new Set([
   "hr_monthly_report_generated", "hr_device_event_unmatched",
   "hr_payroll_report_generated", "hr_document_expiring",
   "hr_long_open_session_detected", "hr_audit_log_viewed", "hr_mobile_quick_action_used",
+  "hr_task_evidence_uploaded", "hr_task_evidence_link_added",
 ]);
 // أحداث تُرسل أيضاً لموظف محدد (قرارات تخصه أو مهام أُسندت له).
 const EMPLOYEE_TARGETED = new Set([
   "hr_leave_decided", "hr_task_new", "hr_task_updated", "hr_task_closed", "hr_attendance_adjusted", "hr_note_new",
   "hr_leave_deleted", "hr_leave_updated", "hr_attendance_voided", "hr_task_deleted", "hr_employee_status_updated",
   "hr_correction_decided", "hr_document_added", "hr_supervisor_link_updated", "hr_supervisor_note",
+  "hr_task_revision_requested",
 ]);
 // أحداث الحذف/الإلغاء الإداري — سجل موحّد إضافي hr_admin_soft_delete.
 const SOFT_DELETE_EVENTS = new Set(["hr_leave_deleted", "hr_attendance_voided", "hr_task_deleted"]);
@@ -62,12 +66,16 @@ const CUSTOM_LOG: Record<string, string> = {
   hr_employee_status_updated: "hr_employee_status_updated",
   hr_device_event_imported: "hr_device_event_imported",
   hr_device_event_processed: "hr_device_event_processed",
+  hr_task_submitted: "hr_task_submitted_for_review",
+  hr_task_closed: "hr_task_approved",
+  hr_task_revision_requested: "hr_task_revision_requested",
 };
 // أحداث يطلقها الموظف بنفسه من بوابته — كل ما عداها إداري ويتطلب صلاحية إدارة HR.
 // يمنع موظفًا عاديًا من إرسال إيميلات بصياغة إدارية (تغيير حالة/حذف/إسناد) لأي حساب.
 const EMPLOYEE_ALLOWED = new Set([
   "hr_check_in", "hr_check_out", "hr_leave_new", "hr_task_started", "hr_task_submitted",
   "hr_task_completion_photo_required", "hr_correction_new", "hr_mobile_quick_action_used",
+  "hr_task_evidence_uploaded", "hr_task_evidence_link_added",
 ]);
 
 /** GET — تشخيص آمن للبيئة المنشورة. */
@@ -136,6 +144,10 @@ export async function POST(req: Request) {
   const audience = str(b.audience) || "both";
   const isTaskEvent = event === "hr_task_new" || event === "hr_task_updated";
   if (isTaskEvent) log("hr_task_notify_created", { event, entity_id: entityId, audience, by: me.data[0].id, service_key_present: adminConfigured() });
+  if (event === "hr_task_new") {
+    log("hr_task_assignment_started", { entity_id: entityId, audience, by: me.data[0].id });
+    log("hr_task_portal_notify_created", { entity_id: entityId, audience, by: me.data[0].id });
+  }
 
   // المستلمون: مجموعة إدارة HR + الموظف المستهدف إن وُجد (قراءة فقط بمفتاح الخدمة).
   const recipients: string[] = [];

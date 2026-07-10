@@ -72,6 +72,7 @@ const EVENT_SUBJECTS: Record<string, string> = {
   hr_document_added:      "وثيقة موظف — كيان",
   hr_supervisor_link_updated: "تحديث الإشراف الميداني — كيان",
   hr_supervisor_note:     "ملاحظة مشرف ميداني — كيان",
+  hr_task_revision_requested: "طلب تعديل على مهمة — كيان",
 };
 
 /** POSTs the portal_notify email payload. ALWAYS logs the outcome. */
