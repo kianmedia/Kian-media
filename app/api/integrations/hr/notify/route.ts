@@ -185,6 +185,16 @@ export async function POST(req: Request) {
     const empEmails = uniq(employees.map(emailOf).filter(valid));
     const supEmails = uniq(supervisors.map(emailOf).filter(valid)).filter((e) => !empEmails.includes(e));
     const adminEmails = uniq(admins.map(emailOf).filter(valid)).filter((e) => !empEmails.includes(e) && !supEmails.includes(e));
+    // مصدر بريد الموظف: من auth.users أم profiles (للإثبات) — دون تسجيل البريد نفسه.
+    const empFromRecord = employees.filter((r) => valid(r.email)).length;
+    const empFromAuth = employees.filter((r) => !valid(r.email) && r.user_id && !!authMap[r.user_id]).length;
+    const employeeEmailSource = empFromAuth > 0 ? (empFromRecord > 0 ? "auth+profile" : "auth") : "profile";
+    log("TASK_ASSIGNMENT_EMAIL", {
+      event, entity_id: entityId,
+      employee_email_source: employeeEmailSource, employee_email_found: empEmails.length > 0,
+      employee_count: empEmails.length, admin_count: adminEmails.length, supervisor_count: supEmails.length,
+      service_key_present: adminConfigured(), endpoint_present: hrEmailEndpoint().startsWith("https://"),
+    });
     log("hr_task_assignment_employee_email_resolved", { event, entity_id: entityId, assigned_user_count: employees.length, employee_email_count: empEmails.length, auth_lookup_count: needAuth.length });
     // إشعارات البوابة تُنشأ في القاعدة: المسندون + الإدارة عبر RPC الإنشاء، والمشرفون
     // عبر hr_notify_task_supervisors (تُستدعى من الواجهة). نسجّل الأعداد المتوقّعة.
