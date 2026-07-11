@@ -81,7 +81,12 @@ begin
     nullif(trim(p_data->>'description'),''), nullif(trim(p_data->>'witnesses'),''), v_emp, coalesce((p_data->>'was_work_stopped')::boolean,false),
     nullif(trim(p_data->>'immediate_action'),''), coalesce((p_data->>'external_reported')::boolean,false), nullif(trim(p_data->>'police_ref'),''), v_emp)
   returning id into v_id;
-  if v_asset is not null then
+  -- Hold تلقائي فقط إن كان الأصل ضمن عهدة (حالية/سابقة) لنفس الموظف — يمنع أن يحتجز
+  -- موظف أي أصل عشوائيًا (DoS على الصرف). خلاف ذلك يُسجَّل البلاغ بلا Hold ويقرّر المسؤول.
+  if v_asset is not null and exists (
+      select 1 from public.custody_inventory_assignment_items i
+      join public.custody_inventory_assignments a on a.id = i.assignment_id
+      where i.asset_id = v_asset and a.employee_user_id = v_emp) then
     update public.custody_inventory_assets set on_hold = true, hold_reason = 'incident ' || v_no where id = v_asset;
   end if;
   perform public.custody_audit('incident_reported', 'custody_incidents', v_id, jsonb_build_object('type', p_data->>'incident_type'));
@@ -207,6 +212,7 @@ drop policy if exists civ_alert_deliv_read on public.custody_alert_deliveries;
 create policy civ_alert_deliv_read on public.custody_alert_deliveries for select to authenticated using (public.civ_can_manage());
 
 grant select on public.custody_incidents, public.custody_incident_actions, public.custody_alert_deliveries to authenticated;
+revoke execute on function public.custody_inv_employee_report_incident(jsonb), public.custody_inv_admin_incident_action(uuid,text,text,boolean) from public, anon;
 grant execute on function public.custody_inv_employee_report_incident(jsonb) to authenticated;
 grant execute on function public.custody_inv_admin_incident_action(uuid,text,text,boolean) to authenticated;
 -- custody_run_alerts / civ_alert_once / civ_item_hold_check: تُستدعى من الخادم/المُشغّل فقط.

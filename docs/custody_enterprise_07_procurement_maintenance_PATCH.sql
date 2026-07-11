@@ -151,6 +151,7 @@ create policy civ_pr_recv_read on public.custody_purchase_receiving for select t
 
 grant select on public.custody_vendors, public.custody_purchase_requests, public.custody_purchase_request_items,
   public.custody_purchase_approvals, public.custody_purchase_vendor_quotes, public.custody_purchase_receiving to authenticated;
+revoke execute on function public.custody_pr_create(jsonb,jsonb), public.custody_pr_decide(uuid,text,text), public.custody_maintenance_approve_cost(uuid,numeric,text) from public, anon;
 grant execute on function public.custody_pr_create(jsonb,jsonb) to authenticated;
 grant execute on function public.custody_pr_decide(uuid,text,text) to authenticated;
 grant execute on function public.custody_maintenance_approve_cost(uuid,numeric,text) to authenticated;

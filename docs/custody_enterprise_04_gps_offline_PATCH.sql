@@ -53,6 +53,7 @@ begin
   if v_owner is null then raise exception 'not_found'; end if;
   if auth.uid() <> v_owner then raise exception 'not authorized'; end if;
   if v_status = 'ended' then raise exception 'session_ended'; end if;
+  if not public.civ_flag('gps_sessions_enabled') then raise exception 'gps_disabled'; end if;   -- إيقاف العلم يوقف الجمع الجاري فورًا
   for elem in select value from jsonb_array_elements(coalesce(p_points,'[]'::jsonb)) loop
     insert into public.custody_gps_points(session_id, lat, lng, accuracy, recorded_at)
       values (p_session, (elem->>'lat')::double precision, (elem->>'lng')::double precision,

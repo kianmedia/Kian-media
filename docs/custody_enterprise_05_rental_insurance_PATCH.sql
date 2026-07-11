@@ -196,6 +196,7 @@ create policy civ_claim_act_read on public.insurance_claim_actions for select to
 grant select on public.custody_rental_customers, public.custody_rental_requests, public.custody_rental_contracts,
   public.custody_rental_items, public.custody_rental_inspections, public.asset_insurance_policies, public.policy_assets,
   public.insurance_claims, public.insurance_claim_evidence, public.insurance_claim_actions to authenticated;
+revoke execute on function public.custody_rental_create_request(jsonb), public.custody_insurance_create_claim(jsonb) from public, anon;
 grant execute on function public.custody_rental_create_request(jsonb) to authenticated;
 grant execute on function public.custody_insurance_create_claim(jsonb) to authenticated;
 commit;

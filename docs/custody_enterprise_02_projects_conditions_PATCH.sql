@@ -162,6 +162,9 @@ create policy civ_cond_read on public.custody_condition_reports for select to au
   using (public.civ_can_manage() or exists (select 1 from public.custody_inventory_assignments a where a.id = assignment_id and a.employee_user_id = auth.uid()));
 
 grant select on public.custody_signatures, public.custody_condition_reports to authenticated;
+revoke execute on function public.custody_inv_set_project(uuid,jsonb), public.custody_inv_admin_project_dashboard(text),
+  public.custody_inv_record_signature(uuid,text,text,text,text,text,text), public.custody_inv_record_condition(uuid,uuid,text,text,text,jsonb,text),
+  public.custody_inv_get_condition_history(uuid) from public, anon;
 grant execute on function public.custody_inv_set_project(uuid,jsonb) to authenticated;
 grant execute on function public.custody_inv_admin_project_dashboard(text) to authenticated;
 grant execute on function public.custody_inv_record_signature(uuid,text,text,text,text,text,text) to authenticated;

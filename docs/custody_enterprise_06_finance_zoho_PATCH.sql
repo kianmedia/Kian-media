@@ -26,7 +26,7 @@ begin
   if not public.civ_flag('depreciation_enabled') then raise exception 'depreciation_disabled'; end if;
   select * into a from public.custody_inventory_assets where id = p_asset and is_deleted = false;
   if a.id is null then raise exception 'not_found'; end if;
-  v_months := nullif(a.useful_life_months, 0);
+  v_months := nullif(greatest(coalesce(a.useful_life_months, 0), 0), 0);   -- عمر غير موجب ⇒ غير قابل للحساب (لا أرقام وهمية)
   if a.purchase_price is null or v_months is null or a.purchase_date is null then
     return jsonb_build_object('ok', true, 'computable', false, 'reason', 'missing_inputs');
   end if;
@@ -87,6 +87,7 @@ language plpgsql security definer set search_path = public as $$
 declare v_id uuid;
 begin
   if not (public.civ_can_finance() or public.civ_can_admin()) then raise exception 'not authorized'; end if;
+  if not public.civ_flag('zoho_asset_sync_enabled') then raise exception 'zoho_disabled'; end if;
   insert into public.custody_zoho_sync_outbox(entity_type, entity_id, operation, payload, approved_by, created_by)
     values (p_entity_type, p_entity_id, coalesce(nullif(p_operation,''),'create'), p_payload, auth.uid(), auth.uid()) returning id into v_id;
   perform public.custody_audit('zoho_enqueue', p_entity_type, p_entity_id, jsonb_build_object('op', p_operation));
@@ -103,6 +104,8 @@ create policy civ_zoho_outbox_read on public.custody_zoho_sync_outbox for select
 drop policy if exists civ_zoho_log_read on public.custody_zoho_sync_log;
 create policy civ_zoho_log_read on public.custody_zoho_sync_log for select to authenticated using (public.civ_can_finance() or public.civ_can_admin());
 grant select on public.custody_zoho_sync_outbox, public.custody_zoho_sync_log to authenticated;
+-- إزالة grant PUBLIC الافتراضي (دفاع في العمق — الدوال محميّة بالبوابة أصلًا) ثم منح authenticated.
+revoke execute on function public.custody_finance_compute_depreciation(uuid), public.custody_finance_asset_usage(uuid), public.custody_zoho_enqueue(text,uuid,text,jsonb) from public, anon;
 grant execute on function public.custody_finance_compute_depreciation(uuid) to authenticated;
 grant execute on function public.custody_finance_asset_usage(uuid) to authenticated;
 grant execute on function public.custody_zoho_enqueue(text,uuid,text,jsonb) to authenticated;

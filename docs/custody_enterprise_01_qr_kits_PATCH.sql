@@ -405,6 +405,7 @@ create policy civ_kit_moves_read on public.custody_inventory_kit_movements for s
 grant select on public.custody_qr_events, public.custody_inventory_asset_components, public.custody_inventory_kits,
   public.custody_inventory_kit_items, public.custody_inventory_kit_versions, public.custody_inventory_kit_movements to authenticated;
 
+revoke execute on function public.custody_inv_admin_reissue_qr(uuid,text), public.custody_inv_log_label_print(uuid[],text), public.custody_inv_employee_issue_kit(jsonb) from public, anon;
 grant execute on function public.civ_flag(text) to authenticated;
 grant execute on function public.custody_inv_resolve_qr(uuid) to authenticated;
 grant execute on function public.custody_inv_admin_reissue_qr(uuid,text) to authenticated;
