@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { pget } from "@/lib/portal/client";
+import CustodyEnterpriseSettings from "@/components/portal/custody-inventory/CustodyEnterpriseSettings";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
   civArchiveAsset, civAdjustStock, civTransferAsset, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
@@ -552,6 +553,11 @@ function SettingsTab({ settings, setSettings, busy, setBusy, flash, err, t }: Co
         <Toggle on={settings.show_purchase_value_to_employee} onClick={() => void save({ show_purchase_value_to_employee: !settings.show_purchase_value_to_employee })} />
         <div><div className="text-sm text-stone-200">إظهار قيمة الشراء للموظف</div>
           <div className="text-[11px] text-stone-500">الافتراضي مخفي — لا يرى الموظف تكلفة الأصول.</div></div>
+      </div>
+      {/* أعلام المنصّة المؤسسية (يقرؤها الكود بأمان قبل تشغيل الـ patches) */}
+      <div className="border-t border-stone-800 pt-4">
+        <h3 className="text-sm font-medium text-stone-300 mb-3">{t({ ar: "مزايا المنصّة المؤسسية", en: "Enterprise modules" })}</h3>
+        <CustodyEnterpriseSettings />
       </div>
     </div>
   );
