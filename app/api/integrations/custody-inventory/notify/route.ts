@@ -80,7 +80,7 @@ export async function POST(req: Request) {
   let employeeEmails: string[] = [];
   if (AUDIENCE_EMPLOYEE.has(event) && employeeUserId) {
     const authMap = await authAdminEmails([employeeUserId]);
-    let e = authMap[employeeUserId];
+    let e: string | undefined = authMap[employeeUserId];
     if (!valid(e)) {
       const pr = await selectAsService<{ email: string | null }[]>(`profiles?id=eq.${enc(employeeUserId)}&select=email&limit=1`);
       if (pr.ok && pr.data[0]) e = pr.data[0].email ?? undefined;

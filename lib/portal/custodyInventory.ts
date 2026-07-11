@@ -13,7 +13,8 @@ export type CivCondition = "new" | "excellent" | "good" | "fair" | "damaged" | "
 export type CivAvailability = "available" | "partially_assigned" | "assigned" | "reserved" | "maintenance" | "lost" | "retired";
 export type CivAssignmentStatus = "draft" | "pending_employee_confirmation" | "active" | "return_requested" | "under_inspection" | "partially_returned" | "returned" | "rejected" | "disputed" | "cancelled";
 export type CivItemStatus = "pending" | "active" | "return_requested" | "inspected" | "returned" | "damaged" | "missing" | "disputed";
-export type CivEvidenceStage = "issue_admin" | "issue_employee" | "return_employee" | "return_inspection" | "damage" | "maintenance";
+export type CivEvidenceStage = "issue_admin" | "issue_employee" | "return_employee" | "return_inspection" | "damage" | "maintenance"
+  | "issue_item" | "issue_group" | "return_item" | "return_group" | "inspection_item";
 export type CivInspectResult = "accepted_good" | "accepted_damaged" | "maintenance_required" | "missing" | "rejected_return" | "partial_return";
 
 export interface CivSettings { legacy_custody_employee_visible: boolean; show_purchase_value_to_employee: boolean }
