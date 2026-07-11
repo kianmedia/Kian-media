@@ -6,15 +6,16 @@ import { useI18n } from "@/lib/i18n";
 import { pget } from "@/lib/portal/client";
 import CustodyEnterpriseSettings from "@/components/portal/custody-inventory/CustodyEnterpriseSettings";
 import CustodyQrLabels from "@/components/portal/custody-inventory/CustodyQrLabels";
+import AssetDetailModal from "@/components/portal/custody-inventory/AssetDetailModal";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
-  civArchiveAsset, civAdjustStock, civTransferAsset, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
-  civListAssetFiles, civSignFiles, civGetAssetTimeline, civUpsertCategory, civArchiveCategory, civUpsertLocation,
+  civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
+  civSignFiles, civUpsertCategory, civArchiveCategory, civUpsertLocation,
   civArchiveLocation, civCreateAssignment, civListAssignments, civListAssignmentItems, civListEvidence,
   civEvidencePath, civUploadEvidence, civAttachEvidence, civInspectReturn, civOpenMaintenance, civCloseMaintenance,
   civListMaintenance, civStartAudit, civListAudits, civListAuditItems, civCountAuditItem, civApproveAudit,
   civGetReport, civGetSettings, civUpdateSettings, civEmitEvent, DEFAULT_CIV_SETTINGS,
-  CIV_ASSETS_BUCKET, CIV_EVIDENCE_BUCKET,
+  CIV_EVIDENCE_BUCKET,
   type CivAsset, type CivCategory, type CivLocation, type CivDashboard, type CivAssignment,
   type CivAssignmentItem, type CivIssueItem, type CivInspectItem, type CivSettings, type CivInspectResult,
 } from "@/lib/portal/custodyInventory";
@@ -233,49 +234,7 @@ function AssetsTab({ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, 
           ))}</tbody>
         </table>
       </div>
-      {detail && <AssetDetail assetId={detail} asset={assets.find((a) => a.id === detail)!} locs={locs} onClose={() => setDetail(null)} onChanged={reload} {...{ busy, setBusy, flash, err, t }} />}
-    </div>
-  );
-}
-
-function AssetDetail({ assetId, asset, locs, onClose, onChanged, busy, setBusy, flash, err, t }: Common & {
-  assetId: string; asset: CivAsset; locs: CivLocation[]; onClose: () => void; onChanged: () => Promise<unknown>;
-}) {
-  const [tl, setTl] = useState<{ movements: { created_at: string; movement_type: string; reason: string | null }[]; stats: { times_issued: number } } | null>(null);
-  const [photos, setPhotos] = useState<string[]>([]);
-  const [adj, setAdj] = useState({ total: String(asset.quantity_total), avail: String(asset.quantity_available), reason: "" });
-  const [reason, setReason] = useState("");
-  useEffect(() => {
-    void civGetAssetTimeline(assetId).then((r) => { if (r.ok) setTl(r.data); });
-    void civListAssetFiles(assetId).then(async (r) => { if (r.ok) { const m = await civSignFiles(CIV_ASSETS_BUCKET, r.data.map((x) => x.file_path)); setPhotos(Object.values(m)); } });
-  }, [assetId]);
-  return (
-    <div className={`${card} space-y-3`}>
-      <div className="flex justify-between items-center"><h3 className="text-sm font-medium text-white">{asset.asset_name} <span className="font-mono text-xs text-stone-500" dir="ltr">{asset.asset_code}</span></h3>
-        <button onClick={onClose} className={`${btnGhost} px-2 py-1 text-xs`}>إغلاق</button></div>
-      {photos.length > 0 && <div className="flex gap-2 flex-wrap">{photos.map((u, i) => <a key={i} href={u} target="_blank" rel="noreferrer"><img src={u} className="w-16 h-16 object-cover rounded border border-stone-700" alt="" /></a>)}</div>}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-stone-400">
-        <span>الحالة: {asset.condition_status}</span><span>الإتاحة: {asset.availability_status}</span><span>مرات الصرف: {tl?.stats.times_issued ?? "…"}</span>
-        {asset.warranty_expiry_date && <span>الضمان: {asset.warranty_expiry_date}</span>}
-      </div>
-      {/* تعديل مخزون */}
-      <div className="grid grid-cols-3 gap-2">
-        <input className={inp} value={adj.total} onChange={(e) => setAdj({ ...adj, total: e.target.value })} placeholder="الإجمالي" />
-        <input className={inp} value={adj.avail} onChange={(e) => setAdj({ ...adj, avail: e.target.value })} placeholder="المتاح" />
-        <input className={inp} value={adj.reason} onChange={(e) => setAdj({ ...adj, reason: e.target.value })} placeholder="سبب التصحيح *" />
-      </div>
-      <div className="flex gap-2 flex-wrap">
-        <button disabled={busy} onClick={async () => { if (!adj.reason.trim()) return flash("سبب التصحيح مطلوب."); setBusy(true); const r = await civAdjustStock(assetId, Number(adj.total), Number(adj.avail), adj.reason.trim()); setBusy(false); if (!r.ok) return err(r, "تعذّر: "); await onChanged(); flash("عُدّل المخزون."); }} className={`${btnRed} px-3 py-1.5 text-xs`}>تصحيح المخزون</button>
-        <select className={`${inp} w-auto`} onChange={async (e) => { const to = e.target.value; if (!to) return; setBusy(true); const r = await civTransferAsset(assetId, to, "نقل موقع"); setBusy(false); if (!r.ok) return err(r, "تعذّر: "); await onChanged(); flash("نُقل الموقع."); }}>
-          <option value="">نقل إلى موقع…</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select>
-        <input className={`${inp} w-40`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="سبب الأرشفة" />
-        <button disabled={busy} onClick={async () => { if (!reason.trim()) return flash("سبب الأرشفة مطلوب."); setBusy(true); const r = await civArchiveAsset(assetId, reason.trim()); setBusy(false); if (!r.ok) return err(r, "تعذّر: "); await onChanged(); onClose(); flash("أُرشف الأصل."); }} className={`${btnGhost} px-3 py-1.5 text-xs border-red-900 text-red-400`}>أرشفة</button>
-      </div>
-      {/* Timeline */}
-      <div className="max-h-48 overflow-y-auto space-y-1">
-        {(tl?.movements ?? []).map((m, i) => <div key={i} className="text-[11px] text-stone-500 flex justify-between border-t border-stone-800 py-1"><span>{m.movement_type}{m.reason ? ` — ${m.reason}` : ""}</span><span dir="ltr">{new Date(m.created_at).toLocaleString("ar")}</span></div>)}
-      </div>
+      {detail && <AssetDetailModal assetId={detail} cats={cats} locs={locs} onClose={() => setDetail(null)} onChanged={reload} t={t} />}
     </div>
   );
 }
