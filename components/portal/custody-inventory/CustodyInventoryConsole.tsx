@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { pget } from "@/lib/portal/client";
 import CustodyEnterpriseSettings from "@/components/portal/custody-inventory/CustodyEnterpriseSettings";
+import CustodyQrLabels from "@/components/portal/custody-inventory/CustodyQrLabels";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
   civArchiveAsset, civAdjustStock, civTransferAsset, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
@@ -25,11 +26,12 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const th = "text-right text-[11px] text-stone-500 font-medium px-2 py-1.5";
 const td = "text-right text-xs text-stone-300 px-2 py-1.5 border-t border-stone-800";
 
-type Tab = "dashboard" | "assets" | "categories" | "locations" | "issue" | "custody" | "maintenance" | "audits" | "reports" | "settings";
+type Tab = "dashboard" | "assets" | "qr" | "categories" | "locations" | "issue" | "custody" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
 const TABS: { k: Tab; ar: string }[] = [
-  { k: "dashboard", ar: "لوحة" }, { k: "assets", ar: "الأصول" }, { k: "categories", ar: "التصنيفات" },
+  { k: "dashboard", ar: "لوحة" }, { k: "assets", ar: "الأصول" }, { k: "qr", ar: "QR والملصقات" }, { k: "categories", ar: "التصنيفات" },
   { k: "locations", ar: "المواقع" }, { k: "issue", ar: "صرف عهدة" }, { k: "custody", ar: "العهد والإرجاع" },
-  { k: "maintenance", ar: "الصيانة" }, { k: "audits", ar: "الجرد" }, { k: "reports", ar: "التقارير" }, { k: "settings", ar: "الإعدادات" },
+  { k: "maintenance", ar: "الصيانة" }, { k: "audits", ar: "الجرد" }, { k: "reports", ar: "التقارير" },
+  { k: "enterprise", ar: "مزايا المنصّة" }, { k: "settings", ar: "الإعدادات" },
 ];
 interface Staff { id: string; full_name: string | null; email: string; staff_role: string | null }
 
@@ -105,6 +107,13 @@ export default function CustodyInventoryConsole() {
       {tab === "maintenance" && <MaintenanceTab {...{ assets, busy, setBusy, flash, err, t }} />}
       {tab === "audits" && <AuditsTab {...{ locs, busy, setBusy, flash, err, t }} />}
       {tab === "reports" && <ReportsTab {...{ busy, setBusy, flash, err, t }} />}
+      {tab === "qr" && <CustodyQrLabels />}
+      {tab === "enterprise" && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-white">{t({ ar: "مزايا المنصّة المؤسسية — Enterprise Features", en: "Enterprise Features" })}</h3>
+          <CustodyEnterpriseSettings />
+        </div>
+      )}
       {tab === "settings" && <SettingsTab {...{ settings, setSettings, busy, setBusy, flash, err, t }} />}
 
       {toast && <div className="fixed bottom-4 inset-x-4 z-50 mx-auto max-w-md bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
