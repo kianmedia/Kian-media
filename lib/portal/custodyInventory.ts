@@ -264,6 +264,25 @@ async function uploadTo(bucket: string, path: string, file: File, allowed: strin
 export const civUploadEvidence = (path: string, file: File) => uploadTo(CIV_EVIDENCE_BUCKET, path, file, IMG);
 export const civUploadAssetFile = (path: string, file: File) => uploadTo(CIV_ASSETS_BUCKET, path, file, IMG_PDF);
 
+export interface CivStoragePhoto { path: string; name: string; size: number | null; created_at: string | null }
+/** يسرد صور الأصل من التخزين مباشرة تحت {assetId}/asset_photo/ — احتياط يُظهر الصور القديمة
+ *  حتى قبل ربطها بجدول asset_files (backfill). يخضع لسياسة قراءة الـbucket (civ_can_manage). */
+export async function civListStoragePhotos(assetId: string): Promise<Result<CivStoragePhoto[]>> {
+  const prefix = `${assetId}/asset_photo/`;
+  try {
+    const res = await storageFetch(`/object/list/${CIV_ASSETS_BUCKET}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prefix, limit: 100, offset: 0, sortBy: { column: "name", order: "asc" } }),
+    });
+    if (!res.ok) return { ok: false, error: `storage_list_${res.status}`, status: res.status };
+    const arr = (await res.json()) as { name: string; id: string | null; created_at?: string; metadata?: { size?: number; mimetype?: string } }[];
+    const out = (Array.isArray(arr) ? arr : [])
+      .filter((o) => o.id && (o.metadata?.mimetype ?? "").startsWith("image/"))   // ملفات صور فقط (تجاهل المجلدات)
+      .map((o) => ({ path: `${prefix}${o.name}`, name: o.name, size: o.metadata?.size ?? null, created_at: o.created_at ?? null }));
+    return { ok: true, data: out };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
 /** توقيع مسارات لعرضها (روابط مؤقتة). bucket = CIV_ASSETS_BUCKET أو CIV_EVIDENCE_BUCKET. */
 export async function civSignFiles(bucket: string, paths: string[]): Promise<Record<string, string>> {
   const uniq = Array.from(new Set(paths.filter(Boolean)));
