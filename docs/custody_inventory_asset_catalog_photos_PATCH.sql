@@ -3,10 +3,10 @@
 -- ────────────────────────────────────────────────────────────────────────────
 -- تُصلح عدم ظهور الصور: بدل قراءة العميل المباشرة من storage (تحجبها RLS)، تقرأ هذه
 -- الدالة storage.objects على الخادم (SECURITY DEFINER) وتدمجها مع سجلات asset_files.
--- • تبحث عن UUID الأصل (أو asset_code) كـ segment في المسار — مستقلة عن ترتيب المسار.
--- • تستبعد المستندات المالية (invoice/warranty/purchase_document/maintenance_report/insurance/supplier).
--- • صور فقط (image/*)، بلا تكرار (bucket+path)، الأساسية أولًا.
--- الصلاحية: civ_can_manage() (مدير/أمين عهدة/مالك) — الموظف/العميل عبر مسارات أخرى.
+-- • المسار المؤكد فقط: name LIKE '{asset_id}/asset_photo/%' (لا asset_code، ولا بحث UUID
+--   في segment آخر — حتى يثبت LIVE_DIAGNOSTIC وجود مسارات Legacy مختلفة).
+-- • داخل مجلد asset_photo حصرًا + MIME صورة (image/*)، لا الامتداد وحده. بلا تكرار، الأساسية أولًا.
+-- الصلاحية: civ_can_manage() + الأصل موجود — يُتحقَّق قبل قراءة storage.objects.
 -- لا يمنح العميل SELECT مباشرًا على storage.objects، ولا يوسّع أي storage policy.
 -- يُشغَّل بعد v1 + asset_editing (يستخدم is_primary). آمن للتكرار.
 -- ════════════════════════════════════════════════════════════════════════════
@@ -14,12 +14,12 @@
 begin;
 
 create or replace function public.custody_inv_get_asset_catalog_photos(p_asset_id uuid) returns jsonb
-language plpgsql security definer set search_path = public as $$
-declare v_code text; j jsonb;
-  fin_segs text[] := array['invoice','warranty','purchase_document','maintenance_report','insurance_document','supplier_quote'];
+language plpgsql security definer set search_path = public, storage as $$
+declare j jsonb;
 begin
+  -- التحقق من الصلاحية قبل قراءة storage.objects: مدير عهدة/مالك + الأصل موجود.
   if not public.civ_can_manage() then raise exception 'not authorized'; end if;
-  select asset_code into v_code from public.custody_inventory_assets where id = p_asset_id;   -- قد يكون محذوفًا — لا يمنع العرض
+  if not exists (select 1 from public.custody_inventory_assets where id = p_asset_id) then raise exception 'not_found'; end if;
 
   with db as (   -- سجلات الجدول (قابلة للإدارة)
     select f.id as file_id, f.file_path as storage_path, f.is_primary, f.created_at,
@@ -28,14 +28,12 @@ begin
     from public.custody_inventory_asset_files f
     where f.asset_id = p_asset_id and f.is_deleted = false and f.file_type = 'asset_photo'
   ),
-  orphan as (   -- صور في التخزين بلا صف (UUID أو asset_code كـ segment؛ لا مستندات مالية)
+  orphan as (   -- صور التخزين تحت مجلد asset_photo لهذا الأصل حصرًا (المسار المؤكد + MIME صورة، لا الامتداد وحده)
     select o.name as storage_path
     from storage.objects o
     where o.bucket_id = 'custody-inventory-assets'
+      and o.name like p_asset_id::text || '/asset_photo/%'
       and coalesce(o.metadata->>'mimetype','') like 'image/%'
-      and ( p_asset_id::text = any(storage.foldername(o.name))
-            or (v_code is not null and v_code = any(storage.foldername(o.name))) )
-      and not (fin_segs && storage.foldername(o.name))
       and not exists (select 1 from db d where d.storage_path = o.name)
   )
   select jsonb_agg(x order by pri desc, ca desc nulls last) into j
@@ -57,7 +55,7 @@ begin
   return coalesce(j, '[]'::jsonb);
 end; $$;
 
-revoke execute on function public.custody_inv_get_asset_catalog_photos(uuid) from public, anon;
+revoke all    on function public.custody_inv_get_asset_catalog_photos(uuid) from public, anon;
 grant  execute on function public.custody_inv_get_asset_catalog_photos(uuid) to authenticated;
 
 commit;

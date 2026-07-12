@@ -480,7 +480,7 @@ function StockTab({ det, busy, setBusy, flash, onDone, t }: {
 // ─── تبويب الصور ───
 // مصدر واحد = RPC custody_inv_get_asset_catalog_photos (يقرأ storage.objects على الخادم،
 // يتجاوز RLS العميل) ويعيد صور السجلات (قابلة للإدارة) + صور التخزين غير المربوطة (عرض فقط).
-const PHOTO_LOADER_BUILD = "fdd1463+ (catalog-rpc)";
+const PHOTO_LOADER_BUILD = "336afe8+";
 type ImgState = "loading" | "ready" | "forbidden" | "not_prepared" | "error";
 const baseName = (p: string) => p.split("/").pop() ?? p;
 function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
