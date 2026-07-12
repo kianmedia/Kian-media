@@ -7,9 +7,9 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
-  civGetAssetDetails, civGetAssetChanges, civUpdateAsset, civCorrectStock, civGetAssetTimeline, civArchiveAsset,
+  civGetAssetDetails, civGetAssetChanges, civUpdateAsset, civCorrectStock, civGetAssetTimeline,
   civListAssetFiles, civSignFiles, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
-  civArchiveAssetFile, civSetPrimaryPhoto, CIV_ASSETS_BUCKET,
+  civArchiveAssetFile, civSetPrimaryPhoto, civCanDelete, civDeleteAsset, civRestoreAsset, CIV_ASSETS_BUCKET,
   type CivAssetDetails, type CivAssetChange, type CivAssetFile, type CivCategory, type CivLocation, type CivMovement,
 } from "@/lib/portal/custodyInventory";
 
@@ -34,6 +34,8 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
   const [det, setDet] = useState<CivAssetDetails | null>(null);
   const [tab, setTab] = useState<MTab>("details");
   const [busy, setBusy] = useState(false);
+  const [canDelete, setCanDelete] = useState(false);   // دور admin الحقيقي فقط (من القاعدة)
+  const [showDelete, setShowDelete] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3600); };
 
@@ -53,6 +55,8 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
     setDet(r.data); setLoad("ready");
   }, [assetId]);
   useEffect(() => { void reload(); }, [reload]);
+  // صلاحية الحذف تُقرأ من القاعدة (admin فقط) — لا نعتمد على الواجهة.
+  useEffect(() => { void civCanDelete().then((r) => setCanDelete(r.ok && r.data === true)); }, [assetId]);
 
   // إغلاق بـ Escape.
   useEffect(() => {
@@ -82,7 +86,18 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
             <h2 className="text-sm font-semibold text-white truncate">{det?.asset_name ?? t({ ar: "تفاصيل الأصل", en: "Asset details" })}</h2>
             {det && <div className="text-[11px] text-stone-500 font-mono truncate" dir="ltr">{det.asset_code}{det.serial_number ? ` · SN ${det.serial_number}` : ""}</div>}
           </div>
-          <button onClick={onClose} className={`${btnGhost} px-3 py-1.5 text-xs shrink-0`}>{t({ ar: "إغلاق", en: "Close" })} ✕</button>
+          <div className="flex items-center gap-2 shrink-0">
+            {load === "ready" && canDelete && !det?.is_deleted && <button onClick={() => setShowDelete(true)} className={`${btnGhost} px-3 py-1.5 text-xs border-red-900 text-red-400`}>{t({ ar: "حذف الأصل", en: "Delete asset" })}</button>}
+            {load === "ready" && canDelete && det?.is_deleted && <button disabled={busy} onClick={async () => {
+              const reason = window.prompt(t({ ar: "سبب استعادة الأصل (10 أحرف على الأقل):", en: "Restore reason (≥10 chars):" }));
+              if (reason === null) return;
+              if (reason.trim().length < 10) { flash(t({ ar: "السبب يجب ألا يقل عن 10 أحرف.", en: "Reason must be ≥ 10 chars." })); return; }
+              setBusy(true); const r = await civRestoreAsset(det.id, reason.trim()); setBusy(false);
+              if (!r.ok) { flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
+              flash(t({ ar: "أُعيد الأصل بحالة مراجعة.", en: "Restored (needs review)." })); await afterChange();
+            }} className={`${btnGhost} px-3 py-1.5 text-xs border-emerald-900 text-emerald-400`}>{t({ ar: "استعادة", en: "Restore" })}</button>}
+            <button onClick={onClose} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "إغلاق", en: "Close" })} ✕</button>
+          </div>
         </div>
 
         {/* حالات التحميل/الخطأ */}
@@ -96,6 +111,10 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
 
         {load === "ready" && det && (
           <div className="p-4 space-y-4">
+            {det.is_deleted && <div className="bg-red-950/40 border border-red-900/60 rounded-xl p-3 text-sm text-red-300">
+              {t({ ar: "هذا الأصل محذوف (مؤرشف) — خارج المخزون النشط.", en: "This asset is deleted (archived) — out of active inventory." })}
+              {det.delete_reason ? ` · ${det.delete_reason}` : ""}
+            </div>}
             {/* شريط تبويبات النافذة */}
             <div className="flex gap-1.5 flex-wrap">
               {TABS.filter((x) => !(x.gated && !canEdit)).map((x) => (
@@ -104,7 +123,7 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
             </div>
 
             {tab === "details" && <DetailsTab det={det} catName={catName} locName={locName} t={t} />}
-            {tab === "edit" && canEdit && <EditTab det={det} cats={cats} locs={locs} busy={busy} setBusy={setBusy} flash={flash} onSaved={afterChange} onClose={onClose} t={t} />}
+            {tab === "edit" && canEdit && <EditTab det={det} cats={cats} locs={locs} busy={busy} setBusy={setBusy} flash={flash} onSaved={afterChange} t={t} />}
             {tab === "stock" && canEdit && <StockTab det={det} busy={busy} setBusy={setBusy} flash={flash} onDone={afterChange} t={t} />}
             {tab === "images" && <ImagesTab assetId={assetId} canEdit={canEdit} busy={busy} setBusy={setBusy} flash={flash} onChanged={onChanged} t={t} />}
             {tab === "changes" && <ChangesTab assetId={assetId} t={t} />}
@@ -112,6 +131,69 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
         )}
 
         {toast && <div className="sticky bottom-0 mx-3 mb-3 bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
+      </div>
+
+      {showDelete && det && <DeleteConfirm det={det} onClose={() => setShowDelete(false)}
+        onDeleted={async () => { setShowDelete(false); flash(t({ ar: "حُذف الأصل.", en: "Asset deleted." })); await onChanged(); onClose(); }} t={t} />}
+    </div>
+  );
+}
+
+// ─── نافذة تأكيد حذف الأصل (Soft delete) — admin فقط ───
+function DeleteConfirm({ det, onClose, onDeleted, t }: { det: CivAssetDetails; onClose: () => void; onDeleted: () => Promise<void>; t: T }) {
+  const [reason, setReason] = useState("");
+  const [ack, setAck] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const reasonOk = reason.trim().length >= 10;
+
+  const msgFor = (e: string) =>
+    /permission_denied/.test(e) ? t({ ar: "غير مصرّح — الحذف لدور admin فقط.", en: "Not authorized — admin only." })
+    : /reason_too_short/.test(e) ? t({ ar: "سبب الحذف يجب ألا يقل عن 10 أحرف.", en: "Reason must be ≥ 10 chars." })
+    : /asset_on_active_custody/.test(e) ? t({ ar: "لا يمكن الحذف — الأصل على عهدة نشطة.", en: "Blocked — asset on active custody." })
+    : /asset_has_active_reservation/.test(e) ? t({ ar: "لا يمكن الحذف — يوجد حجز نشط.", en: "Blocked — active reservation." })
+    : /asset_in_open_maintenance/.test(e) ? t({ ar: "لا يمكن الحذف — يوجد صيانة مفتوحة.", en: "Blocked — open maintenance." })
+    : /asset_in_open_audit/.test(e) ? t({ ar: "لا يمكن الحذف — يوجد جرد مفتوح يشمل الأصل.", en: "Blocked — open audit." })
+    : /asset_has_assigned_quantity/.test(e) ? t({ ar: "لا يمكن الحذف — توجد كمية مصروفة/محجوزة/في الصيانة.", en: "Blocked — committed quantity exists." })
+    : /asset_has_open_incident/.test(e) ? t({ ar: "لا يمكن الحذف — يوجد بلاغ/حادث مفتوح.", en: "Blocked — open incident." })
+    : /asset_in_active_rental/.test(e) ? t({ ar: "لا يمكن الحذف — يوجد تأجير نشط.", en: "Blocked — active rental." })
+    : /asset_in_kit/.test(e) ? t({ ar: "لا يمكن الحذف — الأصل ضمن Kit.", en: "Blocked — asset is in a kit." })
+    : t({ ar: "تعذّر الحذف: ", en: "Delete failed: " }) + e;
+
+  async function confirm() {
+    if (!reasonOk || !ack || busy) return;
+    setBusy(true); setErr(null);
+    const r = await civDeleteAsset(det.id, reason.trim());
+    if (!r.ok) { setBusy(false); setErr(msgFor(r.error)); return; }
+    await onDeleted();
+  }
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="w-full max-w-md bg-stone-950 border border-red-900/60 rounded-2xl shadow-2xl p-4 space-y-3" onMouseDown={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold text-red-400">{t({ ar: "حذف الأصل", en: "Delete asset" })}</h3>
+        <div className="grid grid-cols-2 gap-1.5 text-xs text-stone-300 bg-stone-900 border border-stone-800 rounded-lg p-2">
+          <span>{t({ ar: "الاسم", en: "Name" })}: {det.asset_name}</span>
+          <span dir="ltr">{t({ ar: "الكود", en: "Code" })}: {det.asset_code}</span>
+          <span>{t({ ar: "النوع", en: "Type" })}: {det.asset_type === "serialized" ? t({ ar: "متسلسل", en: "Serialized" }) : t({ ar: "كمي", en: "Quantity" })}</span>
+          <span>{t({ ar: "التسلسلي", en: "Serial" })}: {det.serial_number ?? "—"}</span>
+          <span>{t({ ar: "الإجمالي", en: "Total" })}: {det.quantity_total}</span>
+          <span>{t({ ar: "المتاح", en: "Available" })}: {det.quantity_available}</span>
+        </div>
+        <div className="bg-red-950/40 border border-red-900/60 rounded-lg p-2 text-[11px] text-red-300">{t({ ar: "سيختفي الأصل من المخزون النشط وقوائم الصرف ومسح QR. تبقى الصور والحركات والعهد التاريخية محفوظة، ويمكن للأدمن استعادته لاحقًا.", en: "The asset will disappear from active inventory, issue lists, and QR scan. Photos/movements/history are kept; an admin can restore it later." })}</div>
+        <div>
+          <div className={lbl}>{t({ ar: "سبب حذف الأصل (10 أحرف على الأقل) *", en: "Deletion reason (≥10 chars) *" })}</div>
+          <textarea className={inp} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t({ ar: "لماذا يُحذف هذا الأصل؟", en: "Why delete this asset?" })} />
+          {!reasonOk && reason.length > 0 && <div className="text-[10px] text-amber-400 mt-1">{t({ ar: `المتبقّي: ${Math.max(0, 10 - reason.trim().length)} حرف`, en: `${Math.max(0, 10 - reason.trim().length)} more chars` })}</div>}
+        </div>
+        <label className="flex items-start gap-2 text-xs text-stone-300 cursor-pointer">
+          <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="mt-0.5" />
+          <span>{t({ ar: "أؤكد أنني راجعت حالة الأصل وأرغب في حذفه من المخزون.", en: "I confirm I reviewed the asset and want to delete it." })}</span>
+        </label>
+        {err && <div className="bg-red-950/50 border border-red-900 rounded-lg p-2 text-xs text-red-300">{err}</div>}
+        <div className="flex gap-2 justify-end">
+          <button disabled={busy} onClick={onClose} className={`${btnGhost} px-4 py-2 text-sm`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+          <button disabled={!reasonOk || !ack || busy} onClick={() => void confirm()} className={`${btnRed} px-4 py-2`}>{busy ? t({ ar: "جارٍ الحذف…", en: "Deleting…" }) : t({ ar: "تأكيد حذف الأصل", en: "Confirm delete" })}</button>
+        </div>
       </div>
     </div>
   );
@@ -210,9 +292,9 @@ const Section = ({ title, empty, emptyText, children }: { title: string; empty: 
 );
 
 // ─── تبويب التعديل ───
-function EditTab({ det, cats, locs, busy, setBusy, flash, onSaved, onClose, t }: {
+function EditTab({ det, cats, locs, busy, setBusy, flash, onSaved, t }: {
   det: CivAssetDetails; cats: CivCategory[]; locs: CivLocation[];
-  busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onSaved: () => Promise<void>; onClose: () => void; t: T;
+  busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onSaved: () => Promise<void>; t: T;
 }) {
   const init = {
     asset_name: det.asset_name ?? "", category_id: det.category_id ?? "", warehouse_location_id: det.warehouse_location_id ?? "",
@@ -312,18 +394,7 @@ function EditTab({ det, cats, locs, busy, setBusy, flash, onSaved, onClose, t }:
         <button disabled={busy} onClick={() => void save()} className={`${btnRed} px-5 py-2`}>{busy ? t({ ar: "جارٍ الحفظ…", en: "Saving…" }) : t({ ar: "حفظ", en: "Save" })}</button>
         <button disabled={busy} onClick={() => setF(init)} className={`${btnGhost} px-4 py-2`}>{t({ ar: "استرجاع", en: "Reset" })}</button>
       </div>
-
-      {/* منطقة الخطر: أرشفة (soft delete) — تُمنع تلقائيًا إن كان على عهدة نشطة، ولا تحذف السجل. */}
-      <div className="border-t border-red-900/50 pt-3 mt-2">
-        <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "أرشفة الأصل (لا تُحذف بياناته ولا سجل حركته؛ تُمنع إن كان على عهدة نشطة).", en: "Archive (soft delete; blocked if on active custody; history kept)." })}</div>
-        <button disabled={busy} onClick={async () => {
-          const reason = window.prompt(t({ ar: "سبب الأرشفة:", en: "Archive reason:" }));
-          if (!reason || !reason.trim()) return;
-          setBusy(true); const r = await civArchiveAsset(det.id, reason.trim()); setBusy(false);
-          if (!r.ok) { flash(/asset_on_active_custody/.test(r.error) ? t({ ar: "لا يمكن الأرشفة — الأصل على عهدة نشطة.", en: "Blocked — asset on active custody." }) : (/not authorized/.test(r.error) ? t({ ar: "غير مصرّح.", en: "Not authorized." }) : t({ ar: "تعذّر: ", en: "Failed: " }) + r.error)); return; }
-          flash(t({ ar: "أُرشف الأصل.", en: "Archived." })); await onSaved(); onClose();
-        }} className={`${btnGhost} px-4 py-1.5 text-xs border-red-900 text-red-400`}>{t({ ar: "أرشفة الأصل", en: "Archive asset" })}</button>
-      </div>
+      <p className="text-[11px] text-stone-600 border-t border-stone-800 pt-2">{t({ ar: "لحذف الأصل استخدم زر «حذف الأصل» في الأعلى (لدور admin فقط).", en: "To delete the asset use the “Delete asset” button above (admin only)." })}</p>
     </div>
   );
 }
@@ -402,32 +473,59 @@ function StockTab({ det, busy, setBusy, flash, onDone, t }: {
 }
 
 // ─── تبويب الصور ───
+type ImgState = "loading" | "ready" | "error" | "forbidden" | "not_prepared";
 function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
   assetId: string; canEdit: boolean; busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onChanged: () => void | Promise<unknown>; t: T;
 }) {
   const [files, setFiles] = useState<CivAssetFile[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<ImgState>("loading");
+  const [errMsg, setErrMsg] = useState("");
+  const [signFailed, setSignFailed] = useState(false);
+
   const reload = useCallback(async () => {
-    setLoading(true);
+    setState("loading");
     const r = await civListAssetFiles(assetId);
-    if (r.ok) { setFiles(r.data); const m = await civSignFiles(CIV_ASSETS_BUCKET, r.data.map((x) => x.file_path)); setUrls(m); }
-    setLoading(false);
+    if (!r.ok) {
+      // فرّق بين أسباب الفشل — لا catch صامت يعيد قائمة فارغة.
+      // eslint-disable-next-line no-console
+      console.error("[custody] asset photos load failed", { status: r.status, error: r.error });
+      setErrMsg(r.error);
+      if (r.status === 401 || r.status === 403 || /not authorized|permission|forbidden/i.test(r.error)) setState("forbidden");
+      else if (r.status === 400 || /is_primary|does not exist|PGRST|schema cache|column/i.test(r.error)) setState("not_prepared");
+      else setState("error");
+      return;
+    }
+    setFiles(r.data);
+    if (r.data.length > 0) {
+      const m = await civSignFiles(CIV_ASSETS_BUCKET, r.data.map((x) => x.file_path));
+      setUrls(m);
+      setSignFailed(Object.keys(m).length === 0);   // سجلات موجودة لكن تعذّر توقيع أي رابط
+    } else { setUrls({}); setSignFailed(false); }
+    setState("ready");
   }, [assetId]);
   useEffect(() => { void reload(); }, [reload]);
 
+  // بعد أي تغيير: إن لم تبقَ صورة أساسية ووُجدت صور، رقِّ الأقدم تلقائيًا.
+  async function ensurePrimary() {
+    const rl = await civListAssetFiles(assetId);
+    if (rl.ok && rl.data.length > 0 && !rl.data.some((x) => x.is_primary)) await civSetPrimaryPhoto(rl.data[0].id);
+  }
   async function add(file: File) {
     setBusy(true);
     const path = civAssetFilePath(assetId, "asset_photo", file.name);
     const up = await civUploadAssetFile(path, file);
-    if (up.ok) { const at = await civAttachAssetFile(assetId, "asset_photo", path, file.name, file.type, file.size); setBusy(false); if (!at.ok) { flash(t({ ar: "تعذّر ربط الصورة: ", en: "Attach failed: " }) + at.error); return; } }
-    else { setBusy(false); flash(t({ ar: "تعذّر رفع الصورة: ", en: "Upload failed: " }) + up.error); return; }
+    if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الصورة: ", en: "Upload failed: " }) + up.error); return; }
+    const at = await civAttachAssetFile(assetId, "asset_photo", path, file.name, file.type, file.size);
+    if (!at.ok) { setBusy(false); flash(t({ ar: "رُفعت الصورة لكن تعذّر ربطها بالسجل: ", en: "Uploaded but attach failed: " }) + at.error); return; }
+    await ensurePrimary(); setBusy(false);
     flash(t({ ar: "أُضيفت الصورة.", en: "Image added." })); await reload(); await onChanged();
   }
   async function archive(id: string) {
-    if (!window.confirm(t({ ar: "أرشفة هذه الصورة؟ (لا تُحذف نهائيًا)", en: "Archive this image?" }))) return;
-    setBusy(true); const r = await civArchiveAssetFile(id, "archived from asset details"); setBusy(false);
-    if (!r.ok) { flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
+    if (!window.confirm(t({ ar: "أرشفة هذه الصورة؟ (لا تُحذف نهائيًا — تبقى في السجل).", en: "Archive this image? (kept in the log)" }))) return;
+    setBusy(true); const r = await civArchiveAssetFile(id, "archived from asset details");
+    if (!r.ok) { setBusy(false); flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
+    await ensurePrimary(); setBusy(false);   // إن كانت الأساسية، رقِّ أخرى
     flash(t({ ar: "أُرشفت الصورة.", en: "Archived." })); await reload(); await onChanged();
   }
   async function primary(id: string) {
@@ -436,26 +534,49 @@ function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
     flash(t({ ar: "عُيّنت كصورة أساسية.", en: "Set as primary." })); await reload(); await onChanged();
   }
 
+  const SQL = "docs/custody_inventory_asset_editing_PATCH.sql + …photos_backfill_PATCH.sql";
   return (
     <div className="space-y-3">
-      {canEdit && <label className={`${btnGhost} px-3 py-2 text-xs cursor-pointer inline-block`}>📷 {t({ ar: "إضافة صورة", en: "Add image" })}
-        <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void add(file); e.target.value = ""; }} /></label>}
-      {loading ? <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>
-        : files.length === 0 ? <p className="text-xs text-stone-500">{t({ ar: "لا صور بعد.", en: "No images." })}</p>
-        : <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        {canEdit && <label className={`${btnGhost} px-3 py-2 text-xs cursor-pointer inline-block`}>📷 {t({ ar: "إضافة صورة", en: "Add image" })}
+          <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void add(file); e.target.value = ""; }} /></label>}
+        <button disabled={busy} onClick={() => void reload()} className={`${btnGhost} px-3 py-2 text-xs`}>↻ {t({ ar: "إعادة تحميل", en: "Reload" })}</button>
+      </div>
+
+      {state === "loading" && <p className="text-xs text-stone-500">{t({ ar: "جارٍ تحميل الصور…", en: "Loading images…" })}</p>}
+      {state === "forbidden" && <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-3 text-sm text-amber-300">{t({ ar: "لا تملك صلاحية عرض صور هذا الأصل.", en: "Not authorized to view this asset's images." })}</div>}
+      {state === "not_prepared" && <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-3 text-sm text-amber-300 space-y-1">
+        <div>{t({ ar: "وحدة الصور غير مُجهّزة في قاعدة البيانات.", en: "Images module not prepared in the database." })}</div>
+        <div className="font-mono text-[11px] text-amber-400/90" dir="ltr">Run: {SQL}</div></div>}
+      {state === "error" && <div className="bg-red-950/40 border border-red-900/60 rounded-xl p-3 text-sm text-red-300">{t({ ar: "تعذّر تحميل الصور: ", en: "Failed to load images: " })}<span dir="ltr">{errMsg}</span></div>}
+
+      {state === "ready" && files.length === 0 && <div className="text-sm text-stone-400 bg-stone-900 border border-stone-800 rounded-xl p-3 space-y-1">
+        <div>{t({ ar: "لا توجد صور مرتبطة بهذا الأصل.", en: "No images linked to this asset." })}</div>
+        <div className="text-[11px] text-stone-500">{t({ ar: "إن كانت الصور مرفوعة سابقًا ولا تظهر: شغّل custody_inventory_asset_photos_backfill_PATCH.sql لربط صور التخزين اليتيمة.", en: "If photos were uploaded before and don't show, run the photos backfill patch to link orphaned storage files." })}</div>
+      </div>}
+
+      {state === "ready" && files.length > 0 && <>
+        {signFailed && <div className="bg-amber-950/40 border border-amber-800/60 rounded-lg p-2 text-[11px] text-amber-300">{t({ ar: "تعذّر إنشاء روابط العرض المؤقتة — تحقق من صلاحيات bucket «custody-inventory-assets».", en: "Could not sign display URLs — check the assets bucket policies." })}</div>}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {files.map((f) => (
-            <div key={f.id} className={`${card} p-2 space-y-2 ${f.is_primary ? "ring-2 ring-red-600" : ""}`}>
+            <div key={f.id} className={`${card} p-2 space-y-1.5 ${f.is_primary ? "ring-2 ring-red-600" : ""}`}>
               {urls[f.file_path]
-                ? <a href={urls[f.file_path]} target="_blank" rel="noreferrer"><img src={urls[f.file_path]} className="w-full h-28 object-cover rounded bg-white/5" alt={f.file_name ?? ""} /></a>
-                : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-[10px] text-stone-600">{f.file_type}</div>}
-              <div className="text-[10px] text-stone-500 truncate" dir="ltr">{f.file_name ?? f.file_type}{f.is_primary ? " ★" : ""}</div>
+                ? <a href={urls[f.file_path]} target="_blank" rel="noreferrer" title={t({ ar: "فتح بالحجم الكامل", en: "Open full size" })}><img loading="lazy" src={urls[f.file_path]} className="w-full h-28 object-cover rounded bg-white/5" alt={f.file_name ?? ""} /></a>
+                : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-center text-[10px] text-amber-500/80 px-1">{t({ ar: "الملف غير موجود في التخزين", en: "File missing in storage" })}</div>}
+              <div className="text-[10px] text-stone-400 truncate" dir="ltr">{f.file_name ?? f.file_type}</div>
+              <div className="text-[10px] text-stone-600 flex items-center gap-1 flex-wrap">
+                {f.is_primary && <span className="text-red-400">★ {t({ ar: "أساسية", en: "primary" })}</span>}
+                <span dir="ltr">{new Date(f.created_at).toLocaleDateString("ar")}</span>
+                {f.size_bytes ? <span dir="ltr">· {Math.round(f.size_bytes / 1024)}KB</span> : null}
+              </div>
               {canEdit && <div className="flex gap-1">
                 {!f.is_primary && <button disabled={busy} onClick={() => void primary(f.id)} className={`${btnGhost} px-2 py-1 text-[10px] flex-1`}>{t({ ar: "أساسية", en: "Primary" })}</button>}
                 <button disabled={busy} onClick={() => void archive(f.id)} className={`${btnGhost} px-2 py-1 text-[10px] text-red-400`}>{t({ ar: "أرشفة", en: "Archive" })}</button>
               </div>}
             </div>
           ))}
-        </div>}
+        </div>
+      </>}
     </div>
   );
 }

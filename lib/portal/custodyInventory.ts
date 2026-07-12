@@ -31,7 +31,7 @@ export interface CivAsset {
   warehouse_location_id: string | null; storage_location_text: string | null; notes: string | null; minimum_stock_level: number | null;
   created_at: string; updated_at: string;
 }
-export interface CivAssetFile { id: string; asset_id: string; file_type: string; file_path: string; file_name: string | null; mime_type: string | null; description: string | null; created_at: string; is_primary?: boolean }
+export interface CivAssetFile { id: string; asset_id: string; file_type: string; file_path: string; file_name: string | null; mime_type: string | null; size_bytes?: number | null; uploaded_by?: string | null; description: string | null; created_at: string; is_primary?: boolean }
 export interface CivAssignment {
   id: string; assignment_number: string; employee_user_id: string; employee_id: string | null; assignment_type: string;
   purpose: string | null; expected_return_at: string | null; issued_at: string; employee_confirmed_at: string | null;
@@ -65,7 +65,7 @@ export interface CivAssetDetails {
   warehouse_location_id: string | null; storage_location_text: string | null; notes: string | null; minimum_stock_level: number | null;
   quantity_total: number; quantity_available: number; quantity_in_maintenance: number; quantity_assigned: number; quantity_reserved: number;
   created_at: string; updated_at: string; created_by: string | null; created_by_name: string | null; updated_by: string | null; updated_by_name: string | null;
-  can_edit: boolean; can_finance: boolean;
+  can_edit: boolean; can_finance: boolean; is_deleted?: boolean; delete_reason?: string | null;
   active_assignments: CivActiveAssignmentRef[]; reservations: CivReservationRef[]; maintenance: CivMaintenanceRef[];
   purchase_date: string | null; purchase_price: number | null; current_value: number | null;
   supplier_name: string | null; invoice_number: string | null; warranty_expiry_date: string | null;
@@ -93,8 +93,9 @@ export function civListCategories(): Promise<Result<CivCategory[]>> {
 export function civListLocations(): Promise<Result<CivLocation[]>> {
   return pget<CivLocation[]>(`custody_inventory_locations?is_deleted=eq.false&select=id,name,location_type,city,address,is_active&order=name.asc`);
 }
+// صور الكتالوج فقط (asset_photo) — لا تُظهر فواتير/ضمانات/مستندات مالية. الأساسية أولًا.
 export function civListAssetFiles(assetId: string): Promise<Result<CivAssetFile[]>> {
-  return pget<CivAssetFile[]>(`custody_inventory_asset_files?asset_id=eq.${enc(assetId)}&is_deleted=eq.false&select=id,asset_id,file_type,file_path,file_name,mime_type,description,created_at,is_primary&order=is_primary.desc,created_at.desc`);
+  return pget<CivAssetFile[]>(`custody_inventory_asset_files?asset_id=eq.${enc(assetId)}&is_deleted=eq.false&file_type=eq.asset_photo&select=id,asset_id,file_type,file_path,file_name,mime_type,size_bytes,uploaded_by,description,created_at,is_primary&order=is_primary.desc,created_at.desc`);
 }
 export function civListAssignments(filter?: { status?: string; employee_user_id?: string }): Promise<Result<CivAssignment[]>> {
   let q = `custody_inventory_assignments?is_deleted=eq.false&select=id,assignment_number,employee_user_id,employee_id,assignment_type,purpose,expected_return_at,issued_at,employee_confirmed_at,status,employee_note,custodian_note,ack_snapshot,ack_name&order=issued_at.desc&limit=500`;
@@ -177,6 +178,17 @@ export const civGetAssetDetails = (assetId: string) => prpc<CivAssetDetails>("cu
 export const civGetAssetChanges = (assetId: string) => prpc<CivAssetChange[]>("custody_inv_get_asset_changes", { p_asset: assetId });
 export const civArchiveAssetFile = (fileId: string, reason: string) => prpc<boolean>("custody_inv_admin_archive_asset_file", { p_file: fileId, p_reason: reason });
 export const civSetPrimaryPhoto = (fileId: string) => prpc<boolean>("custody_inv_admin_set_primary_photo", { p_file: fileId });
+
+// ─── حذف/استعادة الأصل (Soft delete) — admin فقط (مُنفَّذ بالقاعدة) ───
+export interface CivDeletedAsset {
+  id: string; asset_code: string; asset_name: string; asset_type: CivAssetType; serial_number: string | null;
+  quantity_total: number; quantity_available: number; previous_availability_status: string | null;
+  delete_reason: string | null; deleted_at: string | null; deleted_by: string | null; deleted_by_name: string | null;
+}
+export const civCanDelete = () => prpc<boolean>("custody_inv_can_delete", {});
+export const civDeleteAsset = (assetId: string, reason: string) => prpc<{ ok: boolean; asset_code: string }>("custody_inv_admin_delete_asset", { p_asset_id: assetId, p_reason: reason });
+export const civRestoreAsset = (assetId: string, reason: string) => prpc<{ ok: boolean; asset_code: string }>("custody_inv_admin_restore_asset", { p_asset_id: assetId, p_reason: reason });
+export const civListDeletedAssets = () => prpc<CivDeletedAsset[]>("custody_inv_admin_list_deleted_assets", {});
 export const civTransferAsset = (assetId: string, toLocation: string | null, reason: string) =>
   prpc<boolean>("custody_inv_admin_transfer_asset", { p_asset: assetId, p_to_location: toLocation, p_reason: reason });
 

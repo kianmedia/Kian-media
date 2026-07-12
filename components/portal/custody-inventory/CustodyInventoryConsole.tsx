@@ -15,9 +15,10 @@ import {
   civEvidencePath, civUploadEvidence, civAttachEvidence, civInspectReturn, civOpenMaintenance, civCloseMaintenance,
   civListMaintenance, civStartAudit, civListAudits, civListAuditItems, civCountAuditItem, civApproveAudit,
   civGetReport, civGetSettings, civUpdateSettings, civEmitEvent, DEFAULT_CIV_SETTINGS,
+  civCanDelete, civListDeletedAssets, civRestoreAsset,
   CIV_EVIDENCE_BUCKET,
   type CivAsset, type CivCategory, type CivLocation, type CivDashboard, type CivAssignment,
-  type CivAssignmentItem, type CivIssueItem, type CivInspectItem, type CivSettings, type CivInspectResult,
+  type CivAssignmentItem, type CivIssueItem, type CivInspectItem, type CivSettings, type CivInspectResult, type CivDeletedAsset,
 } from "@/lib/portal/custodyInventory";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
@@ -164,6 +165,22 @@ function AssetsTab({ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, 
   const [pendingPhoto, setPendingPhoto] = useState<File | null>(null);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const [detail, setDetail] = useState<string | null>(null);
+  // عرض الأصول المحذوفة + الاستعادة — لدور admin فقط (يُتحقَّق من القاعدة).
+  const [view, setView] = useState<"active" | "deleted">("active");
+  const [canDel, setCanDel] = useState(false);
+  const [deleted, setDeleted] = useState<CivDeletedAsset[]>([]);
+  const [delLoading, setDelLoading] = useState(false);
+  useEffect(() => { void civCanDelete().then((r) => setCanDel(r.ok && r.data === true)); }, []);
+  const loadDeleted = useCallback(async () => { setDelLoading(true); const r = await civListDeletedAssets(); if (r.ok) setDeleted(r.data); setDelLoading(false); }, []);
+  useEffect(() => { if (view === "deleted") void loadDeleted(); }, [view, loadDeleted]);
+  async function restore(a: CivDeletedAsset) {
+    const reason = window.prompt(t({ ar: "سبب استعادة الأصل (10 أحرف على الأقل):", en: "Restore reason (≥10 chars):" }));
+    if (reason === null) return;
+    if (reason.trim().length < 10) { flash(t({ ar: "سبب الاستعادة يجب ألا يقل عن 10 أحرف.", en: "Reason must be ≥ 10 chars." })); return; }
+    setBusy(true); const r = await civRestoreAsset(a.id, reason.trim()); setBusy(false);
+    if (!r.ok) { flash((/permission_denied/.test(r.error) ? t({ ar: "غير مصرّح — لدور admin فقط.", en: "Not authorized — admin only." }) : /serial_in_use/.test(r.error) ? t({ ar: "الرقم التسلسلي مستخدم لأصل حيّ آخر.", en: "Serial already used by a live asset." }) : /barcode_in_use/.test(r.error) ? t({ ar: "الباركود مستخدم لأصل حيّ آخر.", en: "Barcode already used." }) : t({ ar: "تعذّر الاستعادة: ", en: "Restore failed: " }) + r.error)); return; }
+    await loadDeleted(); await reload(); flash(t({ ar: "أُعيد الأصل بحالة «مراجعة» — راجعه قبل إتاحته للصرف.", en: "Restored (needs review before issuing)." }));
+  }
 
   async function create() {
     if (!f.asset_name?.trim()) { flash(t({ ar: "اسم الأصل مطلوب.", en: "Name required." })); return; }
@@ -180,18 +197,34 @@ function AssetsTab({ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, 
       warehouse_location_id: f.warehouse_location_id || null, condition_status: f.condition_status as CivAsset["condition_status"], notes: f.notes,
     });
     if (!r.ok) { setBusy(false); return err(r, t({ ar: "تعذّر إنشاء الأصل: ", en: "Failed: " })); }
+    let photoNote = "";   // يُلحَق بتوست النجاح النهائي كي لا تُطمَس رسالة فشل الصورة.
     if (pendingPhoto) {
+      // ارفع ثم اربط — وتحقّق من نجاح الربط (وإلا تبقى صورة يتيمة في التخزين يلتقطها الـbackfill لاحقًا).
       const path = civAssetFilePath(r.data.id, "asset_photo", pendingPhoto.name);
       const up = await civUploadAssetFile(path, pendingPhoto);
-      if (up.ok) await civAttachAssetFile(r.data.id, "asset_photo", path, pendingPhoto.name, pendingPhoto.type, pendingPhoto.size);
-    } else { flash(t({ ar: "تنبيه: يُفضّل إضافة صورة للأصل.", en: "Tip: add an asset photo." })); }
+      if (!up.ok) { console.error("[custody] asset photo upload failed", up.error); photoNote = t({ ar: " — لكن تعذّر رفع الصورة؛ أضِفها من تبويب «الصور».", en: " — but photo upload failed; add it from Images." }); }
+      else {
+        const at = await civAttachAssetFile(r.data.id, "asset_photo", path, pendingPhoto.name, pendingPhoto.type, pendingPhoto.size);
+        if (!at.ok) { console.error("[custody] asset photo attach failed after upload", at.error); photoNote = t({ ar: " — لكن تعذّر ربط الصورة؛ أضِفها من تبويب «الصور».", en: " — but photo attach failed; add it from Images." }); }
+      }
+    }
     void civEmitEvent("civ_asset_created", { title: "أصل جديد: " + f.asset_name.trim() });
     setBusy(false); setShow(false); setF({ asset_type: "serialized", ownership_type: "owned", condition_status: "good", quantity_total: "1" }); setPendingPhoto(null);
-    await reload(); flash(t({ ar: `أُضيف الأصل (${r.data.asset_code}).`, en: "Asset added." }));
+    await reload(); flash(t({ ar: `أُضيف الأصل (${r.data.asset_code})${photoNote}`, en: `Asset added (${r.data.asset_code})${photoNote}` }));
   }
 
   return (
     <div className="space-y-3">
+      {canDel && (
+        <div className="flex gap-1.5">
+          {(["active", "deleted"] as const).map((v) => (
+            <button key={v} onClick={() => setView(v)} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${view === v ? "bg-red-600 text-white" : "bg-stone-800 text-stone-300 border border-stone-700"}`}>
+              {v === "active" ? t({ ar: "الأصول النشطة", en: "Active" }) : t({ ar: `المحذوفة${deleted.length ? ` (${deleted.length})` : ""}`, en: "Deleted" })}
+            </button>
+          ))}
+        </div>
+      )}
+      {view === "active" && <>
       <div className="flex gap-2">
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t({ ar: "بحث بالاسم/الكود/الباركود/التسلسلي", en: "Search" })} className={inp} />
         <button onClick={() => setShow(!show)} className={`${btnRed} px-4 py-2 whitespace-nowrap`}>{show ? t({ ar: "إغلاق", en: "Close" }) : t({ ar: "+ أصل", en: "+ Asset" })}</button>
@@ -234,7 +267,37 @@ function AssetsTab({ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, 
           ))}</tbody>
         </table>
       </div>
-      {detail && <AssetDetailModal assetId={detail} cats={cats} locs={locs} onClose={() => setDetail(null)} onChanged={reload} t={t} />}
+      </>}
+
+      {view === "deleted" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-stone-500">{t({ ar: "الأصول المحذوفة (مؤرشفة) — لدور admin فقط. الصور والحركات والعهد التاريخية محفوظة.", en: "Deleted (archived) assets — admin only. History kept." })}</p>
+            <button disabled={delLoading} onClick={() => void loadDeleted()} className={`${btnGhost} px-3 py-1.5 text-xs`}>↻</button>
+          </div>
+          {delLoading ? <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>
+            : deleted.length === 0 ? <p className="text-xs text-stone-500">{t({ ar: "لا أصول محذوفة.", en: "No deleted assets." })}</p>
+            : <div className="overflow-x-auto"><table className="w-full min-w-[720px]">
+                <thead><tr><th className={th}>الكود</th><th className={th}>الاسم</th><th className={th}>النوع</th><th className={th}>سبب الحذف</th><th className={th}>من حذفه</th><th className={th}>التاريخ</th><th className={th}>الحالة السابقة</th><th className={th}></th></tr></thead>
+                <tbody>{deleted.map((a) => (
+                  <tr key={a.id}>
+                    <td className={`${td} font-mono`} dir="ltr">{a.asset_code}</td><td className={td}>{a.asset_name}</td>
+                    <td className={td}>{a.asset_type === "serialized" ? "متسلسل" : "كمي"}</td>
+                    <td className={td}>{a.delete_reason ?? "—"}</td>
+                    <td className={td}>{a.deleted_by_name ?? (a.deleted_by ? a.deleted_by.slice(0, 8) : "—")}</td>
+                    <td className={td} dir="ltr">{a.deleted_at ? new Date(a.deleted_at).toLocaleDateString("ar") : "—"}</td>
+                    <td className={td}><span className="text-[10px]">{a.previous_availability_status ?? "—"}</span></td>
+                    <td className={td}><div className="flex gap-1">
+                      <button onClick={() => setDetail(a.id)} className={`${btnGhost} px-2 py-1 text-[11px]`}>تفاصيل</button>
+                      <button disabled={busy} onClick={() => void restore(a)} className={`${btnGhost} px-2 py-1 text-[11px] text-emerald-400`}>استعادة</button>
+                    </div></td>
+                  </tr>
+                ))}</tbody>
+              </table></div>}
+        </div>
+      )}
+
+      {detail && <AssetDetailModal assetId={detail} cats={cats} locs={locs} onClose={() => setDetail(null)} onChanged={() => { void reload(); if (view === "deleted") void loadDeleted(); }} t={t} />}
     </div>
   );
 }
