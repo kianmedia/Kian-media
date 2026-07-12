@@ -148,7 +148,7 @@ function DeleteConfirm({ det, onClose, onDeleted, t }: { det: CivAssetDetails; o
   const reasonOk = reason.trim().length >= 10;
 
   const msgFor = (e: string) =>
-    /permission_denied/.test(e) ? t({ ar: "غير مصرّح — الحذف لدور admin فقط.", en: "Not authorized — admin only." })
+    /permission_denied/.test(e) ? t({ ar: "غير مصرّح لك بحذف أو استعادة الأصول.", en: "You are not authorized to delete or restore assets." })
     : /reason_too_short/.test(e) ? t({ ar: "سبب الحذف يجب ألا يقل عن 10 أحرف.", en: "Reason must be ≥ 10 chars." })
     : /asset_on_active_custody/.test(e) ? t({ ar: "لا يمكن الحذف — الأصل على عهدة نشطة.", en: "Blocked — asset on active custody." })
     : /asset_has_active_reservation/.test(e) ? t({ ar: "لا يمكن الحذف — يوجد حجز نشط.", en: "Blocked — active reservation." })

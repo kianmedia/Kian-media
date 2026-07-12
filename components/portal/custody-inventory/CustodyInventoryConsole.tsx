@@ -178,7 +178,7 @@ function AssetsTab({ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, 
     if (reason === null) return;
     if (reason.trim().length < 10) { flash(t({ ar: "سبب الاستعادة يجب ألا يقل عن 10 أحرف.", en: "Reason must be ≥ 10 chars." })); return; }
     setBusy(true); const r = await civRestoreAsset(a.id, reason.trim()); setBusy(false);
-    if (!r.ok) { flash((/permission_denied/.test(r.error) ? t({ ar: "غير مصرّح — لدور admin فقط.", en: "Not authorized — admin only." }) : /serial_in_use/.test(r.error) ? t({ ar: "الرقم التسلسلي مستخدم لأصل حيّ آخر.", en: "Serial already used by a live asset." }) : /barcode_in_use/.test(r.error) ? t({ ar: "الباركود مستخدم لأصل حيّ آخر.", en: "Barcode already used." }) : t({ ar: "تعذّر الاستعادة: ", en: "Restore failed: " }) + r.error)); return; }
+    if (!r.ok) { flash((/permission_denied/.test(r.error) ? t({ ar: "غير مصرّح لك بحذف أو استعادة الأصول.", en: "Not authorized to delete or restore assets." }) : /serial_in_use/.test(r.error) ? t({ ar: "الرقم التسلسلي مستخدم لأصل حيّ آخر.", en: "Serial already used by a live asset." }) : /barcode_in_use/.test(r.error) ? t({ ar: "الباركود مستخدم لأصل حيّ آخر.", en: "Barcode already used." }) : t({ ar: "تعذّر الاستعادة: ", en: "Restore failed: " }) + r.error)); return; }
     await loadDeleted(); await reload(); flash(t({ ar: "أُعيد الأصل بحالة «مراجعة» — راجعه قبل إتاحته للصرف.", en: "Restored (needs review before issuing)." }));
   }
 

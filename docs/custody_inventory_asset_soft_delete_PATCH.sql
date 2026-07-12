@@ -22,15 +22,18 @@ alter table public.custody_inventory_asset_changes drop constraint if exists cus
 alter table public.custody_inventory_asset_changes add constraint custody_inventory_asset_changes_action_check
   check (action in ('update','stock_correction','image_added','image_archived','primary_image_changed','asset_deleted','asset_restored'));
 
--- ─── 3) صلاحية الحذف: admin الحقيقي فقط ───
--- ملاحظة نموذج الأدوار: "admin" في هذا النظام = account_type='admin' (الحساب الإداري
--- الرئيسي). super_admin هو staff_role وليس admin ⇒ مستبعَد. لا نستخدم civ_can_admin/
--- civ_can_manage لأنهما يسمحان بأدوار أخرى. يجب: مسجّل دخول + نشط + account_type='admin'.
+-- ─── 3) صلاحية الحذف: المالك + السوبر أدمن + الأدمن فقط ───
+-- نموذج الأدوار الحقيقي: account_type ∈ (lead,client,admin) ، staff_role يشمل super_admin.
+--   • المالك/الأدمن = account_type='admin' (الحساب الإداري الرئيسي).
+--   • السوبر أدمن   = staff_role='super_admin'.
+-- تحقّق صريح (لا يعتمد على civ_can_admin/civ_can_manage كي لا ينحرف لاحقًا) — نشط فقط.
+-- يستبعد: custody_officer / manager / finance / employee / client / renter / أي دور آخر.
 create or replace function public.civ_can_delete_asset() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.profiles
-    where id = auth.uid() and account_status = 'active' and account_type = 'admin'
+    where id = auth.uid() and account_status = 'active'
+      and (account_type = 'admin' or staff_role = 'super_admin')
   );
 $$;
 revoke execute on function public.civ_can_delete_asset() from public, anon;
