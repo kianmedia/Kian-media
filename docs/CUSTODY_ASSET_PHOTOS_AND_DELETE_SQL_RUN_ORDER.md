@@ -10,7 +10,8 @@
 5. `docs/custody_inventory_asset_editing_PATCH.sql`
 
 ## هذه الدفعة (بالترتيب)
-6. **`docs/custody_asset_photos_DIAGNOSTIC.sql`** — قراءة فقط. شغّله أولًا وافحص النتائج لتعرف أين الصور (سجلات؟ Storage فقط؟ غير قابلة للربط؟). لا يعدّل شيئًا.
+6. **`docs/custody_asset_photos_DIAGNOSTIC.sql`** و **`docs/custody_asset_photos_LIVE_DIAGNOSTIC.sql`** — قراءة فقط. شغّلهما أولًا لتعرف المسار الحقيقي وأين الصور (استعلام 11 يكشف نمط المسار). لا يعدّلان شيئًا.
+6-ب. **`docs/custody_inventory_asset_catalog_photos_PATCH.sql`** — RPC خادمية `custody_inv_get_asset_catalog_photos` تقرأ storage.objects على الخادم (تتجاوز RLS العميل). **ضروري لظهور الصور** — شغّله.
 7. **`docs/custody_inventory_asset_photos_backfill_PATCH.sql`** — يربط صور Storage اليتيمة بجدول `asset_files`، يُطبّع الصورة الأساسية، ويُحصّن RLS (المستندات المالية للمالية فقط). يطبع تقريرًا بعدد الصور المرتبطة/المتجاهلة/غير القابلة للربط.
 8. **`docs/custody_inventory_asset_soft_delete_PATCH.sql`** — يضيف الحذف/الاستعادة الآمن + قائمة المحذوفات + قواعد المنع.
 9. **`docs/custody_inventory_asset_delete_roles_PATCH.sql`** — يوسّع صلاحية الحذف/الاستعادة إلى **المالك + السوبر أدمن + الأدمن** (بدل الأدمن وحده). مضمَّن أصلًا في تعريف (8) للتنصيب الجديد؛ شغّل هذا المستقل إن كنت قد شغّلت (8) مسبقًا.

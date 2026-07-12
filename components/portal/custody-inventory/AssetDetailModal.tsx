@@ -8,9 +8,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   civGetAssetDetails, civGetAssetChanges, civUpdateAsset, civCorrectStock, civGetAssetTimeline,
-  civListAssetFiles, civSignFiles, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
-  civArchiveAssetFile, civSetPrimaryPhoto, civCanDelete, civDeleteAsset, civRestoreAsset, civListStoragePhotos, CIV_ASSETS_BUCKET,
-  type CivAssetDetails, type CivAssetChange, type CivAssetFile, type CivCategory, type CivLocation, type CivMovement, type CivStoragePhoto,
+  civGetAssetCatalogPhotos, civSignFiles, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
+  civArchiveAssetFile, civSetPrimaryPhoto, civCanDelete, civDeleteAsset, civRestoreAsset, CIV_ASSETS_BUCKET,
+  type CivAssetDetails, type CivAssetChange, type CivCatalogPhoto, type CivCategory, type CivLocation, type CivMovement,
 } from "@/lib/portal/custodyInventory";
 
 type T = (m: { ar: string; en: string }) => string;
@@ -206,16 +206,12 @@ function DetailsTab({ det, catName, locName, t }: { det: CivAssetDetails; catNam
   const [photos, setPhotos] = useState<string[]>([]);
   useEffect(() => {
     void civGetAssetTimeline(det.id).then((r) => { if (r.ok) { setMovs(Array.isArray(r.data?.movements) ? r.data.movements : []); setTimesIssued(r.data?.stats?.times_issued ?? null); } else { setMovs([]); } });
-    // ادمج صور السجلات (الأساسية أولًا) مع صور التخزين غير المربوطة كي تظهر الصورة الأساسية دائمًا.
-    void (async () => {
-      const [rf, sf] = await Promise.all([civListAssetFiles(det.id), civListStoragePhotos(det.id)]);
-      const rowPaths = rf.ok ? rf.data.map((x) => x.file_path) : [];
-      const storagePaths = sf.ok ? sf.data.map((o) => o.path) : [];
-      const all = Array.from(new Set([...rowPaths, ...storagePaths]));
-      if (all.length === 0) { setPhotos([]); return; }
-      const m = await civSignFiles(CIV_ASSETS_BUCKET, all);
-      setPhotos(all.map((p) => m[p]).filter(Boolean));
-    })();
+    // صور الكتالوج من الخادم (RPC): الأساسية أولًا ثم بقية الصور (بما فيها غير المربوطة).
+    void civGetAssetCatalogPhotos(det.id).then(async (r) => {
+      if (!r.ok || r.data.length === 0) { setPhotos([]); return; }
+      const m = await civSignFiles(CIV_ASSETS_BUCKET, r.data.map((p) => p.storage_path));
+      setPhotos(r.data.map((p) => m[p.storage_path]).filter(Boolean));
+    });
   }, [det.id]);
   const rows: [string, ReactNode][] = [
     [t({ ar: "الكود", en: "Code" }), <span dir="ltr" className="font-mono">{det.asset_code}</span>],
@@ -482,56 +478,46 @@ function StockTab({ det, busy, setBusy, flash, onDone, t }: {
 }
 
 // ─── تبويب الصور ───
-// المصدر الأساسي = سجلات asset_files (قابلة للإدارة). ونقرأ التخزين مباشرة أيضًا كي تظهر
-// الصور القديمة غير المربوطة فورًا (قبل تشغيل الـbackfill) — للعرض فقط حتى تُربَط.
-type RowsErr = null | "forbidden" | "not_prepared" | "error";
+// مصدر واحد = RPC custody_inv_get_asset_catalog_photos (يقرأ storage.objects على الخادم،
+// يتجاوز RLS العميل) ويعيد صور السجلات (قابلة للإدارة) + صور التخزين غير المربوطة (عرض فقط).
+const PHOTO_LOADER_BUILD = "fdd1463+ (catalog-rpc)";
+type ImgState = "loading" | "ready" | "forbidden" | "not_prepared" | "error";
+const baseName = (p: string) => p.split("/").pop() ?? p;
 function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
   assetId: string; canEdit: boolean; busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onChanged: () => void | Promise<unknown>; t: T;
 }) {
-  const [files, setFiles] = useState<CivAssetFile[]>([]);
-  const [orphans, setOrphans] = useState<CivStoragePhoto[]>([]);
+  const [photos, setPhotos] = useState<CivCatalogPhoto[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [rowsErr, setRowsErr] = useState<RowsErr>(null);
-  const [rowsErrMsg, setRowsErrMsg] = useState("");
+  const [state, setState] = useState<ImgState>("loading");
+  const [errMsg, setErrMsg] = useState("");
   const [signFailed, setSignFailed] = useState(false);
 
   const reload = useCallback(async () => {
-    setLoading(true);
-    // 1) سجلات الجدول (قابلة للإدارة) — مع تمييز أسباب الفشل بلا catch صامت.
-    const r = await civListAssetFiles(assetId);
-    let rows: CivAssetFile[] = [];
-    if (r.ok) { rows = r.data; setRowsErr(null); }
-    else {
+    setState("loading");
+    const r = await civGetAssetCatalogPhotos(assetId);
+    if (!r.ok) {
       // eslint-disable-next-line no-console
-      console.error("[custody] asset photo rows load failed", { status: r.status, error: r.error });
-      setRowsErrMsg(r.error);
-      if (r.status === 401 || r.status === 403 || /not authorized|permission|forbidden/i.test(r.error)) setRowsErr("forbidden");
-      else if (r.status === 400 || /is_primary|does not exist|PGRST|schema cache|column/i.test(r.error)) setRowsErr("not_prepared");
-      else setRowsErr("error");
+      console.error("[custody] catalog photos load failed", { status: r.status, error: r.error });
+      setErrMsg(r.error);
+      if (r.status === 401 || r.status === 403 || /not authorized|permission|forbidden/i.test(r.error)) setState("forbidden");
+      else if (r.status === 404 || /PGRST202|does not exist|not found in the schema|schema cache|function/i.test(r.error)) setState("not_prepared");
+      else setState("error");
+      return;
     }
-    setFiles(rows);
-    // 2) صور التخزين مباشرة (احتياط) — يُظهر حتى غير المربوطة.
-    const s = await civListStoragePhotos(assetId);
-    const storage = s.ok ? s.data : [];
-    // eslint-disable-next-line no-console
-    if (!s.ok) console.error("[custody] storage photo list failed", { status: s.status, error: s.error });
-    const rowPaths = new Set(rows.map((x) => x.file_path));
-    const orphanList = storage.filter((o) => !rowPaths.has(o.path));
-    setOrphans(orphanList);
-    // 3) وقّع كل المسارات معًا (روابط مؤقتة).
-    const allPaths = [...rows.map((x) => x.file_path), ...orphanList.map((o) => o.path)];
-    const m = allPaths.length ? await civSignFiles(CIV_ASSETS_BUCKET, allPaths) : {};
-    setUrls(m);
-    setSignFailed(allPaths.length > 0 && Object.keys(m).length === 0);
-    setLoading(false);
+    setPhotos(r.data);
+    if (r.data.length > 0) {
+      const m = await civSignFiles(CIV_ASSETS_BUCKET, r.data.map((p) => p.storage_path));
+      setUrls(m);
+      setSignFailed(Object.keys(m).length === 0);   // صور موجودة لكن تعذّر توقيع أي رابط
+    } else { setUrls({}); setSignFailed(false); }
+    setState("ready");
   }, [assetId]);
   useEffect(() => { void reload(); }, [reload]);
 
-  // بعد أي تغيير: إن لم تبقَ صورة أساسية ووُجدت صور، رقِّ الأقدم تلقائيًا.
+  // بعد أي تغيير: إن لم تبقَ صورة أساسية بين المربوطة، رقِّ الأولى تلقائيًا.
   async function ensurePrimary() {
-    const rl = await civListAssetFiles(assetId);
-    if (rl.ok && rl.data.length > 0 && !rl.data.some((x) => x.is_primary)) await civSetPrimaryPhoto(rl.data[0].id);
+    const r = await civGetAssetCatalogPhotos(assetId);
+    if (r.ok) { const db = r.data.filter((p) => p.file_id); if (db.length > 0 && !db.some((p) => p.is_primary)) await civSetPrimaryPhoto(db[0].file_id!); }
   }
   async function add(file: File) {
     setBusy(true);
@@ -543,73 +529,73 @@ function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
     await ensurePrimary(); setBusy(false);
     flash(t({ ar: "أُضيفت الصورة.", en: "Image added." })); await reload(); await onChanged();
   }
-  async function archive(id: string) {
+  async function archive(fileId: string) {
     if (!window.confirm(t({ ar: "أرشفة هذه الصورة؟ (لا تُحذف نهائيًا — تبقى في السجل).", en: "Archive this image? (kept in the log)" }))) return;
-    setBusy(true); const r = await civArchiveAssetFile(id, "archived from asset details");
+    setBusy(true); const r = await civArchiveAssetFile(fileId, "archived from asset details");
     if (!r.ok) { setBusy(false); flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
-    await ensurePrimary(); setBusy(false);   // إن كانت الأساسية، رقِّ أخرى
+    await ensurePrimary(); setBusy(false);
     flash(t({ ar: "أُرشفت الصورة.", en: "Archived." })); await reload(); await onChanged();
   }
-  async function primary(id: string) {
-    setBusy(true); const r = await civSetPrimaryPhoto(id); setBusy(false);
+  async function primary(fileId: string) {
+    setBusy(true); const r = await civSetPrimaryPhoto(fileId); setBusy(false);
     if (!r.ok) { flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
     flash(t({ ar: "عُيّنت كصورة أساسية.", en: "Set as primary." })); await reload(); await onChanged();
   }
 
-  const totalShown = files.length + orphans.length;
+  const dbPhotos = photos.filter((p) => p.file_id);
+  const orphans = photos.filter((p) => !p.file_id);
   return (
     <div className="space-y-3">
+      <div className="text-[9px] text-stone-600" dir="ltr">Photo Loader Build: {PHOTO_LOADER_BUILD}</div>
       <div className="flex items-center gap-2 flex-wrap">
         {canEdit && <label className={`${btnGhost} px-3 py-2 text-xs cursor-pointer inline-block`}>📷 {t({ ar: "إضافة صورة", en: "Add image" })}
           <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void add(file); e.target.value = ""; }} /></label>}
-        <button disabled={busy || loading} onClick={() => void reload()} className={`${btnGhost} px-3 py-2 text-xs`}>↻ {t({ ar: "إعادة تحميل", en: "Reload" })}</button>
+        <button disabled={busy || state === "loading"} onClick={() => void reload()} className={`${btnGhost} px-3 py-2 text-xs`}>↻ {t({ ar: "إعادة تحميل", en: "Reload" })}</button>
       </div>
 
-      {loading && <p className="text-xs text-stone-500">{t({ ar: "جارٍ تحميل الصور…", en: "Loading images…" })}</p>}
+      {state === "loading" && <p className="text-xs text-stone-500">{t({ ar: "جارٍ تحميل الصور…", en: "Loading images…" })}</p>}
+      {state === "forbidden" && <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-3 text-sm text-amber-300">{t({ ar: "لا تملك صلاحية عرض صور هذا الأصل.", en: "Not authorized to view this asset's images." })}</div>}
+      {state === "not_prepared" && <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-3 text-sm text-amber-300 space-y-1" dir="rtl">
+        <div>{t({ ar: "وحدة الصور غير مُجهّزة في قاعدة البيانات.", en: "Images module not prepared in the database." })}</div>
+        <div className="font-mono text-[11px] text-amber-400/90" dir="ltr">Run: docs/custody_inventory_asset_catalog_photos_PATCH.sql</div></div>}
+      {state === "error" && <div className="bg-red-950/40 border border-red-900/60 rounded-xl p-3 text-sm text-red-300">{t({ ar: "تعذّر تحميل الصور: ", en: "Failed to load images: " })}<span dir="ltr">{errMsg}</span></div>}
 
-      {/* ملاحظة حالة سجلات الجدول — لا تمنع عرض صور التخزين أدناه */}
-      {!loading && rowsErr === "forbidden" && totalShown === 0 && <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-3 text-sm text-amber-300">{t({ ar: "لا تملك صلاحية عرض صور هذا الأصل.", en: "Not authorized to view this asset's images." })}</div>}
-      {!loading && rowsErr === "not_prepared" && <div className="bg-amber-950/40 border border-amber-800/60 rounded-lg p-2 text-[11px] text-amber-300" dir="rtl">{t({ ar: "إدارة الصور (تعيين أساسية/أرشفة) غير مُجهّزة — شغّل custody_inventory_asset_editing_PATCH.sql. الصور تُعرض من التخزين.", en: "Image management not prepared — run the editing patch. Photos shown from storage." })}</div>}
-      {!loading && rowsErr === "error" && totalShown === 0 && <div className="bg-red-950/40 border border-red-900/60 rounded-xl p-3 text-sm text-red-300">{t({ ar: "تعذّر تحميل سجلات الصور: ", en: "Failed to load image rows: " })}<span dir="ltr">{rowsErrMsg}</span></div>}
-
-      {!loading && signFailed && <div className="bg-amber-950/40 border border-amber-800/60 rounded-lg p-2 text-[11px] text-amber-300">{t({ ar: "تعذّر إنشاء روابط العرض المؤقتة — تحقق من صلاحيات bucket «custody-inventory-assets».", en: "Could not sign display URLs — check the assets bucket policies." })}</div>}
-
-      {!loading && totalShown === 0 && rowsErr !== "forbidden" && rowsErr !== "error" && <div className="text-sm text-stone-400 bg-stone-900 border border-stone-800 rounded-xl p-3">{t({ ar: "لا توجد صور لهذا الأصل.", en: "No images for this asset." })}</div>}
+      {state === "ready" && signFailed && <div className="bg-amber-950/40 border border-amber-800/60 rounded-lg p-2 text-[11px] text-amber-300">{t({ ar: "عُثر على الصور لكن تعذّر إنشاء روابط العرض — تحقق من صلاحيات bucket «custody-inventory-assets».", en: "Photos found but display links failed — check the assets bucket policies." })}</div>}
+      {state === "ready" && photos.length === 0 && <div className="text-sm text-stone-400 bg-stone-900 border border-stone-800 rounded-xl p-3">{t({ ar: "لا توجد صور لهذا الأصل.", en: "No images for this asset." })}</div>}
 
       {/* الصور المربوطة (قابلة للإدارة) */}
-      {!loading && files.length > 0 && <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {files.map((f) => (
-          <div key={f.id} className={`${card} p-2 space-y-1.5 ${f.is_primary ? "ring-2 ring-red-600" : ""}`}>
-            {urls[f.file_path]
-              ? <a href={urls[f.file_path]} target="_blank" rel="noreferrer" title={t({ ar: "فتح بالحجم الكامل", en: "Open full size" })}><img loading="lazy" src={urls[f.file_path]} className="w-full h-28 object-cover rounded bg-white/5" alt={f.file_name ?? ""} /></a>
-              : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-center text-[10px] text-amber-500/80 px-1">{t({ ar: "الملف غير موجود في التخزين", en: "File missing in storage" })}</div>}
-            <div className="text-[10px] text-stone-400 truncate" dir="ltr">{f.file_name ?? f.file_type}</div>
+      {state === "ready" && dbPhotos.length > 0 && <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {dbPhotos.map((p) => (
+          <div key={p.file_id} className={`${card} p-2 space-y-1.5 ${p.is_primary ? "ring-2 ring-red-600" : ""}`}>
+            {urls[p.storage_path]
+              ? <a href={urls[p.storage_path]} target="_blank" rel="noreferrer" title={t({ ar: "فتح بالحجم الكامل", en: "Open full size" })}><img loading="lazy" src={urls[p.storage_path]} className="w-full h-28 object-cover rounded bg-white/5" alt={baseName(p.storage_path)} /></a>
+              : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-center text-[10px] text-amber-500/80 px-1">{p.missing_in_storage ? t({ ar: "الملف غير موجود في التخزين", en: "File missing in storage" }) : t({ ar: "تعذّر إنشاء الرابط", en: "Could not sign URL" })}</div>}
+            <div className="text-[10px] text-stone-400 truncate" dir="ltr">{baseName(p.storage_path)}</div>
             <div className="text-[10px] text-stone-600 flex items-center gap-1 flex-wrap">
-              {f.is_primary && <span className="text-red-400">★ {t({ ar: "أساسية", en: "primary" })}</span>}
-              <span dir="ltr">{new Date(f.created_at).toLocaleDateString("ar")}</span>
-              {f.size_bytes ? <span dir="ltr">· {Math.round(f.size_bytes / 1024)}KB</span> : null}
+              {p.is_primary && <span className="text-red-400">★ {t({ ar: "أساسية", en: "primary" })}</span>}
+              {p.created_at && <span dir="ltr">{new Date(p.created_at).toLocaleDateString("ar")}</span>}
             </div>
             {canEdit && <div className="flex gap-1">
-              {!f.is_primary && <button disabled={busy} onClick={() => void primary(f.id)} className={`${btnGhost} px-2 py-1 text-[10px] flex-1`}>{t({ ar: "أساسية", en: "Primary" })}</button>}
-              <button disabled={busy} onClick={() => void archive(f.id)} className={`${btnGhost} px-2 py-1 text-[10px] text-red-400`}>{t({ ar: "أرشفة", en: "Archive" })}</button>
+              {!p.is_primary && <button disabled={busy} onClick={() => p.file_id && void primary(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] flex-1`}>{t({ ar: "أساسية", en: "Primary" })}</button>}
+              <button disabled={busy} onClick={() => p.file_id && void archive(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] text-red-400`}>{t({ ar: "أرشفة", en: "Archive" })}</button>
             </div>}
           </div>
         ))}
       </div>}
 
-      {/* صور موجودة في التخزين لكن غير مربوطة بجدول asset_files — عرض فقط حتى تُربَط بالـbackfill */}
-      {!loading && orphans.length > 0 && <div className="space-y-2">
+      {/* صور في التخزين غير مربوطة بجدول asset_files — عرض فقط حتى تُربَط بالـbackfill */}
+      {state === "ready" && orphans.length > 0 && <div className="space-y-2">
         <div className="bg-sky-950/40 border border-sky-800/50 rounded-lg p-2 text-[11px] text-sky-300" dir="rtl">
-          {t({ ar: `توجد ${orphans.length} صورة في التخزين غير مربوطة بالسجل (تُعرض هنا). لإدارتها (أساسية/أرشفة) شغّل custody_inventory_asset_photos_backfill_PATCH.sql.`, en: `${orphans.length} storage photo(s) not linked to the catalog (shown below). Run the photos backfill patch to manage them.` })}
+          {t({ ar: `توجد ${orphans.length} صورة في التخزين غير مربوطة بالسجل (تُعرض هنا). لإدارتها (أساسية/أرشفة) شغّل custody_inventory_asset_photos_backfill_PATCH.sql.`, en: `${orphans.length} storage photo(s) not linked (shown). Run the photos backfill patch to manage them.` })}
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {orphans.map((o) => (
-            <div key={o.path} className={`${card} p-2 space-y-1.5`}>
-              {urls[o.path]
-                ? <a href={urls[o.path]} target="_blank" rel="noreferrer" title={t({ ar: "فتح بالحجم الكامل", en: "Open full size" })}><img loading="lazy" src={urls[o.path]} className="w-full h-28 object-cover rounded bg-white/5" alt={o.name} /></a>
-                : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-center text-[10px] text-amber-500/80 px-1">{t({ ar: "تعذّر عرض الصورة", en: "Could not display" })}</div>}
-              <div className="text-[10px] text-stone-400 truncate" dir="ltr">{o.name}</div>
-              <div className="text-[10px] text-sky-500/80">{t({ ar: "غير مربوطة", en: "unlinked" })}{o.size ? ` · ${Math.round(o.size / 1024)}KB` : ""}</div>
+          {orphans.map((p) => (
+            <div key={p.storage_path} className={`${card} p-2 space-y-1.5`}>
+              {urls[p.storage_path]
+                ? <a href={urls[p.storage_path]} target="_blank" rel="noreferrer" title={t({ ar: "فتح بالحجم الكامل", en: "Open full size" })}><img loading="lazy" src={urls[p.storage_path]} className="w-full h-28 object-cover rounded bg-white/5" alt={baseName(p.storage_path)} /></a>
+                : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-center text-[10px] text-amber-500/80 px-1">{t({ ar: "تعذّر إنشاء الرابط", en: "Could not sign URL" })}</div>}
+              <div className="text-[10px] text-stone-400 truncate" dir="ltr">{baseName(p.storage_path)}</div>
+              <div className="text-[10px] text-sky-500/80">{t({ ar: "غير مربوطة", en: "unlinked" })}</div>
             </div>
           ))}
         </div>

@@ -15,25 +15,34 @@ begin;
 -- ─── 1) Backfill: أنشئ سجل asset_files لكل صورة يتيمة في التخزين ───
 -- الشرط: bucket الأصول، المجلد الثاني = asset_photo، MIME صورة، asset_id صالح وموجود،
 --        ولا يوجد سجل بنفس المسار (idempotent).
+-- يطابق UUID الأصل كـ segment في أي موضع من المسار (مستقل عن ترتيب {uuid}/asset_photo أو غيره)،
+-- ويستبعد مجلدات المستندات المالية، ويقتصر على صور (image/*).
 with candidates as (
   select
     o.name                                   as file_path,
-    (storage.foldername(o.name))[1]          as aid_txt,
     regexp_replace(o.name, '^.*/', '')       as base_name,
     o.metadata->>'mimetype'                  as mime,
     nullif(o.metadata->>'size','')::bigint   as size_bytes,
     o.owner                                  as owner_uid,
-    o.created_at                             as created_at
+    o.created_at                             as created_at,
+    storage.foldername(o.name)               as segs
   from storage.objects o
   where o.bucket_id = 'custody-inventory-assets'
-    and (storage.foldername(o.name))[2] = 'asset_photo'
     and coalesce(o.metadata->>'mimetype','') like 'image/%'
+    and not (array['invoice','warranty','purchase_document','maintenance_report','insurance_document','supplier_quote'] && storage.foldername(o.name))
+),
+resolved as (
+  select c.*,
+    (select seg from unnest(c.segs) seg
+      where seg ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        and exists (select 1 from public.custody_inventory_assets a where a.id::text = seg)
+      limit 1) as aid_txt
+  from candidates c
 ),
 valid as (
-  select c.* from candidates c
-  where c.aid_txt ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    and exists (select 1 from public.custody_inventory_assets a where a.id::text = c.aid_txt)
-    and not exists (select 1 from public.custody_inventory_asset_files f where f.file_path = c.file_path)
+  select r.* from resolved r
+  where r.aid_txt is not null
+    and not exists (select 1 from public.custody_inventory_asset_files f where f.file_path = r.file_path)
 )
 insert into public.custody_inventory_asset_files
   (asset_id, file_type, file_path, file_name, mime_type, size_bytes, uploaded_by, created_at, is_deleted, is_primary)
