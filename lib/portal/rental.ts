@@ -4,6 +4,7 @@
 // جداول custody_rental_* (توسعة enterprise_05) + إعدادات/أحداث/رسوم/أدلة التأجير.
 // ════════════════════════════════════════════════════════════════════════════
 import { prpc, pget, enc, type Result } from "@/lib/portal/client";
+import { getValidSession, SUPABASE_URL, SUPABASE_KEY } from "@/lib/portalAuth";
 
 // ─── الأنواع ───
 export type RentalStatus =
@@ -104,4 +105,75 @@ export function rentalEvidencePath(rentalId: string, stage: string, itemId: stri
   const ext = (fileName.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
   const rid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
   return `rental/${rentalId}/${stage}/${itemId}/${rid}.${ext}`;
+}
+
+// ─── دورة الحياة التشغيلية (RPCs) ───
+export interface RentalContractInfo { contract_number: string; status: string; signed_at: string | null; contract_pdf_path: string | null; version?: number; snapshot?: unknown; contract_hash?: string | null }
+export const rentalGenerateContract = (requestId: string) => prpc<{ ok: boolean; contract_id: string; contract_number: string; version: number }>("custody_rental_generate_contract", { p_request: requestId });
+export const rentalSignContract = (contractId: string, signerName: string, signaturePath: string, ua?: string, consent?: string) =>
+  prpc<{ ok: boolean; hash: string }>("custody_rental_sign_contract", { p_contract: contractId, p_signer_name: signerName, p_signature_path: signaturePath, p_ua: ua ?? (typeof navigator !== "undefined" ? navigator.userAgent : null), p_consent: consent ?? null });
+export const rentalStartHandover = (requestId: string) => prpc<{ ok: boolean }>("custody_rental_start_handover", { p_request: requestId });
+export const rentalAddHandoverEvidence = (requestId: string, itemId: string, path: string, condition: string, note?: string) =>
+  prpc<{ ok: boolean }>("custody_rental_add_handover_evidence", { p_request: requestId, p_item: itemId, p_path: path, p_condition: condition, p_note: note ?? null });
+export const rentalCompleteHandover = (requestId: string, customerSig: string, staffSig: string) =>
+  prpc<{ ok: boolean }>("custody_rental_complete_handover", { p_request: requestId, p_customer_sig: customerSig, p_staff_sig: staffSig });
+export const rentalRequestReturn = (requestId: string, note?: string) => prpc<{ ok: boolean }>("custody_rental_request_return", { p_request: requestId, p_note: note ?? null });
+export const rentalStartInspection = (requestId: string) => prpc<{ ok: boolean }>("custody_rental_start_inspection", { p_request: requestId });
+export const rentalInspectItem = (itemId: string, result: string, conditionIn: string, returnedQty: number, note?: string) =>
+  prpc<{ ok: boolean }>("custody_rental_inspect_item", { p_item: itemId, p_result: result, p_condition_in: conditionIn, p_returned_qty: returnedQty, p_note: note ?? null });
+export const rentalCompleteReturn = (requestId: string) => prpc<{ ok: boolean }>("custody_rental_complete_return", { p_request: requestId });
+export const rentalAddCharge = (requestId: string, itemId: string | null, type: RentalChargeType, desc: string, estimate: number) =>
+  prpc<{ ok: boolean; id: string }>("custody_rental_add_charge", { p_request: requestId, p_item: itemId, p_type: type, p_desc: desc, p_estimate: estimate });
+export const rentalApproveCharge = (chargeId: string, approved: number, fromDeposit = 0, additional = 0, reject = false) =>
+  prpc<{ ok: boolean; status: string }>("custody_rental_approve_charge", { p_charge: chargeId, p_approved: approved, p_from_deposit: fromDeposit, p_additional: additional, p_reject: reject });
+export const rentalClose = (requestId: string) => prpc<{ ok: boolean }>("custody_rental_close", { p_request: requestId });
+export const rentalCancel = (requestId: string, reason: string) => prpc<{ ok: boolean }>("custody_rental_cancel", { p_request: requestId, p_reason: reason });
+export const rentalMarkOverdue = () => prpc<{ ok: boolean; marked: number }>("custody_rental_mark_overdue", {});
+export const rentalCustomerGet = (requestId: string) => prpc<Record<string, unknown>>("custody_rental_customer_get", { p_request: requestId });
+
+export interface RentalDashboard { new: number; pending_approval: number; pending_signature: number; handover_today: number; return_today: number; active: number; overdue: number; open_charges: number; deposits_held: number; deposits_release_pending: number }
+export const rentalDashboard = () => prpc<RentalDashboard>("custody_rental_dashboard", {});
+export const rentalGet = (requestId: string) => prpc<Record<string, unknown>>("custody_rental_get", { p_request: requestId });
+export const rentalCalendar = (from: string, to: string) => prpc<Array<{ id: string; request_number: string; status: RentalStatus; from: string; to: string; customer: string | null }>>("custody_rental_calendar", { p_from: from, p_to: to });
+
+// ─── التخزين: رفع/توقيع أدلة التأجير (bucket خاص — signed URL فقط) ───
+const MAX_RENTAL_BYTES = 10 * 1024 * 1024;
+async function rentalStorageFetch(path: string, init: RequestInit): Promise<Response> {
+  const s = await getValidSession();
+  if (!s) throw new Error("not_authenticated");
+  const doFetch = (tok: string) => fetch(`${SUPABASE_URL}/storage/v1${path}`, { ...init, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}`, ...(init.headers || {}) } });
+  let res = await doFetch(s.access_token);
+  if (res.status === 401) { const s2 = await getValidSession(); if (s2) res = await doFetch(s2.access_token); }
+  return res;
+}
+/** رفع دليل تأجير إلى bucket خاص. يعيد المسار عند النجاح. */
+export async function rentalUpload(bucket: string, path: string, file: File): Promise<Result<string>> {
+  if (file.size > MAX_RENTAL_BYTES) return { ok: false, error: "الملف أكبر من 10MB" };
+  if (!file.type.startsWith("image/") && file.type !== "application/pdf") return { ok: false, error: "نوع ملف غير مسموح" };
+  try {
+    const res = await rentalStorageFetch(`/object/${bucket}/${path.split("/").map(encodeURIComponent).join("/")}`, { method: "POST", headers: { "x-upsert": "true", "Content-Type": file.type }, body: file });
+    if (!res.ok) return { ok: false, error: `upload_failed_${res.status}`, status: res.status };
+    return { ok: true, data: path };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+export async function rentalSignFiles(bucket: string, paths: string[]): Promise<Record<string, string>> {
+  const uniq = Array.from(new Set(paths.filter(Boolean)));
+  if (uniq.length === 0) return {};
+  try {
+    const res = await rentalStorageFetch(`/object/sign/${bucket}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expiresIn: 3600, paths: uniq }) });
+    if (!res.ok) return {};
+    const arr = (await res.json()) as { path?: string; signedURL?: string }[];
+    const out: Record<string, string> = {};
+    for (const r of arr) if (r.path && r.signedURL) out[r.path] = `${SUPABASE_URL}/storage/v1${r.signedURL}`;
+    return out;
+  } catch { return {}; }
+}
+/** رفع صورة توقيع (dataURL → PNG) إلى bucket العقود، وإرجاع المسار. */
+export async function rentalUploadSignature(rentalId: string, who: "customer" | "staff", dataUrl: string): Promise<Result<string>> {
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    const file = new File([blob], `${who}.png`, { type: "image/png" });
+    const path = `rental/${rentalId}/signatures/${who}_${(typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now())}.png`;
+    return rentalUpload(RENTAL_CONTRACTS_BUCKET, path, file);
+  } catch (e) { return { ok: false, error: String(e) }; }
 }
