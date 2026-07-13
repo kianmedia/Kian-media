@@ -3,12 +3,13 @@
 --   (data + logic + security). ملف إنتاج واحد idempotent — Standalone بالكامل:
 --   يعمل على قاعدة لا تحتوي custody_enterprise_05 مسبقًا (ينشئ جداول التأجير/التأمين
 --   الأساسية إن غابت)، ثم يرقّيها لطبقة V1 التشغيلية.
--- يعيد استخدام (لا ينشئها — متطلبات أساسية يتحقق منها PREFLIGHT):
---   custody_inventory_assets/reservations/movements، custody_enterprise_settings،
---   custody_incidents، notifications، والدوال المساعدة civ_flag/civ_can_manage/
---   civ_can_finance/civ_can_admin/civ_gen_no/civ_notify_managers/civ_set_avail/
---   civ_client_ip (+ custody_audit اختياري). طبّق custody_inventory v1 +
---   custody_enterprise_00..04 قبل هذا الملف.
+-- يعيد استخدام (لا ينشئها — متطلبات أساسية يتحقق منها PREFLIGHT بـ to_regclass/to_regprocedure):
+--   جداول: custody_inventory_assets/reservations/movements، custody_enterprise_settings، notifications.
+--   دوال: civ_flag(text)/civ_can_manage()/civ_can_finance()/civ_can_admin()/civ_gen_no(text)/
+--     civ_notify_managers(text,uuid,text,text)/civ_set_avail(uuid)/civ_client_ip().
+--   اختياري (تحذير فقط، لا يوقف): is_staff() للمسار القديم، و custody_incidents (enterprise_03)
+--     للربط بوحدة الحوادث — insurance_claims.incident_id يُنشأ بلا FK إن غابت، ولا يعتمد التأجير عليها.
+--   طبّق custody_inventory v1 + custody_enterprise_00/01 + طبقة الصلاحيات civ_* قبل هذا الملف.
 -- لا hard delete. لا DROP TABLE / TRUNCATE / حذف بيانات / إعادة تسمية Legacy.
 --   لا يلمس: العهدة/الأصول، HR، Zoho، الفواتير، العروض، العهدة/التأجير القديم.
 -- ترتيب التنفيذ: PREFLIGHT → extensions/helpers (متطلبات) → FOUNDATION tables +
@@ -24,32 +25,57 @@
 --   ترك القاعدة نصف مطبّقة. أمّا جداول التأجير/التأمين (enterprise_05) فينشئها هذا
 --   الملف أدناه إن غابت (لهذا هو Standalone) — غيابها لا يوقف التنفيذ.
 -- ════════════════════════════════════════════════════════════════════════════
+-- تصنيف واضح:
+--   • External required TABLES — جداول موجودة فعلًا في نظام العهدة/المخزون ولا ينشئها هذا
+--     الملف؛ غيابها يوقف التنفيذ (فحص to_regclass). لا تتضمن custody_incidents (وحدة
+--     الحوادث enterprise_03) لأن دورة التأجير لا تعتمد عليها — الربط بها اختياري أدناه.
+--   • External required FUNCTIONS — دوال مساعدة موجودة قبل هذا الملف؛ غيابها يوقف التنفيذ
+--     (فحص to_regprocedure بالتوقيع الكامل، لا بالاسم المجرد).
+--   • Optional legacy — تحذير فقط، لا يوقف (is_staff للمسار القديم المعطّل بعلمه).
+--   • Created by this RUNME — لا تُفحَص هنا (تُنشأ لاحقًا داخل الملف): جداول/دوال/buckets التأجير والتأمين.
 do $$
-declare v_t text[] := '{}'; v_f text[] := '{}'; x text;
+declare
+  v_req_tables text[] := array[
+    'public.custody_enterprise_settings',      -- هدف ALTER الأعلام
+    'public.custody_inventory_assets',         -- FK بنود التأجير + policy_assets، ومرجع RPCs
+    'public.custody_inventory_reservations',   -- FK custody_rental_items.reservation_id
+    'public.custody_inventory_movements',      -- توسيع CHECK + حركات rental_out/return
+    'public.notifications'];                   -- توسيع notifications_type_check
+  v_req_funcs text[] := array[
+    'public.civ_flag(text)','public.civ_can_manage()','public.civ_can_finance()',
+    'public.civ_can_admin()','public.civ_gen_no(text)',
+    'public.civ_notify_managers(text,uuid,text,text)','public.civ_set_avail(uuid)',
+    'public.civ_client_ip()'];
+  v_miss_t text[] := '{}'; v_have_t text[] := '{}';
+  v_miss_f text[] := '{}'; v_have_f text[] := '{}';
+  x text;
 begin
-  foreach x in array array[
-    'public.custody_enterprise_settings','public.custody_inventory_assets',
-    'public.custody_inventory_reservations','public.custody_inventory_movements',
-    'public.custody_incidents','public.notifications'] loop
-    if to_regclass(x) is null then v_t := v_t || x; end if;
+  foreach x in array v_req_tables loop
+    if to_regclass(x) is null then v_miss_t := v_miss_t || x; else v_have_t := v_have_t || x; end if;
   end loop;
-  foreach x in array array[
-    'civ_flag','civ_can_manage','civ_can_finance','civ_can_admin',
-    'civ_gen_no','civ_notify_managers','civ_set_avail','civ_client_ip'] loop
-    if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-                   where n.nspname='public' and p.proname=x) then v_f := v_f || x; end if;
+  foreach x in array v_req_funcs loop
+    if to_regprocedure(x) is null then v_miss_f := v_miss_f || x; else v_have_f := v_have_f || x; end if;
   end loop;
-  if coalesce(array_length(v_t,1),0) > 0 or coalesce(array_length(v_f,1),0) > 0 then
-    raise exception E'PREFLIGHT FAILED — متطلبات أساسية مفقودة.\n  جداول مفقودة: [%]\n  دوال مفقودة: [%]\n  طبّق أولًا: custody_inventory v1 + custody_enterprise_00..04 (والدوال المساعدة civ_*) ثم أعد تشغيل هذا الملف.',
-      coalesce(array_to_string(v_t,', '),'(لا شيء)'), coalesce(array_to_string(v_f,', '),'(لا شيء)');
+
+  raise notice '─────────────── PREFLIGHT REPORT ───────────────';
+  raise notice 'External TABLES موجودة   : %', coalesce(array_to_string(v_have_t,', '),'(لا شيء)');
+  raise notice 'External TABLES مفقودة   : %', coalesce(array_to_string(v_miss_t,', '),'(لا شيء)');
+  raise notice 'External FUNCTIONS موجودة: %', coalesce(array_to_string(v_have_f,', '),'(لا شيء)');
+  raise notice 'External FUNCTIONS مفقودة: %', coalesce(array_to_string(v_miss_f,', '),'(لا شيء)');
+  if to_regprocedure('public.is_staff()') is null then
+    raise notice 'Optional legacy مفقود   : public.is_staff() — المسار القديم custody_rental_create_request سيبقى معطّلًا (V1 غير متأثرة).';
   end if;
-  -- تحذير غير مانع: is_staff() يستخدمها فقط المسار القديم custody_rental_create_request (من patch 05،
-  -- خلف علم client_rental_portal_enabled المعطّل). طبقة V1 لا تعتمد عليها (تستخدم admin_upsert). إن غابت
-  -- (تأتي من هجرة staff_roles) يبقى المسار القديم معطّلًا فقط — لا نوقف التنفيذ كي لا نمنع نشرًا سليمًا للتأجير.
-  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='is_staff') then
-    raise notice 'PREFLIGHT WARN — public.is_staff() غير موجودة: المسار القديم custody_rental_create_request سيبقى معطّلًا (طبقة V1 غير متأثرة).';
+  if to_regclass('public.custody_incidents') is null then
+    raise notice 'Optional link مفقود     : public.custody_incidents — سيُنشأ insurance_claims بعمود incident_id دون FK (لا اعتماد على وحدة الحوادث).';
   end if;
-  raise notice 'PREFLIGHT OK — المتطلبات موجودة. ستُنشأ جداول التأجير/التأمين الأساسية إن غابت.';
+  raise notice 'سيُنشئ هذا الملف: custody_rental_{customers,requests,contracts,items,inspections,settings,events,charges,evidence} + asset_insurance_policies/policy_assets/insurance_claims(+evidence,+actions) + 30 RPC + 3 buckets خاصة + أعلام التأجير.';
+  raise notice '────────────────────────────────────────────────';
+
+  if coalesce(array_length(v_miss_t,1),0) > 0 or coalesce(array_length(v_miss_f,1),0) > 0 then
+    raise exception E'PREFLIGHT FAILED — متطلبات أساسية خارجية مفقودة.\n  جداول: [%]\n  دوال : [%]\n  طبّق custody_inventory v1 + custody_enterprise_00/01 + طبقة الصلاحيات (civ_*، بما فيها civ_can_finance) قبل هذا الملف. (custody_incidents/enterprise_03 غير مطلوبة للتأجير.)',
+      coalesce(array_to_string(v_miss_t,', '),'(لا شيء)'), coalesce(array_to_string(v_miss_f,', '),'(لا شيء)');
+  end if;
+  raise notice 'PREFLIGHT OK ✓ — المتطلبات الخارجية موجودة. المتابعة إلى إنشاء الأساس.';
 end $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -169,7 +195,7 @@ create table if not exists public.insurance_claims (
   id            uuid primary key default gen_random_uuid(),
   claim_number  text not null unique,
   policy_id     uuid references public.asset_insurance_policies(id),
-  incident_id   uuid references public.custody_incidents(id),
+  incident_id   uuid,   -- ربط اختياري بوحدة الحوادث (custody_incidents/enterprise_03) — FK يُضاف شرطيًا أدناه إن كانت مطبّقة. لا يعتمد التأجير عليها.
   asset_id      uuid references public.custody_inventory_assets(id),
   damage_type   text, report text, estimate_cost numeric,
   claimed_amount numeric, approved_amount numeric, received_amount_ref numeric,
@@ -190,6 +216,17 @@ create table if not exists public.insurance_claim_actions (
   claim_id uuid not null references public.insurance_claims(id) on delete cascade,
   action_type text not null, note text, created_by uuid references auth.users(id), created_at timestamptz not null default now()
 );
+
+-- ربط اختياري: أضف FK من insurance_claims.incident_id إلى وحدة الحوادث فقط إن كانت مطبّقة
+--   (enterprise_03). idempotent (يتحقق من وجود القيد). غيابها لا يكسر التأجير — العمود يبقى
+--   uuid حرًّا. هكذا لا يعتمد تشغيل بوابة التأجير على وحدة خارجية غير مطبّقة.
+do $$ begin
+  if to_regclass('public.custody_incidents') is not null
+     and not exists (select 1 from pg_constraint where conname = 'insurance_claims_incident_id_fkey') then
+    alter table public.insurance_claims
+      add constraint insurance_claims_incident_id_fkey foreign key (incident_id) references public.custody_incidents(id);
+  end if;
+end $$;
 
 create or replace function public.custody_insurance_create_claim(p_data jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
