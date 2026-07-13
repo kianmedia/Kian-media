@@ -7,9 +7,10 @@ import { pget } from "@/lib/portal/client";
 import CustodyEnterpriseSettings from "@/components/portal/custody-inventory/CustodyEnterpriseSettings";
 import CustodyQrLabels from "@/components/portal/custody-inventory/CustodyQrLabels";
 import AssetDetailModal from "@/components/portal/custody-inventory/AssetDetailModal";
+import CustodyPhotoCompletion from "@/components/portal/custody-inventory/CustodyPhotoCompletion";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
-  civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
+  civSaveAssetPhoto,
   civSignFiles, civUpsertCategory, civArchiveCategory, civUpsertLocation,
   civArchiveLocation, civCreateAssignment, civListAssignments, civListAssignmentItems, civListEvidence,
   civEvidencePath, civUploadEvidence, civAttachEvidence, civInspectReturn, civOpenMaintenance, civCloseMaintenance,
@@ -28,9 +29,10 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const th = "text-right text-[11px] text-stone-500 font-medium px-2 py-1.5";
 const td = "text-right text-xs text-stone-300 px-2 py-1.5 border-t border-stone-800";
 
-type Tab = "dashboard" | "assets" | "qr" | "categories" | "locations" | "issue" | "custody" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
-const TABS: { k: Tab; ar: string }[] = [
-  { k: "dashboard", ar: "لوحة" }, { k: "assets", ar: "الأصول" }, { k: "qr", ar: "QR والملصقات" }, { k: "categories", ar: "التصنيفات" },
+type Tab = "dashboard" | "assets" | "photos" | "qr" | "categories" | "locations" | "issue" | "custody" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
+const TABS: { k: Tab; ar: string; adminOnly?: boolean }[] = [
+  { k: "dashboard", ar: "لوحة" }, { k: "assets", ar: "الأصول" }, { k: "photos", ar: "استكمال الصور", adminOnly: true },
+  { k: "qr", ar: "QR والملصقات" }, { k: "categories", ar: "التصنيفات" },
   { k: "locations", ar: "المواقع" }, { k: "issue", ar: "صرف عهدة" }, { k: "custody", ar: "العهد والإرجاع" },
   { k: "maintenance", ar: "الصيانة" }, { k: "audits", ar: "الجرد" }, { k: "reports", ar: "التقارير" },
   { k: "enterprise", ar: "مزايا المنصّة" }, { k: "settings", ar: "الإعدادات" },
@@ -65,6 +67,8 @@ export default function CustodyInventoryConsole() {
   const [assignments, setAssignments] = useState<CivAssignment[]>([]);
   const [settings, setSettings] = useState<CivSettings>(DEFAULT_CIV_SETTINGS);
   const [q, setQ] = useState("");
+  const [canDelete, setCanDelete] = useState(false);   // owner/super_admin/admin (من القاعدة) — يفتح تبويب استكمال الصور
+  useEffect(() => { void civCanDelete().then((r) => setCanDelete(r.ok && r.data === true)); }, []);
 
   const loadRefs = useCallback(async () => {
     const [c, l] = await Promise.all([civListCategories(), civListLocations()]);
@@ -92,7 +96,7 @@ export default function CustodyInventoryConsole() {
     <div className="space-y-4">
       {/* شريط التبويبات */}
       <div className="flex gap-1.5 flex-wrap">
-        {TABS.map((x) => (
+        {TABS.filter((x) => !x.adminOnly || canDelete).map((x) => (
           <button key={x.k} onClick={() => setTab(x.k)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium ${tab === x.k ? "bg-red-600 text-white" : "bg-stone-800 text-stone-300 border border-stone-700"}`}>
             {x.ar}
@@ -102,6 +106,7 @@ export default function CustodyInventoryConsole() {
 
       {tab === "dashboard" && <DashboardTab dash={dash} onGo={(k) => setTab(k)} t={t} />}
       {tab === "assets" && <AssetsTab {...{ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, reload: () => civListAssets(q ? { q } : undefined).then((r) => { if (r.ok) setAssets(r.data); }), catName, locName }} />}
+      {tab === "photos" && canDelete && <CustodyPhotoCompletion cats={cats} locs={locs} />}
       {tab === "categories" && <CategoriesTab {...{ cats, busy, setBusy, flash, err, t, reload: loadRefs }} />}
       {tab === "locations" && <LocationsTab {...{ locs, busy, setBusy, flash, err, t, reload: loadRefs }} />}
       {tab === "issue" && <IssueTab {...{ assets, staff, busy, setBusy, flash, err, t, onDone: () => setTab("custody") }} />}
@@ -199,14 +204,9 @@ function AssetsTab({ assets, cats, locs, q, setQ, busy, setBusy, flash, err, t, 
     if (!r.ok) { setBusy(false); return err(r, t({ ar: "تعذّر إنشاء الأصل: ", en: "Failed: " })); }
     let photoNote = "";   // يُلحَق بتوست النجاح النهائي كي لا تُطمَس رسالة فشل الصورة.
     if (pendingPhoto) {
-      // ارفع ثم اربط — وتحقّق من نجاح الربط (وإلا تبقى صورة يتيمة في التخزين يلتقطها الـbackfill لاحقًا).
-      const path = civAssetFilePath(r.data.id, "asset_photo", pendingPhoto.name);
-      const up = await civUploadAssetFile(path, pendingPhoto);
-      if (!up.ok) { console.error("[custody] asset photo upload failed", up.error); photoNote = t({ ar: " — لكن تعذّر رفع الصورة؛ أضِفها من تبويب «الصور».", en: " — but photo upload failed; add it from Images." }); }
-      else {
-        const at = await civAttachAssetFile(r.data.id, "asset_photo", path, pendingPhoto.name, pendingPhoto.type, pendingPhoto.size);
-        if (!at.ok) { console.error("[custody] asset photo attach failed after upload", at.error); photoNote = t({ ar: " — لكن تعذّر ربط الصورة؛ أضِفها من تبويب «الصور».", en: " — but photo attach failed; add it from Images." }); }
-      }
+      // رفع→ربط→أساسية تلقائيًا؛ ينظّف اليتيم عند فشل الربط. عند الفشل يظهر الأصل في «استكمال الصور».
+      const ph = await civSaveAssetPhoto(r.data.id, pendingPhoto);
+      if (!ph.ok) { console.error("[custody] asset photo save failed", ph.error); photoNote = t({ ar: " — لكن تعذّر حفظ الصورة؛ أضِفها من «استكمال الصور».", en: " — but photo not saved; add it from “Complete photos”." }); }
     }
     void civEmitEvent("civ_asset_created", { title: "أصل جديد: " + f.asset_name.trim() });
     setBusy(false); setShow(false); setF({ asset_type: "serialized", ownership_type: "owned", condition_status: "good", quantity_total: "1" }); setPendingPhoto(null);

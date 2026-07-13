@@ -264,6 +264,50 @@ async function uploadTo(bucket: string, path: string, file: File, allowed: strin
 export const civUploadEvidence = (path: string, file: File) => uploadTo(CIV_EVIDENCE_BUCKET, path, file, IMG);
 export const civUploadAssetFile = (path: string, file: File) => uploadTo(CIV_ASSETS_BUCKET, path, file, IMG_PDF);
 
+/** مسار صورة كتالوج مؤكد: {assetId}/asset_photo/{uuid}.{ext} — المسار الذي تقرؤه الـRPC حصرًا. */
+export function civAssetPhotoPath(assetId: string, fileName: string): string {
+  const ext = (fileName.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
+  const rid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}_${safeName(fileName)}`;
+  return `${assetId}/asset_photo/${rid}.${ext}`;
+}
+
+/** حذف كائن تخزين (best-effort) — لتنظيف اليتيم عند فشل الربط. */
+export async function civDeleteStorageObject(bucket: string, path: string): Promise<Result<boolean>> {
+  try {
+    const res = await storageFetch(`/object/${bucket}/${path.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" });
+    if (!res.ok) return { ok: false, error: `delete_failed_${res.status}`, status: res.status };
+    return { ok: true, data: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** الحفظ الصحيح لصورة أصل: رفع → ربط (يعيّن الأولى Primary تلقائيًا بالقاعدة). عند فشل الربط
+ *  ينظّف اليتيم. Retry آمن (اسم فريد لكل محاولة → لا تكرار). لا يُرجع نجاحًا إلا بعد اكتمال الربط. */
+export async function civSaveAssetPhoto(assetId: string, file: File): Promise<Result<{ fileId: string; path: string }>> {
+  if (!file.type.startsWith("image/")) return { ok: false, error: "not_image" };   // صور كتالوج فقط — لا PDF/مستندات
+  const path = civAssetPhotoPath(assetId, file.name);
+  const up = await civUploadAssetFile(path, file);
+  if (!up.ok) return { ok: false, error: `upload:${up.error}`, status: up.status };
+  const at = await civAttachAssetFile(assetId, "asset_photo", path, file.name, file.type, file.size);
+  if (!at.ok) {
+    // نظّف اليتيم فقط عند رفض خادمي محدَّد (status>=400). عند غموض الشبكة (status 0/غير معروف)
+    // لا تحذف — قد يكون الربط نجح على الخادم وضاعت الاستجابة؛ الحذف سيُتلف صفًا محفوظًا.
+    if (typeof at.status === "number" && at.status >= 400) {
+      await civDeleteStorageObject(CIV_ASSETS_BUCKET, path);
+      return { ok: false, error: `attach:${at.error}`, status: at.status };
+    }
+    return { ok: false, error: `attach_uncertain:${at.error}`, status: at.status };
+  }
+  return { ok: true, data: { fileId: at.data, path } };
+}
+
+// حالة صور الأصول (لعدّاد/فلتر «بدون صورة» وشاشة الاستكمال) — has_photo = صف asset_photo + كائن تخزين.
+export interface CivAssetPhotoStatus {
+  id: string; asset_code: string; asset_name: string; asset_type: CivAssetType; serial_number: string | null;
+  category_id: string | null; warehouse_location_id: string | null; has_photo: boolean;
+}
+export const civListAssetsPhotoStatus = (q?: string) =>
+  prpc<CivAssetPhotoStatus[]>("custody_inv_admin_assets_photo_status", { p_q: q ?? null });
+
 // صور كتالوج الأصل من الخادم (RPC) — تقرأ storage.objects على الخادم (تتجاوز RLS العميل)
 // وتدمجها مع سجلات asset_files. source=database (قابلة للإدارة) أو storage_orphan (عرض فقط).
 export interface CivCatalogPhoto {

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   civGetAssetDetails, civGetAssetChanges, civUpdateAsset, civCorrectStock, civGetAssetTimeline,
-  civGetAssetCatalogPhotos, civSignFiles, civUploadAssetFile, civAttachAssetFile, civAssetFilePath,
+  civGetAssetCatalogPhotos, civSignFiles, civSaveAssetPhoto,
   civArchiveAssetFile, civSetPrimaryPhoto, civCanDelete, civDeleteAsset, civRestoreAsset, CIV_ASSETS_BUCKET,
   type CivAssetDetails, type CivAssetChange, type CivCatalogPhoto, type CivCategory, type CivLocation, type CivMovement,
 } from "@/lib/portal/custodyInventory";
@@ -521,12 +521,15 @@ function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
   }
   async function add(file: File) {
     setBusy(true);
-    const path = civAssetFilePath(assetId, "asset_photo", file.name);
-    const up = await civUploadAssetFile(path, file);
-    if (!up.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع الصورة: ", en: "Upload failed: " }) + up.error); return; }
-    const at = await civAttachAssetFile(assetId, "asset_photo", path, file.name, file.type, file.size);
-    if (!at.ok) { setBusy(false); flash(t({ ar: "رُفعت الصورة لكن تعذّر ربطها بالسجل: ", en: "Uploaded but attach failed: " }) + at.error); return; }
-    await ensurePrimary(); setBusy(false);
+    const r = await civSaveAssetPhoto(assetId, file);   // رفع→ربط→أساسية تلقائيًا؛ ينظّف اليتيم عند فشل الربط
+    setBusy(false);
+    if (!r.ok) {
+      const m = /not_image/.test(r.error) ? t({ ar: "اختر ملف صورة (لا PDF/مستند).", en: "Choose an image file." })
+        : /attach_uncertain/.test(r.error) ? t({ ar: "تعذّر تأكيد الحفظ (شبكة) — حدّث القائمة وتحقّق قبل إعادة المحاولة.", en: "Save unconfirmed (network) — reload and check before retrying." })
+        : /^attach:/.test(r.error) ? t({ ar: "رُفعت الصورة لكن تعذّر ربطها (نُظّفت) — أعد المحاولة.", en: "Uploaded but attach failed (cleaned up) — retry." })
+        : t({ ar: "تعذّر رفع الصورة — أعد المحاولة.", en: "Upload failed — retry." });
+      flash(m); return;
+    }
     flash(t({ ar: "أُضيفت الصورة.", en: "Image added." })); await reload(); await onChanged();
   }
   async function archive(fileId: string) {
