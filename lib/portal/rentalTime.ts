@@ -103,5 +103,7 @@ export function rentalErrorAr(raw: string | null | undefined): string {
   if (/items_incomplete/.test(raw)) return "أكمل حالة وصورة كل قطعة أولًا.";
   if (/insufficient_stock_at_handover/.test(raw)) return "الكمية غير كافية في المخزون لحظة التسليم.";
   if (/items_not_inspected/.test(raw)) return "افحص جميع القطع قبل إنهاء الإرجاع.";
-  return `تعذّر: ${raw}`;
+  // لا تُظهر رسائل PostgREST التقنية للمستخدم (دالة غير موجودة/مخزّن المخطط/عمود مفقود).
+  if (/could not find|schema cache|PGRST\d|does not exist|function .* in the schema/i.test(raw)) return "الخدمة غير مهيأة بعد — يرجى المحاولة لاحقًا.";
+  return "تعذّر إتمام العملية. حاول مرة أخرى.";
 }

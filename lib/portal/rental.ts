@@ -45,13 +45,25 @@ export interface RentalCharge {
   from_deposit: number; additional_due: number; created_at: string;
 }
 export interface RentalAvailability {
-  available: boolean; free: number; available_quantity: number; requested: number; total: number;
-  committed: number; rented_overlap: number; reserved_overlap: number; in_maintenance?: number;
+  available: boolean; available_quantity: number; requested_quantity: number; total_quantity: number;
+  free?: number; requested?: number; total?: number; committed?: number;
+  rented_overlap?: number; reserved_overlap?: number; in_maintenance?: number;
   asset_type: string; availability_status?: string; reason: string;
   conflict_reason: string | null; conflicting_source: string | null; next_available_at: string | null;
 }
-export interface RentalPortalClient { profile_id: string; full_name: string | null; company: string | null; email: string | null; mobile: string | null; account_type: string }
-export interface RentalRentableAsset { asset_id: string; asset_code: string; asset_name: string; asset_type: string; available_quantity: number; available: boolean; photo_path: string | null }
+export interface RentalPortalClient { profile_id: string; full_name: string | null; company: string | null; email: string | null; mobile: string | null; account_type: string; rental_customer_id: string | null }
+export interface RentalClientSearch { total_count: number; limit?: number; offset?: number; rows: RentalPortalClient[] }
+export interface RentalRentableAsset {
+  asset_id: string; asset_code: string; asset_name: string; asset_type: string; serial_number: string | null;
+  catalog_photo_path: string | null; photo_path: string | null; total_quantity: number;
+  available_quantity: number; is_available: boolean; available: boolean; availability_reason: string | null; next_available_at: string | null;
+}
+// تطبيع دفاعي: يدعم أي اسم حقل قديم أثناء الانتقال (بما فيه `free` من النسخة الأساسية). لا undefined/NaN.
+function normAvailQty(row: Record<string, unknown>): number {
+  const v = row.available_quantity ?? row.available_qty ?? row.free_quantity ?? row.qty_available ?? row.free ?? 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
 
 // ─── القراءات (RLS تحكم الصفوف) ───
 const REQ_SEL = "id,request_number,customer_id,status,rental_from,rental_to,rate_type,subtotal,discount_total,additional_total,vat_rate,vat_amount,grand_total,currency,deposit_amount,deposit_status,deposit_received,deposit_applied,deposit_released,actual_handover_at,actual_return_at,purpose,customer_note,internal_note,ready_for_zoho,created_at,updated_at";
@@ -81,8 +93,21 @@ export function rentalListCustomers(q?: string): Promise<Result<RentalCustomer[]
 }
 
 // ─── RPCs (كتابة محمية بالقاعدة) ───
-export const rentalAvailability = (assetId: string, from: string, to: string, qty = 1) =>
-  prpc<RentalAvailability>("custody_rental_availability", { p_asset: assetId, p_from: from, p_to: to, p_qty: qty });
+export async function rentalAvailability(assetId: string, from: string, to: string, qty = 1): Promise<Result<RentalAvailability>> {
+  const r = await prpc<Record<string, unknown>>("custody_rental_availability", { p_asset: assetId, p_from: from, p_to: to, p_qty: qty });
+  if (!r.ok) return r;
+  const d = r.data ?? {};
+  const aq = normAvailQty(d);
+  return { ok: true, data: {
+    available: Boolean(d.available ?? aq >= qty), available_quantity: aq,
+    requested_quantity: Number(d.requested_quantity ?? d.requested ?? qty) || qty,
+    total_quantity: Number(d.total_quantity ?? d.total ?? 0) || 0,
+    committed: Number(d.committed ?? 0) || 0, in_maintenance: Number(d.in_maintenance ?? 0) || 0,
+    asset_type: String(d.asset_type ?? ""), availability_status: (d.availability_status as string) ?? undefined,
+    reason: String(d.reason ?? ""), conflict_reason: (d.conflict_reason as string) ?? null,
+    conflicting_source: (d.conflicting_source as string) ?? null, next_available_at: (d.next_available_at as string) ?? null,
+  } };
+}
 export const rentalTransition = (requestId: string, to: RentalStatus, reason?: string) =>
   prpc<{ ok: boolean; from: string; to: string }>("custody_rental_transition", { p_request: requestId, p_to: to, p_reason: reason ?? null });
 export const rentalUpsertRequest = (data: Record<string, unknown>) =>
@@ -143,12 +168,35 @@ export const rentalSubmit = (requestId: string) => prpc<{ ok: boolean; status: s
 export const rentalApprove = (requestId: string, message?: string) => prpc<{ ok: boolean; status: string }>("custody_rental_approve", { p_request: requestId, p_message: message ?? null });
 export const rentalReject = (requestId: string, reason: string) => prpc<{ ok: boolean; status: string }>("custody_rental_reject", { p_request: requestId, p_reason: reason });
 export const rentalRequestRevision = (requestId: string, note: string) => prpc<{ ok: boolean; status: string }>("custody_rental_request_revision", { p_request: requestId, p_note: note });
-export const rentalSearchClients = (q?: string, limit = 20, offset = 0) => prpc<RentalPortalClient[]>("custody_rental_admin_search_clients", { p_q: q ?? null, p_limit: limit, p_offset: offset });
+export async function rentalSearchClients(q?: string, limit = 20, offset = 0): Promise<Result<RentalClientSearch>> {
+  const r = await prpc<unknown>("custody_rental_admin_search_clients", { p_q: q ?? "", p_limit: limit, p_offset: offset });
+  if (!r.ok) return r;
+  const d = r.data;
+  if (Array.isArray(d)) return { ok: true, data: { total_count: d.length, rows: d as RentalPortalClient[] } };
+  const o = (d ?? {}) as { total_count?: number; limit?: number; offset?: number; rows?: RentalPortalClient[] };
+  return { ok: true, data: { total_count: Number(o.total_count ?? (o.rows?.length ?? 0)) || 0, limit: o.limit, offset: o.offset, rows: o.rows ?? [] } };
+}
 export const rentalLinkPortalClient = (profileId: string) => prpc<{ ok: boolean; customer_id: string; full_name: string | null; company: string | null; email: string | null; phone: string | null; party_type: string }>("custody_rental_admin_link_portal_client", { p_profile: profileId });
 export const rentalCustomerCreateRequest = (data: Record<string, unknown>) => prpc<{ ok: boolean; id: string; request_number: string; status: string }>("custody_rental_customer_create_request", { p_data: data });
 export const rentalCustomerAddItem = (requestId: string, assetId: string, qty = 1) => prpc<{ ok: boolean }>("custody_rental_customer_add_item", { p_request: requestId, p_asset: assetId, p_qty: qty });
 export const rentalCustomerSubmit = (requestId: string) => prpc<{ ok: boolean; status: string }>("custody_rental_customer_submit", { p_request: requestId });
-export const rentalCustomerAvailableAssets = (from: string, to: string, q?: string) => prpc<RentalRentableAsset[]>("custody_rental_customer_available_assets", { p_from: from, p_to: to, p_q: q ?? null });
+export async function rentalCustomerAvailableAssets(from: string, to: string, q?: string): Promise<Result<RentalRentableAsset[]>> {
+  const r = await prpc<Record<string, unknown>[]>("custody_rental_customer_available_assets", { p_from: from, p_to: to, p_q: q ?? "" });
+  if (!r.ok) return r;
+  const rows = (Array.isArray(r.data) ? r.data : []).map((row) => {
+    const aq = normAvailQty(row);
+    const isAvail = Boolean(row.is_available ?? row.available ?? aq > 0);
+    const photo = (row.catalog_photo_path ?? row.photo_path ?? null) as string | null;
+    return {
+      asset_id: String(row.asset_id ?? ""), asset_code: String(row.asset_code ?? ""), asset_name: String(row.asset_name ?? ""),
+      asset_type: String(row.asset_type ?? ""), serial_number: (row.serial_number as string) ?? null,
+      catalog_photo_path: photo, photo_path: photo, total_quantity: Number(row.total_quantity ?? 0) || 0,
+      available_quantity: aq, is_available: isAvail, available: isAvail,
+      availability_reason: (row.availability_reason as string) ?? null, next_available_at: (row.next_available_at as string) ?? null,
+    } as RentalRentableAsset;
+  });
+  return { ok: true, data: rows };
+}
 export const rentalAddEvidence = (requestId: string, itemId: string | null, stage: "handover" | "return_inspection" | "return_request", path: string, condition?: string, note?: string) =>
   prpc<{ ok: boolean }>("custody_rental_add_evidence", { p_request: requestId, p_item: itemId, p_stage: stage, p_path: path, p_condition: condition ?? null, p_note: note ?? null });
 

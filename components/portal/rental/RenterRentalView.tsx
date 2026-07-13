@@ -101,18 +101,19 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
   const [q, setQ] = useState("");
   const [results, setResults] = useState<RentalRentableAsset[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [cart, setCart] = useState<Array<{ asset_id: string; asset_name: string; quantity: number; max: number }>>([]);
   const [busy, setBusy] = useState(false);
   const [winErr, setWinErr] = useState<string | null>(null);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
-  useEffect(() => { const e = validateWindow(f.rental_from, f.rental_to); setWinErr(e ? rentalErrorAr(e) : null); setResults([]); }, [f.rental_from, f.rental_to]);
+  useEffect(() => { const e = validateWindow(f.rental_from, f.rental_to); setWinErr(e ? rentalErrorAr(e) : null); setResults([]); setSearched(false); }, [f.rental_from, f.rental_to]);
   function onFromChange(v: string) { set("rental_from", v); const fi = riyadhInputToUtcISO(v); const ti = riyadhInputToUtcISO(f.rental_to); if (fi && (!ti || new Date(ti).getTime() <= new Date(fi).getTime())) { const np = endPlus24h(v); if (np) set("rental_to", np); } }
   async function search() {
     const we = validateWindow(f.rental_from, f.rental_to); if (we) { flash(rentalErrorAr(we)); return; }
     setSearching(true);
     const r = await rentalCustomerAvailableAssets(riyadhInputToUtcISO(f.rental_from)!, riyadhInputToUtcISO(f.rental_to)!, q.trim() || undefined);
-    setSearching(false);
-    if (r.ok) setResults(r.data); else flash(rentalErrorAr(r.error));
+    setSearching(false); setSearched(true);
+    if (r.ok) setResults(r.data); else { setResults([]); flash(rentalErrorAr(r.error)); }
   }
   function addToCart(a: RentalRentableAsset) {
     if (!a.available || a.available_quantity < 1) { flash(t({ ar: "غير متاح في الفترة المحددة.", en: "Not available." })); return; }
@@ -147,6 +148,8 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
       <div className="border-t border-stone-800 pt-2 space-y-2">
         <label className="block text-[11px] text-stone-400">{t({ ar: "ابحث عن المعدّات المتاحة للفترة", en: "Search available equipment" })}</label>
         <div className="flex gap-2"><input className={`${inp} flex-1`} placeholder={t({ ar: "اسم/كود المعدّة", en: "Name/code" })} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void search(); }} /><button disabled={searching || !!winErr} onClick={() => void search()} className={`${btnGhost} px-3 py-2 text-xs`}>{searching ? "…" : t({ ar: "بحث", en: "Search" })}</button></div>
+        {searching && <div className="text-[11px] text-stone-500">{t({ ar: "جارٍ البحث…", en: "Searching…" })}</div>}
+        {!searching && searched && results.length === 0 && <div className="text-[11px] text-amber-400">{t({ ar: "لا توجد معدات متاحة في هذه الفترة.", en: "No equipment available for this period." })}</div>}
         {results.length > 0 && <div className="max-h-48 overflow-y-auto space-y-1">{results.map((a) => (
           <div key={a.asset_id} className="flex items-center justify-between bg-stone-950 border border-stone-800 rounded-lg p-2 text-xs">
             <span className="text-stone-200">{a.asset_name} <span className="text-stone-500" dir="ltr">({a.asset_code})</span> {a.photo_path ? "📷" : ""}<span className={`ms-2 ${a.available ? "text-emerald-500" : "text-amber-500"}`}>{a.available ? t({ ar: `متاح: ${a.available_quantity}`, en: `avail: ${a.available_quantity}` }) : t({ ar: "غير متاح", en: "n/a" })}</span></span>

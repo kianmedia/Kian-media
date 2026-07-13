@@ -144,6 +144,8 @@ const field = "space-y-0.5";
 
 function availAr(a: RentalAvailability): string {
   if (a.available) return `متاح · الكمية المتاحة: ${a.available_quantity}`;
+  if (a.available_quantity > 0 && a.requested_quantity > a.available_quantity)
+    return `الكمية المطلوبة غير متاحة. المتاح حاليًا: ${a.available_quantity}`;
   const st = a.availability_status ?? "";
   const reason =
     a.conflicting_source === "asset_status" || /lost/.test(a.reason) ? (/, retired/.test(st) ? "الأصل غير نشط." : "الأصل تالف أو مفقود.")
@@ -160,6 +162,7 @@ function CreateTab({ flash, onCreated, t }: { flash: (m: string) => void; onCrea
   const [clientQ, setClientQ] = useState("");
   const [clientResults, setClientResults] = useState<RentalPortalClient[]>([]);
   const [clientSearching, setClientSearching] = useState(false);
+  const [clientSearched, setClientSearched] = useState(false);
   const [chosen, setChosen] = useState<{ customer_id: string; full_name: string | null; company: string | null; email: string | null; phone: string | null } | null>(null);
 
   const dw = useRef(defaultRentalWindow()).current;
@@ -189,16 +192,23 @@ function CreateTab({ flash, onCreated, t }: { flash: (m: string) => void; onCrea
 
   async function searchClients() {
     setClientSearching(true); const r = await rentalSearchClients(clientQ.trim() || undefined, 20, 0); setClientSearching(false);
-    if (r.ok) setClientResults(r.data); else flash(rentalErrorAr(r.error));
+    setClientSearched(true);
+    if (r.ok) setClientResults(r.data.rows); else { setClientResults([]); flash(rentalErrorAr(r.error)); }
   }
   async function pickClient(c: RentalPortalClient) {
+    // إن كان العميل مرتبطًا مسبقًا (rental_customer_id) استخدمه مباشرة — لا upsert/تكرار.
+    if (c.rental_customer_id) {
+      setChosen({ customer_id: c.rental_customer_id, full_name: c.full_name, company: c.company, email: c.email, phone: c.mobile });
+      set("customer_id", c.rental_customer_id); set("party_type", (c.company && c.company.trim()) ? "company" : "individual");
+      setReqId(null); setClientResults([]); setClientSearched(false); return;
+    }
     setBusy(true); const r = await rentalLinkPortalClient(c.profile_id); setBusy(false);
     if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
     setChosen({ customer_id: r.data.customer_id, full_name: r.data.full_name, company: r.data.company, email: r.data.email, phone: r.data.phone });
     set("customer_id", r.data.customer_id); set("party_type", r.data.party_type);
-    setReqId(null); setClientResults([]);
+    setReqId(null); setClientResults([]); setClientSearched(false);
   }
-  function clearClient() { setChosen(null); set("customer_id", ""); setReqId(null); }
+  function clearClient() { setChosen(null); set("customer_id", ""); setReqId(null); setClientResults([]); setClientSearched(false); }
 
   // ينشئ المسودة أو يزامن نافذتها/مواقعها إن كانت موجودة (يمرّر id) — كي لا تُرسَل نافذة قديمة.
   async function ensureDraft(): Promise<string | null> {
@@ -275,10 +285,12 @@ function CreateTab({ flash, onCreated, t }: { flash: (m: string) => void; onCrea
                 <input className={`${inp} flex-1`} placeholder={t({ ar: "بحث بالاسم/الشركة/البريد/الجوال", en: "Search name/company/email/phone" })} value={clientQ} onChange={(e) => setClientQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchClients(); }} />
                 <button disabled={clientSearching} onClick={() => void searchClients()} className={`${btnGhost} px-3 py-2 text-xs`}>{clientSearching ? "…" : t({ ar: "بحث", en: "Search" })}</button>
               </div>
+              {clientSearching && <div className="mt-1 text-[11px] text-stone-500">{t({ ar: "جارٍ البحث…", en: "Searching…" })}</div>}
+              {!clientSearching && clientSearched && clientResults.length === 0 && <div className="mt-1 text-[11px] text-amber-400">{t({ ar: "لا توجد نتائج مطابقة.", en: "No matching clients." })}</div>}
               {clientResults.length > 0 && <div className="mt-1 max-h-44 overflow-y-auto space-y-1">
                 {clientResults.map((c) => (
                   <button key={c.profile_id} onClick={() => void pickClient(c)} className="w-full text-right bg-stone-950 border border-stone-800 rounded-lg p-2 text-xs text-stone-200 hover:border-red-700">
-                    <div>{c.company || c.full_name || c.email} <span className="text-[10px] px-1 rounded bg-stone-800">{c.account_type}</span></div>
+                    <div>{c.company || c.full_name || c.email} <span className="text-[10px] px-1 rounded bg-stone-800">{c.account_type}</span>{c.rental_customer_id ? <span className="text-[9px] text-emerald-500/80 ms-1">مرتبط</span> : ""}</div>
                     <div className="text-[10px] text-stone-500" dir="ltr">{c.email ?? ""} {c.mobile ?? ""}</div>
                   </button>
                 ))}
