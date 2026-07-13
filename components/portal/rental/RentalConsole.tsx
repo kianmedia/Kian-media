@@ -4,14 +4,17 @@
 // التقويم/التقارير. كل الكتابة عبر RPCs محمية بالقاعدة (state machine + RLS).
 // الإجراءات التشغيلية (اعتماد/عقد/توقيع/تسليم/إرجاع/فحص/رسوم/إغلاق) في RentalDetail.
 // ════════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { civListAssets, type CivAsset } from "@/lib/portal/custodyInventory";
 import {
-  rentalDashboard, rentalListRequests, rentalListCustomers, rentalUpsertRequest, rentalAddItem,
-  rentalRemoveItem, rentalAvailability, rentalTransition, rentalListItems, rentalCalendar,
-  type RentalDashboard, type RentalRequest, type RentalCustomer, type RentalItem, type RentalStatus,
+  rentalDashboard, rentalListRequests, rentalUpsertRequest, rentalAddItem,
+  rentalRemoveItem, rentalAvailability, rentalSubmit, rentalListItems, rentalCalendar,
+  rentalSearchClients, rentalLinkPortalClient, emitRentalEvent,
+  type RentalDashboard, type RentalRequest, type RentalItem, type RentalStatus,
+  type RentalAvailability, type RentalPortalClient,
 } from "@/lib/portal/rental";
+import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
 import RentalDetail from "@/components/portal/rental/RentalDetail";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
@@ -122,8 +125,8 @@ function RequestsTab({ openDetail, t }: { openDetail: (id: string) => void; t: T
           <tr key={r.id}>
             <td className={`${td} font-mono`} dir="ltr">{r.request_number}</td>
             <td className={td}><span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-800 border border-stone-700">{rentalStatusAr(r.status)}</span></td>
-            <td className={td} dir="ltr">{r.rental_from ? new Date(r.rental_from).toLocaleDateString("ar") : "—"}</td>
-            <td className={td} dir="ltr">{r.rental_to ? new Date(r.rental_to).toLocaleDateString("ar") : "—"}</td>
+            <td className={td} dir="ltr">{formatRiyadh(r.rental_from, false)}</td>
+            <td className={td} dir="ltr">{formatRiyadh(r.rental_to, false)}</td>
             <td className={td} dir="ltr">{r.grand_total ? `${r.grand_total} ${r.currency}` : "—"}</td>
             <td className={td}>{r.deposit_amount ? rentalStatusAr(r.deposit_status) : "—"}</td>
             <td className={td}><button onClick={() => openDetail(r.id)} className={`${btnGhost} px-2 py-1 text-[11px]`}>تفاصيل</button></td>
@@ -136,77 +139,198 @@ function RequestsTab({ openDetail, t }: { openDetail: (id: string) => void; t: T
 }
 
 // ─── إنشاء طلب ───
+const lbl = "block text-[11px] text-stone-400 mb-1";
+const field = "space-y-0.5";
+
+function availAr(a: RentalAvailability): string {
+  if (a.available) return `متاح · الكمية المتاحة: ${a.available_quantity}`;
+  const st = a.availability_status ?? "";
+  const reason =
+    a.conflicting_source === "asset_status" || /lost/.test(a.reason) ? (/, retired/.test(st) ? "الأصل غير نشط." : "الأصل تالف أو مفقود.")
+    : a.conflicting_source === "other_rental" ? "الأصل محجوز لتأجير آخر."
+    : a.conflicting_source === "custody_reservation" ? "الأصل في عهدة موظف."
+    : a.conflicting_source === "maintenance" ? "الأصل في الصيانة."
+    : "الكمية غير كافية.";
+  const next = a.next_available_at ? ` · يتاح بعد: ${formatRiyadh(a.next_available_at, false)}` : "";
+  return `غير متاح في الفترة المحددة — الكمية المتاحة: ${a.available_quantity}. ${reason}${next}`;
+}
+
 function CreateTab({ flash, onCreated, t }: { flash: (m: string) => void; onCreated: (id: string) => void; t: T }) {
-  const [customers, setCustomers] = useState<RentalCustomer[]>([]);
+  const [renterType, setRenterType] = useState<"registered" | "external">("registered");
+  const [clientQ, setClientQ] = useState("");
+  const [clientResults, setClientResults] = useState<RentalPortalClient[]>([]);
+  const [clientSearching, setClientSearching] = useState(false);
+  const [chosen, setChosen] = useState<{ customer_id: string; full_name: string | null; company: string | null; email: string | null; phone: string | null } | null>(null);
+
+  const dw = useRef(defaultRentalWindow()).current;
   const [assets, setAssets] = useState<CivAsset[]>([]);
-  const [f, setF] = useState<Record<string, string>>({ party_type: "individual", customer_id: "" });
+  const [f, setF] = useState<Record<string, string>>({ party_type: "individual", rental_from: dw.from, rental_to: dw.to });
   const [items, setItems] = useState<RentalItem[]>([]);
   const [reqId, setReqId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [pick, setPick] = useState(""); const [pickQty, setPickQty] = useState("1"); const [avail, setAvail] = useState<string>("");
+  const [winErr, setWinErr] = useState<string | null>(null);
+  const [pick, setPick] = useState(""); const [pickQty, setPickQty] = useState("1");
+  const [avail, setAvail] = useState<RentalAvailability | null>(null);
+  const [availBusy, setAvailBusy] = useState(false);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
-  useEffect(() => { void rentalListCustomers().then((r) => { if (r.ok) setCustomers(r.data); }); void civListAssets().then((r) => { if (r.ok) setAssets(r.data); }); }, []);
 
+  useEffect(() => { void civListAssets().then((r) => { if (r.ok) setAssets(r.data); }); }, []);
+  // أي تغيير في المعدّة/الكمية/النافذة يُلغي نتيجة الفحص القديمة (لا اعتماد عليها).
+  useEffect(() => { setAvail(null); }, [pick, pickQty, f.rental_from, f.rental_to]);
+  useEffect(() => { const e = validateWindow(f.rental_from, f.rental_to); setWinErr(e ? rentalErrorAr(e) : null); }, [f.rental_from, f.rental_to]);
+
+  function onFromChange(v: string) {
+    set("rental_from", v);
+    const fromISO = riyadhInputToUtcISO(v);
+    const toISO = riyalToISO(f.rental_to);
+    if (fromISO && (!toISO || new Date(toISO).getTime() <= new Date(fromISO).getTime())) { const np = endPlus24h(v); if (np) set("rental_to", np); }
+  }
+  function riyalToISO(v?: string) { return riyadhInputToUtcISO(v); }
+
+  async function searchClients() {
+    setClientSearching(true); const r = await rentalSearchClients(clientQ.trim() || undefined, 20, 0); setClientSearching(false);
+    if (r.ok) setClientResults(r.data); else flash(rentalErrorAr(r.error));
+  }
+  async function pickClient(c: RentalPortalClient) {
+    setBusy(true); const r = await rentalLinkPortalClient(c.profile_id); setBusy(false);
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
+    setChosen({ customer_id: r.data.customer_id, full_name: r.data.full_name, company: r.data.company, email: r.data.email, phone: r.data.phone });
+    set("customer_id", r.data.customer_id); set("party_type", r.data.party_type);
+    setReqId(null); setClientResults([]);
+  }
+  function clearClient() { setChosen(null); set("customer_id", ""); setReqId(null); }
+
+  // ينشئ المسودة أو يزامن نافذتها/مواقعها إن كانت موجودة (يمرّر id) — كي لا تُرسَل نافذة قديمة.
   async function ensureDraft(): Promise<string | null> {
-    if (reqId) return reqId;
-    if (!f.customer_id && !f.full_name?.trim()) { flash(t({ ar: "اختر مستأجرًا أو أدخل اسمًا.", en: "Pick or enter a customer." })); return null; }
-    if (!f.rental_from || !f.rental_to) { flash(t({ ar: "حدّد تاريخي البداية والنهاية.", en: "Set start and end dates." })); return null; }
-    const r = await rentalUpsertRequest({ customer_id: f.customer_id || undefined, party_type: f.party_type, full_name: f.full_name, company_name: f.company_name, phone: f.phone, email: f.email, rental_from: new Date(f.rental_from).toISOString(), rental_to: new Date(f.rental_to).toISOString(), rate_type: f.rate_type, purpose: f.purpose, customer_note: f.customer_note, internal_note: f.internal_note });
-    if (!r.ok) { flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return null; }
-    setReqId(r.data.id); return r.data.id;
+    const we = validateWindow(f.rental_from, f.rental_to); if (we) { flash(rentalErrorAr(we)); return null; }
+    if (renterType === "registered" && !chosen) { flash(t({ ar: "اختر عميلًا مسجلًا في البوابة.", en: "Pick a registered client." })); return null; }
+    if (renterType === "external" && !f.full_name?.trim()) { flash(t({ ar: "أدخل اسم/منشأة المستأجر.", en: "Enter renter name." })); return null; }
+    const r = await rentalUpsertRequest({
+      id: reqId ?? undefined,
+      customer_id: chosen?.customer_id || undefined,
+      party_type: f.party_type, full_name: f.full_name, company_name: f.company_name, phone: f.phone, email: f.email,
+      rental_from: riyadhInputToUtcISO(f.rental_from), rental_to: riyadhInputToUtcISO(f.rental_to),
+      delivery_location: f.delivery_location, return_location: f.return_location,
+      rate_type: f.rate_type, purpose: f.purpose, customer_note: f.customer_note, internal_note: f.internal_note,
+    });
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return null; }
+    if (!reqId) setReqId(r.data.id);
+    return r.data.id;
   }
   async function checkAvail() {
-    if (!pick || !f.rental_from || !f.rental_to) return;
-    const r = await rentalAvailability(pick, new Date(f.rental_from).toISOString(), new Date(f.rental_to).toISOString(), Number(pickQty) || 1);
-    setAvail(r.ok ? (r.data.available ? t({ ar: `متاح (${r.data.free})`, en: `available (${r.data.free})` }) : t({ ar: `غير متاح — متبقٍّ ${r.data.free}`, en: `unavailable (${r.data.free})` })) : "—");
+    const we = validateWindow(f.rental_from, f.rental_to); if (we) { flash(rentalErrorAr(we)); return; }
+    if (!pick) return;
+    setAvailBusy(true);
+    const r = await rentalAvailability(pick, riyadhInputToUtcISO(f.rental_from)!, riyadhInputToUtcISO(f.rental_to)!, Number(pickQty) || 1);
+    setAvailBusy(false);
+    if (!r.ok) { flash(rentalErrorAr(r.error)); setAvail(null); return; }
+    setAvail(r.data);
   }
   async function addItem() {
-    const id = await ensureDraft(); if (!id || !pick) return;
+    if (!pick) return;
+    if (!avail) { flash(t({ ar: "افحص التوفّر أولًا.", en: "Check availability first." })); return; }
+    if (!avail.available) { flash(t({ ar: "لا يمكن إضافة أصل غير متاح.", en: "Cannot add an unavailable asset." })); return; }
+    const id = await ensureDraft(); if (!id) return;
     setBusy(true); const r = await rentalAddItem(id, pick, Number(pickQty) || 1); setBusy(false);
-    if (!r.ok) { flash(/not_available/.test(r.error) ? t({ ar: "الأصل غير متاح لهذه الفترة.", en: "Asset not available." }) : t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
-    setPick(""); setPickQty("1"); setAvail("");
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
+    setPick(""); setPickQty("1"); setAvail(null);
     const li = await rentalListItems(id); if (li.ok) setItems(li.data);
   }
   async function submit() {
+    if (busy) return;
     const id = await ensureDraft(); if (!id) return;
     if (items.length === 0) { flash(t({ ar: "أضف معدّة واحدة على الأقل.", en: "Add at least one item." })); return; }
-    setBusy(true); const r = await rentalTransition(id, "pending_approval" as RentalStatus, "submitted"); setBusy(false);
-    if (!r.ok) { flash(t({ ar: "تعذّر الإرسال: ", en: "Submit failed: " }) + r.error); return; }
+    setBusy(true); const r = await rentalSubmit(id); setBusy(false);
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
+    emitRentalEvent("rental_pending_approval", id);
     flash(t({ ar: "أُرسل الطلب للاعتماد.", en: "Sent for approval." })); onCreated(id);
   }
-  const availList = assets.filter((a) => !["lost", "retired"].includes(a.availability_status) && !a.is_deleted);
+  const availList = assets.filter((a) => !["lost", "retired"].includes(a.availability_status));
+
   return (
-    <div className={`${card} space-y-3`}>
+    <div className={`${card} space-y-4`}>
       <h3 className="text-sm font-medium text-white">{t({ ar: "إنشاء طلب تأجير", en: "New rental request" })}</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <select className={inp} value={f.customer_id} onChange={(e) => set("customer_id", e.target.value)}><option value="">{t({ ar: "مستأجر جديد…", en: "New customer…" })}</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.company_name || c.full_name}</option>)}</select>
-        {!f.customer_id && <>
-          <select className={inp} value={f.party_type} onChange={(e) => set("party_type", e.target.value)}><option value="individual">فرد</option><option value="company">شركة</option></select>
-          <input className={inp} placeholder="الاسم/المنشأة *" value={f.full_name ?? ""} onChange={(e) => set("full_name", e.target.value)} />
-          <input className={inp} placeholder="الجوال" value={f.phone ?? ""} onChange={(e) => set("phone", e.target.value)} />
-          <input className={inp} placeholder="البريد" value={f.email ?? ""} onChange={(e) => set("email", e.target.value)} />
-        </>}
-        <input type="datetime-local" className={inp} title="البداية" value={f.rental_from ?? ""} onChange={(e) => set("rental_from", e.target.value)} />
-        <input type="datetime-local" className={inp} title="النهاية" value={f.rental_to ?? ""} onChange={(e) => set("rental_to", e.target.value)} />
-        <input className={inp} placeholder="الغرض" value={f.purpose ?? ""} onChange={(e) => set("purpose", e.target.value)} />
-        <input className={inp} placeholder="ملاحظة داخلية" value={f.internal_note ?? ""} onChange={(e) => set("internal_note", e.target.value)} />
+
+      {/* نوع المستأجر */}
+      <div className="flex gap-2">
+        {(["registered", "external"] as const).map((v) => (
+          <button key={v} onClick={() => { setRenterType(v); clearClient(); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${renterType === v ? "bg-red-600 text-white" : "bg-stone-800 text-stone-300 border border-stone-700"}`}>
+            {v === "registered" ? t({ ar: "اختيار عميل مسجل", en: "Registered client" }) : t({ ar: "إضافة مستأجر خارجي", en: "External renter" })}
+          </button>
+        ))}
       </div>
-      <div className="border-t border-stone-800 pt-3 space-y-2">
-        <div className="flex gap-2 flex-wrap items-center">
-          <select className={`${inp} flex-1 min-w-[180px]`} value={pick} onChange={(e) => { setPick(e.target.value); setAvail(""); }}><option value="">{t({ ar: "اختر معدّة…", en: "Pick asset…" })}</option>{availList.map((a) => <option key={a.id} value={a.id}>{a.asset_name} ({a.asset_code})</option>)}</select>
-          <input className={`${inp} w-20`} type="number" min={1} value={pickQty} onChange={(e) => setPickQty(e.target.value)} />
-          <button disabled={!pick} onClick={() => void checkAvail()} className={`${btnGhost} px-3 py-2 text-xs`}>{t({ ar: "فحص التوفّر", en: "Check" })}</button>
-          {avail && <span className="text-[11px] text-stone-400">{avail}</span>}
-          <button disabled={busy || !pick} onClick={() => void addItem()} className={`${btnRed} px-3 py-2 text-xs`}>{t({ ar: "+ إضافة", en: "+ Add" })}</button>
+
+      {/* اختيار عميل البوابة */}
+      {renterType === "registered" && (
+        <div className={field}>
+          <label className={lbl}>{t({ ar: "العميل المسجّل في البوابة", en: "Portal client" })}</label>
+          {chosen ? (
+            <div className="flex items-center justify-between bg-stone-950 border border-stone-800 rounded-lg p-2 text-xs text-stone-200">
+              <span>{chosen.company || chosen.full_name} <span className="text-stone-500" dir="ltr">· {chosen.email ?? ""} {chosen.phone ?? ""}</span></span>
+              <button onClick={clearClient} className="text-red-400 text-[11px]">{t({ ar: "تغيير", en: "Change" })}</button>
+            </div>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <input className={`${inp} flex-1`} placeholder={t({ ar: "بحث بالاسم/الشركة/البريد/الجوال", en: "Search name/company/email/phone" })} value={clientQ} onChange={(e) => setClientQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchClients(); }} />
+                <button disabled={clientSearching} onClick={() => void searchClients()} className={`${btnGhost} px-3 py-2 text-xs`}>{clientSearching ? "…" : t({ ar: "بحث", en: "Search" })}</button>
+              </div>
+              {clientResults.length > 0 && <div className="mt-1 max-h-44 overflow-y-auto space-y-1">
+                {clientResults.map((c) => (
+                  <button key={c.profile_id} onClick={() => void pickClient(c)} className="w-full text-right bg-stone-950 border border-stone-800 rounded-lg p-2 text-xs text-stone-200 hover:border-red-700">
+                    <div>{c.company || c.full_name || c.email} <span className="text-[10px] px-1 rounded bg-stone-800">{c.account_type}</span></div>
+                    <div className="text-[10px] text-stone-500" dir="ltr">{c.email ?? ""} {c.mobile ?? ""}</div>
+                  </button>
+                ))}
+              </div>}
+            </>
+          )}
         </div>
+      )}
+
+      {/* مستأجر خارجي — نموذج يدوي */}
+      {renterType === "external" && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className={field}><label className={lbl}>{t({ ar: "نوع المستأجر", en: "Type" })}</label><select className={inp} value={f.party_type} onChange={(e) => set("party_type", e.target.value)}><option value="individual">فرد</option><option value="company">شركة</option></select></div>
+          <div className={field}><label className={lbl}>{t({ ar: "الاسم/المنشأة *", en: "Name/Company *" })}</label><input className={inp} value={f.full_name ?? ""} onChange={(e) => set("full_name", e.target.value)} /></div>
+          <div className={field}><label className={lbl}>{t({ ar: "الجوال", en: "Phone" })}</label><input className={inp} dir="ltr" value={f.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></div>
+          <div className={field}><label className={lbl}>{t({ ar: "البريد", en: "Email" })}</label><input className={inp} dir="ltr" value={f.email ?? ""} onChange={(e) => set("email", e.target.value)} /></div>
+        </div>
+      )}
+
+      {/* التواريخ والمواقع */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className={field}><label className={lbl}>{t({ ar: "بداية التأجير (استلام)", en: "Rental start" })}</label><input type="datetime-local" className={inp} value={f.rental_from ?? ""} onChange={(e) => onFromChange(e.target.value)} /></div>
+        <div className={field}><label className={lbl}>{t({ ar: "نهاية التأجير (إرجاع)", en: "Rental end" })}</label><input type="datetime-local" className={inp} value={f.rental_to ?? ""} min={f.rental_from} onChange={(e) => set("rental_to", e.target.value)} />{winErr && <span className="text-[11px] text-red-400">{winErr}</span>}</div>
+        <div className={field}><label className={lbl}>{t({ ar: "موقع التسليم", en: "Delivery location" })}</label><input className={inp} value={f.delivery_location ?? ""} onChange={(e) => set("delivery_location", e.target.value)} /></div>
+        <div className={field}><label className={lbl}>{t({ ar: "موقع الإرجاع", en: "Return location" })}</label><input className={inp} value={f.return_location ?? ""} onChange={(e) => set("return_location", e.target.value)} /></div>
+        <div className={field}><label className={lbl}>{t({ ar: "الغرض", en: "Purpose" })}</label><input className={inp} value={f.purpose ?? ""} onChange={(e) => set("purpose", e.target.value)} /></div>
+        <div className={field}><label className={lbl}>{t({ ar: "ملاحظة داخلية", en: "Internal note" })}</label><input className={inp} value={f.internal_note ?? ""} onChange={(e) => set("internal_note", e.target.value)} /></div>
+      </div>
+      <div className="text-[11px] text-stone-500">{t({ ar: "التوقيت بتوقيت الرياض. النهاية يجب أن تكون بعد البداية.", en: "Times are Asia/Riyadh. End must be after start." })}</div>
+
+      {/* اختيار المعدّة + فحص التوفّر */}
+      <div className="border-t border-stone-800 pt-3 space-y-2">
+        <label className={lbl}>{t({ ar: "المعدّة والكمية", en: "Asset & quantity" })}</label>
+        <div className="flex gap-2 flex-wrap items-center">
+          <select className={`${inp} flex-1 min-w-[180px]`} value={pick} onChange={(e) => setPick(e.target.value)}><option value="">{t({ ar: "اختر معدّة…", en: "Pick asset…" })}</option>{availList.map((a) => <option key={a.id} value={a.id}>{a.asset_name} ({a.asset_code})</option>)}</select>
+          <input className={`${inp} w-20`} type="number" min={1} value={pickQty} onChange={(e) => setPickQty(e.target.value)} />
+          <button disabled={!pick || availBusy || !!winErr} onClick={() => void checkAvail()} className={`${btnGhost} px-3 py-2 text-xs`}>{availBusy ? "…" : t({ ar: "فحص التوفّر", en: "Check availability" })}</button>
+          <button disabled={busy || !pick || !avail?.available} onClick={() => void addItem()} className={`${btnRed} px-3 py-2 text-xs`}>{t({ ar: "+ إضافة", en: "+ Add" })}</button>
+        </div>
+        {avail && <div className={`text-[11px] ${avail.available ? "text-emerald-400" : "text-amber-400"}`}>{availAr(avail)}</div>}
         {items.map((it) => (
           <div key={it.id} className="flex items-center gap-2 bg-stone-950 border border-stone-800 rounded-lg p-2 text-xs text-stone-300">
             <span className="flex-1">{assets.find((a) => a.id === it.asset_id)?.asset_name ?? it.asset_id.slice(0, 8)} × {it.quantity}</span>
-            <button onClick={async () => { const r = await rentalRemoveItem(it.id); if (r.ok && reqId) { const li = await rentalListItems(reqId); if (li.ok) setItems(li.data); } }} className="text-red-400">حذف</button>
+            <button onClick={async () => { const r = await rentalRemoveItem(it.id); if (r.ok && reqId) { const li = await rentalListItems(reqId); if (li.ok) setItems(li.data); } }} className="text-red-400">{t({ ar: "حذف", en: "Remove" })}</button>
           </div>
         ))}
       </div>
-      <button disabled={busy} onClick={() => void submit()} className={`${btnRed} w-full py-2.5`}>{t({ ar: "إرسال للاعتماد", en: "Submit for approval" })}</button>
+
+      <button disabled={busy || !!winErr} onClick={() => void submit()} className={`${btnRed} w-full py-2.5 flex items-center justify-center gap-2`}>
+        {busy && <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+        {t({ ar: "إرسال للاعتماد", en: "Submit for approval" })}
+      </button>
     </div>
   );
 }
@@ -216,8 +340,11 @@ function CalendarTab({ openDetail, t }: { openDetail: (id: string) => void; t: T
   const [events, setEvents] = useState<Array<{ id: string; request_number: string; status: RentalStatus; from: string; to: string; customer: string | null }>>([]);
   const [month, setMonth] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   const load = useCallback(async () => {
-    const from = new Date(month.y, month.m, 1).toISOString();
-    const to = new Date(month.y, month.m + 1, 1).toISOString();
+    // حدود الشهر بتوقيت الرياض الثابت (لا browser-local) — اتساقًا مع تخزين/عرض بقية النظام.
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const ny = month.m === 11 ? month.y + 1 : month.y; const nm = month.m === 11 ? 0 : month.m + 1;
+    const from = riyadhInputToUtcISO(`${month.y}-${pad(month.m + 1)}-01T00:00`)!;
+    const to = riyadhInputToUtcISO(`${ny}-${pad(nm + 1)}-01T00:00`)!;
     const r = await rentalCalendar(from, to); if (r.ok) setEvents(r.data);
   }, [month]);
   useEffect(() => { void load(); }, [load]);
@@ -232,7 +359,7 @@ function CalendarTab({ openDetail, t }: { openDetail: (id: string) => void; t: T
         : <div className="space-y-2">{events.map((e) => (
           <button key={e.id} onClick={() => openDetail(e.id)} className={`${card} w-full text-right flex items-center justify-between hover:border-red-700`}>
             <div><div className="text-sm text-stone-200 font-mono" dir="ltr">{e.request_number}</div><div className="text-[11px] text-stone-500">{e.customer ?? "—"} · {rentalStatusAr(e.status)}</div></div>
-            <div className="text-[11px] text-stone-400" dir="ltr">{new Date(e.from).toLocaleDateString("ar")} → {new Date(e.to).toLocaleDateString("ar")}</div>
+            <div className="text-[11px] text-stone-400" dir="ltr">{formatRiyadh(e.from, false)} → {formatRiyadh(e.to, false)}</div>
           </button>
         ))}</div>}
     </div>

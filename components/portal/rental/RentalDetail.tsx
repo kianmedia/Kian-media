@@ -5,13 +5,15 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  rentalGet, rentalTransition, rentalPrice, rentalDeposit, rentalGenerateContract, rentalSignContract,
-  rentalStartHandover, rentalAddHandoverEvidence, rentalCompleteHandover, rentalRequestReturn,
+  rentalGet, rentalPrice, rentalDeposit, rentalGenerateContract, rentalSignContract,
+  rentalStartHandover, rentalAddEvidence, rentalCompleteHandover, rentalRequestReturn,
   rentalStartInspection, rentalInspectItem, rentalCompleteReturn, rentalAddCharge, rentalApproveCharge,
-  rentalClose, rentalCancel, rentalUpload, rentalUploadSignature, rentalEvidencePath, RENTAL_EVIDENCE_BUCKET,
+  rentalClose, rentalCancel, rentalApprove, rentalReject, rentalRequestRevision,
+  rentalUpload, rentalUploadSignature, rentalItemEvidencePath, rentalOverallEvidencePath, emitRentalEvent, RENTAL_EVIDENCE_BUCKET,
   type RentalStatus,
 } from "@/lib/portal/rental";
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
+import { formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
 
 type T = (m: { ar: string; en: string }) => string;
 const inp = "w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -51,9 +53,10 @@ export default function RentalDetail({ requestId, onClose, onChanged, t }: { req
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onClose]);
 
-  async function run(fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) {
+  async function run(fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string, emit?: string) {
     setBusy(true); const r = await fn(); setBusy(false);
-    if (!r.ok) { flash(t({ ar: "تعذّر: ", en: "Failed: " }) + (r.error ?? "")); return false; }
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return false; }
+    if (emit) emitRentalEvent(emit, requestId);
     flash(okMsg); await reload(); onChanged(); return true;
   }
 
@@ -74,7 +77,7 @@ export default function RentalDetail({ requestId, onClose, onChanged, t }: { req
             <div className={`${box} grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs text-stone-300`}>
               <span>{t({ ar: "العميل", en: "Customer" })}: {d.customer?.company_name || d.customer?.full_name || "—"}</span>
               <span dir="ltr">{d.customer?.phone ?? ""}</span>
-              <span dir="ltr">{d.rental_from ? new Date(d.rental_from).toLocaleDateString("ar") : "—"} → {d.rental_to ? new Date(d.rental_to).toLocaleDateString("ar") : "—"}</span>
+              <span dir="ltr">{formatRiyadh(d.rental_from)} → {formatRiyadh(d.rental_to)}</span>
               <span>{t({ ar: "الإجمالي", en: "Total" })}: {money(d.grand_total)} {d.currency}</span>
               <span>{t({ ar: "الضريبة", en: "VAT" })}: {money(d.vat_amount)} ({d.vat_rate}%)</span>
               <span>{t({ ar: "الوديعة", en: "Deposit" })}: {money(d.deposit_amount)} · {rentalStatusAr(d.deposit_status)}</span>
@@ -104,7 +107,7 @@ export default function RentalDetail({ requestId, onClose, onChanged, t }: { req
             <div>
               <h3 className="text-xs font-medium text-stone-400 mb-1">{t({ ar: "سجل الحالة", en: "History" })}</h3>
               <div className="max-h-40 overflow-y-auto space-y-1">{d.events.map((e, i) => (
-                <div key={i} className="text-[11px] text-stone-500 flex justify-between border-t border-stone-800 py-1"><span>{rentalStatusAr(e.from ?? "")} → {rentalStatusAr(e.to)}{e.reason ? ` · ${e.reason}` : ""}</span><span dir="ltr">{new Date(e.at).toLocaleString("ar")}</span></div>
+                <div key={i} className="text-[11px] text-stone-500 flex justify-between border-t border-stone-800 py-1"><span>{rentalStatusAr(e.from ?? "")} → {rentalStatusAr(e.to)}{e.reason ? ` · ${e.reason}` : ""}</span><span dir="ltr">{formatRiyadh(e.at)}</span></div>
               ))}</div>
             </div>
           </div>
@@ -116,7 +119,7 @@ export default function RentalDetail({ requestId, onClose, onChanged, t }: { req
 }
 
 // ─── شريط الإجراءات (state-driven) ───
-function ActionBar({ d, busy, run, reload, flash, onClose, t }: { d: Detail; busy: boolean; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>; reload: () => Promise<void>; flash: (m: string) => void; onClose: () => void; t: T }) {
+function ActionBar({ d, busy, run, reload, flash, onClose, t }: { d: Detail; busy: boolean; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string, emit?: string) => Promise<boolean>; reload: () => Promise<void>; flash: (m: string) => void; onClose: () => void; t: T }) {
   const s = d.status;
   const [showHandover, setShowHandover] = useState(false);
   const [showInspect, setShowInspect] = useState(false);
@@ -125,19 +128,20 @@ function ActionBar({ d, busy, run, reload, flash, onClose, t }: { d: Detail; bus
       <h3 className="text-xs font-medium text-stone-400">{t({ ar: "الإجراءات", en: "Actions" })}</h3>
       <div className="flex gap-2 flex-wrap">
         {s === "pending_approval" && <>
-          <button disabled={busy} onClick={() => run(() => rentalTransition(d.id, "approved" as RentalStatus), t({ ar: "اعتُمد.", en: "Approved." }))} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "اعتماد", en: "Approve" })}</button>
-          <button disabled={busy} onClick={() => run(() => rentalTransition(d.id, "rejected" as RentalStatus, "rejected"), t({ ar: "رُفض.", en: "Rejected." }))} className={`${btnGhost} px-4 py-1.5 text-xs text-red-400`}>{t({ ar: "رفض", en: "Reject" })}</button>
+          <button disabled={busy} onClick={async () => { const msg = window.prompt(t({ ar: "رسالة للمستأجر (اختياري):", en: "Message to renter (optional):" })) ?? undefined; await run(() => rentalApprove(d.id, msg), t({ ar: "اعتُمد الطلب.", en: "Approved." }), "rental_approved"); }} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "اعتماد", en: "Approve" })}</button>
+          <button disabled={busy} onClick={async () => { const reason = window.prompt(t({ ar: "سبب الرفض (إلزامي، يُرسل للمستأجر):", en: "Reject reason (required):" })); if (reason && reason.trim()) await run(() => rentalReject(d.id, reason.trim()), t({ ar: "رُفض الطلب.", en: "Rejected." }), "rental_rejected"); }} className={`${btnGhost} px-4 py-1.5 text-xs text-red-400`}>{t({ ar: "رفض", en: "Reject" })}</button>
+          <button disabled={busy} onClick={async () => { const note = window.prompt(t({ ar: "ملاحظة التعديل المطلوبة (تُرسل للمستأجر):", en: "Revision note (to renter):" })); if (note && note.trim()) await run(() => rentalRequestRevision(d.id, note.trim()), t({ ar: "أُرسل طلب التعديل.", en: "Revision requested." }), "rental_revision_requested"); }} className={`${btnGhost} px-4 py-1.5 text-xs text-amber-400`}>{t({ ar: "طلب تعديل", en: "Request revision" })}</button>
         </>}
         {(s === "approved" || s === "awaiting_customer_confirmation") && <button disabled={busy} onClick={() => run(() => rentalGenerateContract(d.id), t({ ar: "أُنشئ العقد.", en: "Contract generated." }))} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "توليد العقد", en: "Generate contract" })}</button>}
         {s === "contract_pending_signature" && d.latest_contract && <SignInline contractId={d.latest_contract.id} run={run} t={t} />}
         {(s === "scheduled" || s === "preparing" || s === "ready_for_handover") && <button disabled={busy} onClick={() => setShowHandover(true)} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "التجهيز والتسليم", en: "Handover" })}</button>}
-        {(s === "active" || s === "overdue") && <button disabled={busy} onClick={() => run(() => rentalRequestReturn(d.id), t({ ar: "سُجّل طلب الإرجاع.", en: "Return requested." }))} className={`${btnGhost} px-4 py-1.5 text-xs`}>{t({ ar: "طلب إرجاع", en: "Request return" })}</button>}
-        {s === "return_requested" && <button disabled={busy} onClick={() => run(() => rentalStartInspection(d.id), t({ ar: "بدأ الفحص.", en: "Inspection started." }))} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "بدء فحص الإرجاع", en: "Start inspection" })}</button>}
+        {(s === "active" || s === "overdue") && <button disabled={busy} onClick={() => run(() => rentalRequestReturn(d.id), t({ ar: "سُجّل طلب الإرجاع.", en: "Return requested." }), "rental_return_requested")} className={`${btnGhost} px-4 py-1.5 text-xs`}>{t({ ar: "طلب إرجاع", en: "Request return" })}</button>}
+        {s === "return_requested" && <button disabled={busy} onClick={() => run(() => rentalStartInspection(d.id), t({ ar: "بدأ الفحص.", en: "Inspection started." }), "rental_return_inspection_required")} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "بدء فحص الإرجاع", en: "Start inspection" })}</button>}
         {s === "inspection_pending" && <>
           <button disabled={busy} onClick={() => setShowInspect(true)} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "فحص القطع", en: "Inspect items" })}</button>
           <button disabled={busy} onClick={() => run(() => rentalCompleteReturn(d.id), t({ ar: "اكتمل الإرجاع.", en: "Return complete." }))} className={`${btnGhost} px-4 py-1.5 text-xs`}>{t({ ar: "إنهاء الفحص", en: "Complete return" })}</button>
         </>}
-        {s === "charges_pending" && <button disabled={busy} onClick={() => run(() => rentalClose(d.id), t({ ar: "أُغلق التأجير.", en: "Closed." }))} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "إغلاق التأجير", en: "Close rental" })}</button>}
+        {s === "charges_pending" && <button disabled={busy} onClick={() => run(() => rentalClose(d.id), t({ ar: "أُغلق التأجير.", en: "Closed." }), "rental_closed")} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "إغلاق التأجير", en: "Close rental" })}</button>}
         {["draft", "pending_approval", "approved", "awaiting_customer_confirmation", "contract_pending_signature", "scheduled", "preparing", "ready_for_handover"].includes(s) &&
           <button disabled={busy} onClick={async () => { const reason = window.prompt(t({ ar: "سبب الإلغاء:", en: "Cancel reason:" })); if (reason && reason.trim()) await run(() => rentalCancel(d.id, reason.trim()), t({ ar: "أُلغي.", en: "Cancelled." })); }} className={`${btnGhost} px-4 py-1.5 text-xs text-stone-500`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>}
       </div>
@@ -148,7 +152,7 @@ function ActionBar({ d, busy, run, reload, flash, onClose, t }: { d: Detail; bus
 }
 
 // ─── توقيع مضمّن (اسم + لوحة رسم canvas) ───
-function SignInline({ contractId, run, t }: { contractId: string; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>; t: T }) {
+function SignInline({ contractId, run, t }: { contractId: string; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string, emit?: string) => Promise<boolean>; t: T }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(""); const [ack, setAck] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -178,42 +182,77 @@ function SignInline({ contractId, run, t }: { contractId: string; run: (fn: () =
   );
 }
 
+// ─── لوحة توقيع قابلة لإعادة الاستخدام (canvas → dataURL) ───
+function SigCanvas({ label, onChange }: { label: string; onChange: (dataUrl: string | null) => void }) {
+  const ref = useRef<HTMLCanvasElement | null>(null); const drawing = useRef(false); const dirty = useRef(false);
+  function pos(e: React.PointerEvent<HTMLCanvasElement>) { const c = ref.current!; const r = c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  function down(e: React.PointerEvent<HTMLCanvasElement>) { drawing.current = true; const ctx = ref.current!.getContext("2d")!; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }
+  function move(e: React.PointerEvent<HTMLCanvasElement>) { if (!drawing.current) return; const ctx = ref.current!.getContext("2d")!; const p = pos(e); ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.lineTo(p.x, p.y); ctx.stroke(); dirty.current = true; }
+  function end() { if (drawing.current) { drawing.current = false; onChange(dirty.current ? ref.current!.toDataURL("image/png") : null); } }
+  function clear() { const c = ref.current; if (c) c.getContext("2d")!.clearRect(0, 0, c.width, c.height); dirty.current = false; onChange(null); }
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between"><span className="text-[11px] text-stone-400">{label}</span><button onClick={clear} className="text-[10px] text-stone-500">مسح</button></div>
+      <canvas ref={ref} width={320} height={90} className="w-full bg-stone-800 border border-stone-700 rounded-lg touch-none" onPointerDown={down} onPointerMove={move} onPointerUp={end} onPointerLeave={end} />
+    </div>
+  );
+}
+
 // ─── التجهيز والتسليم ───
 function HandoverPanel({ d, onDone, flash, t }: { d: Detail; onDone: () => Promise<void>; flash: (m: string) => void; t: T }) {
   const [conds, setConds] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [overallDone, setOverallDone] = useState(false);
+  const [custSig, setCustSig] = useState<string | null>(null);
+  const [staffSig, setStaffSig] = useState<string | null>(null);
   useEffect(() => { void rentalStartHandover(d.id); }, [d.id]);
-  async function addPhoto(itemId: string, file: File, condition: string) {
+  async function addItemPhoto(itemId: string, file: File, condition: string) {
     setBusy(true);
-    const path = rentalEvidencePath(d.id, "handover", itemId, file.name);
+    const path = rentalItemEvidencePath(d.id, "handover", itemId, file.name);
     const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
-    if (up.ok) { const r = await rentalAddHandoverEvidence(d.id, itemId, up.data, condition); if (!r.ok) flash(t({ ar: "تعذّر الربط: ", en: "Attach failed: " }) + r.error); else flash(t({ ar: "أُضيفت صورة القطعة.", en: "Photo added." })); }
+    if (up.ok) { const r = await rentalAddEvidence(d.id, itemId, "handover", up.data, condition); if (!r.ok) flash(rentalErrorAr(r.error)); else flash(t({ ar: "أُضيفت صورة القطعة.", en: "Item photo added." })); }
     else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
     setBusy(false);
   }
-  const [custName, setCustName] = useState("");
+  async function addOverallPhoto(file: File) {
+    setBusy(true);
+    const path = rentalOverallEvidencePath(d.id, "handover", file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    if (up.ok) { const r = await rentalAddEvidence(d.id, null, "handover", up.data); if (r.ok) { setOverallDone(true); flash(t({ ar: "أُضيفت الصورة الإجمالية.", en: "Overall photo added." })); } else flash(rentalErrorAr(r.error)); }
+    else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
+    setBusy(false);
+  }
   async function complete() {
-    // توقيعان مبسّطان (اسم) — الرسم عبر توقيع العقد. هنا نمرّر مسار توقيع نصي مؤقت.
-    const custSig = `handover-customer:${custName || "signed"}`;
-    const staffSig = `handover-staff:${new Date().toISOString()}`;
-    setBusy(true); const r = await rentalCompleteHandover(d.id, custSig, staffSig); setBusy(false);
-    if (!r.ok) { flash(/items_incomplete/.test(r.error) ? t({ ar: "أكمل حالة وصورة كل قطعة أولًا.", en: "Complete condition+photo per item." }) : t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
+    if (!custSig || !staffSig) { flash(t({ ar: "توقيع المستأجر وموظف كيان مطلوبان.", en: "Both signatures required." })); return; }
+    setBusy(true);
+    const cu = await rentalUploadSignature(d.id, "customer", custSig);
+    const su = await rentalUploadSignature(d.id, "staff", staffSig);
+    if (!cu.ok || !su.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع التواقيع.", en: "Signature upload failed." })); return; }
+    const r = await rentalCompleteHandover(d.id, cu.data, su.data); setBusy(false);
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
+    emitRentalEvent("rental_activated", d.id);
     flash(t({ ar: "تم التسليم وتفعيل التأجير.", en: "Handover complete — activated." })); await onDone();
   }
   return (
     <div className="mt-2 border-t border-stone-800 pt-2 space-y-2">
+      <div className="text-[11px] text-stone-500">{t({ ar: "صوّر كل قطعة + صورة إجمالية واحدة، وحدّد الحالة، ثم التوقيعان.", en: "Photo each item + one overall, set condition, then both signatures." })}</div>
       {d.items.map((it) => (
         <div key={it.id} className="bg-stone-950 border border-stone-800 rounded-lg p-2 space-y-1.5">
           <div className="text-xs text-stone-200">{it.asset_name} <span dir="ltr" className="text-stone-500">({it.asset_code})</span> × {it.quantity}</div>
           <div className="flex gap-2 items-center flex-wrap">
             <select className={`${inp} w-auto text-xs`} value={conds[it.id] ?? "good"} onChange={(e) => setConds((p) => ({ ...p, [it.id]: e.target.value }))}>{CONDITIONS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
-            <label className={`${btnGhost} px-3 py-1.5 text-xs cursor-pointer`}>📷 {t({ ar: "صورة", en: "Photo" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void addPhoto(it.id, f, conds[it.id] ?? "good"); e.target.value = ""; }} /></label>
+            <label className={`${btnGhost} px-3 py-1.5 text-xs cursor-pointer`}>📷 {t({ ar: "صورة القطعة", en: "Item photo" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void addItemPhoto(it.id, f, conds[it.id] ?? "good"); e.target.value = ""; }} /></label>
             {it.condition_out && <span className="text-[10px] text-emerald-500/80">✓ {it.condition_out}</span>}
           </div>
         </div>
       ))}
-      <input className={inp} placeholder={t({ ar: "اسم مستلم العميل (توقيع)", en: "Customer receiver name" })} value={custName} onChange={(e) => setCustName(e.target.value)} />
-      <button disabled={busy} onClick={() => void complete()} className={`${btnRed} w-full py-2 text-xs`}>{t({ ar: "إتمام التسليم وتفعيل التأجير", en: "Complete handover & activate" })}</button>
+      <div className="bg-stone-950 border border-stone-800 rounded-lg p-2 flex items-center gap-2">
+        <label className={`${btnRed} px-3 py-1.5 text-xs cursor-pointer`}>📷 {t({ ar: "صورة إجمالية للطلب (إلزامية)", en: "Overall photo (required)" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void addOverallPhoto(f); e.target.value = ""; }} /></label>
+        {overallDone && <span className="text-[10px] text-emerald-500">✓ {t({ ar: "أُضيفت", en: "added" })}</span>}
+      </div>
+      <SigCanvas label={t({ ar: "توقيع المستأجر", en: "Customer signature" })} onChange={setCustSig} />
+      <SigCanvas label={t({ ar: "توقيع موظف كيان", en: "Kian staff signature" })} onChange={setStaffSig} />
+      <button disabled={busy || !custSig || !staffSig} onClick={() => void complete()} className={`${btnRed} w-full py-2 text-xs`}>{t({ ar: "إتمام التسليم وتفعيل التأجير", en: "Complete handover & activate" })}</button>
     </div>
   );
 }
@@ -221,16 +260,34 @@ function HandoverPanel({ d, onDone, flash, t }: { d: Detail; onDone: () => Promi
 // ─── فحص الإرجاع ───
 function InspectPanel({ d, onDone, flash, t }: { d: Detail; onDone: () => Promise<void>; flash: (m: string) => void; t: T }) {
   const [busy, setBusy] = useState(false);
+  const [overallDone, setOverallDone] = useState(false);
   const items = d.items.filter((i) => ["issued", "return_requested"].includes(i.status));
   const [sel, setSel] = useState<Record<string, { result: string; condition: string; note: string }>>({});
+  async function addItemPhoto(itemId: string, file: File, condition: string) {
+    setBusy(true);
+    const path = rentalItemEvidencePath(d.id, "return", itemId, file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    if (up.ok) { const r = await rentalAddEvidence(d.id, itemId, "return_inspection", up.data, condition); if (!r.ok) flash(rentalErrorAr(r.error)); else flash(t({ ar: "أُضيفت صورة الإرجاع.", en: "Return photo added." })); }
+    else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
+    setBusy(false);
+  }
+  async function addOverallPhoto(file: File) {
+    setBusy(true);
+    const path = rentalOverallEvidencePath(d.id, "return", file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    if (up.ok) { const r = await rentalAddEvidence(d.id, null, "return_inspection", up.data); if (r.ok) { setOverallDone(true); flash(t({ ar: "أُضيفت الصورة الإجمالية للإرجاع.", en: "Overall return photo added." })); } else flash(rentalErrorAr(r.error)); }
+    else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
+    setBusy(false);
+  }
   async function inspect(itemId: string, qty: number) {
     const v = sel[itemId] ?? { result: "available", condition: "good", note: "" };
     setBusy(true); const r = await rentalInspectItem(itemId, v.result, v.condition, qty, v.note); setBusy(false);
-    if (!r.ok) { flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
     flash(t({ ar: "سُجّل الفحص.", en: "Inspected." })); await onDone();
   }
   return (
     <div className="mt-2 border-t border-stone-800 pt-2 space-y-2">
+      <div className="text-[11px] text-stone-500">{t({ ar: "صوّر كل قطعة بعد الإرجاع + صورة إجمالية للمرتجع، وسجّل الفحص. لا يُغلق الإرجاع بلا صورة إجمالية.", en: "Photo each returned item + one overall; return can't complete without the overall photo." })}</div>
       {items.length === 0 ? <p className="text-xs text-stone-500">{t({ ar: "لا قطع بانتظار الفحص.", en: "No items to inspect." })}</p> : items.map((it) => (
         <div key={it.id} className="bg-stone-950 border border-stone-800 rounded-lg p-2 space-y-1.5">
           <div className="text-xs text-stone-200">{it.asset_name} <span dir="ltr" className="text-stone-500">({it.asset_code})</span> × {it.quantity}</div>
@@ -238,15 +295,22 @@ function InspectPanel({ d, onDone, flash, t }: { d: Detail; onDone: () => Promis
             <select className={`${inp} text-xs`} value={sel[it.id]?.result ?? "available"} onChange={(e) => setSel((p) => ({ ...p, [it.id]: { ...(p[it.id] ?? { condition: "good", note: "" }), result: e.target.value } }))}>{RESULTS.map((r) => <option key={r} value={r}>{r}</option>)}</select>
             <select className={`${inp} text-xs`} value={sel[it.id]?.condition ?? "good"} onChange={(e) => setSel((p) => ({ ...p, [it.id]: { ...(p[it.id] ?? { result: "available", note: "" }), condition: e.target.value } }))}>{CONDITIONS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
           </div>
-          <button disabled={busy} onClick={() => void inspect(it.id, it.quantity)} className={`${btnRed} px-3 py-1 text-xs`}>{t({ ar: "تسجيل فحص القطعة", en: "Record" })}</button>
+          <div className="flex gap-2 items-center flex-wrap">
+            <label className={`${btnGhost} px-3 py-1.5 text-xs cursor-pointer`}>📷 {t({ ar: "صورة بعد الإرجاع", en: "Return photo" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void addItemPhoto(it.id, f, sel[it.id]?.condition ?? "good"); e.target.value = ""; }} /></label>
+            <button disabled={busy} onClick={() => void inspect(it.id, it.quantity)} className={`${btnRed} px-3 py-1 text-xs`}>{t({ ar: "تسجيل فحص القطعة", en: "Record" })}</button>
+          </div>
         </div>
       ))}
+      <div className="bg-stone-950 border border-stone-800 rounded-lg p-2 flex items-center gap-2">
+        <label className={`${btnRed} px-3 py-1.5 text-xs cursor-pointer`}>📷 {t({ ar: "صورة إجمالية للمرتجع (إلزامية)", en: "Overall return photo (required)" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void addOverallPhoto(f); e.target.value = ""; }} /></label>
+        {overallDone && <span className="text-[10px] text-emerald-500">✓ {t({ ar: "أُضيفت", en: "added" })}</span>}
+      </div>
     </div>
   );
 }
 
 // ─── التسعير + الوديعة (مالية — الخادم يفرض الصلاحية) ───
-function FinancePanel({ d, run, t }: { d: Detail; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>; t: T }) {
+function FinancePanel({ d, run, t }: { d: Detail; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string, emit?: string) => Promise<boolean>; t: T }) {
   const [p, setP] = useState({ subtotal: String(d.subtotal || ""), discount_total: String(d.discount_total || ""), additional_total: String(d.additional_total || ""), vat_rate: String(d.vat_rate ?? 15), deposit_amount: String(d.deposit_amount || "") });
   const [depAmt, setDepAmt] = useState("");
   if (["closed", "cancelled"].includes(d.status)) return null;
@@ -272,7 +336,7 @@ function FinancePanel({ d, run, t }: { d: Detail; run: (fn: () => Promise<{ ok: 
 }
 
 // ─── المطالبات/الرسوم ───
-function ChargesPanel({ d, run, t }: { d: Detail; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string) => Promise<boolean>; t: T }) {
+function ChargesPanel({ d, run, t }: { d: Detail; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string, emit?: string) => Promise<boolean>; t: T }) {
   const [nc, setNc] = useState({ item_id: "", type: "damage", desc: "", estimate: "" });
   if (!["active", "overdue", "return_requested", "inspection_pending", "charges_pending"].includes(d.status) && d.charges.length === 0) return null;
   return (

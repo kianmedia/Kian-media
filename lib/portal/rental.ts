@@ -44,7 +44,14 @@ export interface RentalCharge {
   estimate: number; approved_amount: number | null; status: "reported" | "approved" | "rejected" | "settled";
   from_deposit: number; additional_due: number; created_at: string;
 }
-export interface RentalAvailability { available: boolean; free: number; total: number; committed: number; rented_overlap: number; reserved_overlap: number; asset_type: string; reason: string }
+export interface RentalAvailability {
+  available: boolean; free: number; available_quantity: number; requested: number; total: number;
+  committed: number; rented_overlap: number; reserved_overlap: number; in_maintenance?: number;
+  asset_type: string; availability_status?: string; reason: string;
+  conflict_reason: string | null; conflicting_source: string | null; next_available_at: string | null;
+}
+export interface RentalPortalClient { profile_id: string; full_name: string | null; company: string | null; email: string | null; mobile: string | null; account_type: string }
+export interface RentalRentableAsset { asset_id: string; asset_code: string; asset_name: string; asset_type: string; available_quantity: number; available: boolean; photo_path: string | null }
 
 // ─── القراءات (RLS تحكم الصفوف) ───
 const REQ_SEL = "id,request_number,customer_id,status,rental_from,rental_to,rate_type,subtotal,discount_total,additional_total,vat_rate,vat_amount,grand_total,currency,deposit_amount,deposit_status,deposit_received,deposit_applied,deposit_released,actual_handover_at,actual_return_at,purpose,customer_note,internal_note,ready_for_zoho,created_at,updated_at";
@@ -130,6 +137,52 @@ export const rentalClose = (requestId: string) => prpc<{ ok: boolean }>("custody
 export const rentalCancel = (requestId: string, reason: string) => prpc<{ ok: boolean }>("custody_rental_cancel", { p_request: requestId, p_reason: reason });
 export const rentalMarkOverdue = () => prpc<{ ok: boolean; marked: number }>("custody_rental_mark_overdue", {});
 export const rentalCustomerGet = (requestId: string) => prpc<Record<string, unknown>>("custody_rental_customer_get", { p_request: requestId });
+
+// ─── HOTFIX: إرسال/اعتماد/رفض/تعديل + ربط عميل البوابة + طلب ذاتي + دليل عام ───
+export const rentalSubmit = (requestId: string) => prpc<{ ok: boolean; status: string }>("custody_rental_submit", { p_request: requestId });
+export const rentalApprove = (requestId: string, message?: string) => prpc<{ ok: boolean; status: string }>("custody_rental_approve", { p_request: requestId, p_message: message ?? null });
+export const rentalReject = (requestId: string, reason: string) => prpc<{ ok: boolean; status: string }>("custody_rental_reject", { p_request: requestId, p_reason: reason });
+export const rentalRequestRevision = (requestId: string, note: string) => prpc<{ ok: boolean; status: string }>("custody_rental_request_revision", { p_request: requestId, p_note: note });
+export const rentalSearchClients = (q?: string, limit = 20, offset = 0) => prpc<RentalPortalClient[]>("custody_rental_admin_search_clients", { p_q: q ?? null, p_limit: limit, p_offset: offset });
+export const rentalLinkPortalClient = (profileId: string) => prpc<{ ok: boolean; customer_id: string; full_name: string | null; company: string | null; email: string | null; phone: string | null; party_type: string }>("custody_rental_admin_link_portal_client", { p_profile: profileId });
+export const rentalCustomerCreateRequest = (data: Record<string, unknown>) => prpc<{ ok: boolean; id: string; request_number: string; status: string }>("custody_rental_customer_create_request", { p_data: data });
+export const rentalCustomerAddItem = (requestId: string, assetId: string, qty = 1) => prpc<{ ok: boolean }>("custody_rental_customer_add_item", { p_request: requestId, p_asset: assetId, p_qty: qty });
+export const rentalCustomerSubmit = (requestId: string) => prpc<{ ok: boolean; status: string }>("custody_rental_customer_submit", { p_request: requestId });
+export const rentalCustomerAvailableAssets = (from: string, to: string, q?: string) => prpc<RentalRentableAsset[]>("custody_rental_customer_available_assets", { p_from: from, p_to: to, p_q: q ?? null });
+export const rentalAddEvidence = (requestId: string, itemId: string | null, stage: "handover" | "return_inspection" | "return_request", path: string, condition?: string, note?: string) =>
+  prpc<{ ok: boolean }>("custody_rental_add_evidence", { p_request: requestId, p_item: itemId, p_stage: stage, p_path: path, p_condition: condition ?? null, p_note: note ?? null });
+
+// مسارات أدلة منظّمة (bucket rental-evidence حصرًا — لا كتالوج الأصول ولا hr-files).
+function evUuidExt(fileName: string): { rid: string; ext: string } {
+  const ext = (fileName.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
+  const rid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  return { rid, ext };
+}
+/** rental/{rid}/{phase}/items/{itemId}/{uuid}.{ext} */
+export function rentalItemEvidencePath(rentalId: string, phase: "handover" | "return", itemId: string, fileName: string): string {
+  const { rid, ext } = evUuidExt(fileName);
+  return `rental/${rentalId}/${phase}/items/${itemId}/${rid}.${ext}`;
+}
+/** rental/{rid}/{phase}/overall/{uuid}.{ext} */
+export function rentalOverallEvidencePath(rentalId: string, phase: "handover" | "return", fileName: string): string {
+  const { rid, ext } = evUuidExt(fileName);
+  return `rental/${rentalId}/${phase}/overall/${rid}.${ext}`;
+}
+
+// إطلاق إشعار بريد التأجير بعد إجراء ناجح (best-effort — لا يكسر الإجراء). القناة نفسها للعهدة.
+export function emitRentalEvent(event: string, requestId: string): void {
+  void (async () => {
+    try {
+      const s = await getValidSession();
+      if (!s) return;
+      await fetch("/api/integrations/rental/notify", {
+        method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ event, request_id: requestId }),
+      });
+    } catch { /* فشل البريد لا يكسر الإجراء — Vercel logs تحمل السبب */ }
+  })();
+}
 
 export interface RentalDashboard { new: number; pending_approval: number; pending_signature: number; handover_today: number; return_today: number; active: number; overdue: number; open_charges: number; deposits_held: number; deposits_release_pending: number }
 export const rentalDashboard = () => prpc<RentalDashboard>("custody_rental_dashboard", {});

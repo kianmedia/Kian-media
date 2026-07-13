@@ -1,0 +1,107 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Kian — تحويل زمن التأجير (إصلاح bad_window).
+// قاعدة: إدخال <input type="datetime-local"> يُفسَّر بتوقيت الرياض (UTC+3، بلا توقيت
+// صيفي) — لا بتوقيت متصفح المستخدم. يُخزَّن في القاعدة UTC (ISO 8601)، ويُعرض بتوقيت
+// الرياض. لا نستخدم `new Date(localString)` (يفسّرها بمنطقة المتصفح) ولا تنسيقًا
+// يعتمد على لغة المتصفح ثم نعيد تحليله.
+// ════════════════════════════════════════════════════════════════════════════
+
+const RIYADH_OFFSET = "+03:00"; // السعودية — إزاحة ثابتة (لا DST)
+const RIYADH_MS = 3 * 60 * 60 * 1000;
+const pad = (n: number) => String(n).padStart(2, "0");
+const asInput = (r: Date) =>
+  `${r.getUTCFullYear()}-${pad(r.getUTCMonth() + 1)}-${pad(r.getUTCDate())}T${pad(r.getUTCHours())}:${pad(r.getUTCMinutes())}`;
+
+/** datetime-local ("YYYY-MM-DDTHH:mm") مُفسَّرًا كتوقيت الرياض → UTC ISO 8601 صريح. null إن كان غير صالح. */
+export function riyadhInputToUtcISO(local: string | null | undefined): string | null {
+  if (!local) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(local).trim());
+  if (!m) return null;
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? "00"}${RIYADH_OFFSET}`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/** UTC ISO → قيمة datetime-local بتوقيت الرياض ("YYYY-MM-DDTHH:mm"). "" إن غير صالح. */
+export function utcToRiyadhInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  return asInput(new Date(t + RIYADH_MS)); // مكوّنات UTC لهذا الكائن = ساعة حائط الرياض
+}
+
+/** عرض بتوقيت الرياض (Intl مع timeZone صريح — لا يعتمد الحساب على منطقة المتصفح). */
+export function formatRiyadh(iso: string | null | undefined, withTime = true): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  try {
+    return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", {
+      timeZone: "Asia/Riyadh", year: "numeric", month: "2-digit", day: "2-digit",
+      ...(withTime ? { hour: "2-digit", minute: "2-digit", hour12: false } : {}),
+    }).format(d);
+  } catch {
+    return utcToRiyadhInput(iso).replace("T", " ");
+  }
+}
+
+/** نافذة افتراضية: البداية = بداية الساعة القادمة (توقيت الرياض)، النهاية = بعدها بـ24 ساعة (لا تساوي). */
+export function defaultRentalWindow(): { from: string; to: string } {
+  const start = new Date(Date.now() + RIYADH_MS);
+  start.setUTCMinutes(0, 0, 0);
+  start.setUTCHours(start.getUTCHours() + 1);
+  return { from: asInput(start), to: asInput(new Date(start.getTime() + 24 * 60 * 60 * 1000)) };
+}
+
+/** نهاية مقترحة = البداية + 24 ساعة (كقيمة datetime-local). "" إن كانت البداية غير صالحة. */
+export function endPlus24h(fromLocal: string | null | undefined): string {
+  const iso = riyadhInputToUtcISO(fromLocal);
+  if (!iso) return "";
+  return utcToRiyadhInput(new Date(new Date(iso).getTime() + 24 * 60 * 60 * 1000).toISOString());
+}
+
+export type WindowError = "invalid_start" | "invalid_end" | "end_before_start";
+/** تحقق من نافذة التأجير قبل الإرسال. يعيد رمز خطأ أو null. لا يسمح بتساوي البداية والنهاية. */
+export function validateWindow(fromLocal: string | null | undefined, toLocal: string | null | undefined): WindowError | null {
+  const f = riyadhInputToUtcISO(fromLocal);
+  if (!f) return "invalid_start";
+  const t = riyadhInputToUtcISO(toLocal);
+  if (!t) return "invalid_end";
+  if (new Date(t).getTime() <= new Date(f).getTime()) return "end_before_start";
+  return null;
+}
+
+// ─── ربط أخطاء الخادم برسائل عربية واضحة ───
+const ERR_AR: Record<string, string> = {
+  bad_window: "نافذة التأجير غير صالحة — تحقق من تاريخي الاستلام والإرجاع.",
+  invalid_start: "تاريخ/وقت الاستلام غير صالح.",
+  invalid_end: "تاريخ/وقت الإرجاع غير صالح.",
+  end_before_start: "يجب أن يكون وقت الإرجاع بعد وقت الاستلام.",
+  unavailable: "المعدّة غير متاحة في الفترة المحددة.",
+  not_available: "المعدّة غير متاحة في الفترة المحددة.",
+  quantity_unavailable: "الكمية المطلوبة غير متاحة في الفترة المحددة.",
+  no_items: "أضف معدّة واحدة على الأقل.",
+  customer_incomplete: "بيانات المستأجر غير مكتملة.",
+  reason_required: "سبب الرفض مطلوب.",
+  note_required: "ملاحظة التعديل مطلوبة.",
+  not_editable: "لا يمكن تعديل الطلب في حالته الحالية.",
+  bad_status: "لا يمكن تنفيذ هذا الإجراء في حالة الطلب الحالية.",
+  contract_not_signed: "العقد غير موقّع بعد.",
+  signatures_required: "توقيع المستأجر وموظف كيان مطلوبان.",
+  overall_photo_required: "صورة إجمالية واحدة على الأقل مطلوبة قبل التسليم.",
+  overall_return_photo_required: "صورة إرجاع إجمالية مطلوبة قبل إنهاء الفحص.",
+  customer_portal_disabled: "بوابة طلبات التأجير للمستأجرين غير مفعّلة حاليًا.",
+  rental_disabled: "وحدة التأجير غير مفعّلة.",
+  profile_not_found: "لم يُعثر على حساب العميل.",
+  not_found: "الطلب غير موجود.",
+  "not authorized": "لا تملك صلاحية هذا الإجراء.",
+};
+/** رسالة عربية لأي رمز خطأ خادمي/محلي (يقتطع اللاحقة مثل quantity_unavailable:<uuid>). */
+export function rentalErrorAr(raw: string | null | undefined): string {
+  if (!raw) return "حدث خطأ غير متوقع.";
+  const code = String(raw).split(":")[0].trim();
+  if (ERR_AR[code]) return ERR_AR[code];
+  if (/items_incomplete/.test(raw)) return "أكمل حالة وصورة كل قطعة أولًا.";
+  if (/insufficient_stock_at_handover/.test(raw)) return "الكمية غير كافية في المخزون لحظة التسليم.";
+  if (/items_not_inspected/.test(raw)) return "افحص جميع القطع قبل إنهاء الإرجاع.";
+  return `تعذّر: ${raw}`;
+}
