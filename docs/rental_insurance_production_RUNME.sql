@@ -1,15 +1,259 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- Kian — Rental & Insurance Portal V1 — FOUNDATION (data + logic + security)
--- ملف إنتاج واحد idempotent. يوسّع جداول custody_enterprise_05 (لا ينشئ نظامًا موازيًا).
--- يعيد استخدام: custody_inventory_assets (المعدات)، civ_can_manage/civ_can_finance،
---   civ_gen_no، civ_notify_managers، custody_audit، civ_flag، نمط FOR UPDATE.
--- لا hard delete. لا يلمس: العهدة/الأصول، HR، Zoho، الفواتير، العروض، العهدة/التأجير القديم.
--- شغّل بعد أن تكون قاعدة custody_inventory v1 + enterprise_00 (flags) + enterprise_05
---   (جداول التأجير) مطبّقة. آمن للتكرار. Validation في النهاية.
--- ملاحظة النطاق: هذا هو أساس V1 (المخطط + المنطق + الأمان). واجهات الإدارة/المستأجر
---   وتدفقات التسليم/الإرجاع تُبنى فوق هذا الأساس بعد التحقق.
+-- Kian — Rental & Insurance Portal V1 — STANDALONE PRODUCTION RUNME
+--   (data + logic + security). ملف إنتاج واحد idempotent — Standalone بالكامل:
+--   يعمل على قاعدة لا تحتوي custody_enterprise_05 مسبقًا (ينشئ جداول التأجير/التأمين
+--   الأساسية إن غابت)، ثم يرقّيها لطبقة V1 التشغيلية.
+-- يعيد استخدام (لا ينشئها — متطلبات أساسية يتحقق منها PREFLIGHT):
+--   custody_inventory_assets/reservations/movements، custody_enterprise_settings،
+--   custody_incidents، notifications، والدوال المساعدة civ_flag/civ_can_manage/
+--   civ_can_finance/civ_can_admin/civ_gen_no/civ_notify_managers/civ_set_avail/
+--   civ_client_ip (+ custody_audit اختياري). طبّق custody_inventory v1 +
+--   custody_enterprise_00..04 قبل هذا الملف.
+-- لا hard delete. لا DROP TABLE / TRUNCATE / حذف بيانات / إعادة تسمية Legacy.
+--   لا يلمس: العهدة/الأصول، HR، Zoho، الفواتير، العروض، العهدة/التأجير القديم.
+-- ترتيب التنفيذ: PREFLIGHT → extensions/helpers (متطلبات) → FOUNDATION tables +
+--   base RPCs + base RLS → أعلام + إعدادات → أعمدة/قيود V1 → جداول V1 الجديدة →
+--   دوال الأمان + آلة الحالات → دوال دورة الحياة الإدارية → أنواع الإشعارات →
+--   تشديد RLS → storage buckets/policies → دوال التشغيل → grants → NOTIFY → Validation.
+-- آمن للتكرار. كل قسم داخل transaction؛ storage في قسم منفصل (لا يمكن دمجه بأمان مع الباقي).
 -- ════════════════════════════════════════════════════════════════════════════
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- PREFLIGHT — متطلبات أساسية يجب أن تكون مطبّقة مسبقًا (custody v1 + enterprise_00..04).
+--   هذا الملف لا ينشئ العهدة/المخزون/الدوال المساعدة؛ إن غابت يتوقف بخطأ واضح بدل
+--   ترك القاعدة نصف مطبّقة. أمّا جداول التأجير/التأمين (enterprise_05) فينشئها هذا
+--   الملف أدناه إن غابت (لهذا هو Standalone) — غيابها لا يوقف التنفيذ.
+-- ════════════════════════════════════════════════════════════════════════════
+do $$
+declare v_t text[] := '{}'; v_f text[] := '{}'; x text;
+begin
+  foreach x in array array[
+    'public.custody_enterprise_settings','public.custody_inventory_assets',
+    'public.custody_inventory_reservations','public.custody_inventory_movements',
+    'public.custody_incidents','public.notifications'] loop
+    if to_regclass(x) is null then v_t := v_t || x; end if;
+  end loop;
+  foreach x in array array[
+    'civ_flag','civ_can_manage','civ_can_finance','civ_can_admin',
+    'civ_gen_no','civ_notify_managers','civ_set_avail','civ_client_ip'] loop
+    if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+                   where n.nspname='public' and p.proname=x) then v_f := v_f || x; end if;
+  end loop;
+  if coalesce(array_length(v_t,1),0) > 0 or coalesce(array_length(v_f,1),0) > 0 then
+    raise exception E'PREFLIGHT FAILED — متطلبات أساسية مفقودة.\n  جداول مفقودة: [%]\n  دوال مفقودة: [%]\n  طبّق أولًا: custody_inventory v1 + custody_enterprise_00..04 (والدوال المساعدة civ_*) ثم أعد تشغيل هذا الملف.',
+      coalesce(array_to_string(v_t,', '),'(لا شيء)'), coalesce(array_to_string(v_f,', '),'(لا شيء)');
+  end if;
+  -- تحذير غير مانع: is_staff() يستخدمها فقط المسار القديم custody_rental_create_request (من patch 05،
+  -- خلف علم client_rental_portal_enabled المعطّل). طبقة V1 لا تعتمد عليها (تستخدم admin_upsert). إن غابت
+  -- (تأتي من هجرة staff_roles) يبقى المسار القديم معطّلًا فقط — لا نوقف التنفيذ كي لا نمنع نشرًا سليمًا للتأجير.
+  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='is_staff') then
+    raise notice 'PREFLIGHT WARN — public.is_staff() غير موجودة: المسار القديم custody_rental_create_request سيبقى معطّلًا (طبقة V1 غير متأثرة).';
+  end if;
+  raise notice 'PREFLIGHT OK — المتطلبات موجودة. ستُنشأ جداول التأجير/التأمين الأساسية إن غابت.';
+end $$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- FOUNDATION — جداول التأجير والتأمين الأساسية (مدمجة حرفيًا من custody_enterprise_05،
+--   جُعلت idempotent). تجعل هذا الملف Standalone. إن كانت الجداول موجودة (Patch 05
+--   مطبّق) تُترك كما هي دون تعديل بيانات — CREATE IF NOT EXISTS فقط. لا DROP/TRUNCATE.
+--   أعمدة V1 الإضافية تُضاف في الأقسام 1..3 أدناه عبر ADD COLUMN IF NOT EXISTS.
+-- ════════════════════════════════════════════════════════════════════════════
+begin;
+
+-- FND-1) بوابة التأجير — الجداول الأساسية (enterprise_05 §1).
+create table if not exists public.custody_rental_customers (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid references auth.users(id),   -- إن كان له حساب بوابة
+  party_type   text not null default 'individual' check (party_type in ('individual','company')),
+  full_name    text not null,
+  company_name text,
+  phone        text,
+  email        text,
+  id_number_ref text,                            -- مرجع هوية (لا نخزّن أكثر من اللازم)
+  notes        text,
+  is_deleted   boolean not null default false,
+  created_by   uuid references auth.users(id),
+  created_at   timestamptz not null default now()
+);
+create table if not exists public.custody_rental_requests (
+  id            uuid primary key default gen_random_uuid(),
+  request_number text not null unique,
+  customer_id   uuid references public.custody_rental_customers(id),
+  status        text not null default 'requested'
+                check (status in ('requested','reviewing','quoted','approved','contracted','active','return_requested','under_inspection','closed','cancelled')),
+  rental_from   timestamptz,
+  rental_to     timestamptz,
+  deposit_ref   numeric,
+  purpose       text,
+  notes         text,
+  created_by    uuid references auth.users(id),
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create table if not exists public.custody_rental_contracts (
+  id            uuid primary key default gen_random_uuid(),
+  contract_number text not null unique,
+  request_id    uuid references public.custody_rental_requests(id),
+  customer_id   uuid references public.custody_rental_customers(id),
+  terms_snapshot text,
+  contract_pdf_path text,
+  customer_signature_path text,
+  staff_signature_path text,
+  signed_at     timestamptz,
+  status        text not null default 'draft' check (status in ('draft','signed','active','closed','cancelled')),
+  created_by    uuid references auth.users(id),
+  created_at    timestamptz not null default now()
+);
+create table if not exists public.custody_rental_items (
+  id            uuid primary key default gen_random_uuid(),
+  request_id    uuid references public.custody_rental_requests(id),
+  contract_id   uuid references public.custody_rental_contracts(id),
+  asset_id      uuid references public.custody_inventory_assets(id),
+  quantity      numeric not null default 1 check (quantity > 0),
+  condition_out text, condition_in text,
+  status        text not null default 'reserved' check (status in ('reserved','issued','return_requested','inspected','returned','damaged','missing')),
+  created_at    timestamptz not null default now()
+);
+create table if not exists public.custody_rental_inspections (
+  id            uuid primary key default gen_random_uuid(),
+  contract_id   uuid references public.custody_rental_contracts(id),
+  item_id       uuid references public.custody_rental_items(id),
+  result        text, damage_fee_ref numeric, late_fee_ref numeric, note text,
+  inspected_by  uuid references auth.users(id),
+  inspected_at  timestamptz not null default now()
+);
+create index if not exists idx_civ_rental_req_customer on public.custody_rental_requests(customer_id);
+create index if not exists idx_civ_rental_items_contract on public.custody_rental_items(contract_id);
+
+-- إنشاء طلب تأجير (المسار القديم من patch 05 — مُبقى للتوافق؛ V1 يستخدم admin_upsert أدناه).
+create or replace function public.custody_rental_create_request(p_data jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_no text; v_id uuid; v_cust uuid;
+begin
+  if not public.civ_flag('client_rental_portal_enabled') then raise exception 'rental_disabled'; end if;
+  if not (public.is_staff() or auth.uid() is not null) then raise exception 'unauthenticated'; end if;
+  v_cust := nullif(p_data->>'customer_id','')::uuid;
+  if v_cust is null and public.is_staff() then
+    insert into public.custody_rental_customers(full_name, company_name, phone, email, party_type, created_by)
+      values (coalesce(nullif(trim(p_data->>'full_name'),''),'—'), nullif(trim(p_data->>'company_name'),''), nullif(trim(p_data->>'phone'),''),
+        nullif(trim(p_data->>'email'),''), coalesce(nullif(p_data->>'party_type',''),'individual'), auth.uid()) returning id into v_cust;
+  end if;
+  v_no := public.civ_gen_no('RNT');
+  insert into public.custody_rental_requests(request_number, customer_id, rental_from, rental_to, purpose, notes, created_by)
+    values (v_no, v_cust, nullif(p_data->>'rental_from','')::timestamptz, nullif(p_data->>'rental_to','')::timestamptz,
+      nullif(trim(p_data->>'purpose'),''), nullif(trim(p_data->>'notes'),''), auth.uid()) returning id into v_id;
+  perform public.civ_notify_managers('rental_request_created', v_id, 'طلب تأجير جديد ' || v_no, 'New rental request ' || v_no);
+  return jsonb_build_object('ok', true, 'id', v_id, 'request_number', v_no);
+end; $$;
+
+-- FND-2) التأمين والمطالبات — الجداول الأساسية (enterprise_05 §2).
+create table if not exists public.asset_insurance_policies (
+  id            uuid primary key default gen_random_uuid(),
+  policy_number text not null unique,
+  provider      text,
+  start_date    date, end_date date,
+  coverage_amount numeric, deductible numeric,
+  terms         text, contact text,
+  documents     jsonb not null default '[]',
+  is_deleted    boolean not null default false,
+  created_by    uuid references auth.users(id),
+  created_at    timestamptz not null default now()
+);
+create table if not exists public.policy_assets (
+  id         uuid primary key default gen_random_uuid(),
+  policy_id  uuid not null references public.asset_insurance_policies(id) on delete cascade,
+  asset_id   uuid not null references public.custody_inventory_assets(id),
+  constraint uq_policy_asset unique (policy_id, asset_id)
+);
+create table if not exists public.insurance_claims (
+  id            uuid primary key default gen_random_uuid(),
+  claim_number  text not null unique,
+  policy_id     uuid references public.asset_insurance_policies(id),
+  incident_id   uuid references public.custody_incidents(id),
+  asset_id      uuid references public.custody_inventory_assets(id),
+  damage_type   text, report text, estimate_cost numeric,
+  claimed_amount numeric, approved_amount numeric, received_amount_ref numeric,
+  status        text not null default 'open' check (status in ('open','submitted','under_review','approved','rejected','paid','closed')),
+  reject_reason text,
+  submitted_at  timestamptz,
+  created_by    uuid references auth.users(id),
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create table if not exists public.insurance_claim_evidence (
+  id uuid primary key default gen_random_uuid(),
+  claim_id uuid not null references public.insurance_claims(id) on delete cascade,
+  file_path text not null, note text, uploaded_by uuid references auth.users(id), created_at timestamptz not null default now()
+);
+create table if not exists public.insurance_claim_actions (
+  id uuid primary key default gen_random_uuid(),
+  claim_id uuid not null references public.insurance_claims(id) on delete cascade,
+  action_type text not null, note text, created_by uuid references auth.users(id), created_at timestamptz not null default now()
+);
+
+create or replace function public.custody_insurance_create_claim(p_data jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_no text; v_id uuid;
+begin
+  if not (public.civ_can_manage() or public.civ_can_finance()) then raise exception 'not authorized'; end if;
+  if not public.civ_flag('insurance_claims_enabled') then raise exception 'insurance_disabled'; end if;
+  v_no := public.civ_gen_no('CLM');
+  insert into public.insurance_claims(claim_number, policy_id, incident_id, asset_id, damage_type, report, estimate_cost, claimed_amount, status, created_by)
+    values (v_no, nullif(p_data->>'policy_id','')::uuid, nullif(p_data->>'incident_id','')::uuid, nullif(p_data->>'asset_id','')::uuid,
+      nullif(trim(p_data->>'damage_type'),''), nullif(trim(p_data->>'report'),''), nullif(p_data->>'estimate_cost','')::numeric,
+      nullif(p_data->>'claimed_amount','')::numeric, 'open', auth.uid()) returning id into v_id;
+  perform public.civ_notify_managers('insurance_claim_updated', v_id, 'مطالبة تأمين جديدة ' || v_no, 'New insurance claim ' || v_no);
+  return jsonb_build_object('ok', true, 'id', v_id, 'claim_number', v_no);
+end; $$;
+
+-- FND-3) RLS + سياسات القراءة الأساسية + المنح (enterprise_05 §3).
+--   ملاحظة: القسم 7 من V1 أدناه يشدّد قراءة الطلبات/العقود/البنود لمدير/مالية فقط
+--   (يزيل قراءة العميل المباشرة لتفادي تسريب الأعمدة الداخلية) — تشغيلها بعد هذا مقصود.
+alter table public.custody_rental_customers   enable row level security;
+alter table public.custody_rental_requests    enable row level security;
+alter table public.custody_rental_contracts   enable row level security;
+alter table public.custody_rental_items       enable row level security;
+alter table public.custody_rental_inspections enable row level security;
+alter table public.asset_insurance_policies   enable row level security;
+alter table public.policy_assets              enable row level security;
+alter table public.insurance_claims           enable row level security;
+alter table public.insurance_claim_evidence   enable row level security;
+alter table public.insurance_claim_actions    enable row level security;
+
+drop policy if exists civ_rental_cust_read on public.custody_rental_customers;
+create policy civ_rental_cust_read on public.custody_rental_customers for select to authenticated using (public.civ_can_manage() or user_id = auth.uid());
+drop policy if exists civ_rental_req_read on public.custody_rental_requests;
+create policy civ_rental_req_read on public.custody_rental_requests for select to authenticated
+  using (public.civ_can_manage() or exists (select 1 from public.custody_rental_customers c where c.id = customer_id and c.user_id = auth.uid()));
+drop policy if exists civ_rental_contract_read on public.custody_rental_contracts;
+create policy civ_rental_contract_read on public.custody_rental_contracts for select to authenticated
+  using (public.civ_can_manage() or exists (select 1 from public.custody_rental_customers c where c.id = customer_id and c.user_id = auth.uid()));
+drop policy if exists civ_rental_items_read on public.custody_rental_items;
+create policy civ_rental_items_read on public.custody_rental_items for select to authenticated using (public.civ_can_manage());
+drop policy if exists civ_rental_insp_read on public.custody_rental_inspections;
+create policy civ_rental_insp_read on public.custody_rental_inspections for select to authenticated using (public.civ_can_manage());
+drop policy if exists civ_ins_policy_read on public.asset_insurance_policies;
+create policy civ_ins_policy_read on public.asset_insurance_policies for select to authenticated using (public.civ_can_manage() or public.civ_can_finance());
+drop policy if exists civ_policy_assets_read on public.policy_assets;
+create policy civ_policy_assets_read on public.policy_assets for select to authenticated using (public.civ_can_manage() or public.civ_can_finance());
+drop policy if exists civ_claims_read on public.insurance_claims;
+create policy civ_claims_read on public.insurance_claims for select to authenticated using (public.civ_can_manage() or public.civ_can_finance());
+drop policy if exists civ_claim_ev_read on public.insurance_claim_evidence;
+create policy civ_claim_ev_read on public.insurance_claim_evidence for select to authenticated using (public.civ_can_manage() or public.civ_can_finance());
+drop policy if exists civ_claim_act_read on public.insurance_claim_actions;
+create policy civ_claim_act_read on public.insurance_claim_actions for select to authenticated using (public.civ_can_manage() or public.civ_can_finance());
+
+grant select on public.custody_rental_customers, public.custody_rental_requests, public.custody_rental_contracts,
+  public.custody_rental_items, public.custody_rental_inspections, public.asset_insurance_policies, public.policy_assets,
+  public.insurance_claims, public.insurance_claim_evidence, public.insurance_claim_actions to authenticated;
+revoke execute on function public.custody_rental_create_request(jsonb), public.custody_insurance_create_claim(jsonb) from public, anon;
+grant execute on function public.custody_rental_create_request(jsonb) to authenticated;
+grant execute on function public.custody_insurance_create_claim(jsonb) to authenticated;
+commit;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- V1 UPGRADE — أعلام + إعدادات + أعمدة/قيود/جداول V1 فوق الأساس أعلاه.
+-- ════════════════════════════════════════════════════════════════════════════
 begin;
 
 -- ─── 0) أعلام المزايا (تُضاف إلى custody_enterprise_settings ذي الصف الواحد id=1) ───
@@ -980,3 +1224,49 @@ select 'new_tables' as k,
   to_regclass('public.custody_rental_settings') is not null as settings;
 select 'buckets' as k, count(*) from storage.buckets where id in ('rental-evidence','rental-contracts','rental-private-documents');
 select 'status_check_widened' as k, count(*) from pg_constraint where conname='custody_rental_requests_status_check';
+
+-- (8) تحقق Standalone الموسّع: وجود كل الجداول الأساسية + الدوال + الأعلام + RLS + الفهارس.
+-- 8-أ) الجداول الأساسية العشرة (foundation) — يجب أن تكون كلها true.
+select 'foundation_tables' as k,
+  to_regclass('public.custody_rental_customers')   is not null as rental_customers,
+  to_regclass('public.custody_rental_requests')    is not null as rental_requests,
+  to_regclass('public.custody_rental_items')       is not null as rental_items,
+  to_regclass('public.custody_rental_contracts')   is not null as rental_contracts,
+  to_regclass('public.custody_rental_inspections') is not null as rental_inspections,
+  to_regclass('public.asset_insurance_policies')   is not null as ins_policies,
+  to_regclass('public.policy_assets')              is not null as policy_assets,
+  to_regclass('public.insurance_claims')           is not null as ins_claims,
+  to_regclass('public.insurance_claim_evidence')   is not null as ins_claim_evidence,
+  to_regclass('public.insurance_claim_actions')    is not null as ins_claim_actions;
+-- 8-ب) دوال المفتاح موجودة (dashboard + availability).
+select 'key_rpcs' as k,
+  to_regprocedure('public.custody_rental_dashboard()') is not null as dashboard,
+  to_regprocedure('public.custody_rental_availability(uuid,timestamptz,timestamptz,numeric)') is not null as availability;
+-- 8-ج) عدد دوال التأجير/التأمين (يشمل الأساس + V1 التشغيلي — المتوقّع 30).
+select 'rental_rpc_count' as k, count(*) as n
+from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where n.nspname='public' and (p.proname like 'custody_rental\_%' or p.proname like 'rental\_%' or p.proname like 'custody_insurance\_%');
+-- 8-د) private buckets ليست عامة.
+select 'private_buckets' as k, id, public from storage.buckets
+where id in ('rental-evidence','rental-contracts','rental-private-documents') order by id;
+-- 8-هـ) RLS مفعّل على كل جداول التأجير/التأمين + الجداول الجديدة.
+select 'rls_enabled' as k, c.relname, c.relrowsecurity
+from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname='public' and c.relname in (
+  'custody_rental_customers','custody_rental_requests','custody_rental_items','custody_rental_contracts',
+  'custody_rental_inspections','custody_rental_events','custody_rental_charges','custody_rental_evidence',
+  'custody_rental_settings','asset_insurance_policies','policy_assets','insurance_claims',
+  'insurance_claim_evidence','insurance_claim_actions')
+order by c.relname;
+-- 8-و) القيود والفهارس الحرجة (status check موسّع + حركة rental_* + فهارس التأجير).
+select 'critical_constraints' as k,
+  (select count(*) from pg_constraint where conname='custody_rental_requests_status_check') as status_check,
+  (select count(*) from pg_constraint where conname='custody_inventory_movements_movement_type_check') as movement_check,
+  (select count(*) from pg_constraint where conname='notifications_type_check') as notif_check,
+  (select count(*) from pg_indexes where schemaname='public' and indexname in
+     ('idx_rental_req_status','idx_rental_req_window','idx_rental_items_asset','idx_rental_items_request',
+      'idx_rental_events_req','idx_rental_charges_req','idx_rental_evidence_req',
+      'idx_civ_rental_req_customer','idx_civ_rental_items_contract')) as rental_indexes;
+-- 8-ز) الأعلام (كلها false افتراضيًا — لا تُفعّل على Production قبل اختبار Preview).
+select 'flags_full' as k, rental_insurance_enabled, rental_customer_portal_enabled, rental_whatsapp_enabled, rental_finance_enabled
+from public.custody_enterprise_settings where id=1;
