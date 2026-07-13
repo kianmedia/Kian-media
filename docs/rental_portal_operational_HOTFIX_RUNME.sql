@@ -291,25 +291,24 @@ begin
     limit v_lim offset v_off), '[]'::jsonb);
 end; $$;
 
--- ربط/إنشاء عميل تأجير من ملف بوابة — مفتاح ثابت user_id (upsert؛ لا تكرار).
-create or replace function public.custody_rental_admin_link_portal_client(p_profile uuid) returns jsonb
-language plpgsql security definer set search_path = public as $$
-declare pr record; v_id uuid;
+-- ربط/إنشاء عميل تأجير من ملف بوابة — توقيع قانوني p_profile_id (drop لتغيّر اسم البارامتر)،
+--   مفتاح ثابت user_id (upsert؛ لا تكرار)، رد قانوني (rental_customer_id/profile_id/...).
+drop function if exists public.custody_rental_admin_link_portal_client(uuid);
+create function public.custody_rental_admin_link_portal_client(p_profile_id uuid) returns jsonb
+language plpgsql security definer set search_path = public, auth as $$
+declare pr record; v_id uuid; v_party text;
 begin
-  if not (public.civ_can_manage() or public.civ_can_admin()) then raise exception 'not authorized'; end if;
-  select id, full_name, company, email, mobile, account_type into pr from public.profiles where id = p_profile and account_status = 'active';
+  if not (public.civ_can_admin() or public.civ_can_manage()) then raise exception 'not authorized'; end if;
+  select id, full_name, company, email, mobile, account_type, account_status into pr from public.profiles where id = p_profile_id;
   if pr.id is null then raise exception 'profile_not_found'; end if;
+  if pr.account_status <> 'active' or pr.account_type not in ('client','admin') then raise exception 'invalid_account'; end if;
+  v_party := case when coalesce(pr.company,'') <> '' then 'company' else 'individual' end;
   insert into public.custody_rental_customers(user_id, party_type, full_name, company_name, phone, email, created_by)
-    values (pr.id, case when coalesce(pr.company,'') <> '' then 'company' else 'individual' end,
-            coalesce(nullif(trim(pr.full_name),''), pr.email), nullif(trim(pr.company),''), pr.mobile, pr.email, auth.uid())
-  on conflict (user_id) where user_id is not null do update set
-    full_name = coalesce(nullif(trim(excluded.full_name),''), public.custody_rental_customers.full_name),
-    company_name = coalesce(excluded.company_name, public.custody_rental_customers.company_name),
-    phone = coalesce(excluded.phone, public.custody_rental_customers.phone),
-    email = coalesce(excluded.email, public.custody_rental_customers.email), updated_at = now()
+    values (p_profile_id, v_party, coalesce(nullif(trim(pr.full_name),''), pr.email, 'عميل'), nullif(trim(pr.company),''), pr.mobile, pr.email, auth.uid())
+  on conflict (user_id) where user_id is not null do update set updated_at = now()
   returning id into v_id;
-  return jsonb_build_object('ok', true, 'customer_id', v_id, 'full_name', pr.full_name, 'company', pr.company, 'email', pr.email, 'phone', pr.mobile,
-    'party_type', case when coalesce(pr.company,'') <> '' then 'company' else 'individual' end);
+  return jsonb_build_object('rental_customer_id', v_id, 'profile_id', pr.id, 'full_name', pr.full_name,
+    'company', pr.company, 'email', pr.email, 'mobile', pr.mobile, 'account_type', pr.account_type);
 end; $$;
 
 -- إعادة إعلان admin_upsert مع موقع التسليم/الإرجاع (يحافظ على كل السلوك السابق + عمودين).

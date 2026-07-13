@@ -14,7 +14,7 @@ import {
   type RentalDashboard, type RentalRequest, type RentalItem, type RentalStatus,
   type RentalAvailability, type RentalPortalClient,
 } from "@/lib/portal/rental";
-import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
+import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr, rentalLinkErrorAr } from "@/lib/portal/rentalTime";
 import RentalDetail from "@/components/portal/rental/RentalDetail";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
@@ -203,9 +203,10 @@ function CreateTab({ flash, onCreated, t }: { flash: (m: string) => void; onCrea
       setReqId(null); setClientResults([]); setClientSearched(false); return;
     }
     setBusy(true); const r = await rentalLinkPortalClient(c.profile_id); setBusy(false);
-    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
-    setChosen({ customer_id: r.data.customer_id, full_name: r.data.full_name, company: r.data.company, email: r.data.email, phone: r.data.phone });
-    set("customer_id", r.data.customer_id); set("party_type", r.data.party_type);
+    if (!r.ok) { flash(rentalLinkErrorAr(r.error)); return; }
+    const d = r.data;
+    setChosen({ customer_id: d.rental_customer_id, full_name: d.full_name, company: d.company, email: d.email, phone: d.mobile });
+    set("customer_id", d.rental_customer_id); set("party_type", (d.company && d.company.trim()) ? "company" : "individual");
     setReqId(null); setClientResults([]); setClientSearched(false);
   }
   function clearClient() { setChosen(null); set("customer_id", ""); setReqId(null); setClientResults([]); setClientSearched(false); }

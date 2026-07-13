@@ -107,3 +107,14 @@ export function rentalErrorAr(raw: string | null | undefined): string {
   if (/could not find|schema cache|PGRST\d|does not exist|function .* in the schema/i.test(raw)) return "الخدمة غير مهيأة بعد — يرجى المحاولة لاحقًا.";
   return "تعذّر إتمام العملية. حاول مرة أخرى.";
 }
+
+/** رسائل دقيقة لعملية ربط/اختيار عميل البوابة — لا تُظهر نص PostgREST للمستخدم. */
+export function rentalLinkErrorAr(raw: string | null | undefined): string {
+  const r = String(raw ?? "");
+  const code = r.split(":")[0].trim();
+  if (/could not find|schema cache|PGRST\d|does not exist|function .* in the schema/i.test(r)) return "خدمة ربط العميل غير مطبقة في قاعدة البيانات.";
+  if (code === "not authorized" || /permission denied/i.test(r)) return "ليس لديك صلاحية لاختيار هذا العميل.";
+  if (code === "profile_not_found") return "حساب العميل غير موجود.";
+  if (code === "invalid_account") return "الحساب المحدد ليس حساب عميل صالحًا.";
+  return "تعذر اختيار العميل. يرجى إعادة المحاولة.";
+}

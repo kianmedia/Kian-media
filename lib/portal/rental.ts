@@ -176,7 +176,23 @@ export async function rentalSearchClients(q?: string, limit = 20, offset = 0): P
   const o = (d ?? {}) as { total_count?: number; limit?: number; offset?: number; rows?: RentalPortalClient[] };
   return { ok: true, data: { total_count: Number(o.total_count ?? (o.rows?.length ?? 0)) || 0, limit: o.limit, offset: o.offset, rows: o.rows ?? [] } };
 }
-export const rentalLinkPortalClient = (profileId: string) => prpc<{ ok: boolean; customer_id: string; full_name: string | null; company: string | null; email: string | null; phone: string | null; party_type: string }>("custody_rental_admin_link_portal_client", { p_profile: profileId });
+export interface RentalLinkedClient { rental_customer_id: string; profile_id: string; full_name: string | null; company: string | null; email: string | null; mobile: string | null; account_type: string }
+// التوقيع القانوني: p_profile_id uuid. يطبّع الرد (Object/Array/row/data) ويشترط rental_customer_id.
+export async function rentalLinkPortalClient(profileId: string): Promise<Result<RentalLinkedClient>> {
+  const r = await prpc<unknown>("custody_rental_admin_link_portal_client", { p_profile_id: profileId });
+  if (!r.ok) return r;
+  const d = r.data as Record<string, unknown> | unknown[] | null;
+  const rowU = Array.isArray(d) ? d[0] : ((d as Record<string, unknown>)?.row ?? (d as Record<string, unknown>)?.data ?? d);
+  const row = (rowU ?? {}) as Record<string, unknown>;
+  const rcid = row.rental_customer_id ?? row.customer_id; // دعم اسم قديم أثناء الانتقال
+  if (!rcid) return { ok: false, error: "link_no_id" };
+  return { ok: true, data: {
+    rental_customer_id: String(rcid), profile_id: String(row.profile_id ?? profileId),
+    full_name: (row.full_name as string) ?? null, company: (row.company as string) ?? null,
+    email: (row.email as string) ?? null, mobile: ((row.mobile as string) ?? (row.phone as string)) ?? null,
+    account_type: String(row.account_type ?? ""),
+  } };
+}
 export const rentalCustomerCreateRequest = (data: Record<string, unknown>) => prpc<{ ok: boolean; id: string; request_number: string; status: string }>("custody_rental_customer_create_request", { p_data: data });
 export const rentalCustomerAddItem = (requestId: string, assetId: string, qty = 1) => prpc<{ ok: boolean }>("custody_rental_customer_add_item", { p_request: requestId, p_asset: assetId, p_qty: qty });
 export const rentalCustomerSubmit = (requestId: string) => prpc<{ ok: boolean; status: string }>("custody_rental_customer_submit", { p_request: requestId });

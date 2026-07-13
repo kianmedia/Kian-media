@@ -1241,6 +1241,33 @@ end $$;
 
 commit;
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- 9b) ربط عميل البوابة (مدمج من rental_client_linking_HOTFIX — كي لا تعود مشكلة الربط
+--     في أي تثبيت جديد). مفتاح ثابت user_id + توقيع قانوني p_profile_id + رد قانوني.
+-- ════════════════════════════════════════════════════════════════════════════
+begin;
+create unique index if not exists uq_rental_customer_user on public.custody_rental_customers(user_id) where user_id is not null;
+drop function if exists public.custody_rental_admin_link_portal_client(uuid);
+create function public.custody_rental_admin_link_portal_client(p_profile_id uuid) returns jsonb
+language plpgsql security definer set search_path = public, auth as $$
+declare pr record; v_id uuid; v_party text;
+begin
+  if not (public.civ_can_admin() or public.civ_can_manage()) then raise exception 'not authorized'; end if;
+  select id, full_name, company, email, mobile, account_type, account_status into pr from public.profiles where id = p_profile_id;
+  if pr.id is null then raise exception 'profile_not_found'; end if;
+  if pr.account_status <> 'active' or pr.account_type not in ('client','admin') then raise exception 'invalid_account'; end if;
+  v_party := case when coalesce(pr.company,'') <> '' then 'company' else 'individual' end;
+  insert into public.custody_rental_customers(user_id, party_type, full_name, company_name, phone, email, created_by)
+    values (p_profile_id, v_party, coalesce(nullif(trim(pr.full_name),''), pr.email, 'عميل'), nullif(trim(pr.company),''), pr.mobile, pr.email, auth.uid())
+  on conflict (user_id) where user_id is not null do update set updated_at = now()
+  returning id into v_id;
+  return jsonb_build_object('rental_customer_id', v_id, 'profile_id', pr.id, 'full_name', pr.full_name,
+    'company', pr.company, 'email', pr.email, 'mobile', pr.mobile, 'account_type', pr.account_type);
+end; $$;
+revoke all on function public.custody_rental_admin_link_portal_client(uuid) from public, anon;
+grant execute on function public.custody_rental_admin_link_portal_client(uuid) to authenticated;
+commit;
+
 -- إعادة تحميل مخطط PostgREST.
 notify pgrst, 'reload schema';
 
