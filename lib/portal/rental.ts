@@ -193,9 +193,17 @@ export async function rentalLinkPortalClient(profileId: string): Promise<Result<
     account_type: String(row.account_type ?? ""),
   } };
 }
-export const rentalCustomerCreateRequest = (data: Record<string, unknown>) => prpc<{ ok: boolean; id: string; request_number: string; status: string }>("custody_rental_customer_create_request", { p_data: data });
+export interface RentalCreatedItem { item_id: string; asset_id: string; quantity: number }
+export const rentalCustomerCreateRequest = (data: Record<string, unknown>) => prpc<{ ok: boolean; id: string; request_number: string; status: string; items: RentalCreatedItem[] }>("custody_rental_customer_create_request", { p_data: data });
 export const rentalCustomerAddItem = (requestId: string, assetId: string, qty = 1) => prpc<{ ok: boolean }>("custody_rental_customer_add_item", { p_request: requestId, p_asset: assetId, p_qty: qty });
-export const rentalCustomerSubmit = (requestId: string) => prpc<{ ok: boolean; status: string }>("custody_rental_customer_submit", { p_request: requestId });
+export const rentalCustomerSubmit = (requestId: string, consentPath?: string, consentText?: string) =>
+  prpc<{ ok: boolean; status: string }>("custody_rental_customer_submit", { p_request: requestId, p_consent_signature_path: consentPath ?? null, p_consent_text: consentText ?? null });
+// إقرار/عقد + دليل الإنشاء + بحث بالباركود (بوابة المستأجر)
+export const rentalConsentText = () => prpc<{ consent_text: string; version: number; currency: string }>("custody_rental_consent_text", {});
+export const rentalCustomerAddRequestEvidence = (requestId: string, itemId: string | null, path: string) =>
+  prpc<{ ok: boolean }>("custody_rental_customer_add_request_evidence", { p_request: requestId, p_item: itemId, p_path: path });
+export const rentalCustomerLookupAsset = (code: string, from: string, to: string) =>
+  prpc<{ found: boolean; asset_id?: string; asset_code?: string; asset_name?: string; asset_type?: string; serial_number?: string | null; total_quantity?: number; available_quantity?: number; is_available?: boolean; catalog_photo_path?: string | null }>("custody_rental_customer_lookup_asset", { p_code: code, p_from: from, p_to: to });
 export async function rentalCustomerAvailableAssets(from: string, to: string, q?: string): Promise<Result<RentalRentableAsset[]>> {
   const r = await prpc<Record<string, unknown>[]>("custody_rental_customer_available_assets", { p_from: from, p_to: to, p_q: q ?? "" });
   if (!r.ok) return r;
@@ -223,12 +231,12 @@ function evUuidExt(fileName: string): { rid: string; ext: string } {
   return { rid, ext };
 }
 /** rental/{rid}/{phase}/items/{itemId}/{uuid}.{ext} */
-export function rentalItemEvidencePath(rentalId: string, phase: "handover" | "return", itemId: string, fileName: string): string {
+export function rentalItemEvidencePath(rentalId: string, phase: "handover" | "return" | "request", itemId: string, fileName: string): string {
   const { rid, ext } = evUuidExt(fileName);
   return `rental/${rentalId}/${phase}/items/${itemId}/${rid}.${ext}`;
 }
 /** rental/{rid}/{phase}/overall/{uuid}.{ext} */
-export function rentalOverallEvidencePath(rentalId: string, phase: "handover" | "return", fileName: string): string {
+export function rentalOverallEvidencePath(rentalId: string, phase: "handover" | "return" | "request", fileName: string): string {
   const { rid, ext } = evUuidExt(fileName);
   return `rental/${rentalId}/${phase}/overall/${rid}.${ext}`;
 }
@@ -284,6 +292,15 @@ export async function rentalSignFiles(bucket: string, paths: string[]): Promise<
     for (const r of arr) if (r.path && r.signedURL) out[r.path] = `${SUPABASE_URL}/storage/v1${r.signedURL}`;
     return out;
   } catch { return {}; }
+}
+/** رفع توقيع الإقرار (dataURL → PNG) إلى bucket الأدلة (المستأجر يكتبه — write-only). */
+export async function rentalUploadConsentSignature(rentalId: string, dataUrl: string): Promise<Result<string>> {
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    const file = new File([blob], "consent.png", { type: "image/png" });
+    const rid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+    return rentalUpload(RENTAL_EVIDENCE_BUCKET, `rental/${rentalId}/consent/${rid}.png`, file);
+  } catch (e) { return { ok: false, error: String(e) }; }
 }
 /** رفع صورة توقيع (dataURL → PNG) إلى bucket العقود، وإرجاع المسار. */
 export async function rentalUploadSignature(rentalId: string, who: "customer" | "staff", dataUrl: string): Promise<Result<string>> {
