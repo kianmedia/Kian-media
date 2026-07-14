@@ -91,6 +91,8 @@ const ERR_AR: Record<string, string> = {
   overall_return_photo_required: "صورة إرجاع إجمالية مطلوبة قبل إنهاء الفحص.",
   identity_incomplete: "أكمل بيانات الهوية: الاسم الكامل والجوال ونوع/رقم الهوية والعنوان.",
   item_photo_required: "صوّر كل معدة — صورة واحدة على الأقل لكل معدة.",
+  return_item_photo_required: "صوّر كل معدة عند الإرجاع — صورة واحدة على الأقل لكل معدة.",
+  return_overall_photo_required: "صورة إرجاع إجمالية مطلوبة.",
   consent_required: "يجب توقيع الإقرار/عقد التأجير قبل الإرسال.",
   code_required: "أدخل باركود/كود المعدة.",
   asset_not_found: "لم يُعثر على معدة بهذا الباركود/الكود.",
@@ -111,6 +113,26 @@ export function rentalErrorAr(raw: string | null | undefined): string {
   // لا تُظهر رسائل PostgREST التقنية للمستخدم (دالة غير موجودة/مخزّن المخطط/عمود مفقود).
   if (/could not find|schema cache|PGRST\d|does not exist|function .* in the schema/i.test(raw)) return "الخدمة غير مهيأة بعد — يرجى المحاولة لاحقًا.";
   return "تعذّر إتمام العملية. حاول مرة أخرى.";
+}
+
+/** رسائل دقيقة لرفع الأدلة (تحدّد المرحلة التي فشلت — لا تُظهر نصًا تقنيًا). */
+export function rentalUploadErrorAr(raw: string | null | undefined): string {
+  const r = String(raw ?? "");
+  if (r.startsWith("attach:")) {
+    if (/could not find|schema cache|PGRST\d|does not exist/i.test(r)) return "خدمة حفظ الصور غير مطبقة في قاعدة البيانات.";
+    if (/not authorized|403/.test(r)) return "لا تملك صلاحية رفع صورة لهذا الطلب.";
+    if (/not_editable/.test(r)) return "لا يمكن إضافة صور بعد إرسال أو إغلاق الطلب.";
+    if (/storage_object_missing/.test(r)) return "لم يكتمل رفع الملف إلى التخزين. أعد المحاولة.";
+    return "تم رفع الملف ولكن تعذر ربطه بالطلب. أعد المحاولة.";
+  }
+  if (/not_authorized/.test(r)) return "لا تملك صلاحية رفع صورة لهذا الطلب.";
+  if (/not_editable/.test(r)) return "لا يمكن إضافة صور بعد إرسال أو إغلاق الطلب.";
+  if (/could not find|schema cache|PGRST\d|does not exist|server_not_configured/i.test(r)) return "خدمة حفظ الصور غير مطبقة في قاعدة البيانات.";
+  if (/too_large/.test(r)) return "الصورة أكبر من الحد المسموح. اختر صورة أصغر.";
+  if (/bad_mime/.test(r)) return "صيغة الصورة غير مدعومة. اختر JPG أو PNG.";
+  if (/upload_failed|sign_failed|upload_network|http_5\d\d/.test(r)) return "تعذر رفع الصورة إلى التخزين. أعد المحاولة.";
+  if (/item_not_in_request|item_required/.test(r)) return "المعدة غير صحيحة لهذا الطلب.";
+  return "تعذر رفع الصورة. أعد المحاولة.";
 }
 
 /** رسائل دقيقة لعملية ربط/اختيار عميل البوابة — لا تُظهر نص PostgREST للمستخدم. */

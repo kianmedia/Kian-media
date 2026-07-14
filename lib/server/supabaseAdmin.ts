@@ -26,6 +26,36 @@ export type AdminResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; status: number };
 
+const encPath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
+
+/** ينشئ Signed Upload URL بمفتاح الخدمة — يتيح للمتصفح الرفع دون سياسة Storage للمستأجر. */
+export async function createSignedUploadUrl(bucket: string, path: string): Promise<AdminResult<{ path: string; signed_url: string; token: string }>> {
+  if (!adminConfigured()) return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/upload/sign/${bucket}/${encPath(path)}`, {
+      method: "POST", headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: "{}", cache: "no-store",
+    });
+    if (!res.ok) return { ok: false, error: `sign_failed_${res.status}`, status: res.status };
+    const j = (await res.json()) as { url?: string };
+    if (!j.url) return { ok: false, error: "no_signed_url", status: 502 };
+    const full = `${SUPABASE_URL}/storage/v1${j.url}`;
+    let token = ""; try { token = new URL(full).searchParams.get("token") ?? ""; } catch { /* noop */ }
+    return { ok: true, data: { path, signed_url: full, token } };
+  } catch { return { ok: false, error: "network", status: 0 }; }
+}
+
+/** يحذف كائن تخزين بمفتاح الخدمة (تنظيف اليتيم عند فشل finalize). best-effort. */
+export async function deleteStorageObjectAsService(bucket: string, path: string): Promise<boolean> {
+  if (!adminConfigured()) return false;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${encPath(path)}`, {
+      method: "DELETE", headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }, cache: "no-store",
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
 /**
  * Call a Postgres function via PostgREST RPC as the service_role.
  * Used by the n8n ingest route to invoke public.whatsapp_ingest_message(...).

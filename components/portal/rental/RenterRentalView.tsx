@@ -6,15 +6,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  rentalCustomerList, rentalCustomerGet, rentalSignContract, rentalRequestReturn, rentalUploadSignature,
+  rentalCustomerList, rentalCustomerGet, rentalSignContract, rentalUploadSignature,
   rentalCustomerCreateRequest, rentalCustomerAvailableAssets, rentalCustomerSubmit, rentalConsentText,
-  rentalCustomerLookupAsset, rentalUpload, rentalItemEvidencePath, rentalDeleteObject,
-  rentalOverallEvidencePath, rentalUploadConsentSignature, rentalCustomerInvoices, emitRentalEvent, RENTAL_EVIDENCE_BUCKET,
-  rentalAddRequestEvidence, rentalRemoveRequestEvidence,
-  type RentalCustomerView, type RentalRentableAsset, type RentalCreatedItem, type RentalDamageInvoice,
+  rentalCustomerLookupAsset, rentalDeleteObject, rentalUploadEvidence, rentalCustomerRequestReturn, rentalCustomerItems,
+  rentalCustomerInvoices, emitRentalEvent, RENTAL_EVIDENCE_BUCKET, rentalRemoveRequestEvidence,
+  type RentalCustomerView, type RentalRentableAsset, type RentalCreatedItem, type RentalDamageInvoice, type RentalCustomerItem,
 } from "@/lib/portal/rental";
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
-import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
+import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr, rentalUploadErrorAr } from "@/lib/portal/rentalTime";
 import { normalizeImageToJpeg } from "@/lib/portal/rentalImage";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
@@ -67,6 +66,7 @@ export default function RenterRentalView() {
 function RenterDetail({ requestId, onClose, onChanged, flash, t }: { requestId: string; onClose: () => void; onChanged: () => void; flash: (m: string) => void; t: (m: { ar: string; en: string }) => string }) {
   const [d, setD] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [returning, setReturning] = useState(false);
   const [invoices, setInvoices] = useState<RentalDamageInvoice[]>([]);
   const reload = useCallback(async () => { const r = await rentalCustomerGet(requestId); if (r.ok) setD(r.data); const inv = await rentalCustomerInvoices(requestId); if (inv.ok) setInvoices(inv.data); }, [requestId]);
   useEffect(() => { void reload(); }, [reload]);
@@ -97,7 +97,8 @@ function RenterDetail({ requestId, onClose, onChanged, flash, t }: { requestId: 
               </div>
             ))}</div>}
             {status === "contract_pending_signature" && contract?.id && <RenterSign contractId={contract.id} consent={contract.consent_text} onDone={async () => { await reload(); onChanged(); flash(t({ ar: "وُقّع العقد.", en: "Signed." })); }} t={t} />}
-            {(status === "active" || status === "overdue") && <button disabled={busy} onClick={async () => { const note = window.prompt(t({ ar: "ملاحظة الإرجاع (اختياري):", en: "Return note (optional):" })); setBusy(true); const r = await rentalRequestReturn(requestId, note ?? undefined); setBusy(false); if (r.ok) { emitRentalEvent("rental_return_requested", requestId); flash(t({ ar: "أُرسل طلب الإرجاع.", en: "Return requested." })); await reload(); onChanged(); } else flash(rentalErrorAr(r.error)); }} className={`${btnRed} w-full py-2 text-sm`}>{t({ ar: "طلب إرجاع", en: "Request return" })}</button>}
+            {(status === "active" || status === "overdue") && !returning && <button disabled={busy} onClick={() => setReturning(true)} className={`${btnRed} w-full py-2 text-sm`}>{t({ ar: "طلب إرجاع المعدات", en: "Request return" })}</button>}
+            {returning && <RenterReturn requestId={requestId} onDone={async () => { setReturning(false); emitRentalEvent("rental_return_requested", requestId); await reload(); onChanged(); flash(t({ ar: "أُرسل طلب الإرجاع.", en: "Return requested." })); }} onCancel={() => setReturning(false)} flash={flash} t={t} />}
           </div>
         )}
       </div>
@@ -196,12 +197,10 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
     setSt({ status: "uploading" });
     const norm = await normalizeImageToJpeg(file);
     if (!norm.ok) { setSt({ status: "error", err: norm.error }); flash(norm.error); return; }
-    const path = itemId ? rentalItemEvidencePath(created.id, "request", itemId, norm.file.name) : rentalOverallEvidencePath(created.id, "request", norm.file.name);
-    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, norm.file);
-    if (!up.ok) { setSt({ status: "error", err: rentalErrorAr(up.error), preview: norm.previewUrl }); flash(rentalErrorAr(up.error)); return; }
-    const a = await rentalAddRequestEvidence(created.id, itemId, itemId ? "item_photo" : "overall_photo", up.data, norm.file.type, norm.file.size);
-    if (!a.ok) { void rentalDeleteObject(RENTAL_EVIDENCE_BUCKET, path); setSt({ status: "error", err: rentalErrorAr(a.error), preview: norm.previewUrl }); flash(rentalErrorAr(a.error)); return; }
-    setSt({ status: "done", preview: norm.previewUrl, path });
+    // رفع خادمي آمن (signed URL) — لا يعتمد على سياسة Storage للمستأجر. النجاح بعد finalize فقط.
+    const r = await rentalUploadEvidence({ rentalId: created.id, itemId, stage: "request", evidenceType: itemId ? "item_photo" : "overall_photo" }, norm.file);
+    if (!r.ok) { setSt({ status: "error", err: rentalUploadErrorAr(r.error), preview: norm.previewUrl }); flash(rentalUploadErrorAr(r.error)); return; }
+    setSt({ status: "done", preview: norm.previewUrl, path: r.data.path });
     flash(itemId ? t({ ar: "أُضيفت صورة المعدة.", en: "Item photo added." }) : t({ ar: "أُضيفت الصورة الإجمالية.", en: "Overall photo added." }));
   }
   async function removePhoto(itemId: string | null) {
@@ -220,9 +219,11 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
     if (!overallDone) { flash(rentalErrorAr("overall_photo_required")); return; }
     if (!sigData || !ack) { flash(rentalErrorAr("consent_required")); return; }
     setBusy(true);
-    const sig = await rentalUploadConsentSignature(created.id, sigData);
-    if (!sig.ok) { setBusy(false); flash(t({ ar: "تعذّر رفع التوقيع.", en: "Signature upload failed." })); return; }
-    const r = await rentalCustomerSubmit(created.id, sig.data, consent?.consent_text);
+    const sigBlob = await (await fetch(sigData)).blob();
+    const sigFile = new File([sigBlob], "consent.png", { type: "image/png" });
+    const sig = await rentalUploadEvidence({ rentalId: created.id, itemId: null, stage: "request", evidenceType: "signature" }, sigFile);
+    if (!sig.ok) { setBusy(false); flash(rentalUploadErrorAr(sig.error)); return; }
+    const r = await rentalCustomerSubmit(created.id, sig.data.path, consent?.consent_text);
     setBusy(false);
     if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
     emitRentalEvent("rental_request_created", created.id);
@@ -318,6 +319,74 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
       ))}</div>}
       <textarea className={inp} rows={2} placeholder={t({ ar: "ملاحظات (اختياري)", en: "Notes (optional)" })} value={f.customer_note ?? ""} onChange={(e) => set("customer_note", e.target.value)} />
       <button disabled={busy || !!winErr || cart.length === 0 || identityMissing()} onClick={() => void toEvidence()} className={`${btnRed} w-full py-2.5 text-sm`}>{t({ ar: "متابعة إلى الصور والتوقيع", en: "Continue to photos & sign" })}</button>
+    </div>
+  );
+}
+
+// ─── طلب إرجاع المستأجر (active/overdue فقط): حالة+صورة لكل معدة + إجمالية + توقيع ───
+const RETURN_CONDS: { v: string; ar: string }[] = [
+  { v: "good", ar: "سليمة" }, { v: "dirty", ar: "متسخة" }, { v: "scratched", ar: "مخدوشة" },
+  { v: "broken", ar: "بها كسر" }, { v: "missing_accessory", ar: "مفقود ملحق" }, { v: "missing", ar: "مفقودة" }, { v: "other", ar: "أخرى" },
+];
+function RenterReturn({ requestId, onDone, onCancel, flash, t }: { requestId: string; onDone: () => Promise<void>; onCancel: () => void; flash: (m: string) => void; t: (m: { ar: string; en: string }) => string }) {
+  const [items, setItems] = useState<RentalCustomerItem[]>([]);
+  const [itemEv, setItemEv] = useState<Record<string, PhotoState>>({});
+  const [conds, setConds] = useState<Record<string, string>>({});
+  const [overallEv, setOverallEv] = useState<PhotoState>({ status: "idle" });
+  const [sigData, setSigData] = useState<string | null>(null); const [ack, setAck] = useState(false);
+  const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  useEffect(() => { void rentalCustomerItems(requestId).then((r) => { if (r.ok) setItems(r.data.filter((i) => ["issued", "return_requested"].includes(i.status))); }); }, [requestId]);
+  async function doUpload(itemId: string | null, file: File) {
+    const setSt = (s: PhotoState) => { if (itemId) setItemEv((p) => ({ ...p, [itemId]: s })); else setOverallEv(s); };
+    setSt({ status: "uploading" });
+    const norm = await normalizeImageToJpeg(file);
+    if (!norm.ok) { setSt({ status: "error", err: norm.error }); flash(norm.error); return; }
+    const r = await rentalUploadEvidence({ rentalId: requestId, itemId, stage: "return_request", evidenceType: itemId ? "item_photo" : "overall_photo", condition: itemId ? (conds[itemId] ?? "good") : undefined }, norm.file);
+    if (!r.ok) { setSt({ status: "error", err: rentalUploadErrorAr(r.error), preview: norm.previewUrl }); flash(rentalUploadErrorAr(r.error)); return; }
+    setSt({ status: "done", preview: norm.previewUrl, path: r.data.path });
+  }
+  const allItemPhotos = items.length > 0 && items.every((it) => itemEv[it.item_id]?.status === "done");
+  const overallDone = overallEv.status === "done";
+  const anyUploading = overallEv.status === "uploading" || Object.values(itemEv).some((s) => s.status === "uploading");
+  async function submit() {
+    if (busy || anyUploading) return;
+    if (!allItemPhotos) { flash(rentalErrorAr("return_item_photo_required")); return; }
+    if (!overallDone) { flash(rentalErrorAr("return_overall_photo_required")); return; }
+    if (!sigData || !ack) { flash(rentalErrorAr("consent_required")); return; }
+    setBusy(true);
+    const blob = await (await fetch(sigData)).blob();
+    const sig = await rentalUploadEvidence({ rentalId: requestId, itemId: null, stage: "return_request", evidenceType: "signature" }, new File([blob], "return-consent.png", { type: "image/png" }));
+    if (!sig.ok) { setBusy(false); flash(rentalUploadErrorAr(sig.error)); return; }
+    const r = await rentalCustomerRequestReturn(requestId, note.trim() || undefined);
+    setBusy(false);
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
+    await onDone();
+  }
+  return (
+    <div className={`${card} space-y-2`}>
+      <div className="flex items-center justify-between"><div className="text-xs font-medium text-white">{t({ ar: "طلب إرجاع المعدات", en: "Return request" })}</div><button onClick={onCancel} className={`${btnGhost} px-2 py-0.5 text-[11px]`}>✕</button></div>
+      <div className="text-[11px] text-stone-500">{t({ ar: "حدّد حالة كل معدة وصوّرها + صورة إجمالية للمرتجع، ثم وقّع. الإدارة تفحص وتغلق.", en: "Set + photo each item + one overall, then sign. Staff inspect & close." })}</div>
+      {items.map((it) => { const st = itemEv[it.item_id] ?? { status: "idle" as const }; return (
+        <div key={it.item_id} className="bg-stone-950 border border-stone-800 rounded-lg p-2 space-y-1.5 text-xs">
+          <div className="text-stone-200">{it.asset_name} <span dir="ltr" className="text-stone-500">({it.asset_code})</span> × {it.quantity}</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select className={`${inp} w-auto text-xs`} value={conds[it.item_id] ?? "good"} onChange={(e) => setConds((p) => ({ ...p, [it.item_id]: e.target.value }))}>{RETURN_CONDS.map((c) => <option key={c.v} value={c.v}>{c.ar}</option>)}</select>
+            <label className={`${st.status === "done" ? btnGhost : btnRed} px-3 py-1.5 text-[11px] cursor-pointer ${st.status === "uploading" ? "opacity-50 pointer-events-none" : ""}`}>📷 {st.status === "done" ? t({ ar: "استبدال", en: "Replace" }) : t({ ar: "صورة", en: "Photo" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={st.status === "uploading"} onChange={(e) => { const f = e.target.files?.[0]; if (f) void doUpload(it.item_id, f); e.target.value = ""; }} /></label>
+            {st.status === "done" && <span className="text-[10px] text-emerald-500">✓</span>}
+            {st.status === "uploading" && <span className="text-[10px] text-stone-400">⏳</span>}
+            {st.status === "error" && <span className="text-[10px] text-red-400">{st.err}</span>}
+          </div>
+        </div>
+      ); })}
+      {items.length === 0 && <div className="text-[11px] text-stone-500">{t({ ar: "جارٍ تحميل المعدات…", en: "Loading items…" })}</div>}
+      <div className="bg-stone-950 border border-stone-800 rounded-lg p-2 flex items-center gap-2">
+        <label className={`${overallEv.status === "done" ? btnGhost : btnRed} px-3 py-1.5 text-[11px] cursor-pointer ${overallEv.status === "uploading" ? "opacity-50 pointer-events-none" : ""}`}>📷 {t({ ar: "صورة إجمالية للمرتجع (إلزامية)", en: "Overall (required)" })}<input type="file" accept="image/*" capture="environment" className="hidden" disabled={overallEv.status === "uploading"} onChange={(e) => { const f = e.target.files?.[0]; if (f) void doUpload(null, f); e.target.value = ""; }} /></label>
+        {overallEv.status === "done" && <span className="text-[10px] text-emerald-500">✓</span>}
+      </div>
+      <textarea className={inp} rows={2} placeholder={t({ ar: "ملاحظات الإرجاع (اختياري)", en: "Return notes (optional)" })} value={note} onChange={(e) => setNote(e.target.value)} />
+      <ConsentPad onChange={setSigData} />
+      <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "أقر بصحة حالة المعدات المذكورة.", en: "I confirm the stated condition." })}</label>
+      <button disabled={busy || anyUploading || !allItemPhotos || !overallDone || !sigData || !ack} onClick={() => void submit()} className={`${btnRed} w-full py-2 text-xs flex items-center justify-center gap-2`}>{busy && <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}{t({ ar: "توقيع وإرسال طلب الإرجاع", en: "Sign & submit return" })}</button>
     </div>
   );
 }

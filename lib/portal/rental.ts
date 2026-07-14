@@ -249,6 +249,43 @@ export function rentalOverallEvidencePath(rentalId: string, phase: "handover" | 
   return `rental/${rentalId}/${phase}/overall/${rid}.${ext}`;
 }
 
+// ─── الرفع الخادمي الآمن (Signed Upload URL) — لا يعتمد على سياسة Storage للمستأجر ───
+async function rentalApiPost<T>(url: string, body: unknown): Promise<Result<T>> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated" };
+  try {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` }, body: JSON.stringify(body) });
+    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string } & Record<string, unknown>;
+    if (!res.ok || j?.ok === false) return { ok: false, error: String(j?.error ?? `http_${res.status}`), status: res.status };
+    return { ok: true, data: j as T };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+export type RentalEvidenceStage = "request" | "handover" | "return_request" | "return_inspection";
+export type RentalEvidenceType = "item_photo" | "overall_photo" | "signature";
+/** رفع دليل عبر 3 خطوات خادمية: signed-url → PUT → finalize. النجاح فقط بعد finalize. */
+export async function rentalUploadEvidence(
+  params: { rentalId: string; itemId: string | null; stage: RentalEvidenceStage; evidenceType: RentalEvidenceType; condition?: string },
+  file: File,
+): Promise<Result<{ path: string }>> {
+  const url = await rentalApiPost<{ bucket: string; path: string; signed_url: string; token: string }>(
+    "/api/rental/evidence/upload-url",
+    { rental_id: params.rentalId, rental_item_id: params.itemId, stage: params.stage, evidence_type: params.evidenceType, mime_type: file.type, file_size: file.size });
+  if (!url.ok) return url;
+  try {
+    const put = await fetch(url.data.signed_url, { method: "PUT", headers: { "Content-Type": file.type || "image/jpeg", "x-upsert": "true" }, body: file });
+    if (!put.ok) return { ok: false, error: `upload_failed_${put.status}`, status: put.status };
+  } catch { return { ok: false, error: "upload_network" }; }
+  const fin = await rentalApiPost<{ ok: boolean; duplicate?: boolean }>(
+    "/api/rental/evidence/finalize",
+    { rental_id: params.rentalId, rental_item_id: params.itemId, stage: params.stage, evidence_type: params.evidenceType, storage_path: url.data.path, mime_type: file.type, file_size: file.size, condition: params.condition ?? null });
+  if (!fin.ok) return { ok: false, error: `attach:${fin.error}`, status: fin.status };
+  return { ok: true, data: { path: url.data.path } };
+}
+export const rentalCustomerRequestReturn = (requestId: string, note?: string) =>
+  prpc<{ ok: boolean; status: string }>("custody_rental_customer_request_return", { p_request: requestId, p_note: note ?? null });
+export interface RentalCustomerItem { item_id: string; asset_name: string; asset_code: string; quantity: number; status: string }
+export const rentalCustomerItems = (requestId: string) => prpc<RentalCustomerItem[]>("custody_rental_customer_items", { p_request: requestId });
+
 // إطلاق إشعار بريد التأجير بعد إجراء ناجح (best-effort — لا يكسر الإجراء). القناة نفسها للعهدة.
 export function emitRentalEvent(event: string, requestId: string): void {
   void (async () => {
