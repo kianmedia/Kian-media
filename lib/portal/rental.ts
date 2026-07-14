@@ -298,7 +298,11 @@ export async function rentalUploadEvidence(
     void rentalDeleteObject(RENTAL_EVIDENCE_BUCKET, path);   // نظّف الكائن اليتيم عند فشل الإرفاق
     return { ok: false, error: `attach:${fin.error}`, status: fin.status };
   }
-  return rentalUploadEvidenceViaServer(params, file);   // احتياطي: رفع خادمي موقّع
+  // تعذّر الرفع المباشر (غالبًا المخزن/السياسة غير مطبّقة). نجرّب المسار الخادمي؛ وإن فشل أيضًا
+  // نُعيد خطأ الرفع المباشر لأنه أوضح تشخيصًا (upload_failed_400/404=مخزن مفقود، 403=سياسة/ملكية)
+  // بدل رسالة not_found من الخادم التي تُخفي السبب الحقيقي.
+  const srv = await rentalUploadEvidenceViaServer(params, file);
+  return srv.ok ? srv : up;
 }
 /** احتياطي: رفع دليل عبر 3 خطوات خادمية موقّعة (signed-url → PUT → finalize). يتطلب مفتاح الخدمة. */
 async function rentalUploadEvidenceViaServer(
