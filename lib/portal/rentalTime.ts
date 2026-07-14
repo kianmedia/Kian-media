@@ -125,9 +125,11 @@ export function rentalUploadErrorAr(raw: string | null | undefined): string {
     if (/storage_object_missing/.test(r)) return "لم يكتمل رفع الملف إلى التخزين. أعد المحاولة.";
     return "تم رفع الملف ولكن تعذر ربطه بالطلب. أعد المحاولة.";
   }
-  if (/not_authorized/.test(r)) return "لا تملك صلاحية رفع صورة لهذا الطلب.";
+  if (/not_authorized|not authorized/.test(r)) return "لا تملك صلاحية رفع صورة لهذا الطلب.";
   if (/not_editable/.test(r)) return "لا يمكن إضافة صور بعد إرسال أو إغلاق الطلب.";
-  if (/could not find|schema cache|PGRST\d|does not exist|server_not_configured/i.test(r)) return "خدمة حفظ الصور غير مطبقة في قاعدة البيانات.";
+  if (/could not find|schema cache|PGRST\d|does not exist|server_not_configured|server_supabase_not_configured/i.test(r)) return "خدمة حفظ الصور غير مطبقة في قاعدة البيانات — طبّق ملف التحديث ثم أعد المحاولة.";
+  if (/upload_failed_404/.test(r)) return "مخزن الصور غير مُهيّأ بعد (لم يُطبَّق تحديث قاعدة البيانات). طبّق ملف التحديث.";
+  if (/upload_failed_40[13]/.test(r)) return "تعذّر رفع الصورة — تأكد من تطبيق تحديث قاعدة البيانات، أو أعد تسجيل الدخول.";
   if (/too_large/.test(r)) return "الصورة أكبر من الحد المسموح. اختر صورة أصغر.";
   if (/bad_mime/.test(r)) return "صيغة الصورة غير مدعومة. اختر JPG أو PNG.";
   if (/upload_failed|sign_failed|upload_network|http_5\d\d/.test(r)) return "تعذر رفع الصورة إلى التخزين. أعد المحاولة.";
