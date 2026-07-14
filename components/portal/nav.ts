@@ -21,6 +21,7 @@ const REG: Record<string, TabDef> = {
   staff:         { href: "/client-portal/staff",         ar: "الموظفون",    en: "Staff" },
   whatsapp:      { href: "/client-portal/admin/whatsapp", ar: "صندوق واتساب", en: "WhatsApp Inbox" },
   opportunities: { href: "/client-portal/opportunities", ar: "مركز الفرص",  en: "Opportunities" },
+  testimonials:  { href: "/client-portal/testimonials",   ar: "آراء العملاء", en: "Testimonials" },
   equipment:     { href: "/client-portal/equipment",     ar: "تأجير المعدات", en: "Equipment Rental", adminAr: "العهدة والتأجير", adminEn: "Custody & Rental", staffAr: "العهدة", staffEn: "Custody" },
   asset_custody: { href: "/client-portal/asset-custody",  ar: "عهدتي المسجلة", en: "My Registered Custody", adminAr: "مخزون الأصول والعهد", adminEn: "Asset Inventory & Custody", staffAr: "عهدتي المسجلة", staffEn: "My Registered Custody" },
   rentals:       { href: "/client-portal/rentals",         ar: "تأجيراتي",      en: "My Rentals", adminAr: "تأجير المعدات", adminEn: "Equipment Rental", staffAr: "تأجير المعدات", staffEn: "Rental" },
@@ -33,9 +34,9 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  manager:     ["overview", "projects", "quotes", "messages", "files", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "employee", "whatsapp", "opportunities", "testimonials", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "employee", "whatsapp", "opportunities", "testimonials", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "quotes", "messages", "files", "employee", "whatsapp", "opportunities", "testimonials", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
   sales:       ["employee", "quotes", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
   editor:      ["employee", "projects", "equipment", "asset_custody", "notifications", "profile"],
