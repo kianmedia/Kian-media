@@ -125,16 +125,16 @@ export function rentalUploadErrorAr(raw: string | null | undefined): string {
     if (/storage_object_missing/.test(r)) return "لم يكتمل رفع الملف إلى التخزين. أعد المحاولة.";
     return "تم رفع الملف ولكن تعذر ربطه بالطلب. أعد المحاولة.";
   }
-  if (/not_authorized|not authorized/.test(r)) return "لا تملك صلاحية رفع صورة لهذا الطلب.";
   if (/not_editable/.test(r)) return "لا يمكن إضافة صور بعد إرسال أو إغلاق الطلب.";
-  if (/could not find|schema cache|PGRST\d|does not exist|server_not_configured|server_supabase_not_configured/i.test(r)) return "خدمة حفظ الصور غير مطبقة في قاعدة البيانات — طبّق ملف التحديث ثم أعد المحاولة.";
-  if (/upload_failed_404/.test(r)) return "مخزن الصور غير مُهيّأ بعد (لم يُطبَّق تحديث قاعدة البيانات). طبّق ملف التحديث.";
-  if (/upload_failed_40[13]/.test(r)) return "تعذّر رفع الصورة — تأكد من تطبيق تحديث قاعدة البيانات، أو أعد تسجيل الدخول.";
+  if (/could not find|schema cache|PGRST\d|does not exist|server_not_configured|server_supabase_not_configured|bucket.*not found|not.?found.*bucket/i.test(r)) return "خدمة حفظ الصور غير مُطبَّقة في قاعدة البيانات — شغّل ملف rental_v1_final_production_RUNME.sql ثم أعد المحاولة.";
+  if (/upload_failed_404/.test(r)) return "مخزن الصور غير موجود — شغّل ملف rental_v1_final_production_RUNME.sql على Supabase.";
+  if (/not_authorized|not authorized|upload_failed_403/.test(r)) return "تعذّر رفع الصورة — تأكد من تطبيق تحديث قاعدة البيانات (السياسات)، أو أعد تسجيل الدخول.";
+  if (/^unauthorized$|not_authenticated|upload_failed_401|session_expired|401/.test(r)) return "انتهت الجلسة أو تعذّر التحقق — أعد تسجيل الدخول ثم حاول.";
   if (/too_large/.test(r)) return "الصورة أكبر من الحد المسموح. اختر صورة أصغر.";
   if (/bad_mime/.test(r)) return "صيغة الصورة غير مدعومة. اختر JPG أو PNG.";
   if (/upload_failed|sign_failed|upload_network|http_5\d\d/.test(r)) return "تعذر رفع الصورة إلى التخزين. أعد المحاولة.";
   if (/item_not_in_request|item_required/.test(r)) return "المعدة غير صحيحة لهذا الطلب.";
-  return "تعذر رفع الصورة. أعد المحاولة.";
+  return "تعذّر رفع الصورة — على الأرجح لم يُطبَّق تحديث قاعدة البيانات (rental_v1_final_production_RUNME.sql). طبّقه ثم أعد المحاولة.";
 }
 
 /** رسائل دقيقة لعملية ربط/اختيار عميل البوابة — لا تُظهر نص PostgREST للمستخدم. */

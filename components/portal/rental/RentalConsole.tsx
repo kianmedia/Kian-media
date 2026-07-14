@@ -10,7 +10,7 @@ import { civListAssets, type CivAsset } from "@/lib/portal/custodyInventory";
 import {
   rentalDashboard, rentalListRequests, rentalUpsertRequest, rentalAddItem,
   rentalRemoveItem, rentalAvailability, rentalSubmit, rentalListItems, rentalCalendar,
-  rentalSearchClients, rentalLinkPortalClient, emitRentalEvent,
+  rentalSearchClients, rentalLinkPortalClient, emitRentalEvent, rentalExpireStaleDrafts,
   type RentalDashboard, type RentalRequest, type RentalItem, type RentalStatus,
   type RentalAvailability, type RentalPortalClient,
 } from "@/lib/portal/rental";
@@ -42,6 +42,7 @@ export default function RentalConsole() {
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3600); };
   const [detail, setDetail] = useState<string | null>(null);
+  const [listRev, setListRev] = useState(0);   // تغييره يُعيد تحميل قائمة الطلبات (بعد الحذف مثلًا)
 
   const TABS: { k: Tab; ar: string; en: string }[] = [
     { k: "overview", ar: "نظرة عامة", en: "Overview" }, { k: "requests", ar: "الطلبات", en: "Requests" },
@@ -55,12 +56,12 @@ export default function RentalConsole() {
         ))}
       </div>
       {tab === "overview" && <OverviewTab onGo={() => setTab("requests")} openDetail={setDetail} t={t} />}
-      {tab === "requests" && <RequestsTab openDetail={setDetail} t={t} />}
+      {tab === "requests" && <RequestsTab key={listRev} openDetail={setDetail} t={t} />}
       {tab === "create" && <CreateTab flash={flash} onCreated={(id) => { setDetail(id); setTab("requests"); }} t={t} />}
       {tab === "calendar" && <CalendarTab openDetail={setDetail} t={t} />}
       {tab === "reports" && <ReportsTab t={t} />}
 
-      {detail && <RentalDetail requestId={detail} onClose={() => setDetail(null)} onChanged={() => { /* الأبناء يعيدون التحميل */ }} t={t} />}
+      {detail && <RentalDetail requestId={detail} onClose={() => setDetail(null)} onChanged={() => setListRev((v) => v + 1)} t={t} />}
       {toast && <div className="fixed bottom-4 inset-x-4 z-50 mx-auto max-w-md bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
     </div>
   );
@@ -71,6 +72,8 @@ function OverviewTab({ onGo, openDetail, t }: { onGo: () => void; openDetail: (i
   const [dash, setDash] = useState<RentalDashboard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { void rentalDashboard().then((r) => { if (r.ok) setDash(r.data); else setErr(r.error); }); }, []);
+  // كنس المسودّات القديمة (>15د) عند فتح لوحة التأجير — تُرجَع معداتها للمخزون. best-effort.
+  useEffect(() => { void rentalExpireStaleDrafts(15); }, []);
   if (err) return <div className="bg-red-950/40 border border-red-900/60 rounded-xl p-3 text-sm text-red-300">{t({ ar: "تعذّر التحميل: ", en: "Failed: " })}<span dir="ltr">{err}</span></div>;
   if (!dash) return <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
   const cards: [string, number][] = [

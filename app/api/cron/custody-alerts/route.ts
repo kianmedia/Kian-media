@@ -16,9 +16,12 @@ const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.st
 
 // تذكيرات التأجير (قرب موعد التسليم) + تعليم المتأخرات. بوابة (SQL) + إيميل. دقة تقريبية:
 // يشغّلها الكرون اليومي؛ الدقة الحقيقية لساعتين تحتاج مُشغّلًا أكثر تكرارًا (لاحقًا).
-async function rentalReminders(): Promise<{ marked: number; reminded: number; emailed: number }> {
-  const out = { marked: 0, reminded: 0, emailed: 0 };
+async function rentalReminders(): Promise<{ marked: number; reminded: number; emailed: number; expired: number }> {
+  const out = { marked: 0, reminded: 0, emailed: 0, expired: 0 };
   try {
+    // backstop يومي: إنهاء صلاحية المسودّات القديمة (>15د) وإرجاع معداتها (الدقة اللحظية عبر الكنس الكسول في الواجهة).
+    const exp = await rpcAsService<{ ok: boolean; expired: number }>("custody_rental_expire_stale_drafts", { p_minutes: 15 });
+    if (exp.ok) out.expired = exp.data?.expired ?? 0;
     const overdue = await rpcAsService<{ ok: boolean; marked: number }>("custody_rental_mark_overdue", {});
     if (overdue.ok) out.marked = overdue.data?.marked ?? 0;
     const rem = await rpcAsService<{ ok: boolean; reminded: number; due: Array<{ request_id: string; request_number: string; customer_email: string | null; party_name: string | null }> }>("custody_rental_due_reminders", { p_window_hours: 2 });
