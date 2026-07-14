@@ -11,8 +11,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const BUCKET = "rental-evidence";
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-const STAGES = new Set(["request", "handover", "return_request", "return_inspection"]);
-const STAGE_FOLDER: Record<string, string> = { request: "request", handover: "handover", return_request: "return", return_inspection: "return" };
+const STAGES = new Set(["request", "handover", "return_request", "return_inspection", "contract"]);
+const STAGE_FOLDER: Record<string, string> = { request: "request", handover: "handover", return_request: "return", return_inspection: "return", contract: "contract" };
 
 export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
@@ -59,6 +59,7 @@ export async function POST(req: Request) {
   const s = r.status;
   const okStage =
     stage === "request" ? (isOwner ? s === "draft" : isStaff)
+    : stage === "contract" ? (isOwner ? s === "contract_pending_signature" : isStaff)
     : stage === "return_request" ? (isOwner ? ["active", "overdue", "return_requested"].includes(s) : isStaff)
     : stage === "handover" ? (isStaff && ["scheduled", "preparing", "ready_for_handover"].includes(s))
     : /* return_inspection */ (isStaff && s === "inspection_pending");

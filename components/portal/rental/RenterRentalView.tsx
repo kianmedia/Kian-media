@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  rentalCustomerList, rentalCustomerGet, rentalSignContract, rentalUploadSignature,
+  rentalCustomerList, rentalCustomerGet, rentalSignContract, rentalUploadContractSignature,
   rentalCustomerCreateRequest, rentalCustomerAvailableAssets, rentalCustomerSubmit, rentalConsentText,
   rentalCustomerLookupAsset, rentalDeleteObject, rentalUploadEvidence, rentalCustomerRequestReturn, rentalCustomerItems,
   rentalCustomerInvoices, emitRentalEvent, RENTAL_EVIDENCE_BUCKET, rentalRemoveRequestEvidence,
@@ -96,7 +96,7 @@ function RenterDetail({ requestId, onClose, onChanged, flash, t }: { requestId: 
                 {iv.pdf_url ? <a href={iv.pdf_url} target="_blank" rel="noopener noreferrer" className="text-red-400">PDF</a> : null}
               </div>
             ))}</div>}
-            {status === "contract_pending_signature" && contract?.id && <RenterSign contractId={contract.id} consent={contract.consent_text} onDone={async () => { await reload(); onChanged(); flash(t({ ar: "وُقّع العقد.", en: "Signed." })); }} t={t} />}
+            {status === "contract_pending_signature" && contract?.id && <RenterSign requestId={requestId} contractId={contract.id} consent={contract.consent_text} flash={flash} onDone={async () => { await reload(); onChanged(); flash(t({ ar: "وُقّع العقد.", en: "Signed." })); }} t={t} />}
             {(status === "active" || status === "overdue") && !returning && <button disabled={busy} onClick={() => setReturning(true)} className={`${btnRed} w-full py-2 text-sm`}>{t({ ar: "طلب إرجاع المعدات", en: "Request return" })}</button>}
             {returning && <RenterReturn requestId={requestId} onDone={async () => { setReturning(false); emitRentalEvent("rental_return_requested", requestId); await reload(); onChanged(); flash(t({ ar: "أُرسل طلب الإرجاع.", en: "Return requested." })); }} onCancel={() => setReturning(false)} flash={flash} t={t} />}
           </div>
@@ -391,29 +391,37 @@ function RenterReturn({ requestId, onDone, onCancel, flash, t }: { requestId: st
   );
 }
 
-function RenterSign({ contractId, consent, onDone, t }: { contractId: string; consent?: string; onDone: () => Promise<void>; t: (m: { ar: string; en: string }) => string }) {
+function RenterSign({ requestId, contractId, consent, onDone, flash, t }: { requestId: string; contractId: string; consent?: string; onDone: () => Promise<void>; flash: (m: string) => void; t: (m: { ar: string; en: string }) => string }) {
   const [name, setName] = useState(""); const [ack, setAck] = useState(false); const [busy, setBusy] = useState(false);
-  const ref = useRef<HTMLCanvasElement | null>(null); const drawing = useRef(false);
+  const [terms, setTerms] = useState<string | undefined>(consent);
+  const ref = useRef<HTMLCanvasElement | null>(null); const drawing = useRef(false); const dirty = useRef(false);
+  useEffect(() => { if (!consent) void rentalConsentText().then((r) => { if (r.ok && r.data.consent_text) setTerms(r.data.consent_text); }); }, [consent]);
   function pos(e: React.PointerEvent<HTMLCanvasElement>) { const c = ref.current!; const r = c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
   function down(e: React.PointerEvent<HTMLCanvasElement>) { drawing.current = true; const ctx = ref.current!.getContext("2d")!; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }
-  function move(e: React.PointerEvent<HTMLCanvasElement>) { if (!drawing.current) return; const ctx = ref.current!.getContext("2d")!; const p = pos(e); ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.lineTo(p.x, p.y); ctx.stroke(); }
+  function move(e: React.PointerEvent<HTMLCanvasElement>) { if (!drawing.current) return; const ctx = ref.current!.getContext("2d")!; const p = pos(e); ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.lineTo(p.x, p.y); ctx.stroke(); dirty.current = true; }
+  function clear() { const c = ref.current; if (c) c.getContext("2d")!.clearRect(0, 0, c.width, c.height); dirty.current = false; }
   async function sign() {
-    if (!name.trim() || !ack) return;
+    if (!name.trim() || !ack) { flash(t({ ar: "أدخل اسمك ووافق على الشروط.", en: "Enter your name and accept the terms." })); return; }
+    if (!dirty.current) { flash(t({ ar: "الرجاء التوقيع في المربع.", en: "Please sign in the box." })); return; }
     setBusy(true);
-    const up = await rentalUploadSignature(contractId, "customer", ref.current!.toDataURL("image/png"));
-    if (!up.ok) { setBusy(false); return; }
-    const r = await rentalSignContract(contractId, name.trim(), up.data, undefined, t({ ar: "أوافق على شروط العقد.", en: "I agree." }));
+    // رفع خادمي موقّع (المستأجر لا يملك كتابة مباشرة على bucket العقود).
+    const up = await rentalUploadContractSignature(requestId, ref.current!.toDataURL("image/png"));
+    if (!up.ok) { setBusy(false); flash(rentalUploadErrorAr(up.error)); return; }
+    const r = await rentalSignContract(contractId, name.trim(), up.data.path, undefined, terms || t({ ar: "أوافق على شروط العقد.", en: "I agree." }));
     setBusy(false);
-    if (r.ok) await onDone();
+    if (r.ok) await onDone(); else flash(rentalErrorAr(r.error));
   }
   return (
     <div className={`${card} space-y-2`}>
-      <div className="text-[11px] text-amber-400/80">{t({ ar: "قالب تشغيلي يحتاج مراجعة واعتمادًا قانونيًا قبل الاستخدام الخارجي النهائي.", en: "Operational template — legal review required." })}</div>
-      {consent && <div className="text-[11px] text-stone-400 max-h-24 overflow-y-auto whitespace-pre-wrap">{consent}</div>}
-      <input className={inp} placeholder={t({ ar: "اسمك", en: "Your name" })} value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="text-[11px] text-amber-400/80">{t({ ar: "إقرار وعقد التأجير — قالب تشغيلي يحتاج مراجعة واعتمادًا قانونيًا قبل الاستخدام الخارجي النهائي.", en: "Rental contract — operational template, legal review required." })}</div>
+      {terms
+        ? <div className="text-[11px] text-stone-300 max-h-40 overflow-y-auto whitespace-pre-wrap bg-stone-950 border border-stone-800 rounded-lg p-2">{terms}</div>
+        : <div className="text-[11px] text-stone-500">{t({ ar: "جارٍ تحميل صيغة العقد…", en: "Loading contract…" })}</div>}
+      <input className={inp} placeholder={t({ ar: "اسمك الكامل", en: "Your full name" })} value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="flex items-center justify-between"><span className="text-[11px] text-stone-400">{t({ ar: "التوقيع", en: "Signature" })}</span><button onClick={clear} className="text-[10px] text-stone-500">{t({ ar: "مسح", en: "Clear" })}</button></div>
       <canvas ref={ref} width={400} height={110} className="w-full bg-stone-800 border border-stone-700 rounded-lg touch-none" onPointerDown={down} onPointerMove={move} onPointerUp={() => { drawing.current = false; }} onPointerLeave={() => { drawing.current = false; }} />
-      <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "أوافق على شروط العقد.", en: "I agree to the contract terms." })}</label>
-      <button disabled={busy || !name.trim() || !ack} onClick={() => void sign()} className={`${btnRed} w-full py-2 text-sm`}>{t({ ar: "توقيع العقد", en: "Sign contract" })}</button>
+      <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "أقر بصحة بياناتي وأوافق على شروط عقد التأجير.", en: "I confirm my data and agree to the terms." })}</label>
+      <button disabled={busy || !name.trim() || !ack} onClick={() => void sign()} className={`${btnRed} w-full py-2 text-sm flex items-center justify-center gap-2`}>{busy && <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}{t({ ar: "توقيع العقد", en: "Sign contract" })}</button>
     </div>
   );
 }

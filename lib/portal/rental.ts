@@ -283,6 +283,21 @@ export async function rentalUploadEvidence(
 }
 export const rentalCustomerRequestReturn = (requestId: string, note?: string) =>
   prpc<{ ok: boolean; status: string }>("custody_rental_customer_request_return", { p_request: requestId, p_note: note ?? null });
+/** رفع توقيع العقد عبر المسار الخادمي الموقّع (لا finalize — المسار يُمرَّر لـsign_contract). */
+export async function rentalUploadContractSignature(requestId: string, dataUrl: string): Promise<Result<{ path: string }>> {
+  let file: File;
+  try { const blob = await (await fetch(dataUrl)).blob(); file = new File([blob], "contract-sign.png", { type: "image/png" }); }
+  catch { return { ok: false, error: "signature_encode" }; }
+  const url = await rentalApiPost<{ bucket: string; path: string; signed_url: string; token: string }>(
+    "/api/rental/evidence/upload-url",
+    { rental_id: requestId, rental_item_id: null, stage: "contract", evidence_type: "signature", mime_type: file.type, file_size: file.size });
+  if (!url.ok) return url;
+  try {
+    const put = await fetch(url.data.signed_url, { method: "PUT", headers: { "Content-Type": "image/png", "x-upsert": "true" }, body: file });
+    if (!put.ok) return { ok: false, error: `upload_failed_${put.status}`, status: put.status };
+  } catch { return { ok: false, error: "upload_network" }; }
+  return { ok: true, data: { path: url.data.path } };
+}
 export interface RentalCustomerItem { item_id: string; asset_name: string; asset_code: string; quantity: number; status: string }
 export const rentalCustomerItems = (requestId: string) => prpc<RentalCustomerItem[]>("custody_rental_customer_items", { p_request: requestId });
 
