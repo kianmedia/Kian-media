@@ -15,12 +15,42 @@ import {
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
 import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr, rentalUploadErrorAr } from "@/lib/portal/rentalTime";
 import { normalizeImageToJpeg } from "@/lib/portal/rentalImage";
+import { buildRentalContractAr, buildRentalContractEn, type RentalContractDetails } from "@/lib/portal/rentalContract";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
 const inp = "w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 focus:outline-none focus:ring-2 focus:ring-red-500";
 const btnRed = "rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium";
 const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200 text-sm disabled:opacity-50";
 const money = (n: unknown) => (n == null ? "—" : Number(n).toLocaleString("ar"));
+
+// ─── عقد التأجير كرابط يفتح النص الكامل (يعرض النص المعتمد من الإدارة إن وُجد، وإلا العقد الافتراضي) ───
+function ContractDialog({ terms, details }: { terms?: string | null; details?: RentalContractDetails }) {
+  const { t, isAr } = useI18n();
+  const [open, setOpen] = useState(false);
+  // نعتمد نص الإدارة فقط إن كان عقدًا فعليًا (طويلًا)؛ وإلا نعرض العقد الكامل المبني.
+  const text = terms && terms.trim().length > 200 ? terms : isAr ? buildRentalContractAr(details) : buildRentalContractEn(details);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className="text-[12px] text-red-400 hover:text-red-300 underline inline-flex items-center gap-1 whitespace-nowrap">
+        <span>📄</span>{t({ ar: "عرض عقد التأجير كاملًا", en: "View full contract" })}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/75" onClick={() => setOpen(false)}>
+          <div className="bg-stone-900 border border-stone-700 rounded-xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-3 border-b border-stone-800 shrink-0">
+              <div className="text-sm font-semibold text-white">{t({ ar: "عقد تأجير المعدّات", en: "Equipment Rental Contract" })}</div>
+              <button onClick={() => setOpen(false)} className={`${btnGhost} px-3 py-1 text-xs`}>✕</button>
+            </div>
+            <div className="overflow-y-auto p-4 text-[12.5px] leading-7 text-stone-200 whitespace-pre-wrap" dir={isAr ? "rtl" : "ltr"}>{text}</div>
+            <div className="p-3 border-t border-stone-800 text-center shrink-0">
+              <button onClick={() => setOpen(false)} className={`${btnRed} px-6 py-1.5 text-xs`}>{t({ ar: "إغلاق", en: "Close" })}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 export default function RenterRentalView() {
   const { t } = useI18n();
@@ -129,6 +159,7 @@ const ID_TYPES: { v: string; ar: string }[] = [
 ];
 
 function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; onCreated: () => Promise<void>; flash: (m: string) => void; t: (m: { ar: string; en: string }) => string }) {
+  const { isAr } = useI18n();
   const dw = useRef(defaultRentalWindow()).current;
   const [phase, setPhase] = useState<"form" | "evidence">("form");
   const [f, setF] = useState<Record<string, string>>({ rental_from: dw.from, rental_to: dw.to, id_type: "national_id" });
@@ -194,13 +225,20 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
   async function doUpload(itemId: string | null, file: File) {
     if (!created) return;
     const setSt = (s: PhotoState) => { if (itemId) setItemEv((p) => ({ ...p, [itemId]: s })); else setOverallEv(s); };
+    const prev = itemId ? itemEv[itemId] : overallEv;   // للتنظيف عند الاستبدال
     setSt({ status: "uploading" });
     const norm = await normalizeImageToJpeg(file);
     if (!norm.ok) { setSt({ status: "error", err: norm.error }); flash(norm.error); return; }
-    // رفع خادمي آمن (signed URL) — لا يعتمد على سياسة Storage للمستأجر. النجاح بعد finalize فقط.
+    // رفع مباشر بجلسة المستأجر ثم إرفاق عبر RPC. النجاح بعد الإرفاق فقط.
     const r = await rentalUploadEvidence({ rentalId: created.id, itemId, stage: "request", evidenceType: itemId ? "item_photo" : "overall_photo" }, norm.file);
     if (!r.ok) { setSt({ status: "error", err: rentalUploadErrorAr(r.error), preview: norm.previewUrl }); flash(rentalUploadErrorAr(r.error)); return; }
     setSt({ status: "done", preview: norm.previewUrl, path: r.data.path });
+    // نظّف الدليل السابق عند الاستبدال (يمنع سجلًا يتيمًا وصورة قديمة في مراجعة الإدارة).
+    if (prev?.path && prev.path !== r.data.path) {
+      void rentalRemoveRequestEvidence(created.id, prev.path);
+      void rentalDeleteObject(RENTAL_EVIDENCE_BUCKET, prev.path);
+    }
+    if (prev?.preview && prev.preview !== norm.previewUrl) { try { URL.revokeObjectURL(prev.preview); } catch { /* noop */ } }
     flash(itemId ? t({ ar: "أُضيفت صورة المعدة.", en: "Item photo added." }) : t({ ar: "أُضيفت الصورة الإجمالية.", en: "Overall photo added." }));
   }
   async function removePhoto(itemId: string | null) {
@@ -223,7 +261,12 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
     const sigFile = new File([sigBlob], "consent.png", { type: "image/png" });
     const sig = await rentalUploadEvidence({ rentalId: created.id, itemId: null, stage: "request", evidenceType: "signature" }, sigFile);
     if (!sig.ok) { setBusy(false); flash(rentalUploadErrorAr(sig.error)); return; }
-    const r = await rentalCustomerSubmit(created.id, sig.data.path, consent?.consent_text);
+    // نخزّن نص العقد الفعلي الذي عُرض للمستأجر (يطابق ما وقّع عليه): نص الإدارة إن كان عقدًا فعليًا،
+    // وإلا العقد الكامل المبني بلغة الواجهة الحالية (كما يعرضه ContractDialog تمامًا).
+    const storedTerms = consent?.consent_text && consent.consent_text.trim().length > 200
+      ? consent.consent_text
+      : isAr ? buildRentalContractAr(contractDetailsOf()) : buildRentalContractEn(contractDetailsOf());
+    const r = await rentalCustomerSubmit(created.id, sig.data.path, storedTerms);
     setBusy(false);
     if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
     emitRentalEvent("rental_request_created", created.id);
@@ -232,8 +275,22 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
   }
 
   const cartName = (assetId: string) => cart.find((c) => c.asset_id === assetId)?.asset_name ?? assetId.slice(0, 8);
+  const contractDetailsOf = (): RentalContractDetails => ({
+    request_number: created?.request_number ?? null,
+    renter_name: f.full_name,
+    id_type: ID_TYPES.find((x) => x.v === f.id_type)?.ar ?? f.id_type,
+    id_number: f.id_number_ref,
+    phone: f.phone,
+    address: f.address,
+    rental_from: f.rental_from ? formatRiyadh(riyadhInputToUtcISO(f.rental_from) ?? "", true) : null,
+    rental_to: f.rental_to ? formatRiyadh(riyadhInputToUtcISO(f.rental_to) ?? "", true) : null,
+    delivery_location: f.delivery_location,
+    return_location: f.return_location,
+    items: created?.items.map((it) => ({ name: cartName(it.asset_id), quantity: it.quantity })) ?? [],
+  });
 
   if (phase === "evidence" && created) {
+    const contractDetails = contractDetailsOf();
     return (
       <div className={`${card} space-y-3`}>
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium text-white">{t({ ar: "صور المعدات + الإقرار", en: "Photos + consent" })} <span className="font-mono text-[11px] text-stone-400" dir="ltr">{created.request_number}</span></h3><button onClick={onClose} className={`${btnGhost} px-3 py-1 text-xs`}>✕</button></div>
@@ -264,10 +321,13 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
           {overallEv.status === "done" && <button onClick={() => void removePhoto(null)} className="text-red-400 text-[11px]">{t({ ar: "حذف", en: "Remove" })}</button>}
         </div>
         <div className="border-t border-stone-800 pt-2 space-y-2">
-          <div className="text-[11px] text-amber-400/80">{t({ ar: "إقرار وعقد التأجير — بالتوقيع تُقر بصحة بياناتك وموافقتك على الشروط (قالب يحتاج مراجعة قانونية).", en: "Consent — signing confirms your data and agreement." })}</div>
-          {consent?.consent_text && <div className="text-[11px] text-stone-400 max-h-28 overflow-y-auto whitespace-pre-wrap bg-stone-950 border border-stone-800 rounded-lg p-2">{consent.consent_text}</div>}
+          <div className="flex items-center justify-between gap-2 bg-stone-950 border border-stone-800 rounded-lg p-2.5">
+            <span className="text-[12px] text-stone-200 font-medium">{t({ ar: "عقد التأجير", en: "Rental contract" })}</span>
+            <ContractDialog terms={consent?.consent_text} details={contractDetails} />
+          </div>
+          <div className="text-[11px] text-stone-400">{t({ ar: "اضغط الرابط أعلاه لقراءة العقد كاملًا. التوقيع أدناه يعني موافقتك على جميع بنوده.", en: "Open the link above to read the full contract. Signing below means you accept all its terms." })}</div>
           <ConsentPad onChange={setSigData} />
-          <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "أقر بصحة بياناتي وأوافق على شروط عقد التأجير.", en: "I confirm my data and agree to the terms." })}</label>
+          <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "قرأتُ عقد التأجير وأوافق على جميع بنوده، وأُقرّ بصحة بياناتي.", en: "I have read and accept all terms of the rental contract, and confirm my data." })}</label>
         </div>
         <button disabled={busy || anyUploading || !allItemPhotos || !overallDone || !sigData || !ack} onClick={() => void submit()} className={`${btnRed} w-full py-2.5 text-sm flex items-center justify-center gap-2`}>{busy && <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}{t({ ar: "توقيع وإرسال الطلب", en: "Sign & submit" })}</button>
       </div>
@@ -338,12 +398,15 @@ function RenterReturn({ requestId, onDone, onCancel, flash, t }: { requestId: st
   useEffect(() => { void rentalCustomerItems(requestId).then((r) => { if (r.ok) setItems(r.data.filter((i) => ["issued", "return_requested"].includes(i.status))); }); }, [requestId]);
   async function doUpload(itemId: string | null, file: File) {
     const setSt = (s: PhotoState) => { if (itemId) setItemEv((p) => ({ ...p, [itemId]: s })); else setOverallEv(s); };
+    const prev = itemId ? itemEv[itemId] : overallEv;   // للتنظيف عند الاستبدال
     setSt({ status: "uploading" });
     const norm = await normalizeImageToJpeg(file);
     if (!norm.ok) { setSt({ status: "error", err: norm.error }); flash(norm.error); return; }
     const r = await rentalUploadEvidence({ rentalId: requestId, itemId, stage: "return_request", evidenceType: itemId ? "item_photo" : "overall_photo", condition: itemId ? (conds[itemId] ?? "good") : undefined }, norm.file);
     if (!r.ok) { setSt({ status: "error", err: rentalUploadErrorAr(r.error), preview: norm.previewUrl }); flash(rentalUploadErrorAr(r.error)); return; }
     setSt({ status: "done", preview: norm.previewUrl, path: r.data.path });
+    // مرحلة الإرجاع لا تملك RPC حذف؛ نحرّر معاينة الصورة السابقة عند الاستبدال (منع تسرّب ذاكرة).
+    if (prev?.preview && prev.preview !== norm.previewUrl) { try { URL.revokeObjectURL(prev.preview); } catch { /* noop */ } }
   }
   const allItemPhotos = items.length > 0 && items.every((it) => itemEv[it.item_id]?.status === "done");
   const overallDone = overallEv.status === "done";
@@ -392,8 +455,10 @@ function RenterReturn({ requestId, onDone, onCancel, flash, t }: { requestId: st
 }
 
 function RenterSign({ requestId, contractId, consent, onDone, flash, t }: { requestId: string; contractId: string; consent?: string; onDone: () => Promise<void>; flash: (m: string) => void; t: (m: { ar: string; en: string }) => string }) {
+  const { isAr } = useI18n();
   const [name, setName] = useState(""); const [ack, setAck] = useState(false); const [busy, setBusy] = useState(false);
   const [terms, setTerms] = useState<string | undefined>(consent);
+  const contractText = terms && terms.trim().length > 200 ? terms : isAr ? buildRentalContractAr() : buildRentalContractEn();
   const ref = useRef<HTMLCanvasElement | null>(null); const drawing = useRef(false); const dirty = useRef(false);
   useEffect(() => { if (!consent) void rentalConsentText().then((r) => { if (r.ok && r.data.consent_text) setTerms(r.data.consent_text); }); }, [consent]);
   function pos(e: React.PointerEvent<HTMLCanvasElement>) { const c = ref.current!; const r = c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
@@ -407,20 +472,21 @@ function RenterSign({ requestId, contractId, consent, onDone, flash, t }: { requ
     // رفع خادمي موقّع (المستأجر لا يملك كتابة مباشرة على bucket العقود).
     const up = await rentalUploadContractSignature(requestId, ref.current!.toDataURL("image/png"));
     if (!up.ok) { setBusy(false); flash(rentalUploadErrorAr(up.error)); return; }
-    const r = await rentalSignContract(contractId, name.trim(), up.data.path, undefined, terms || t({ ar: "أوافق على شروط العقد.", en: "I agree." }));
+    const r = await rentalSignContract(contractId, name.trim(), up.data.path, undefined, contractText);
     setBusy(false);
     if (r.ok) await onDone(); else flash(rentalErrorAr(r.error));
   }
   return (
     <div className={`${card} space-y-2`}>
-      <div className="text-[11px] text-amber-400/80">{t({ ar: "إقرار وعقد التأجير — قالب تشغيلي يحتاج مراجعة واعتمادًا قانونيًا قبل الاستخدام الخارجي النهائي.", en: "Rental contract — operational template, legal review required." })}</div>
-      {terms
-        ? <div className="text-[11px] text-stone-300 max-h-40 overflow-y-auto whitespace-pre-wrap bg-stone-950 border border-stone-800 rounded-lg p-2">{terms}</div>
-        : <div className="text-[11px] text-stone-500">{t({ ar: "جارٍ تحميل صيغة العقد…", en: "Loading contract…" })}</div>}
+      <div className="flex items-center justify-between gap-2 bg-stone-950 border border-stone-800 rounded-lg p-2.5">
+        <span className="text-[12px] text-stone-200 font-medium">{t({ ar: "عقد التأجير", en: "Rental contract" })}</span>
+        <ContractDialog terms={contractText} />
+      </div>
+      <div className="text-[11px] text-stone-400">{t({ ar: "اضغط الرابط أعلاه لقراءة العقد كاملًا قبل التوقيع.", en: "Open the link above to read the full contract before signing." })}</div>
       <input className={inp} placeholder={t({ ar: "اسمك الكامل", en: "Your full name" })} value={name} onChange={(e) => setName(e.target.value)} />
       <div className="flex items-center justify-between"><span className="text-[11px] text-stone-400">{t({ ar: "التوقيع", en: "Signature" })}</span><button onClick={clear} className="text-[10px] text-stone-500">{t({ ar: "مسح", en: "Clear" })}</button></div>
       <canvas ref={ref} width={400} height={110} className="w-full bg-stone-800 border border-stone-700 rounded-lg touch-none" onPointerDown={down} onPointerMove={move} onPointerUp={() => { drawing.current = false; }} onPointerLeave={() => { drawing.current = false; }} />
-      <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "أقر بصحة بياناتي وأوافق على شروط عقد التأجير.", en: "I confirm my data and agree to the terms." })}</label>
+      <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />{t({ ar: "قرأتُ عقد التأجير وأوافق على جميع بنوده، وأُقرّ بصحة بياناتي.", en: "I have read and accept all terms of the rental contract, and confirm my data." })}</label>
       <button disabled={busy || !name.trim() || !ack} onClick={() => void sign()} className={`${btnRed} w-full py-2 text-sm flex items-center justify-center gap-2`}>{busy && <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}{t({ ar: "توقيع العقد", en: "Sign contract" })}</button>
     </div>
   );

@@ -262,8 +262,42 @@ async function rentalApiPost<T>(url: string, body: unknown): Promise<Result<T>> 
 }
 export type RentalEvidenceStage = "request" | "handover" | "return_request" | "return_inspection";
 export type RentalEvidenceType = "item_photo" | "overall_photo" | "signature";
-/** رفع دليل عبر 3 خطوات خادمية: signed-url → PUT → finalize. النجاح فقط بعد finalize. */
+const STAGE_FOLDER: Record<string, string> = { request: "request", handover: "handover", return_request: "return", return_inspection: "return", contract: "contract" };
+/** يبني مسار الدليل داخل bucket (rental/{id}/{folder}/…). يُتحقَّق منه في RPC + سياسة Storage. */
+function evidencePath(rentalId: string, stage: string, evidenceType: string, itemId: string | null, ext: string): string {
+  const folder = STAGE_FOLDER[stage] ?? "request";
+  const rid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  if (evidenceType === "item_photo") return `rental/${rentalId}/${folder}/items/${itemId}/${rid}.${ext}`;
+  if (evidenceType === "signature") return `rental/${rentalId}/${folder}/signature/${rid}.${ext}`;
+  return `rental/${rentalId}/${folder}/overall/${rid}.${ext}`;
+}
+/**
+ * رفع دليل التأجير — المسار الأساسي: رفع مباشر بجلسة المستأجر/الموظف (سياسة Storage
+ * «rental evidence write v2» تسمح لصاحب الطلب أو الموظف) ثم إرفاق عبر RPC
+ * custody_rental_finalize_evidence (ممنوحة لـauthenticated). لا يحتاج مفتاح خادم —
+ * يكفي تطبيق ملف SQL. وعند تعذّر الرفع المباشر (دلو/سياسة غير مطبّقة) يسقط تلقائيًا
+ * إلى المسار الخادمي الموقّع (يتطلب SUPABASE_SERVICE_ROLE_KEY). النجاح فقط بعد الإرفاق.
+ */
 export async function rentalUploadEvidence(
+  params: { rentalId: string; itemId: string | null; stage: RentalEvidenceStage; evidenceType: RentalEvidenceType; condition?: string },
+  file: File,
+): Promise<Result<{ path: string }>> {
+  const ext = file.type === "image/png" ? "png" : "jpg";
+  const path = evidencePath(params.rentalId, params.stage, params.evidenceType, params.itemId, ext);
+  const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+  if (up.ok) {
+    const fin = await prpc<{ ok: boolean; duplicate?: boolean }>("custody_rental_finalize_evidence", {
+      p_rental_id: params.rentalId, p_rental_item_id: params.itemId, p_stage: params.stage,
+      p_evidence_type: params.evidenceType, p_storage_path: path, p_mime_type: file.type,
+      p_file_size: file.size, p_condition: params.condition ?? null });
+    if (fin.ok) return { ok: true, data: { path } };
+    void rentalDeleteObject(RENTAL_EVIDENCE_BUCKET, path);   // نظّف الكائن اليتيم عند فشل الإرفاق
+    return { ok: false, error: `attach:${fin.error}`, status: fin.status };
+  }
+  return rentalUploadEvidenceViaServer(params, file);   // احتياطي: رفع خادمي موقّع
+}
+/** احتياطي: رفع دليل عبر 3 خطوات خادمية موقّعة (signed-url → PUT → finalize). يتطلب مفتاح الخدمة. */
+async function rentalUploadEvidenceViaServer(
   params: { rentalId: string; itemId: string | null; stage: RentalEvidenceStage; evidenceType: RentalEvidenceType; condition?: string },
   file: File,
 ): Promise<Result<{ path: string }>> {
@@ -283,11 +317,16 @@ export async function rentalUploadEvidence(
 }
 export const rentalCustomerRequestReturn = (requestId: string, note?: string) =>
   prpc<{ ok: boolean; status: string }>("custody_rental_customer_request_return", { p_request: requestId, p_note: note ?? null });
-/** رفع توقيع العقد عبر المسار الخادمي الموقّع (لا finalize — المسار يُمرَّر لـsign_contract). */
+/** رفع توقيع العقد — رفع مباشر بجلسة المستأجر إلى مجلد طلبه (لا finalize — المسار يُمرَّر لـsign_contract). */
 export async function rentalUploadContractSignature(requestId: string, dataUrl: string): Promise<Result<{ path: string }>> {
   let file: File;
   try { const blob = await (await fetch(dataUrl)).blob(); file = new File([blob], "contract-sign.png", { type: "image/png" }); }
   catch { return { ok: false, error: "signature_encode" }; }
+  const rid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+  const path = `rental/${requestId}/contract/signature/${rid}.png`;
+  const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);   // مباشر — لا يحتاج مفتاح خادم
+  if (up.ok) return { ok: true, data: { path } };
+  // احتياطي: المسار الخادمي الموقّع (يتطلب مفتاح الخدمة).
   const url = await rentalApiPost<{ bucket: string; path: string; signed_url: string; token: string }>(
     "/api/rental/evidence/upload-url",
     { rental_id: requestId, rental_item_id: null, stage: "contract", evidence_type: "signature", mime_type: file.type, file_size: file.size });
@@ -322,7 +361,7 @@ export const rentalGet = (requestId: string) => prpc<Record<string, unknown>>("c
 export const rentalCalendar = (from: string, to: string) => prpc<Array<{ id: string; request_number: string; status: RentalStatus; from: string; to: string; customer: string | null }>>("custody_rental_calendar", { p_from: from, p_to: to });
 
 // ─── التخزين: رفع/توقيع أدلة التأجير (bucket خاص — signed URL فقط) ───
-const MAX_RENTAL_BYTES = 10 * 1024 * 1024;
+const MAX_RENTAL_BYTES = 20 * 1024 * 1024;   // يطابق حدّ bucket rental-evidence (20MB)
 async function rentalStorageFetch(path: string, init: RequestInit): Promise<Response> {
   const s = await getValidSession();
   if (!s) throw new Error("not_authenticated");
@@ -333,7 +372,7 @@ async function rentalStorageFetch(path: string, init: RequestInit): Promise<Resp
 }
 /** رفع دليل تأجير إلى bucket خاص. يعيد المسار عند النجاح. */
 export async function rentalUpload(bucket: string, path: string, file: File): Promise<Result<string>> {
-  if (file.size > MAX_RENTAL_BYTES) return { ok: false, error: "الملف أكبر من 10MB" };
+  if (file.size > MAX_RENTAL_BYTES) return { ok: false, error: `الملف أكبر من ${Math.round(MAX_RENTAL_BYTES / (1024 * 1024))}MB` };
   if (!file.type.startsWith("image/") && file.type !== "application/pdf") return { ok: false, error: "نوع ملف غير مسموح" };
   try {
     const res = await rentalStorageFetch(`/object/${bucket}/${path.split("/").map(encodeURIComponent).join("/")}`, { method: "POST", headers: { "x-upsert": "true", "Content-Type": file.type }, body: file });
