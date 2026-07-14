@@ -203,8 +203,13 @@ export const rentalCustomerSubmit = (requestId: string, consentPath?: string, co
   prpc<{ ok: boolean; status: string }>("custody_rental_customer_submit", { p_request: requestId, p_consent_signature_path: consentPath ?? null, p_consent_text: consentText ?? null });
 // إقرار/عقد + دليل الإنشاء + بحث بالباركود (بوابة المستأجر)
 export const rentalConsentText = () => prpc<{ consent_text: string; version: number; currency: string }>("custody_rental_consent_text", {});
-export const rentalCustomerAddRequestEvidence = (requestId: string, itemId: string | null, path: string) =>
-  prpc<{ ok: boolean }>("custody_rental_customer_add_request_evidence", { p_request: requestId, p_item: itemId, p_path: path });
+// RPC إرفاق موحّدة (مستأجر/موظف): نوع + مسار + mime + حجم، مع تحقق مسار/تكرار/وجود الملف.
+export const rentalAddRequestEvidence = (rentalId: string, itemId: string | null, type: "item_photo" | "overall_photo", path: string, mime?: string, size?: number) =>
+  prpc<{ ok: boolean; duplicate?: boolean }>("custody_rental_add_request_evidence", { p_rental_id: rentalId, p_rental_item_id: itemId, p_evidence_type: type, p_storage_path: path, p_mime_type: mime ?? null, p_file_size: size ?? null });
+export const rentalRemoveRequestEvidence = (rentalId: string, path: string) =>
+  prpc<{ ok: boolean }>("custody_rental_remove_request_evidence", { p_rental_id: rentalId, p_path: path });
+export interface RentalEvidenceStatus { items: Array<{ item_id: string; asset_name: string; asset_code: string; has_photo: boolean }>; overall_count: number; all_items_have_photo: boolean; complete: boolean }
+export const rentalRequestEvidenceStatus = (requestId: string) => prpc<RentalEvidenceStatus>("custody_rental_request_evidence_status", { p_request: requestId });
 export const rentalCustomerLookupAsset = (code: string, from: string, to: string) =>
   prpc<{ found: boolean; asset_id?: string; asset_code?: string; asset_name?: string; asset_type?: string; serial_number?: string | null; total_quantity?: number; available_quantity?: number; is_available?: boolean; catalog_photo_path?: string | null }>("custody_rental_customer_lookup_asset", { p_code: code, p_from: from, p_to: to });
 export async function rentalCustomerAvailableAssets(from: string, to: string, q?: string): Promise<Result<RentalRentableAsset[]>> {
@@ -283,6 +288,13 @@ export async function rentalUpload(bucket: string, path: string, file: File): Pr
     if (!res.ok) return { ok: false, error: `upload_failed_${res.status}`, status: res.status };
     return { ok: true, data: path };
   } catch (e) { return { ok: false, error: String(e) }; }
+}
+/** حذف كائن تخزين (لتنظيف اليتيم عند فشل الإرفاق، أو حذف/استبدال قبل الإرسال). best-effort. */
+export async function rentalDeleteObject(bucket: string, path: string): Promise<boolean> {
+  try {
+    const res = await rentalStorageFetch(`/object/${bucket}/${path.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" });
+    return res.ok;
+  } catch { return false; }
 }
 export async function rentalSignFiles(bucket: string, paths: string[]): Promise<Record<string, string>> {
   const uniq = Array.from(new Set(paths.filter(Boolean)));

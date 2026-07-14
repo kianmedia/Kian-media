@@ -14,6 +14,7 @@ import {
 } from "@/lib/portal/rental";
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
 import { formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
+import { normalizeImageToJpeg } from "@/lib/portal/rentalImage";
 
 type T = (m: { ar: string; en: string }) => string;
 const inp = "w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -208,16 +209,18 @@ function HandoverPanel({ d, onDone, flash, t }: { d: Detail; onDone: () => Promi
   useEffect(() => { void rentalStartHandover(d.id); }, [d.id]);
   async function addItemPhoto(itemId: string, file: File, condition: string) {
     setBusy(true);
-    const path = rentalItemEvidencePath(d.id, "handover", itemId, file.name);
-    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    const norm = await normalizeImageToJpeg(file); if (!norm.ok) { flash(norm.error); setBusy(false); return; }
+    const path = rentalItemEvidencePath(d.id, "handover", itemId, norm.file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, norm.file);
     if (up.ok) { const r = await rentalAddEvidence(d.id, itemId, "handover", up.data, condition); if (!r.ok) flash(rentalErrorAr(r.error)); else flash(t({ ar: "أُضيفت صورة القطعة.", en: "Item photo added." })); }
     else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
     setBusy(false);
   }
   async function addOverallPhoto(file: File) {
     setBusy(true);
-    const path = rentalOverallEvidencePath(d.id, "handover", file.name);
-    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    const norm = await normalizeImageToJpeg(file); if (!norm.ok) { flash(norm.error); setBusy(false); return; }
+    const path = rentalOverallEvidencePath(d.id, "handover", norm.file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, norm.file);
     if (up.ok) { const r = await rentalAddEvidence(d.id, null, "handover", up.data); if (r.ok) { setOverallDone(true); flash(t({ ar: "أُضيفت الصورة الإجمالية.", en: "Overall photo added." })); } else flash(rentalErrorAr(r.error)); }
     else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
     setBusy(false);
@@ -265,16 +268,18 @@ function InspectPanel({ d, onDone, flash, t }: { d: Detail; onDone: () => Promis
   const [sel, setSel] = useState<Record<string, { result: string; condition: string; note: string }>>({});
   async function addItemPhoto(itemId: string, file: File, condition: string) {
     setBusy(true);
-    const path = rentalItemEvidencePath(d.id, "return", itemId, file.name);
-    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    const norm = await normalizeImageToJpeg(file); if (!norm.ok) { flash(norm.error); setBusy(false); return; }
+    const path = rentalItemEvidencePath(d.id, "return", itemId, norm.file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, norm.file);
     if (up.ok) { const r = await rentalAddEvidence(d.id, itemId, "return_inspection", up.data, condition); if (!r.ok) flash(rentalErrorAr(r.error)); else flash(t({ ar: "أُضيفت صورة الإرجاع.", en: "Return photo added." })); }
     else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
     setBusy(false);
   }
   async function addOverallPhoto(file: File) {
     setBusy(true);
-    const path = rentalOverallEvidencePath(d.id, "return", file.name);
-    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, file);
+    const norm = await normalizeImageToJpeg(file); if (!norm.ok) { flash(norm.error); setBusy(false); return; }
+    const path = rentalOverallEvidencePath(d.id, "return", norm.file.name);
+    const up = await rentalUpload(RENTAL_EVIDENCE_BUCKET, path, norm.file);
     if (up.ok) { const r = await rentalAddEvidence(d.id, null, "return_inspection", up.data); if (r.ok) { setOverallDone(true); flash(t({ ar: "أُضيفت الصورة الإجمالية للإرجاع.", en: "Overall return photo added." })); } else flash(rentalErrorAr(r.error)); }
     else flash(t({ ar: "تعذّر الرفع.", en: "Upload failed." }));
     setBusy(false);
