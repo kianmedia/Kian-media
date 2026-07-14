@@ -127,8 +127,8 @@ export function rentalUploadErrorAr(raw: string | null | undefined): string {
   }
   if (/not_editable/.test(r)) return "لا يمكن إضافة صور بعد إرسال أو إغلاق الطلب.";
   if (/could not find|schema cache|PGRST\d|does not exist|server_not_configured|server_supabase_not_configured|bucket.*not found|not.?found.*bucket/i.test(r)) return "خدمة حفظ الصور غير مُطبَّقة في قاعدة البيانات — شغّل ملف rental_v1_final_production_RUNME.sql ثم أعد المحاولة.";
-  if (/upload_failed_404/.test(r)) return "مخزن الصور غير موجود — شغّل ملف rental_v1_final_production_RUNME.sql على Supabase.";
-  if (/not_authorized|not authorized|upload_failed_403/.test(r)) return "تعذّر رفع الصورة — تأكد من تطبيق تحديث قاعدة البيانات (السياسات)، أو أعد تسجيل الدخول.";
+  if (/upload_failed_40[04]|bucket.*not.*found/i.test(r)) return "مخزن الصور «rental-evidence» غير موجود — شغّل ملف rental_v1_final_production_RUNME.sql على Supabase.";
+  if (/not_authorized|not authorized|upload_failed_403/.test(r)) return "تعذّر رفع الصورة — سياسة التخزين غير مطبّقة (شغّل ملف SQL)، أو أعد تسجيل الدخول.";
   if (/^unauthorized$|not_authenticated|upload_failed_401|session_expired|401/.test(r)) return "انتهت الجلسة أو تعذّر التحقق — أعد تسجيل الدخول ثم حاول.";
   if (/too_large/.test(r)) return "الصورة أكبر من الحد المسموح. اختر صورة أصغر.";
   if (/bad_mime/.test(r)) return "صيغة الصورة غير مدعومة. اختر JPG أو PNG.";
