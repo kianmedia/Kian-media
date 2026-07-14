@@ -37,7 +37,9 @@ function ClientProjects() {
     return () => { alive = false; };
   }, []);
 
-  if (profile.account_type === "lead") {
+  // الموظف المكلَّف (staff_role مُعيَّن) قد يبقى account_type='lead'؛ لا نعرض له حالة العميل الفارغة —
+  // بل نُظهر مشاريعه المسندة (RLS تُرجِعها عبر project_members). حالة "وقّع أول عرض سعر" لِلـlead الحقيقي فقط.
+  if (profile.account_type === "lead" && !profile.staff_role) {
     return (
       <div className="text-center" style={{ padding: "70px 24px", border: "1px dashed rgba(255,255,255,0.12)", borderRadius: "4px" }}>
         <p className="text-white/55" style={{ fontSize: "15px", lineHeight: 1.85 }}>

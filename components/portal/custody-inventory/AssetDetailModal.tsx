@@ -6,6 +6,7 @@
 // الإنفاذ الحقيقي في القاعدة — إخفاء الأزرار تجميلي.
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { usePortal } from "@/components/portal/PortalShell";
 import {
   civGetAssetDetails, civGetAssetChanges, civUpdateAsset, civCorrectStock, civGetAssetTimeline,
   civGetAssetCatalogPhotos, civSignFiles, civSaveAssetPhoto,
@@ -75,7 +76,10 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
     { k: "images", ar: "الصور", en: "Images" },
     { k: "changes", ar: "سجل التغييرات", en: "Changes" },
   ];
-  const canEdit = !!det?.can_edit;
+  const canEdit = !!det?.can_edit;   // تعديل/مخزون/تمييز-أرشفة الصور — مالك فقط (civ_can_admin)
+  // إضافة/استكمال صور الأصل: أمين العهدة/المدير/المالك (civ_can_manage) — الخلفية تسمح بذلك أصلًا.
+  const { caps, profile } = usePortal();
+  const canManagePhotos = caps.isAdminArea || profile.staff_role === "custody_officer";
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/70 p-3 sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -125,7 +129,7 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
             {tab === "details" && <DetailsTab det={det} catName={catName} locName={locName} t={t} />}
             {tab === "edit" && canEdit && <EditTab det={det} cats={cats} locs={locs} busy={busy} setBusy={setBusy} flash={flash} onSaved={afterChange} t={t} />}
             {tab === "stock" && canEdit && <StockTab det={det} busy={busy} setBusy={setBusy} flash={flash} onDone={afterChange} t={t} />}
-            {tab === "images" && <ImagesTab assetId={assetId} canEdit={canEdit} busy={busy} setBusy={setBusy} flash={flash} onChanged={onChanged} t={t} />}
+            {tab === "images" && <ImagesTab assetId={assetId} canEdit={canEdit} canManagePhotos={canManagePhotos} busy={busy} setBusy={setBusy} flash={flash} onChanged={onChanged} t={t} />}
             {tab === "changes" && <ChangesTab assetId={assetId} t={t} />}
           </div>
         )}
@@ -483,8 +487,8 @@ function StockTab({ det, busy, setBusy, flash, onDone, t }: {
 const PHOTO_LOADER_BUILD = "336afe8+";
 type ImgState = "loading" | "ready" | "forbidden" | "not_prepared" | "error";
 const baseName = (p: string) => p.split("/").pop() ?? p;
-function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
-  assetId: string; canEdit: boolean; busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onChanged: () => void | Promise<unknown>; t: T;
+function ImagesTab({ assetId, canEdit, canManagePhotos, busy, setBusy, flash, onChanged, t }: {
+  assetId: string; canEdit: boolean; canManagePhotos: boolean; busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onChanged: () => void | Promise<unknown>; t: T;
 }) {
   const [photos, setPhotos] = useState<CivCatalogPhoto[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
@@ -551,7 +555,7 @@ function ImagesTab({ assetId, canEdit, busy, setBusy, flash, onChanged, t }: {
     <div className="space-y-3">
       <div className="text-[9px] text-stone-600" dir="ltr">Photo Loader Build: {PHOTO_LOADER_BUILD}</div>
       <div className="flex items-center gap-2 flex-wrap">
-        {canEdit && <label className={`${btnGhost} px-3 py-2 text-xs cursor-pointer inline-block`}>📷 {t({ ar: "إضافة صورة", en: "Add image" })}
+        {canManagePhotos && <label className={`${btnGhost} px-3 py-2 text-xs cursor-pointer inline-block`}>📷 {t({ ar: "إضافة صورة", en: "Add image" })}
           <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void add(file); e.target.value = ""; }} /></label>}
         <button disabled={busy || state === "loading"} onClick={() => void reload()} className={`${btnGhost} px-3 py-2 text-xs`}>↻ {t({ ar: "إعادة تحميل", en: "Reload" })}</button>
       </div>

@@ -8,10 +8,11 @@ import {
   rentalGet, rentalPrice, rentalDeposit, rentalGenerateContract, rentalSignContract,
   rentalStartHandover, rentalAddEvidence, rentalCompleteHandover, rentalRequestReturn,
   rentalStartInspection, rentalInspectItem, rentalCompleteReturn, rentalAddCharge, rentalApproveCharge,
-  rentalClose, rentalCancel, rentalApprove, rentalReject, rentalRequestRevision,
+  rentalClose, rentalCancel, rentalApprove, rentalReject, rentalRequestRevision, rentalDelete,
   rentalUpload, rentalUploadSignature, rentalItemEvidencePath, rentalOverallEvidencePath, emitRentalEvent, RENTAL_EVIDENCE_BUCKET,
   type RentalStatus,
 } from "@/lib/portal/rental";
+import { usePortal } from "@/components/portal/PortalShell";
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
 import { formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
 import { normalizeImageToJpeg } from "@/lib/portal/rentalImage";
@@ -96,7 +97,7 @@ export default function RentalDetail({ requestId, onClose, onChanged, t }: { req
             </div>
 
             {/* شريط الإجراءات حسب الحالة */}
-            <ActionBar d={d} busy={busy} run={run} reload={reload} flash={flash} onClose={onClose} t={t} />
+            <ActionBar d={d} busy={busy} setBusy={setBusy} run={run} reload={reload} flash={flash} onClose={onClose} onChanged={onChanged} t={t} />
 
             {/* التسعير + الوديعة (مالية) */}
             <FinancePanel d={d} run={run} t={t} />
@@ -120,10 +121,21 @@ export default function RentalDetail({ requestId, onClose, onChanged, t }: { req
 }
 
 // ─── شريط الإجراءات (state-driven) ───
-function ActionBar({ d, busy, run, reload, flash, onClose, t }: { d: Detail; busy: boolean; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string, emit?: string) => Promise<boolean>; reload: () => Promise<void>; flash: (m: string) => void; onClose: () => void; t: T }) {
+function ActionBar({ d, busy, setBusy, run, reload, flash, onClose, onChanged, t }: { d: Detail; busy: boolean; setBusy: (b: boolean) => void; run: (fn: () => Promise<{ ok: boolean; error?: string }>, m: string, emit?: string) => Promise<boolean>; reload: () => Promise<void>; flash: (m: string) => void; onClose: () => void; onChanged: () => void; t: T }) {
   const s = d.status;
+  const { caps } = usePortal();
   const [showHandover, setShowHandover] = useState(false);
   const [showInspect, setShowInspect] = useState(false);
+  // حذف الطلب (المالك/السوبر أدمن) — يُرجِع المعدات ويغلق التفاصيل ويحدّث القائمة.
+  async function doDelete() {
+    if (!window.confirm(t({ ar: "حذف هذا الطلب نهائيًا؟ ستُرجَع المعدات المحجوزة للمخزون. لا يمكن التراجع.", en: "Delete this request permanently? Reserved equipment returns to stock. Cannot be undone." }))) return;
+    setBusy(true);
+    const r = await rentalDelete(d.id);
+    setBusy(false);
+    if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
+    flash(t({ ar: "حُذف الطلب وأُرجعت المعدات.", en: "Deleted; equipment returned." }));
+    onChanged(); onClose();
+  }
   return (
     <div className={`${box} space-y-2`}>
       <h3 className="text-xs font-medium text-stone-400">{t({ ar: "الإجراءات", en: "Actions" })}</h3>
@@ -145,6 +157,8 @@ function ActionBar({ d, busy, run, reload, flash, onClose, t }: { d: Detail; bus
         {s === "charges_pending" && <button disabled={busy} onClick={() => run(() => rentalClose(d.id), t({ ar: "أُغلق التأجير.", en: "Closed." }), "rental_closed")} className={`${btnRed} px-4 py-1.5 text-xs`}>{t({ ar: "إغلاق التأجير", en: "Close rental" })}</button>}
         {["draft", "pending_approval", "approved", "awaiting_customer_confirmation", "contract_pending_signature", "scheduled", "preparing", "ready_for_handover"].includes(s) &&
           <button disabled={busy} onClick={async () => { const reason = window.prompt(t({ ar: "سبب الإلغاء:", en: "Cancel reason:" })); if (reason && reason.trim()) await run(() => rentalCancel(d.id, reason.trim()), t({ ar: "أُلغي.", en: "Cancelled." })); }} className={`${btnGhost} px-4 py-1.5 text-xs text-stone-500`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>}
+        {caps.isOwner && !["active", "overdue"].includes(s) &&
+          <button disabled={busy} onClick={() => void doDelete()} className={`${btnGhost} px-4 py-1.5 text-xs text-red-500 border-red-900/60`}>{t({ ar: "🗑 حذف الطلب", en: "Delete request" })}</button>}
       </div>
       {showHandover && <HandoverPanel d={d} onDone={async () => { setShowHandover(false); await reload(); }} flash={flash} t={t} />}
       {showInspect && <InspectPanel d={d} onDone={async () => { setShowInspect(false); await reload(); }} flash={flash} t={t} />}

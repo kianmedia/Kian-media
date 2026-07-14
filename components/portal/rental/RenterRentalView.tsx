@@ -9,7 +9,7 @@ import {
   rentalCustomerList, rentalCustomerGet, rentalSignContract, rentalUploadContractSignature,
   rentalCustomerCreateRequest, rentalCustomerAvailableAssets, rentalCustomerSubmit, rentalConsentText,
   rentalCustomerLookupAsset, rentalDeleteObject, rentalUploadEvidence, rentalCustomerRequestReturn, rentalCustomerItems,
-  rentalCustomerInvoices, emitRentalEvent, RENTAL_EVIDENCE_BUCKET, rentalRemoveRequestEvidence,
+  rentalCustomerInvoices, emitRentalEvent, RENTAL_EVIDENCE_BUCKET, rentalRemoveRequestEvidence, rentalRequestEvidenceStatus, rentalExpireStaleDrafts,
   type RentalCustomerView, type RentalRentableAsset, type RentalCreatedItem, type RentalDamageInvoice, type RentalCustomerItem,
 } from "@/lib/portal/rental";
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
@@ -173,10 +173,25 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
   const [overallEv, setOverallEv] = useState<PhotoState>({ status: "idle" });
   const [consent, setConsent] = useState<{ consent_text: string } | null>(null);
   const [sigData, setSigData] = useState<string | null>(null); const [ack, setAck] = useState(false);
+  // فحص جاهزية نظام الصور عند دخول مرحلة الأدلة: يكشف إن لم يُطبَّق تحديث قاعدة البيانات.
+  const [dbReady, setDbReady] = useState<null | boolean>(null);
+  useEffect(() => {
+    if (phase !== "evidence" || !created) { setDbReady(null); return; }
+    let alive = true;
+    void rentalRequestEvidenceStatus(created.id).then((r) => {
+      if (!alive) return;
+      if (r.ok) { setDbReady(true); return; }
+      const missing = /could not find|schema cache|PGRST|does not exist|function .* in the schema|not configured/i.test(r.error);
+      setDbReady(missing ? false : true);   // خطأ آخر (مثل not_found) لا يعني أن الـSQL غير مطبّق
+    });
+    return () => { alive = false; };
+  }, [phase, created]);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
 
   useEffect(() => { const e = validateWindow(f.rental_from, f.rental_to); setWinErr(e ? rentalErrorAr(e) : null); if (phase === "form") { setResults([]); setSearched(false); } }, [f.rental_from, f.rental_to, phase]);
   useEffect(() => { void rentalConsentText().then((r) => { if (r.ok) setConsent({ consent_text: r.data.consent_text }); }); }, []);
+  // كنس المسودّات القديمة (>15د) عند فتح نموذج طلب جديد — تُرجَع معداتها فتظهر متاحة في البحث. best-effort.
+  useEffect(() => { void rentalExpireStaleDrafts(15); }, []);
   function onFromChange(v: string) { set("rental_from", v); const fi = riyadhInputToUtcISO(v); const ti = riyadhInputToUtcISO(f.rental_to); if (fi && (!ti || new Date(ti).getTime() <= new Date(fi).getTime())) { const np = endPlus24h(v); if (np) set("rental_to", np); } }
 
   async function search() {
@@ -231,7 +246,7 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
     if (!norm.ok) { setSt({ status: "error", err: norm.error }); flash(norm.error); return; }
     // رفع مباشر بجلسة المستأجر ثم إرفاق عبر RPC. النجاح بعد الإرفاق فقط.
     const r = await rentalUploadEvidence({ rentalId: created.id, itemId, stage: "request", evidenceType: itemId ? "item_photo" : "overall_photo" }, norm.file);
-    if (!r.ok) { setSt({ status: "error", err: rentalUploadErrorAr(r.error), preview: norm.previewUrl }); flash(rentalUploadErrorAr(r.error)); return; }
+    if (!r.ok) { const m = rentalUploadErrorAr(r.error); setSt({ status: "error", err: `${m} [${r.error}]`, preview: norm.previewUrl }); flash(m); return; }
     setSt({ status: "done", preview: norm.previewUrl, path: r.data.path });
     // نظّف الدليل السابق عند الاستبدال (يمنع سجلًا يتيمًا وصورة قديمة في مراجعة الإدارة).
     if (prev?.path && prev.path !== r.data.path) {
@@ -295,6 +310,11 @@ function RenterCreate({ onClose, onCreated, flash, t }: { onClose: () => void; o
       <div className={`${card} space-y-3`}>
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium text-white">{t({ ar: "صور المعدات + الإقرار", en: "Photos + consent" })} <span className="font-mono text-[11px] text-stone-400" dir="ltr">{created.request_number}</span></h3><button onClick={onClose} className={`${btnGhost} px-3 py-1 text-xs`}>✕</button></div>
         <div className="text-[11px] text-stone-500">{t({ ar: "صوّر كل معدة (إلزامي، صورة واحدة على الأقل) + صورة إجمالية للمعدات، ثم وقّع الإقرار.", en: "Photo each item (≥1, required) + one overall, then sign." })}</div>
+        {dbReady === false && (
+          <div className="bg-red-950/60 border border-red-800 rounded-lg p-2.5 text-[11px] text-red-200 leading-5">
+            ⚠️ {t({ ar: "رفع الصور معطّل: لم يُطبَّق تحديث قاعدة البيانات بعد. شغّل ملف docs/rental_v1_final_production_RUNME.sql على Supabase (ينشئ مخزن الصور والصلاحيات) ثم أعد المحاولة.", en: "Photo upload disabled: the database update isn't applied. Run docs/rental_v1_final_production_RUNME.sql on Supabase, then retry." })}
+          </div>
+        )}
         {created.items.map((it) => { const st = itemEv[it.item_id] ?? { status: "idle" as const }; return (
           <div key={it.item_id} className="bg-stone-950 border border-stone-800 rounded-lg p-2 flex items-center gap-2 text-xs">
             {st.preview ? <img src={st.preview} alt="" className="w-11 h-11 object-cover rounded border border-stone-700" /> : <div className="w-11 h-11 rounded bg-stone-800 border border-stone-700 flex items-center justify-center text-stone-600">📷</div>}
@@ -403,7 +423,7 @@ function RenterReturn({ requestId, onDone, onCancel, flash, t }: { requestId: st
     const norm = await normalizeImageToJpeg(file);
     if (!norm.ok) { setSt({ status: "error", err: norm.error }); flash(norm.error); return; }
     const r = await rentalUploadEvidence({ rentalId: requestId, itemId, stage: "return_request", evidenceType: itemId ? "item_photo" : "overall_photo", condition: itemId ? (conds[itemId] ?? "good") : undefined }, norm.file);
-    if (!r.ok) { setSt({ status: "error", err: rentalUploadErrorAr(r.error), preview: norm.previewUrl }); flash(rentalUploadErrorAr(r.error)); return; }
+    if (!r.ok) { const m = rentalUploadErrorAr(r.error); setSt({ status: "error", err: `${m} [${r.error}]`, preview: norm.previewUrl }); flash(m); return; }
     setSt({ status: "done", preview: norm.previewUrl, path: r.data.path });
     // مرحلة الإرجاع لا تملك RPC حذف؛ نحرّر معاينة الصورة السابقة عند الاستبدال (منع تسرّب ذاكرة).
     if (prev?.preview && prev.preview !== norm.previewUrl) { try { URL.revokeObjectURL(prev.preview); } catch { /* noop */ } }
