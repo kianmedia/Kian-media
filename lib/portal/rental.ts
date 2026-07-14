@@ -157,7 +157,10 @@ export const rentalCompleteReturn = (requestId: string) => prpc<{ ok: boolean }>
 export const rentalAddCharge = (requestId: string, itemId: string | null, type: RentalChargeType, desc: string, estimate: number) =>
   prpc<{ ok: boolean; id: string }>("custody_rental_add_charge", { p_request: requestId, p_item: itemId, p_type: type, p_desc: desc, p_estimate: estimate });
 export const rentalApproveCharge = (chargeId: string, approved: number, fromDeposit = 0, additional = 0, reject = false) =>
-  prpc<{ ok: boolean; status: string }>("custody_rental_approve_charge", { p_charge: chargeId, p_approved: approved, p_from_deposit: fromDeposit, p_additional: additional, p_reject: reject });
+  prpc<{ ok: boolean; status: string; from_deposit?: number; additional_due?: number; invoice_id?: string | null }>("custody_rental_approve_charge", { p_charge: chargeId, p_approved: approved, p_from_deposit: fromDeposit, p_additional: additional, p_reject: reject });
+export const rentalChargeObjection = (chargeId: string, objection: string) => prpc<{ ok: boolean }>("custody_rental_charge_objection", { p_charge: chargeId, p_objection: objection });
+export interface RentalDamageInvoice { invoice_number: string; status: string; currency: string; subtotal: number; vat: number; total: number; pdf_url: string | null; description: string | null; created_at: string }
+export const rentalCustomerInvoices = (requestId: string) => prpc<RentalDamageInvoice[]>("custody_rental_customer_invoices", { p_request: requestId });
 export const rentalClose = (requestId: string) => prpc<{ ok: boolean }>("custody_rental_close", { p_request: requestId });
 export const rentalCancel = (requestId: string, reason: string) => prpc<{ ok: boolean }>("custody_rental_cancel", { p_request: requestId, p_reason: reason });
 export const rentalMarkOverdue = () => prpc<{ ok: boolean; marked: number }>("custody_rental_mark_overdue", {});

@@ -344,7 +344,7 @@ function ChargesPanel({ d, run, t }: { d: Detail; run: (fn: () => Promise<{ ok: 
       <h3 className="text-xs font-medium text-stone-400">{t({ ar: "التلف والرسوم والمطالبات", en: "Charges & claims" })}</h3>
       {d.charges.map((c) => (
         <div key={c.id} className="flex items-center justify-between bg-stone-950 border border-stone-800 rounded-lg p-2 text-xs">
-          <span className="text-stone-300">{c.charge_type}{c.description ? ` — ${c.description}` : ""} · {t({ ar: "تقدير", en: "est" })} {money(c.estimate)}{c.approved_amount != null ? ` · ${t({ ar: "معتمد", en: "appr" })} ${money(c.approved_amount)}` : ""}</span>
+          <span className="text-stone-300">{c.charge_type}{c.description ? ` — ${c.description}` : ""} · {t({ ar: "تقدير", en: "est" })} {money(c.estimate)}{c.approved_amount != null ? ` · ${t({ ar: "معتمد", en: "appr" })} ${money(c.approved_amount)}` : ""}{c.status === "approved" ? ` · ${t({ ar: "من الوديعة", en: "deposit" })} ${money(c.from_deposit)}${c.additional_due > 0 ? ` · ${t({ ar: "فاتورة فرق", en: "invoice" })} ${money(c.additional_due)}` : ""}` : ""}</span>
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-stone-500">{c.status}</span>
             {c.status === "reported" && <>

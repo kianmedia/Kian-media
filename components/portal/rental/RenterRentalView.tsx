@@ -9,8 +9,8 @@ import {
   rentalCustomerList, rentalCustomerGet, rentalSignContract, rentalRequestReturn, rentalUploadSignature,
   rentalCustomerCreateRequest, rentalCustomerAvailableAssets, rentalCustomerSubmit, rentalConsentText,
   rentalCustomerAddRequestEvidence, rentalCustomerLookupAsset, rentalUpload, rentalItemEvidencePath,
-  rentalOverallEvidencePath, rentalUploadConsentSignature, emitRentalEvent, RENTAL_EVIDENCE_BUCKET,
-  type RentalCustomerView, type RentalRentableAsset, type RentalCreatedItem,
+  rentalOverallEvidencePath, rentalUploadConsentSignature, rentalCustomerInvoices, emitRentalEvent, RENTAL_EVIDENCE_BUCKET,
+  type RentalCustomerView, type RentalRentableAsset, type RentalCreatedItem, type RentalDamageInvoice,
 } from "@/lib/portal/rental";
 import { rentalStatusAr } from "@/components/portal/rental/RentalConsole";
 import { riyadhInputToUtcISO, validateWindow, defaultRentalWindow, endPlus24h, formatRiyadh, rentalErrorAr } from "@/lib/portal/rentalTime";
@@ -65,7 +65,8 @@ export default function RenterRentalView() {
 function RenterDetail({ requestId, onClose, onChanged, flash, t }: { requestId: string; onClose: () => void; onChanged: () => void; flash: (m: string) => void; t: (m: { ar: string; en: string }) => string }) {
   const [d, setD] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
-  const reload = useCallback(async () => { const r = await rentalCustomerGet(requestId); if (r.ok) setD(r.data); }, [requestId]);
+  const [invoices, setInvoices] = useState<RentalDamageInvoice[]>([]);
+  const reload = useCallback(async () => { const r = await rentalCustomerGet(requestId); if (r.ok) setD(r.data); const inv = await rentalCustomerInvoices(requestId); if (inv.ok) setInvoices(inv.data); }, [requestId]);
   useEffect(() => { void reload(); }, [reload]);
   const contract = (d?.contract ?? null) as { id?: string; contract_number?: string; status?: string; consent_text?: string } | null;
   const status = String(d?.status ?? "");
@@ -87,6 +88,12 @@ function RenterDetail({ requestId, onClose, onChanged, flash, t }: { requestId: 
               <span>{t({ ar: "حالة الوديعة", en: "Deposit status" })}: {rentalStatusAr(String(d.deposit_status ?? ""))}</span>
             </div>
             <div><div className="text-xs text-stone-400 mb-1">{t({ ar: "المعدات", en: "Equipment" })}</div>{items.map((i, k) => <div key={k} className="text-xs text-stone-300 border-t border-stone-800 py-1">{i.asset_name} × {i.quantity} <span className="text-stone-500">· {rentalStatusAr(i.status)}</span></div>)}</div>
+            {invoices.length > 0 && <div className={`${card} space-y-1`}><div className="text-xs text-amber-400 mb-1">{t({ ar: "فواتير الأضرار", en: "Damage invoices" })}</div>{invoices.map((iv, k) => (
+              <div key={k} className="flex items-center justify-between text-xs text-stone-300 border-t border-stone-800 py-1">
+                <span className="font-mono" dir="ltr">{iv.invoice_number} · {money(iv.total)} {iv.currency} · {rentalStatusAr(iv.status)}</span>
+                {iv.pdf_url ? <a href={iv.pdf_url} target="_blank" rel="noopener noreferrer" className="text-red-400">PDF</a> : null}
+              </div>
+            ))}</div>}
             {status === "contract_pending_signature" && contract?.id && <RenterSign contractId={contract.id} consent={contract.consent_text} onDone={async () => { await reload(); onChanged(); flash(t({ ar: "وُقّع العقد.", en: "Signed." })); }} t={t} />}
             {(status === "active" || status === "overdue") && <button disabled={busy} onClick={async () => { const note = window.prompt(t({ ar: "ملاحظة الإرجاع (اختياري):", en: "Return note (optional):" })); setBusy(true); const r = await rentalRequestReturn(requestId, note ?? undefined); setBusy(false); if (r.ok) { emitRentalEvent("rental_return_requested", requestId); flash(t({ ar: "أُرسل طلب الإرجاع.", en: "Return requested." })); await reload(); onChanged(); } else flash(rentalErrorAr(r.error)); }} className={`${btnRed} w-full py-2 text-sm`}>{t({ ar: "طلب إرجاع", en: "Request return" })}</button>}
           </div>
