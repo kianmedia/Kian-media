@@ -10,6 +10,7 @@ import { useI18n } from "@/lib/i18n";
 import { formatRiyadh } from "@/lib/portal/rentalTime";
 import {
   civAdminCustodyDashboard, civInspectReturn, civSignFiles, CIV_ASSETS_BUCKET,
+  civAdminConfirmAssignment, civAdminStartReturn, civAdminResendConfirmation, civAdminCancelAssignment,
   type CustodyDashboard, type CustodyDashRow, type CustodyDashItem, type CivInspectResult,
 } from "@/lib/portal/custodyInventory";
 
@@ -36,6 +37,17 @@ const INSPECT_OPTS: { v: CivInspectResult; ar: string }[] = [
   { v: "rejected_return", ar: "رفض الإرجاع" }, { v: "partial_return", ar: "إرجاع جزئي" },
 ];
 
+function mapAdminErr(e: string): string {
+  if (/could not find|schema cache|PGRST\d|does not exist|function/i.test(e)) return "الخدمة غير مطبّقة في قاعدة البيانات — شغّل custody_confirmation_return_FINAL_FIX_RUNME.sql.";
+  if (/not authorized|permission denied/i.test(e)) return "لا تملك صلاحية تنفيذ هذا الإجراء.";
+  if (/handover_evidence_required/.test(e)) return "لا يمكن التأكيد بلا صور تسليم للعهدة.";
+  if (/reason_required/.test(e)) return "السبب إلزامي.";
+  if (/not_pending/.test(e)) return "العهدة لم تعد بانتظار التأكيد.";
+  if (/not_active/.test(e)) return "العهدة ليست نشطة الآن.";
+  if (/cannot_cancel_after_confirmation/.test(e)) return "لا يمكن الإلغاء بعد التأكيد — استخدم بدء الإرجاع.";
+  if (/not_found/.test(e)) return "العهدة غير موجودة.";
+  return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";
+}
 function fmtDuration(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const d = Math.floor(s / 86400);
@@ -225,6 +237,31 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
     onClose();
   }
 
+  async function doAdmin(action: "confirm" | "resend" | "start_return" | "cancel") {
+    if (busy) return;
+    let reason = "";
+    if (action !== "resend") {
+      const p = window.prompt(
+        action === "confirm" ? "سبب التأكيد الإداري (إلزامي — لا يُزوَّر توقيع الموظف):"
+        : action === "cancel" ? "سبب إلغاء التسليم (إلزامي — تُرجَع المعدات للمخزون):"
+        : "سبب بدء الإرجاع نيابة عن الموظف (إلزامي):");
+      if (p === null) return;
+      if (!p.trim()) { flash("السبب إلزامي."); return; }
+      reason = p.trim();
+    }
+    setBusy(true);
+    const res =
+      action === "confirm"      ? await civAdminConfirmAssignment(r.custody_id, r.employee_name, reason)
+      : action === "resend"     ? await civAdminResendConfirmation(r.custody_id)
+      : action === "start_return" ? await civAdminStartReturn(r.custody_id, reason)
+      :                           await civAdminCancelAssignment(r.custody_id, reason);
+    setBusy(false);
+    if (!res.ok) { flash(mapAdminErr(res.error)); return; }
+    flash(action === "confirm" ? "تم التأكيد إداريًا." : action === "resend" ? "أُرسل التذكير للموظف." : action === "start_return" ? "بدأ إجراء الإرجاع." : "أُلغي التسليم وأُرجعت المعدات.");
+    await onChanged();
+    onClose();
+  }
+
   const canInspect = ["return_requested", "under_inspection"].includes(r.status);
 
   return (
@@ -304,6 +341,18 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
               ))}
             </div>
           </section>
+
+          {/* إجراءات إدارية حسب الحالة */}
+          {(r.status === "pending_employee_confirmation" || r.status === "active") && (
+            <section className="flex flex-wrap gap-2">
+              {r.status === "pending_employee_confirmation" && <>
+                <button disabled={busy} onClick={() => void doAdmin("confirm")} className={`${BTN_RED} px-4 py-2`}>تأكيد إداري</button>
+                <button disabled={busy} onClick={() => void doAdmin("resend")} className={`${BTN_GHOST} px-4 py-2`}>إعادة إرسال التأكيد</button>
+                <button disabled={busy} onClick={() => void doAdmin("cancel")} className={`${BTN_GHOST} px-4 py-2 text-red-400 border-red-900/60`}>إلغاء التسليم</button>
+              </>}
+              {r.status === "active" && <button disabled={busy} onClick={() => void doAdmin("start_return")} className={`${BTN_RED} px-4 py-2`}>بدء إرجاع العهدة</button>}
+            </section>
+          )}
 
           {/* إجراء الفحص (return_requested / under_inspection) */}
           {canInspect && (

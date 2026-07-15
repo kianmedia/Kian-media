@@ -194,6 +194,16 @@ export interface CivInspectItem { assignment_item_id: string; result: CivInspect
 export const civInspectReturn = (assignmentId: string, items: CivInspectItem[]) =>
   prpc<{ ok: boolean; status: string; accepted: number; resolved: number; rejected: number; closed: boolean }>("custody_inv_admin_inspect_return", { p_assignment: assignmentId, p_items: items });
 
+// ─── إجراءات الأدمن على تأكيد/إرجاع العهدة (تُطبَّق عبر custody_confirmation_return_FINAL_FIX_RUNME.sql) ───
+export const civAdminConfirmAssignment = (assignmentId: string, employeeName: string, reason: string) =>
+  prpc<{ ok: boolean; status: string }>("custody_inv_admin_confirm_assignment", { p_assignment: assignmentId, p_employee_name: employeeName, p_reason: reason });
+export const civAdminStartReturn = (assignmentId: string, reason: string) =>
+  prpc<{ ok: boolean; status: string }>("custody_inv_admin_start_return", { p_assignment: assignmentId, p_reason: reason });
+export const civAdminResendConfirmation = (assignmentId: string) =>
+  prpc<{ ok: boolean }>("custody_inv_admin_resend_confirmation", { p_assignment: assignmentId });
+export const civAdminCancelAssignment = (assignmentId: string, reason: string) =>
+  prpc<{ ok: boolean; status: string }>("custody_inv_admin_cancel_assignment", { p_assignment: assignmentId, p_reason: reason });
+
 export const civAdjustStock = (assetId: string, newTotal: number | null, newAvailable: number | null, reason: string) =>
   prpc<boolean>("custody_inv_admin_adjust_stock", { p_asset: assetId, p_new_total: newTotal, p_new_available: newAvailable, p_reason: reason });
 // تصحيح مخزون آمن — الخادم يحسب المتاح ويمنع الفساد (delta أو set_total).
