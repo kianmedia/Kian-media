@@ -11,6 +11,7 @@ import { formatRiyadh } from "@/lib/portal/rentalTime";
 import {
   civAdminCustodyDashboard, civInspectReturn, civSignFiles, CIV_ASSETS_BUCKET,
   civAdminConfirmAssignment, civAdminStartReturn, civAdminResendConfirmation, civAdminCancelAssignment,
+  civAdminStartInspection, civUploadEvidence, civAttachEvidence, civEvidencePath,
   type CustodyDashboard, type CustodyDashRow, type CustodyDashItem, type CivInspectResult,
 } from "@/lib/portal/custodyInventory";
 
@@ -31,6 +32,11 @@ const COND_AR: Record<string, string> = {
   new: "جديدة", excellent: "ممتازة", good: "جيدة", fair: "مقبولة", damaged: "تالفة",
   under_maintenance: "تحت الصيانة", lost: "مفقودة", retired: "مشطوبة",
 };
+// حالة البند (تختلف عن حالة العهدة) → عربي
+const ITEM_STATUS_AR: Record<string, string> = {
+  pending: "بانتظار التأكيد", active: "نشطة", return_requested: "طلب إرجاع",
+  inspected: "مفحوصة", returned: "مُرجعة", damaged: "تالفة", missing: "مفقودة", disputed: "متنازع",
+};
 const INSPECT_OPTS: { v: CivInspectResult; ar: string }[] = [
   { v: "accepted_good", ar: "سليمة — قبول" }, { v: "accepted_damaged", ar: "تالفة — قبول" },
   { v: "maintenance_required", ar: "تحتاج صيانة" }, { v: "missing", ar: "مفقودة" },
@@ -44,9 +50,25 @@ function mapAdminErr(e: string): string {
   if (/reason_required/.test(e)) return "السبب إلزامي.";
   if (/not_pending/.test(e)) return "العهدة لم تعد بانتظار التأكيد.";
   if (/not_active/.test(e)) return "العهدة ليست نشطة الآن.";
+  if (/not_returnable/.test(e)) return "لا يمكن بدء الفحص — العهدة ليست بحالة طلب إرجاع.";
   if (/cannot_cancel_after_confirmation/.test(e)) return "لا يمكن الإلغاء بعد التأكيد — استخدم بدء الإرجاع.";
   if (/not_found/.test(e)) return "العهدة غير موجودة.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";
+}
+
+// رسائل دقيقة لفشل اعتماد الفحص (تستخرج السبب الحقيقي من قاعدة البيانات).
+function mapInspectErr(e: string): string {
+  if (/could not find|schema cache|PGRST\d|does not exist|function/i.test(e)) return "خدمة الفحص غير مطبّقة — شغّل custody_return_inspection_FINAL_FIX_RUNME.sql.";
+  if (/not authorized|permission denied/i.test(e)) return "لا تملك صلاحية الفحص.";
+  if (/overall_inspection_photo_required/.test(e)) return "صورة فحص إجمالية إلزامية قبل الاعتماد.";
+  if (/item_inspection_photo_required/.test(e)) return "صورة فحص إلزامية لكل قطعة بها ضرر/صيانة/فقد/إرجاع جزئي.";
+  if (/item_not_pending_return/.test(e)) return "لا يُفحَص إلا ما قدّمه الموظف للإرجاع (بحالة «طلب إرجاع»).";
+  if (/not_inspectable/.test(e)) return "لا يمكن الفحص — حالة العهدة لا تسمح.";
+  if (/bad_quantity/.test(e)) return "كمية إرجاع غير صحيحة (تتجاوز المتبقّي).";
+  if (/bad_result/.test(e)) return "نتيجة فحص غير صالحة.";
+  if (/items_required/.test(e)) return "لا توجد بنود للفحص.";
+  if (/item_not_found|not_found/.test(e)) return "العهدة أو البند غير موجود.";
+  return "تعذّر تنفيذ الفحص. أعد المحاولة.";
 }
 function fmtDuration(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
@@ -207,6 +229,13 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Record<string, CivInspectResult>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [overallCount, setOverallCount] = useState(0);         // صور الفحص الإجمالية المرفوعة
+  const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({}); // itemId → عدد صور الفحص
+
+  // البنود التي قدّمها الموظف للإرجاع فقط (هي ما يُفحَص).
+  const returnableItems = (r.items || []).filter((i) => i.status === "return_requested");
+  // النتائج التي تُلزم صورة فحص لكل قطعة.
+  const PHOTO_RESULTS: CivInspectResult[] = ["accepted_damaged", "maintenance_required", "missing", "partial_return"];
 
   useEffect(() => {
     const paths = (r.items || []).map((i) => i.photo_path).filter((p): p is string => !!p);
@@ -218,20 +247,54 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // بدء فحص الإرجاع: return_requested → under_inspection (idempotent للـ under_inspection).
+  async function startInspection() {
+    if (busy) return;
+    if (r.status === "return_requested") {
+      setBusy(true);
+      const res = await civAdminStartInspection(r.custody_id);
+      setBusy(false);
+      if (!res.ok) { flash(mapAdminErr(res.error)); return; }
+      await onChanged();   // حدّث الحالة/العدّادات فورًا (under_inspection) حتى لو أُغلق الدرج دون اعتماد
+    }
+    setInspecting(true);
+  }
+
+  // رفع صورة فحص (إجمالية إن كان itemId=null، أو لقطعة). المرحلة return_inspection (يقبلها attach RPC).
+  async function uploadInspectionPhoto(itemId: string | null, file: File) {
+    setBusy(true);
+    const path = civEvidencePath(r.employee_user_id, r.custody_id, "return_inspection", file.name);
+    const up = await civUploadEvidence(path, file);
+    if (!up.ok) { setBusy(false); flash("تعذّر رفع صورة الفحص: " + up.error); return; }
+    const at = await civAttachEvidence({ assignment_id: r.custody_id, assignment_item_id: itemId, stage: "return_inspection", path, name: file.name, mime: file.type || "image/jpeg", size: file.size });
+    setBusy(false);
+    if (!at.ok) { flash("تعذّر ربط صورة الفحص: " + mapInspectErr(at.error)); return; }
+    if (itemId) setItemPhotos((p) => ({ ...p, [itemId]: (p[itemId] ?? 0) + 1 }));
+    else setOverallCount((n) => n + 1);
+    flash("أُضيفت صورة الفحص.");
+  }
+
   async function submitInspect() {
     if (busy) return;
-    const items = (r.items || []).map((i) => ({
+    const items = returnableItems.map((i) => ({
       assignment_item_id: i.item_id,
       result: results[i.item_id] ?? ("accepted_good" as CivInspectResult),
-      quantity: i.quantity,
+      quantity: i.quantity - (i.quantity_returned ?? 0),
       note: notes[i.item_id]?.trim() || undefined,
     }));
-    if (items.length === 0) { flash("لا توجد بنود للفحص."); return; }
+    if (items.length === 0) { flash("لا توجد بنود بحالة «طلب إرجاع» لفحصها."); return; }
+    // تحقّق مسبق (رسالة أوضح قبل رحلة الخادم): صورة فحص واحدة على الأقل عند وجود قبول
+    // (تُطابق شرط الخادم: أي دليل return_inspection — إجمالي أو لقطعة — يفي)، + صورة لكل قطعة متضرّرة.
+    const hasAccept = items.some((it) => it.result !== "rejected_return");
+    const anyInspectionPhoto = overallCount > 0 || Object.values(itemPhotos).some((n) => n > 0);
+    if (hasAccept && !anyInspectionPhoto) { flash("صورة فحص إجمالية إلزامية قبل الاعتماد."); return; }
+    const needItemPhoto = items.find((it) => PHOTO_RESULTS.includes(it.result) && (itemPhotos[it.assignment_item_id] ?? 0) < 1);
+    if (needItemPhoto) { flash("صورة فحص إلزامية لكل قطعة بها ضرر/صيانة/فقد/إرجاع جزئي."); return; }
     setBusy(true);
     const res = await civInspectReturn(r.custody_id, items);
     setBusy(false);
-    if (!res.ok) { flash(/could not find|schema|PGRST/i.test(res.error) ? "خدمة الفحص غير مطبّقة في قاعدة البيانات." : /not authorized|permission/i.test(res.error) ? "لا تملك صلاحية الفحص." : "تعذّر تنفيذ الفحص."); return; }
-    flash(res.data.closed ? "تم الفحص وأُغلقت العهدة." : "تم تسجيل الفحص.");
+    if (!res.ok) { flash(mapInspectErr(res.error)); return; }
+    flash(res.data.closed ? "تم الفحص واكتمل إرجاع العهدة." : res.data.status === "partially_returned" ? "تم الفحص — إرجاع جزئي، تبقّت بنود." : res.data.status === "rejected" ? "أُعيد الطلب للموظف للاستكمال." : "تم تسجيل الفحص.");
     setInspecting(false);
     await onChanged();
     onClose();
@@ -327,15 +390,28 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
                       {i.condition_at_return ? ` · عند الإرجاع: ${COND_AR[i.condition_at_return] ?? i.condition_at_return}` : ""}
                     </div>
                   </div>
-                  {inspecting && canInspect && (
-                    <div className="flex flex-col gap-1 shrink-0 w-40">
-                      <select value={results[i.item_id] ?? "accepted_good"} onChange={(e) => setResults((p) => ({ ...p, [i.item_id]: e.target.value as CivInspectResult }))}
-                        className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }}>
-                        {INSPECT_OPTS.map((o) => <option key={o.v} value={o.v}>{o.ar}</option>)}
-                      </select>
-                      <input value={notes[i.item_id] ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [i.item_id]: e.target.value }))} placeholder="ملاحظة"
-                        className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" />
-                    </div>
+                  {inspecting && canInspect && i.status === "return_requested" && (() => {
+                    const res = results[i.item_id] ?? "accepted_good";
+                    const needPhoto = PHOTO_RESULTS.includes(res as CivInspectResult);
+                    return (
+                      <div className="flex flex-col gap-1 shrink-0 w-44">
+                        <select value={res} onChange={(e) => setResults((p) => ({ ...p, [i.item_id]: e.target.value as CivInspectResult }))}
+                          className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }}>
+                          {INSPECT_OPTS.map((o) => <option key={o.v} value={o.v}>{o.ar}</option>)}
+                        </select>
+                        <input value={notes[i.item_id] ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [i.item_id]: e.target.value }))} placeholder="ملاحظة"
+                          className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" />
+                        {needPhoto && (
+                          <label className={`rounded px-2 py-1 text-[11px] text-center cursor-pointer ${(itemPhotos[i.item_id] ?? 0) > 0 ? "bg-stone-800 border border-stone-700 text-emerald-400" : "bg-red-600 text-white"} ${busy ? "opacity-50 pointer-events-none" : ""}`}>
+                            📷 {(itemPhotos[i.item_id] ?? 0) > 0 ? `صورة فحص (${itemPhotos[i.item_id]})` : "صورة فحص إلزامية"}
+                            <input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadInspectionPhoto(i.item_id, f); e.target.value = ""; }} />
+                          </label>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {inspecting && canInspect && i.status !== "return_requested" && (
+                    <span className="shrink-0 text-[10px] text-stone-600">{ITEM_STATUS_AR[i.status] ?? i.status}</span>
                   )}
                 </div>
               ))}
@@ -356,12 +432,22 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
 
           {/* إجراء الفحص (return_requested / under_inspection) */}
           {canInspect && (
-            <section className="flex gap-2">
+            <section className="space-y-2">
               {!inspecting
-                ? <button onClick={() => setInspecting(true)} className={`${BTN_RED} px-4 py-2`}>بدء فحص الإرجاع</button>
+                ? <button disabled={busy} onClick={() => void startInspection()} className={`${BTN_RED} px-4 py-2`}>{busy ? "…" : (r.status === "under_inspection" ? "متابعة الفحص" : "بدء فحص الإرجاع")}</button>
                 : <>
-                    <button disabled={busy} onClick={() => void submitInspect()} className={`${BTN_RED} px-4 py-2`}>{busy ? "…" : "اعتماد الفحص"}</button>
-                    <button disabled={busy} onClick={() => setInspecting(false)} className={`${BTN_GHOST} px-4 py-2`}>إلغاء</button>
+                    {returnableItems.length === 0
+                      ? <p className="text-[11px] text-amber-400">لا توجد بنود بحالة «طلب إرجاع» لفحصها في هذه العهدة.</p>
+                      : <>
+                          <label className={`inline-flex items-center gap-1 rounded px-3 py-1.5 text-xs cursor-pointer ${overallCount > 0 ? "bg-stone-800 border border-stone-700 text-emerald-400" : "bg-stone-800 border border-red-900/60 text-stone-200"} ${busy ? "opacity-50 pointer-events-none" : ""}`}>
+                            📷 {overallCount > 0 ? `صورة الفحص الإجمالية (${overallCount})` : "صورة فحص إجمالية إلزامية"}
+                            <input type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadInspectionPhoto(null, f); e.target.value = ""; }} />
+                          </label>
+                          <div className="flex gap-2">
+                            <button disabled={busy} onClick={() => void submitInspect()} className={`${BTN_RED} px-4 py-2`}>{busy ? "…" : "اعتماد الفحص"}</button>
+                            <button disabled={busy} onClick={() => setInspecting(false)} className={`${BTN_GHOST} px-4 py-2`}>إلغاء</button>
+                          </div>
+                        </>}
                   </>}
             </section>
           )}

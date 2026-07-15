@@ -193,6 +193,9 @@ export const civRequestReturn = (assignmentId: string, items: CivReturnItem[], n
 export interface CivInspectItem { assignment_item_id: string; result: CivInspectResult; quantity?: number; note?: string; to_location_id?: string; damage_value?: number }
 export const civInspectReturn = (assignmentId: string, items: CivInspectItem[]) =>
   prpc<{ ok: boolean; status: string; accepted: number; resolved: number; rejected: number; closed: boolean }>("custody_inv_admin_inspect_return", { p_assignment: assignmentId, p_items: items });
+// بدء فحص الإرجاع (return_requested → under_inspection) — عبر custody_return_inspection_FINAL_FIX_RUNME.sql.
+export const civAdminStartInspection = (assignmentId: string, note?: string) =>
+  prpc<{ ok: boolean; status: string; noop?: boolean }>("custody_inv_admin_start_inspection", { p_assignment: assignmentId, p_note: note ?? null });
 
 // ─── إجراءات الأدمن على تأكيد/إرجاع العهدة (تُطبَّق عبر custody_confirmation_return_FINAL_FIX_RUNME.sql) ───
 export const civAdminConfirmAssignment = (assignmentId: string, employeeName: string, reason: string) =>
