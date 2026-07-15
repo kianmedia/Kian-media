@@ -103,6 +103,33 @@ export function civListAssignments(filter?: { status?: string; employee_user_id?
   if (filter?.employee_user_id) q += `&employee_user_id=eq.${enc(filter.employee_user_id)}`;
   return pget<CivAssignment[]>(q);
 }
+
+// ─── مركز إدارة العهد والإرجاع: قراءة إدارية مُثرّاة (اسم الموظف/المعدة/التأخير + عدّادات) ───
+export interface CustodyDashItem {
+  item_id: string; asset_id: string; asset_name: string; asset_code: string; serial_number: string | null;
+  brand: string | null; model: string | null; quantity: number; quantity_returned: number;
+  condition_at_issue: string | null; condition_at_return: string | null; status: string; photo_path: string | null;
+}
+export interface CustodyDashRow {
+  custody_id: string; custody_number: string; status: string;
+  employee_user_id: string; employee_name: string; employee_job_title: string | null; employee_department: string | null;
+  employee_mobile: string | null; employee_email: string | null; employee_account_status: string | null;
+  project_id: string | null; project_name: string | null; assignment_type: string; purpose: string | null;
+  issued_at: string; expected_return_at: string | null; employee_confirmed_at: string | null; employee_confirmed: boolean;
+  remaining_seconds: number; overdue_seconds: number; item_count: number; items: CustodyDashItem[]; issue_count: number;
+  can_resend_confirm: boolean; can_request_return: boolean; can_inspect: boolean; can_close: boolean; can_cancel: boolean;
+}
+export interface CustodyDashboard { total_count: number; counters: Record<string, number>; rows: CustodyDashRow[] }
+
+export function civAdminCustodyDashboard(f?: {
+  status?: string; search?: string; employeeId?: string; projectId?: string; overdueOnly?: boolean; limit?: number; offset?: number;
+}): Promise<Result<CustodyDashboard>> {
+  return prpc<CustodyDashboard>("custody_admin_custody_dashboard", {
+    p_status: f?.status || null, p_search: f?.search || null, p_employee_id: f?.employeeId || null,
+    p_project_id: f?.projectId || null, p_overdue_only: f?.overdueOnly ?? false,
+    p_limit: f?.limit ?? 50, p_offset: f?.offset ?? 0,
+  });
+}
 export async function civListAssignmentItems(assignmentId: string): Promise<Result<CivAssignmentItem[]>> {
   // نضمّن اسم/كود الأصل عبر resource embedding (FK asset_id) ثم نُسطّحه.
   const r = await pget<(CivAssignmentItem & { asset?: { asset_name: string; asset_code: string } | null })[]>(

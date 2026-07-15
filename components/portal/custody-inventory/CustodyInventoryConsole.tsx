@@ -8,6 +8,7 @@ import CustodyEnterpriseSettings from "@/components/portal/custody-inventory/Cus
 import CustodyQrLabels from "@/components/portal/custody-inventory/CustodyQrLabels";
 import AssetDetailModal from "@/components/portal/custody-inventory/AssetDetailModal";
 import CustodyPhotoCompletion from "@/components/portal/custody-inventory/CustodyPhotoCompletion";
+import AdminCustodyOperations from "@/components/portal/custody-inventory/AdminCustodyOperations";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
   civSaveAssetPhoto,
@@ -110,7 +111,7 @@ export default function CustodyInventoryConsole() {
       {tab === "categories" && <CategoriesTab {...{ cats, busy, setBusy, flash, err, t, reload: loadRefs }} />}
       {tab === "locations" && <LocationsTab {...{ locs, busy, setBusy, flash, err, t, reload: loadRefs }} />}
       {tab === "issue" && <IssueTab {...{ assets, staff, busy, setBusy, flash, err, t, onDone: () => setTab("custody") }} />}
-      {tab === "custody" && <CustodyTab {...{ assignments, busy, setBusy, flash, err, t, empName, locs, reload: () => civListAssignments().then((r) => { if (r.ok) setAssignments(r.data); }) }} />}
+      {tab === "custody" && <AdminCustodyOperations />}
       {tab === "maintenance" && <MaintenanceTab {...{ assets, busy, setBusy, flash, err, t }} />}
       {tab === "audits" && <AuditsTab {...{ locs, busy, setBusy, flash, err, t }} />}
       {tab === "reports" && <ReportsTab {...{ busy, setBusy, flash, err, t }} />}
