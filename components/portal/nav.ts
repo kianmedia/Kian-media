@@ -14,6 +14,7 @@ interface TabDef { href: string; ar: string; en: string; adminAr?: string; admin
 const REG: Record<string, TabDef> = {
   overview:      { href: "/client-portal",               ar: "نظرة عامة",   en: "Overview",      adminAr: "لوحة الإدارة",         adminEn: "Admin Dashboard" },
   projects:      { href: "/client-portal/projects",      ar: "مشاريعي",     en: "Projects",      adminAr: "المشاريع",             adminEn: "Projects" },
+  project_core:  { href: "/client-portal/project-core",  ar: "إدارة المشاريع", en: "Project Core", adminAr: "منصّة المشاريع", adminEn: "Project Core", staffAr: "منصّة المشاريع", staffEn: "Project Core" },
   quotes:        { href: "/client-portal/quotes",        ar: "طلبات السعر", en: "Quotes",        adminAr: "طلبات عروض السعر",     adminEn: "Quote Requests" },
   messages:      { href: "/client-portal/messages",      ar: "الرسائل",     en: "Messages",      adminAr: "رسائل العملاء",        adminEn: "Client Messages" },
   files:         { href: "/client-portal/files",         ar: "ملفاتي",      en: "My Files",      adminAr: "روابط وملفات العملاء", adminEn: "Client Files" },
@@ -33,12 +34,12 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "quotes", "messages", "files", "accounts", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "quotes", "messages", "files", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  manager:     ["overview", "projects", "quotes", "messages", "files", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
   sales:       ["employee", "quotes", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
-  editor:      ["employee", "projects", "equipment", "asset_custody", "notifications", "profile"],
+  editor:      ["employee", "projects", "project_core", "equipment", "asset_custody", "notifications", "profile"],
   hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "notifications", "profile"],
   readonly:    ["employee", "projects", "equipment", "asset_custody", "notifications", "profile"],
   finance:     ["employee", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
