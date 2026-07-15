@@ -126,11 +126,14 @@ function ActionBar({ d, busy, setBusy, run, reload, flash, onClose, onChanged, t
   const { caps } = usePortal();
   const [showHandover, setShowHandover] = useState(false);
   const [showInspect, setShowInspect] = useState(false);
-  // حذف الطلب (المالك/السوبر أدمن) — يُرجِع المعدات ويغلق التفاصيل ويحدّث القائمة.
+  // حذف الطلب (المالك/السوبر أدمن/admin) — السبب إلزامي؛ يُرجِع المعدات ويغلق التفاصيل ويحدّث القائمة.
   async function doDelete() {
+    const reason = window.prompt(t({ ar: "سبب حذف الطلب (إلزامي — يُسجَّل في السجل):", en: "Deletion reason (required — logged):" }));
+    if (reason === null) return;                       // ألغى المستخدم النافذة
+    if (!reason.trim()) { flash(t({ ar: "سبب الحذف إلزامي.", en: "A deletion reason is required." })); return; }
     if (!window.confirm(t({ ar: "حذف هذا الطلب نهائيًا؟ ستُرجَع المعدات المحجوزة للمخزون. لا يمكن التراجع.", en: "Delete this request permanently? Reserved equipment returns to stock. Cannot be undone." }))) return;
     setBusy(true);
-    const r = await rentalDelete(d.id);
+    const r = await rentalDelete(d.id, reason.trim());
     setBusy(false);
     if (!r.ok) { flash(rentalErrorAr(r.error)); return; }
     flash(t({ ar: "حُذف الطلب وأُرجعت المعدات.", en: "Deleted; equipment returned." }));

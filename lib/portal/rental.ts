@@ -164,8 +164,8 @@ export const rentalCustomerInvoices = (requestId: string) => prpc<RentalDamageIn
 export const rentalClose = (requestId: string) => prpc<{ ok: boolean }>("custody_rental_close", { p_request: requestId });
 export const rentalCancel = (requestId: string, reason: string) => prpc<{ ok: boolean }>("custody_rental_cancel", { p_request: requestId, p_reason: reason });
 export const rentalMarkOverdue = () => prpc<{ ok: boolean; marked: number }>("custody_rental_mark_overdue", {});
-// حذف طلب تأجير (المالك/السوبر أدمن) مع إرجاع المعدات للمخزون. يُمنع للطلب النشط/المتأخر.
-export const rentalDelete = (requestId: string) => prpc<{ ok: boolean; deleted: string }>("custody_rental_delete", { p_request: requestId });
+// حذف طلب تأجير (المالك/السوبر أدمن/admin) مع إرجاع المعدات للمخزون. السبب إلزامي. يُمنع للطلب النشط/المتأخر.
+export const rentalDelete = (requestId: string, reason: string) => prpc<{ ok: boolean; deleted: string; request_number?: string }>("custody_rental_delete", { p_rental_id: requestId, p_reason: reason });
 // إنهاء صلاحية المسودّات القديمة (>دقائق) وإرجاع معداتها — best-effort (لا يكسر أي شيء إن فشل).
 export const rentalExpireStaleDrafts = (minutes = 15) => prpc<{ ok: boolean; expired: number }>("custody_rental_expire_stale_drafts", { p_minutes: minutes });
 export const rentalCustomerGet = (requestId: string) => prpc<Record<string, unknown>>("custody_rental_customer_get", { p_request: requestId });

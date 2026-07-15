@@ -100,7 +100,10 @@ const ERR_AR: Record<string, string> = {
   rental_disabled: "وحدة التأجير غير مفعّلة.",
   profile_not_found: "لم يُعثر على حساب العميل.",
   not_found: "الطلب غير موجود.",
-  "not authorized": "لا تملك صلاحية هذا الإجراء.",
+  "not authorized": "ليس لديك صلاحية لتنفيذ هذا الإجراء.",
+  active_rental_cannot_be_deleted: "لا يمكن حذف تأجير نشط قبل إرجاع المعدات وإقفال الطلب.",
+  return_incomplete: "لا يمكن الإقفال قبل اكتمال فحص الإرجاع.",
+  charges_unsettled: "لا يمكن الإقفال قبل تسوية الرسوم والتأمين.",
 };
 /** رسالة عربية لأي رمز خطأ خادمي/محلي (يقتطع اللاحقة مثل quantity_unavailable:<uuid>). */
 export function rentalErrorAr(raw: string | null | undefined): string {
