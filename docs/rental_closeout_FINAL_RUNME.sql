@@ -78,7 +78,15 @@ begin
   update public.custody_inventory_reservations set status = 'cancelled'
    where id in (select reservation_id from public.custody_rental_items
                 where request_id = p_rental_id and reservation_id is not null);
-  -- (ب) أي بند ما زال reserved/issued → لا يبقى محجوزًا/مسحوبًا بعد الحذف.
+  -- (أ.٢) إعادة الكمية المخصومة فعليًا وقت التسليم للبنود المسحوبة/المطلوب إرجاعها (لم تُفحص بعد).
+  --       التسليم يخصم quantity_available؛ الفحص وحده يعيده. البنود reserved لم تُخصم أصلًا
+  --       (تُحسب ديناميكيًا)، وreturned/inspected/damaged/missing لا تُعاد هنا (مُعالَجة/مفقودة).
+  update public.custody_inventory_assets a
+     set quantity_available = a.quantity_available + s.qty
+    from (select asset_id, sum(quantity) as qty from public.custody_rental_items
+          where request_id = p_rental_id and status in ('issued','return_requested') group by asset_id) s
+   where a.id = s.asset_id;
+  -- (ب) أي بند ما زال reserved/issued/return_requested → لا يبقى محجوزًا/مسحوبًا بعد الحذف.
   update public.custody_rental_items set status = 'returned'
    where request_id = p_rental_id and status in ('reserved','issued','return_requested');
   -- (ج) إلغاء العقود غير النهائية.
