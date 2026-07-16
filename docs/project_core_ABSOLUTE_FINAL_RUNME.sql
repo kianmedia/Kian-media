@@ -2282,6 +2282,343 @@ begin
 end $g7$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 8 — Zoho Books: جداول الربط/الطابور/الخرائط/الـWebhooks (Server-side فقط؛
+-- التنفيذ الفعلي عبر /api/cron/zoho-sync بمفتاح الخدمة + ZOHO_BOOKS_SYNC_MODE).
+-- كيان = التشغيل والاعتماد؛ Zoho Books = السجل المحاسبي الرسمي. لا Draft يُرحَّل.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B8.1 إعدادات التكامل (صف واحد) ═══
+create table if not exists public.zoho_books_settings (
+  id                 int primary key default 1 check (id = 1),
+  organization_id    text,
+  organization_name  text,
+  api_domain         text,
+  sync_paused        boolean not null default false,
+  estimates_sync_enabled boolean not null default false,
+  last_test_at       timestamptz,
+  last_test_ok       boolean,
+  last_test_error    text,
+  last_sync_at       timestamptz,
+  updated_at         timestamptz not null default now()
+);
+insert into public.zoho_books_settings(id) values (1) on conflict (id) do nothing;
+
+-- ═══ B8.2 خرائط الحسابات/الضرائب/طرق الدفع (لا IDs في الكود) ═══
+create table if not exists public.zoho_account_mappings (
+  id          uuid primary key default gen_random_uuid(),
+  kind        text not null check (kind in ('expense_account','paid_through','tax','income_account','item')),
+  local_key   text not null,            -- فئة مصروف كيان / طريقة دفع / vat15 / revenue
+  zoho_id     text not null,
+  zoho_name   text,
+  updated_by  uuid,
+  updated_at  timestamptz not null default now(),
+  unique (kind, local_key)
+);
+
+-- ═══ B8.3 ربط الكيانات (Local ↔ Zoho) ═══
+create table if not exists public.zoho_entity_mappings (
+  id                 uuid primary key default gen_random_uuid(),
+  local_entity_type  text not null,     -- expense/bill/vendor_payment/invoice/customer_payment/project/contact/vendor/estimate
+  local_entity_id    uuid not null,
+  zoho_entity_type   text not null,
+  zoho_entity_id     text not null,
+  organization_id    text,
+  sync_status        text not null default 'synced'
+                     check (sync_status in ('not_configured','ready','pending','processing','synced','failed','conflict','needs_review','paused')),
+  last_synced_at     timestamptz,
+  last_local_version timestamptz,
+  last_remote_hash   text,
+  last_error         text,
+  metadata           jsonb not null default '{}',
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  unique (local_entity_type, local_entity_id),
+  unique (organization_id, zoho_entity_type, zoho_entity_id)
+);
+
+-- ═══ B8.4 طابور المزامنة (Jobs + Attempts + Idempotency) ═══
+create table if not exists public.zoho_sync_jobs (
+  id               uuid primary key default gen_random_uuid(),
+  operation        text not null,       -- create_expense/create_bill/vendor_payment/invoice_upsert/customer_payment/estimate_upsert/project_upsert
+  local_entity_type text not null,
+  local_entity_id  uuid not null,
+  project_id       uuid,
+  payload          jsonb not null default '{}',
+  payload_hash     text,
+  idempotency_key  text unique,         -- KIAN-<TYPE>-<id>[-<op>] — منع التكرار
+  status           text not null default 'pending'
+                   check (status in ('pending','processing','done','failed','needs_review','cancelled','dry_run_ok')),
+  attempts         int not null default 0,
+  next_attempt_at  timestamptz,
+  response_code    int,
+  response_note    text,                -- مُعقَّم — لا أسرار
+  provider_id      text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create index if not exists idx_zjobs_pending on public.zoho_sync_jobs(status, next_attempt_at) where status in ('pending','needs_review');
+
+-- ═══ B8.5 أحداث الـWebhook (Dedup + Audit) ═══
+create table if not exists public.zoho_webhook_events (
+  id           uuid primary key default gen_random_uuid(),
+  remote_event_id text unique,          -- منع Webhook loop/التكرار
+  event_type   text,
+  entity_type  text,
+  entity_id    text,
+  organization_id text,
+  payload_hash text,
+  payload      jsonb not null default '{}',
+  processed_at timestamptz,
+  process_note text,
+  created_at   timestamptz not null default now()
+);
+
+-- ═══ B8.6 إدراج مهمة مزامنة (داخلي — تستدعيه الـTriggers) ═══
+create or replace function public.zoho_enqueue(
+  p_op text, p_ltype text, p_lid uuid, p_project uuid, p_payload jsonb, p_idem text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  insert into public.zoho_sync_jobs(operation, local_entity_type, local_entity_id, project_id, payload, idempotency_key,
+      payload_hash)
+    values (p_op, p_ltype, p_lid, p_project, coalesce(p_payload,'{}'::jsonb), p_idem, md5(coalesce(p_payload,'{}'::jsonb)::text))
+    on conflict (idempotency_key) do nothing
+    returning id into v_id;
+  return v_id;
+end $$;
+
+-- ═══ B8.7 Triggers الترحيل — لا Draft/Submitted/Rejected يصل إلى Zoho ═══
+-- المصروف المدفوع مباشرة ⇒ Zoho Expense. المعتمد (لمورد، غير مدفوع) ⇒ Bill.
+-- دفع فاتورة مورد سبق ترحيلها كـBill ⇒ Vendor Payment مرتبطة بها.
+create or replace function public.zoho_expense_outbox()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op <> 'UPDATE' or new.status = old.status then return new; end if;
+  if coalesce(new.kind, 'actual') <> 'actual' then return new; end if;   -- لا ترحيل للتقديري
+  if new.status = 'approved' and coalesce(btrim(new.supplier),'') <> '' then
+    perform public.zoho_enqueue('create_bill', 'expense', new.id, new.project_id,
+      jsonb_build_object('expense', row_to_json(new)::jsonb), 'KIAN-BILL-' || new.id);
+  elsif new.status = 'paid' then
+    -- Bill مرتبطة أو «في الطريق» (مهمة KIAN-BILL قائمة) ⇒ الدفع Vendor Payment لا Expense.
+    if exists (select 1 from public.zoho_entity_mappings m
+               where m.local_entity_type = 'bill' and m.local_entity_id = new.id)
+       or exists (select 1 from public.zoho_sync_jobs j
+               where j.idempotency_key = 'KIAN-BILL-' || new.id
+                 and j.status in ('pending','processing','done','dry_run_ok','needs_review','failed')) then
+      perform public.zoho_enqueue('vendor_payment', 'expense', new.id, new.project_id,
+        jsonb_build_object('expense', row_to_json(new)::jsonb), 'KIAN-VPAY-' || new.id);
+    else
+      perform public.zoho_enqueue('create_expense', 'expense', new.id, new.project_id,
+        jsonb_build_object('expense', row_to_json(new)::jsonb), 'KIAN-EXPENSE-' || new.id);
+    end if;
+  elsif new.status in ('refunded','voided') then
+    -- لا Delete لقيد منشور — يُعلَّم للمراجعة اليدوية في Zoho (Adjustment/Reversal وفق السياسة).
+    update public.zoho_entity_mappings set sync_status = 'needs_review',
+        last_error = 'المصروف ' || new.status || ' محليًا — يحتاج معالجة محاسبية في Zoho', updated_at = now()
+      where local_entity_type in ('expense','bill') and local_entity_id = new.id;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_zoho_expense on public.project_expenses;
+create trigger trg_zoho_expense after update on public.project_expenses
+  for each row execute function public.zoho_expense_outbox();
+
+-- دفعة العميل: invoiced ⇒ Invoice Upsert؛ تحصيل ⇒ Customer Payment.
+create or replace function public.zoho_revenue_outbox()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op <> 'UPDATE' then return new; end if;
+  if new.status in ('invoiced','partially_paid','paid','overdue') and old.status in ('planned','invoice_pending') then
+    perform public.zoho_enqueue('invoice_upsert', 'revenue', new.id, new.project_id,
+      jsonb_build_object('revenue', row_to_json(new)::jsonb), 'KIAN-INVOICE-' || new.id);
+  end if;
+  if new.status in ('cancelled','refunded') and old.status not in ('cancelled','refunded') then
+    update public.zoho_entity_mappings set sync_status = 'needs_review',
+        last_error = 'الدفعة ' || new.status || ' محليًا — عالج الفاتورة في Zoho (Void/Credit Note)', updated_at = now()
+      where local_entity_type = 'invoice' and local_entity_id = new.id;
+  end if;
+  if new.collected_amount > coalesce(old.collected_amount, 0) then
+    perform public.zoho_enqueue('customer_payment', 'revenue', new.id, new.project_id,
+      jsonb_build_object('revenue', row_to_json(new)::jsonb,
+        'delta', new.collected_amount - coalesce(old.collected_amount,0)),
+      'KIAN-PAYMENT-' || new.id || '-' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS'));
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_zoho_revenue on public.project_revenue_schedule;
+create trigger trg_zoho_revenue after update on public.project_revenue_schedule
+  for each row execute function public.zoho_revenue_outbox();
+
+-- ═══ B8.8 RPCs للواجهة (finance/admin) ═══
+create or replace function public.zoho_status()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+begin
+  if not (public.is_owner() or public.staff_role() in ('finance','manager')) then raise exception 'not authorized'; end if;
+  return jsonb_build_object(
+    'settings', (select row_to_json(s)::jsonb - 'id' from public.zoho_books_settings s where s.id = 1),
+    'jobs', (select coalesce(jsonb_object_agg(status, n), '{}'::jsonb) from
+      (select status, count(*) n from public.zoho_sync_jobs group by status) x),
+    'mappings_count', (select count(*) from public.zoho_entity_mappings),
+    'account_mappings', (select coalesce(jsonb_agg(jsonb_build_object('kind', kind, 'local_key', local_key, 'zoho_id', zoho_id, 'zoho_name', zoho_name) order by kind, local_key), '[]'::jsonb)
+                         from public.zoho_account_mappings),
+    'unprocessed_webhooks', (select count(*) from public.zoho_webhook_events where processed_at is null));
+end $$;
+
+create or replace function public.zoho_mapping_set(p_kind text, p_local_key text, p_zoho_id text, p_zoho_name text default null)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not (public.is_owner() or public.staff_role() = 'finance') then raise exception 'not authorized'; end if;
+  if coalesce(btrim(p_zoho_id),'') = '' then
+    delete from public.zoho_account_mappings where kind = p_kind and local_key = p_local_key;
+    return true;
+  end if;
+  insert into public.zoho_account_mappings(kind, local_key, zoho_id, zoho_name, updated_by)
+    values (p_kind, p_local_key, btrim(p_zoho_id), nullif(btrim(coalesce(p_zoho_name,'')),''), auth.uid())
+    on conflict (kind, local_key) do update set zoho_id = excluded.zoho_id, zoho_name = excluded.zoho_name,
+      updated_by = auth.uid(), updated_at = now();
+  return true;
+end $$;
+
+create or replace function public.zoho_sync_pause(p_paused boolean)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not (public.is_owner() or public.staff_role() = 'finance') then raise exception 'not authorized'; end if;
+  update public.zoho_books_settings set sync_paused = p_paused, updated_at = now() where id = 1;
+  return true;
+end $$;
+
+create or replace function public.zoho_job_retry(p_id uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not (public.is_owner() or public.staff_role() = 'finance') then raise exception 'not authorized'; end if;
+  update public.zoho_sync_jobs set status = 'pending', attempts = 0, next_attempt_at = null,
+      response_note = null, updated_at = now()
+    where id = p_id and status in ('failed','needs_review','cancelled','dry_run_ok');
+  return found;
+end $$;
+
+-- مزامنة الآن: يعيد بثّ مهام كيانات مشروع لم تُرحَّل بعد (للمالية).
+create or replace function public.zoho_sync_project_now(p_project uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare rec record; v_n int := 0; v_revived int;
+begin
+  if not public.pc_can_see_finance(p_project) then raise exception 'not authorized'; end if;
+  -- الانتقال من dry_run إلى live: أعد مهام التجربة الناجحة إلى الطابور.
+  update public.zoho_sync_jobs set status = 'pending', attempts = 0, next_attempt_at = null, updated_at = now()
+    where project_id = p_project and status = 'dry_run_ok';
+  get diagnostics v_revived = row_count;
+  v_n := v_n + coalesce(v_revived, 0);
+  for rec in select * from public.project_expenses e
+    where e.project_id = p_project and e.is_deleted = false and e.status in ('approved','paid')
+      and coalesce(e.kind, 'actual') = 'actual'
+      and not exists (select 1 from public.zoho_entity_mappings m
+                      where m.local_entity_id = e.id and m.local_entity_type in ('expense','bill'))
+  loop
+    if rec.status = 'paid' then
+      perform public.zoho_enqueue('create_expense','expense',rec.id,p_project,
+        jsonb_build_object('expense', row_to_json(rec)::jsonb), 'KIAN-EXPENSE-' || rec.id);
+      v_n := v_n + 1;
+    elsif coalesce(btrim(rec.supplier),'') <> '' then
+      perform public.zoho_enqueue('create_bill','expense',rec.id,p_project,
+        jsonb_build_object('expense', row_to_json(rec)::jsonb), 'KIAN-BILL-' || rec.id);
+      v_n := v_n + 1;
+    end if;
+  end loop;
+  for rec in select * from public.project_revenue_schedule r
+    where r.project_id = p_project and r.is_deleted = false
+      and r.status in ('invoiced','partially_paid','paid','overdue')
+      and not exists (select 1 from public.zoho_entity_mappings m
+                      where m.local_entity_id = r.id and m.local_entity_type = 'invoice')
+  loop
+    perform public.zoho_enqueue('invoice_upsert','revenue',rec.id,p_project,
+      jsonb_build_object('revenue', row_to_json(rec)::jsonb), 'KIAN-INVOICE-' || rec.id);
+    v_n := v_n + 1;
+  end loop;
+  -- تحصيلات سابقة بلا Customer Payment مرحَّلة (Backfill).
+  for rec in select * from public.project_revenue_schedule r
+    where r.project_id = p_project and r.is_deleted = false and r.collected_amount > 0
+      and not exists (select 1 from public.zoho_entity_mappings m
+                      where m.local_entity_id = r.id and m.local_entity_type = 'customer_payment')
+  loop
+    perform public.zoho_enqueue('customer_payment','revenue',rec.id,p_project,
+      jsonb_build_object('revenue', row_to_json(rec)::jsonb, 'delta', rec.collected_amount),
+      'KIAN-PAYMENT-' || rec.id || '-BF');
+    v_n := v_n + 1;
+  end loop;
+  return jsonb_build_object('ok', true, 'enqueued', v_n);
+end $$;
+
+-- تقرير Reconciliation لمشروع (أو شامل للمالية).
+create or replace function public.zoho_reconciliation(p_project uuid default null)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+begin
+  if p_project is not null then
+    if not public.pc_can_see_finance(p_project) then raise exception 'not authorized'; end if;
+  elsif not (public.is_owner() or public.staff_role() = 'finance') then
+    raise exception 'not authorized';
+  end if;
+  return jsonb_build_object(
+    'expenses', (select coalesce(jsonb_agg(jsonb_build_object(
+        'id', e.id, 'description', coalesce(e.description, e.category), 'amount', e.amount_incl_vat,
+        'status', e.status, 'supplier', e.supplier,
+        'zoho_type', m.zoho_entity_type, 'zoho_id', m.zoho_entity_id, 'sync_status', coalesce(m.sync_status,
+          case when e.status in ('approved','paid') then 'not_configured' else null end),
+        'last_error', m.last_error, 'last_synced_at', m.last_synced_at) order by e.created_at desc), '[]'::jsonb)
+      from public.project_expenses e
+      left join public.zoho_entity_mappings m on m.local_entity_id = e.id and m.local_entity_type in ('expense','bill')
+      where e.is_deleted = false and (p_project is null or e.project_id = p_project)
+        and e.status in ('approved','scheduled_for_payment','partially_paid','paid','refunded','voided')),
+    'revenue', (select coalesce(jsonb_agg(jsonb_build_object(
+        'id', r.id, 'name', r.name, 'amount', r.amount_incl_vat, 'collected', r.collected_amount, 'status', r.status,
+        'zoho_id', m.zoho_entity_id, 'sync_status', coalesce(m.sync_status,
+          case when r.status in ('invoiced','partially_paid','paid','overdue') then 'not_configured' else null end),
+        'remote', m.metadata->'remote', 'last_error', m.last_error) order by r.due_date nulls last), '[]'::jsonb)
+      from public.project_revenue_schedule r
+      left join public.zoho_entity_mappings m on m.local_entity_id = r.id and m.local_entity_type = 'invoice'
+      where r.is_deleted = false and (p_project is null or r.project_id = p_project)),
+    'jobs_open', (select coalesce(jsonb_agg(jsonb_build_object(
+        'id', j.id, 'operation', j.operation, 'status', j.status, 'attempts', j.attempts,
+        'note', j.response_note, 'created_at', j.created_at) order by j.created_at desc), '[]'::jsonb)
+      from public.zoho_sync_jobs j
+      where j.status in ('pending','processing','failed','needs_review','dry_run_ok')
+        and (p_project is null or j.project_id = p_project)),
+    'unprocessed_webhooks', (select count(*) from public.zoho_webhook_events where processed_at is null));
+end $$;
+
+-- ═══ B8.9 RLS + Grants ═══
+alter table public.zoho_books_settings   enable row level security;
+alter table public.zoho_account_mappings enable row level security;
+alter table public.zoho_entity_mappings  enable row level security;
+alter table public.zoho_sync_jobs        enable row level security;
+alter table public.zoho_webhook_events   enable row level security;
+drop policy if exists zbs_read on public.zoho_books_settings;
+create policy zbs_read on public.zoho_books_settings for select to authenticated
+  using (public.is_owner() or public.staff_role() in ('finance','manager'));
+drop policy if exists zem_read on public.zoho_entity_mappings;
+create policy zem_read on public.zoho_entity_mappings for select to authenticated
+  using (public.is_owner() or public.staff_role() = 'finance');
+grant select on public.zoho_books_settings, public.zoho_entity_mappings to authenticated;
+
+do $g8$
+declare f text;
+begin
+  foreach f in array array[
+    'public.zoho_status()',
+    'public.zoho_mapping_set(text,text,text,text)',
+    'public.zoho_sync_pause(boolean)',
+    'public.zoho_job_retry(uuid)',
+    'public.zoho_sync_project_now(uuid)',
+    'public.zoho_reconciliation(uuid)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+  execute 'revoke all on function public.zoho_enqueue(text,text,uuid,uuid,jsonb,text) from public, anon, authenticated';
+  execute 'revoke all on function public.zoho_expense_outbox() from public, anon, authenticated';
+  execute 'revoke all on function public.zoho_revenue_outbox() from public, anon, authenticated';
+end $g8$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -2341,6 +2678,12 @@ begin
   if to_regprocedure('public.pc_event_emit(uuid,text,text,uuid,text,text,text,text,text,text,uuid[],text)') is null then miss := miss || ' pc_event_emit'; end if;
   if to_regprocedure('public.pc_reminders_scan()')     is null then miss := miss || ' pc_reminders_scan'; end if;
   if not exists (select 1 from pg_trigger where tgname = 'trg_notif_email_bridge') then miss := miss || ' trg_notif_email_bridge'; end if;
+  -- Batch 8
+  if to_regclass('public.zoho_sync_jobs')        is null then miss := miss || ' zoho_sync_jobs'; end if;
+  if to_regclass('public.zoho_entity_mappings')  is null then miss := miss || ' zoho_entity_mappings'; end if;
+  if to_regclass('public.zoho_webhook_events')   is null then miss := miss || ' zoho_webhook_events'; end if;
+  if to_regprocedure('public.zoho_reconciliation(uuid)') is null then miss := miss || ' zoho_reconciliation'; end if;
+  if not exists (select 1 from pg_trigger where tgname = 'trg_zoho_expense') then miss := miss || ' trg_zoho_expense'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;

@@ -299,6 +299,41 @@ export const pcApplyTemplateV2 = (projectId: string, templateId: string, modules
   prpc<TemplateApplyResult>("project_core_apply_template_v2", { p_project: projectId, p_template: templateId, p_modules: modules ?? null, p_start: start ?? null });
 export const pcListAllTemplates = () => pget<ProjectTemplate[]>(`project_templates?select=*&order=name.asc`);
 
+// ─── Batch 8: Zoho Books (finance/admin) ───
+export interface ZohoStatus {
+  settings: { organization_id: string | null; organization_name: string | null; sync_paused: boolean;
+    last_test_at: string | null; last_test_ok: boolean | null; last_test_error: string | null; last_sync_at: string | null } | null;
+  jobs: Record<string, number>;
+  mappings_count: number;
+  account_mappings: { kind: string; local_key: string; zoho_id: string; zoho_name: string | null }[];
+  unprocessed_webhooks: number;
+}
+export interface ZohoReconRow {
+  id: string; description?: string; name?: string; amount: number; collected?: number; status: string;
+  supplier?: string | null; zoho_type?: string | null; zoho_id: string | null; sync_status: string | null;
+  last_error: string | null; last_synced_at?: string | null; remote?: Record<string, unknown> | null;
+}
+export interface ZohoRecon {
+  expenses: ZohoReconRow[]; revenue: ZohoReconRow[];
+  jobs_open: { id: string; operation: string; status: string; attempts: number; note: string | null; created_at: string }[];
+  unprocessed_webhooks: number;
+}
+export const pcZohoStatus = () => prpc<ZohoStatus>("zoho_status");
+export const pcZohoMappingSet = (kind: string, localKey: string, zohoId: string, zohoName?: string) =>
+  prpc<boolean>("zoho_mapping_set", { p_kind: kind, p_local_key: localKey, p_zoho_id: zohoId, p_zoho_name: zohoName ?? null });
+export const pcZohoPause = (paused: boolean) => prpc<boolean>("zoho_sync_pause", { p_paused: paused });
+export const pcZohoJobRetry = (id: string) => prpc<boolean>("zoho_job_retry", { p_id: id });
+export const pcZohoSyncProjectNow = (projectId: string) => prpc<{ ok: boolean; enqueued: number }>("zoho_sync_project_now", { p_project: projectId });
+export const pcZohoReconciliation = (projectId?: string) => prpc<ZohoRecon>("zoho_reconciliation", { p_project: projectId ?? null });
+export const ZOHO_SYNC_LABELS: Record<string, { ar: string; en: string }> = {
+  not_configured: { ar: "غير مربوط", en: "Not linked" }, ready: { ar: "جاهز", en: "Ready" },
+  pending: { ar: "قيد المزامنة", en: "Pending" }, processing: { ar: "قيد المزامنة", en: "Processing" },
+  synced: { ar: "تمت المزامنة", en: "Synced" }, done: { ar: "تمت المزامنة", en: "Done" },
+  failed: { ar: "فشل", en: "Failed" }, conflict: { ar: "تعارض", en: "Conflict" },
+  needs_review: { ar: "يحتاج مراجعة", en: "Needs review" }, paused: { ar: "متوقف", en: "Paused" },
+  dry_run_ok: { ar: "تجربة ناجحة (Dry-Run)", en: "Dry-run OK" }, cancelled: { ar: "ملغى", en: "Cancelled" },
+};
+
 // ─── Batch 7: مراقبة الإشعارات والبريد (للإدارة) ───
 export interface EmailDeliveryRow {
   id: string; status: "pending" | "processing" | "sent" | "failed" | "skipped" | "bounced";

@@ -12,6 +12,8 @@ import {
   pcListExpenses, pcExpenseCreate, pcExpenseTransition, pcExpenseDelete, pcListPhaseBudgets, pcPhaseBudgetUpsert,
   pcListRevenue, pcRevenueUpsert, pcListFinAlerts, pcFinAlertsRecompute, pcErr, EXPENSE_STATUS_LABELS,
   pcFinanceReport, pcFinanceClosureChecklist, pcFinanceClose, pcFinanceReopen, pcExpenseRefund,
+  pcZohoStatus, pcZohoMappingSet, pcZohoPause, pcZohoJobRetry, pcZohoSyncProjectNow, pcZohoReconciliation, ZOHO_SYNC_LABELS,
+  type ZohoStatus, type ZohoRecon,
   type FinanceSummary, type FinanceSettings, type ProjectExpense, type PhaseBudget, type RevenueRow, type FinAlert, type StaffLite,
   type FinanceReport, type ClosureChecklist,
 } from "@/lib/portal/projectCore";
@@ -29,7 +31,7 @@ export function FinanceTab({ projectId, flash }: { projectId: string; flash: (m:
   const canAdmin = caps.isOwner || profile.staff_role === "finance";  // تعديل الإعدادات المالية العليا
   const [sum, setSum] = useState<FinanceSummary | null>(null);
   const [alerts, setAlerts] = useState<FinAlert[]>([]);
-  const [sub, setSub] = useState<"expenses" | "budgets" | "revenue" | "report" | "closure" | "settings">("expenses");
+  const [sub, setSub] = useState<"expenses" | "budgets" | "revenue" | "report" | "closure" | "zoho" | "settings">("expenses");
   const [phase, setPhase] = useState<"loading" | "ready" | "denied">("loading");
 
   const loadTop = useCallback(async () => {
@@ -77,7 +79,7 @@ export function FinanceTab({ projectId, flash }: { projectId: string; flash: (m:
         {cards.map((c, i) => <div key={i} className={`${card} p-2.5`}><div className={`text-sm font-bold ${c.cls ?? "text-stone-200"}`} dir="ltr">{c.v}</div><div className="text-[10px] text-stone-500">{c.ar}</div></div>)}
       </div>
       <div className="flex items-center justify-between">
-        <div className="flex gap-1.5 flex-wrap">{(["expenses", "budgets", "revenue", "report", "closure", "settings"] as const).map((k) => <button key={k} onClick={() => setSub(k)} className={`px-2.5 py-1 rounded-lg text-[11px] ${sub === k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>{t(k === "expenses" ? { ar: "المصروفات", en: "Expenses" } : k === "budgets" ? { ar: "ميزانيات المراحل", en: "Phase Budgets" } : k === "revenue" ? { ar: "الإيرادات", en: "Revenue" } : k === "report" ? { ar: "التقارير", en: "Reports" } : k === "closure" ? { ar: "الإغلاق المالي", en: "Closure" } : { ar: "الإعدادات", en: "Settings" })}</button>)}</div>
+        <div className="flex gap-1.5 flex-wrap">{(["expenses", "budgets", "revenue", "report", "closure", "zoho", "settings"] as const).map((k) => <button key={k} onClick={() => setSub(k)} className={`px-2.5 py-1 rounded-lg text-[11px] ${sub === k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>{t(k === "expenses" ? { ar: "المصروفات", en: "Expenses" } : k === "budgets" ? { ar: "ميزانيات المراحل", en: "Phase Budgets" } : k === "revenue" ? { ar: "الإيرادات", en: "Revenue" } : k === "report" ? { ar: "التقارير", en: "Reports" } : k === "closure" ? { ar: "الإغلاق المالي", en: "Closure" } : k === "zoho" ? { ar: "Zoho Books", en: "Zoho" } : { ar: "الإعدادات", en: "Settings" })}</button>)}</div>
         <button onClick={() => void recompute()} className="text-[11px] text-stone-400 hover:text-white">↻ {t({ ar: "تحديث التنبيهات", en: "Refresh alerts" })}</button>
       </div>
       {sub === "expenses" && <ExpensesSection projectId={projectId} settings={sum} onChanged={loadTop} flash={flash} />}
@@ -85,6 +87,7 @@ export function FinanceTab({ projectId, flash }: { projectId: string; flash: (m:
       {sub === "revenue" && <RevenueSection projectId={projectId} onChanged={loadTop} flash={flash} />}
       {sub === "report" && <FinReportSection projectId={projectId} flash={flash} />}
       {sub === "closure" && <FinClosureSection projectId={projectId} isOwner={caps.isOwner} onChanged={loadTop} flash={flash} />}
+      {sub === "zoho" && <ZohoSection projectId={projectId} isOwner={canAdmin} flash={flash} />}
       {sub === "settings" && <SettingsSection projectId={projectId} canAdmin={canAdmin} isOwner={caps.isOwner} onChanged={loadTop} flash={flash} />}
     </div>
   );
@@ -427,6 +430,137 @@ function FinClosureSection({ projectId, isOwner, onChanged, flash }: { projectId
             </button>
           )}
           {!chk.can_close && !isOwner && <p className="text-[11px] text-amber-400 self-center">{t({ ar: "بنود حرجة مفتوحة — عالجها أو اطلب تجاوز المالك.", en: "Critical items open." })}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Zoho Books: حالة الربط + خرائط الحسابات + مزامنة المشروع + Reconciliation ───
+function ZohoSection({ projectId, isOwner, flash }: { projectId: string; isOwner: boolean; flash: (m: string) => void }) {
+  const { t } = useI18n();
+  const [st, setSt] = useState<ZohoStatus | null>(null);
+  const [rec, setRec] = useState<ZohoRecon | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [mapKind, setMapKind] = useState("expense_account");
+  const [mapKey, setMapKey] = useState("");
+  const [mapId, setMapId] = useState("");
+  const load = useCallback(async () => {
+    const [s, r] = await Promise.all([pcZohoStatus(), pcZohoReconciliation(projectId)]);
+    if (s.ok) setSt(s.data); else flash(pcErr(s.error));
+    if (r.ok) setRec(r.data);
+  }, [projectId, flash]);
+  useEffect(() => { void load(); }, [load]);
+  async function syncNow() {
+    if (busy) return; setBusy(true);
+    const r = await pcZohoSyncProjectNow(projectId);
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: `أُدرجت ${r.data.enqueued} مهمة في طابور المزامنة — تُنفَّذ في الدورة القادمة.`, en: `Enqueued ${r.data.enqueued}.` }));
+    void load();
+  }
+  async function pause(p: boolean) {
+    const r = await pcZohoPause(p);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    void load();
+  }
+  async function saveMap() {
+    if (!mapKey.trim() || !mapId.trim()) return;
+    const r = await pcZohoMappingSet(mapKind, mapKey.trim(), mapId.trim());
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setMapKey(""); setMapId(""); flash(t({ ar: "حُفظت الخريطة.", en: "Saved." })); void load();
+  }
+  async function retry(id: string) {
+    const r = await pcZohoJobRetry(id);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    void load();
+  }
+  const chip = (s: string | null) => {
+    const k = s ?? "not_configured";
+    const cls = k === "synced" || k === "done" ? "bg-emerald-900/40 text-emerald-300"
+      : k === "failed" || k === "conflict" ? "bg-red-900/40 text-red-300"
+      : k === "needs_review" ? "bg-amber-900/40 text-amber-300"
+      : k === "pending" || k === "processing" ? "bg-sky-900/40 text-sky-300"
+      : k === "dry_run_ok" ? "bg-purple-900/40 text-purple-300" : "bg-stone-800 text-stone-400";
+    return <span className={`px-1.5 py-0.5 rounded text-[10px] ${cls}`}>{t(ZOHO_SYNC_LABELS[k] ?? { ar: k, en: k })}</span>;
+  };
+  if (!st) return <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
+  const s = st.settings;
+  return (
+    <div className="space-y-3">
+      <div className={`${card} p-3 text-xs space-y-1.5`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`w-2.5 h-2.5 rounded-full ${s?.last_test_ok ? "bg-emerald-500" : "bg-red-500"}`} />
+          <span className="text-stone-200 font-semibold">Zoho Books</span>
+          <span className="text-stone-400">{s?.last_test_ok ? t({ ar: "متصل", en: "Connected" }) : t({ ar: "غير متصل", en: "Disconnected" })}</span>
+          {s?.organization_name && <span className="text-stone-500" dir="ltr">{s.organization_name}</span>}
+          {s?.sync_paused && <span className="text-amber-400">⏸ {t({ ar: "المزامنة متوقفة", en: "Paused" })}</span>}
+          <span className="flex-1" />
+          {isOwner && (s?.sync_paused
+            ? <button onClick={() => void pause(false)} className={`${btnGhost} px-2 py-1 text-[10px] text-emerald-400`}>{t({ ar: "استئناف", en: "Resume" })}</button>
+            : <button onClick={() => void pause(true)} className={`${btnGhost} px-2 py-1 text-[10px] text-amber-400`}>{t({ ar: "إيقاف مؤقت", en: "Pause" })}</button>)}
+          <button disabled={busy} onClick={() => void syncNow()} className={`${btnRed} px-2.5 py-1 text-[10px]`}>{busy ? "…" : t({ ar: "مزامنة هذا المشروع الآن", en: "Sync now" })}</button>
+        </div>
+        <div className="text-[10px] text-stone-500 flex gap-3 flex-wrap">
+          {s?.last_test_at && <span dir="ltr">{t({ ar: "آخر فحص", en: "Test" })}: {String(s.last_test_at).slice(0, 16).replace("T", " ")}</span>}
+          {s?.last_sync_at && <span dir="ltr">{t({ ar: "آخر مزامنة", en: "Sync" })}: {String(s.last_sync_at).slice(0, 16).replace("T", " ")}</span>}
+          {s?.last_test_error && <span className="text-red-400" dir="ltr">{s.last_test_error}</span>}
+          {Object.entries(st.jobs).map(([k, n]) => <span key={k}>{t(ZOHO_SYNC_LABELS[k] ?? { ar: k, en: k })}: <b dir="ltr">{n}</b></span>)}
+          {st.unprocessed_webhooks > 0 && <span className="text-amber-400">Webhooks: {st.unprocessed_webhooks}</span>}
+        </div>
+        <p className="text-[10px] text-stone-600">{t({ ar: "الاتصال والتنفيذ عبر الخادم فقط (ZOHO_BOOKS_SYNC_MODE: disabled/dry_run/live). لا يُرحَّل Draft، ولا تُحذف قيود منشورة، ولا تُعتبر أي قيمة «مُرحَّلة» دون رد Zoho حقيقي.", en: "Server-side only; dry-run/live via env." })}</p>
+      </div>
+
+      {isOwner && (
+        <div className={`${card} p-3 text-xs space-y-1.5`}>
+          <div className="text-stone-400">{t({ ar: "خرائط الحسابات والضرائب (لا IDs في الكود)", en: "Account/tax mappings" })}</div>
+          {st.account_mappings.map((m, i) => (
+            <div key={i} className="flex items-center gap-2 text-[11px]">
+              <span className="text-stone-500 w-32 shrink-0">{m.kind}</span>
+              <span className="text-stone-300 flex-1">{m.local_key}</span>
+              <span className="text-stone-400" dir="ltr">{m.zoho_name ?? m.zoho_id}</span>
+              <button onClick={() => void pcZohoMappingSet(m.kind, m.local_key, "").then(() => void load())} className="text-stone-600 hover:text-red-400">✕</button>
+            </div>
+          ))}
+          {st.account_mappings.length === 0 && <p className="text-[11px] text-amber-400">{t({ ar: "لا خرائط بعد — بدونها تُعلَّم القيود «يحتاج مراجعة» ولا يُستخدم حساب عشوائي.", en: "No mappings yet." })}</p>}
+          <div className="flex gap-1.5 flex-wrap items-center">
+            <select value={mapKind} onChange={(e) => setMapKind(e.target.value)} className={`${inp} py-1 text-[10px]`} style={{ colorScheme: "dark" }}>
+              {["expense_account", "paid_through", "tax", "income_account", "item"].map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+            <input value={mapKey} onChange={(e) => setMapKey(e.target.value)} placeholder={t({ ar: "المفتاح المحلي (فئة/vat15/default/revenue)", en: "local key" })} className={`${inp} py-1 flex-1 min-w-[120px] text-[10px]`} dir="ltr" />
+            <input value={mapId} onChange={(e) => setMapId(e.target.value)} placeholder="Zoho ID" className={`${inp} py-1 w-36 text-[10px]`} dir="ltr" />
+            <button onClick={() => void saveMap()} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "حفظ", en: "Save" })}</button>
+          </div>
+        </div>
+      )}
+
+      {rec && (
+        <div className="space-y-2">
+          <div className="text-xs text-stone-400">{t({ ar: "تسوية المشروع (Reconciliation)", en: "Reconciliation" })}</div>
+          {[...rec.expenses.map((x) => ({ ...x, _t: "مصروف" })), ...rec.revenue.map((x) => ({ ...x, _t: "دفعة" }))].map((x) => (
+            <div key={x.id} className={`${card} p-2 text-[11px] flex items-center gap-2 flex-wrap`}>
+              <span className="text-stone-600">{(x as { _t: string })._t}</span>
+              <span className="text-stone-200 flex-1 min-w-0 truncate">{x.description ?? x.name}</span>
+              <span className="text-stone-400" dir="ltr">{new Intl.NumberFormat("en-US").format(Math.round(x.amount))}</span>
+              {chip(x.sync_status)}
+              {x.zoho_id && <span className="text-[9px] text-stone-600" dir="ltr">{x.zoho_id}</span>}
+              {x.last_error && <span className="text-[9px] text-red-400 w-full">{x.last_error}</span>}
+            </div>
+          ))}
+          {rec.jobs_open.length > 0 && (
+            <div className={`${card} p-2 text-[11px] space-y-1`}>
+              <div className="text-stone-500">{t({ ar: "مهام مفتوحة", en: "Open jobs" })}</div>
+              {rec.jobs_open.map((j) => (
+                <div key={j.id} className="flex items-center gap-2 flex-wrap">
+                  <span className="text-stone-300" dir="ltr">{j.operation}</span>
+                  {chip(j.status)}
+                  <span className="text-stone-600" dir="ltr">×{j.attempts}</span>
+                  {j.note && <span className="text-stone-500 flex-1 truncate">{j.note}</span>}
+                  {(j.status === "failed" || j.status === "needs_review") && <button onClick={() => void retry(j.id)} className="text-emerald-400 text-[10px]">{t({ ar: "إعادة", en: "Retry" })}</button>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
