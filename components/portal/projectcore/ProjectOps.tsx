@@ -8,12 +8,13 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   PC_STAGES, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, TASK_STATUS_LABELS, APPROVAL_STATUS_LABELS,
-  pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate, pcTaskDelete,
+  pcEnsure, pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate, pcTaskDelete,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcListTaskComments, pcTaskComment,
   pcListApprovals, pcApprovalRequest, pcApprovalDecide, pcListActivity, pcErr,
   type ProjectCore, type PcTask, type PcStage, type PcPriority, type PcTaskStatus,
   type TaskChecklistItem, type TaskComment, type ProjectApproval, type ProjectActivity, type PcApprovalKind,
 } from "@/lib/portal/projectCore";
+import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const inp = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -22,23 +23,47 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
+type TabKey = "tasks" | "team" | "deliverables" | "approvals" | "costs" | "risks" | "meetings" | "shoots" | "timeline" | "activity";
+const TABS: { k: TabKey; ar: string; en: string }[] = [
+  { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "team", ar: "الفريق", en: "Team" },
+  { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
+  { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
+  { k: "meetings", ar: "الاجتماعات", en: "Meetings" }, { k: "shoots", ar: "جلسات التصوير", en: "Shoots" },
+  { k: "timeline", ar: "الجدول الزمني", en: "Timeline" }, { k: "activity", ar: "النشاط", en: "Activity" },
+];
 
 export default function ProjectOps({ projectId, projectName, onChanged }: { projectId: string; projectName: string; onChanged?: () => void }) {
   const { t } = useI18n();
   const { caps } = usePortal();
   const canManage = caps.isAdminArea || caps.isEditor;
   const [core, setCore] = useState<ProjectCore | null>(null);
-  const [tab, setTab] = useState<"tasks" | "approvals" | "activity">("tasks");
+  const [tab, setTab] = useState<TabKey>("tasks");
   const [busy, setBusy] = useState(false);
+  const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); };
 
-  const loadCore = useCallback(async () => { const r = await pcGetProjectCore(projectId); if (r.ok) setCore(r.data); }, [projectId]);
+  // pcEnsure يُنشئ صفّ project_core إن لم يوجد (Idempotent) فلا يكون شريط المراحل معطّلًا صامتًا.
+  const loadCore = useCallback(async () => {
+    const r = await pcEnsure(projectId);
+    if (r.ok) { setCore(r.data); return; }
+    const g = await pcGetProjectCore(projectId);   // fallback للقراءة فقط
+    if (g.ok) setCore(g.data);
+  }, [projectId]);
   useEffect(() => { void loadCore(); }, [loadCore]);
 
   async function setStage(stage: PcStage) {
-    if (busy) return; setBusy(true);
-    const r = await pcSetStage(projectId, stage);
+    if (busy || !core) return;
+    const curIdx = PC_STAGES.indexOf(core.core_stage), tgtIdx = PC_STAGES.indexOf(stage);
+    let note: string | undefined;
+    if (tgtIdx < curIdx || stage === "closed") {   // الرجوع للخلف أو الإغلاق: سبب إلزامي
+      const p = window.prompt(t({ ar: "سبب الرجوع/الإغلاق (إلزامي):", en: "Reason for going back / closing (required):" }));
+      if (p === null) return;
+      if (!p.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+      note = p.trim();
+    }
+    setBusy(true);
+    const r = await pcSetStage(projectId, stage, note);
     setBusy(false);
     if (!r.ok) { flash(pcErr(r.error)); return; }
     setCore(r.data); flash(t({ ar: "تم تحديث المرحلة.", en: "Stage updated." })); onChanged?.();
@@ -47,6 +72,7 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
     if (busy) return; setBusy(true);
     const r = await pcSetMeta(projectId, patch);
     setBusy(false);
+    setRev((v) => v + 1);   // أرجِع الحقول غير المتحكَّم بها لقيمة core (نجاحًا أو فشلًا)
     if (!r.ok) { flash(pcErr(r.error)); return; }
     setCore(r.data); flash(t({ ar: "تم الحفظ.", en: "Saved." })); onChanged?.();
   }
@@ -74,7 +100,7 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
       {/* الملخّص */}
       <section className={`${card} p-4`}>
         <h3 className="text-sm font-semibold text-white mb-3">{t({ ar: "ملخّص التشغيل", en: "Operations Summary" })}</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+        <div key={`meta-${rev}`} className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
           <label className="space-y-1"><span className="text-stone-500">{t({ ar: "الأولوية", en: "Priority" })}</span>
             <select disabled={!canManage} value={core?.priority ?? "normal"} onChange={(e) => void saveMeta({ priority: e.target.value })} className={`${inp} w-full`} style={{ colorScheme: "dark" }}>
               {PRIORITIES.map((p) => <option key={p} value={p}>{t(PRIORITY_LABELS[p])}</option>)}
@@ -95,16 +121,23 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
       </section>
 
       {/* تبويبات */}
-      <div className="flex gap-2">
-        {(["tasks", "approvals", "activity"] as const).map((k) => (
-          <button key={k} onClick={() => setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs ${tab === k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
-            {t(k === "tasks" ? { ar: "المهام", en: "Tasks" } : k === "approvals" ? { ar: "الاعتمادات", en: "Approvals" } : { ar: "النشاط", en: "Activity" })}
+      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+        {TABS.filter((tb) => tb.k !== "costs" || caps.canSeeFinancials).map((tb) => (
+          <button key={tb.k} onClick={() => setTab(tb.k)} className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
+            {t({ ar: tb.ar, en: tb.en })}
           </button>
         ))}
       </div>
 
       {tab === "tasks" && <TasksTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "team" && <TeamTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "deliverables" && <DeliverablesTab projectId={projectId} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
+      {tab === "costs" && <CostsTab projectId={projectId} flash={flash} />}
+      {tab === "risks" && <RisksTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "meetings" && <MeetingsTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "shoots" && <ShootsTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "timeline" && <TimelineTab projectId={projectId} />}
       {tab === "activity" && <ActivityTab projectId={projectId} />}
 
       {toast && <div className="fixed bottom-4 inset-x-4 z-[70] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
@@ -145,7 +178,7 @@ function TasksTab({ projectId, canManage, flash }: { projectId: string; canManag
 
   const groups: { k: PcTaskStatus; ar: string }[] = [
     { k: "todo", ar: "قائمة" }, { k: "in_progress", ar: "قيد التنفيذ" }, { k: "blocked", ar: "معطّلة" },
-    { k: "in_review", ar: "قيد المراجعة" }, { k: "done", ar: "منجزة" },
+    { k: "in_review", ar: "قيد المراجعة" }, { k: "done", ar: "منجزة" }, { k: "cancelled", ar: "ملغاة" },
   ];
 
   return (

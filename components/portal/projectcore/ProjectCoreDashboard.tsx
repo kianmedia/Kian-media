@@ -1,137 +1,171 @@
 "use client";
 // ════════════════════════════════════════════════════════════════════════════
-// Project Core — لوحة القيادة: عدّادات التشغيل + قائمة المشاريع التشغيلية +
-// فلاتر، ثم الدخول إلى لوحة تشغيل المشروع (ProjectOps). staff فقط.
+// Project Core — لوحة قيادة تفاعلية حقيقية: العدّادات والقائمة من نداء موحّد واحد
+// (project_core_dashboard) بنفس شروط الفلترة، كل بطاقة فلتر فعلي، بحث، إنشاء مشروع،
+// وكل مشروع يفتح صفحته المستقلة. staff فقط.
 // ════════════════════════════════════════════════════════════════════════════
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
 import {
-  pcDashboard, pcListProjects, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
-  type ProjectCoreDashboard as Dash, type OperationalProject, type PcStage, type PcPriority, type PcHealth,
+  pcDashboard, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
+  type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth,
 } from "@/lib/portal/projectCore";
-import ProjectOps from "./ProjectOps";
+import CreateProjectWizard from "./CreateProjectWizard";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const HEALTH_CLS: Record<PcHealth, string> = { on_track: "text-emerald-400", at_risk: "text-amber-400", off_track: "text-red-400" };
 const PRIO_CLS: Record<PcPriority, string> = { low: "text-stone-400", normal: "text-sky-400", high: "text-amber-400", urgent: "text-red-400" };
+const money = (n: number | null | undefined) => n == null ? "—" : new Intl.NumberFormat("en-US").format(Math.round(n));
 
 export default function ProjectCoreDashboard() {
   const { t } = useI18n();
-  const [dash, setDash] = useState<Dash | null>(null);
-  const [projects, setProjects] = useState<OperationalProject[]>([]);
+  const { caps } = usePortal();
+  const [data, setData] = useState<DashboardResponse | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState<"all" | "active" | "overdue" | "awaiting_client" | "at_risk">("all");
-  const [selected, setSelected] = useState<OperationalProject | null>(null);
+  const [filter, setFilter] = useState<DashFilter>("all");
+  const [search, setSearch] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (f: DashFilter, s: string) => {
     setPhase("loading");
-    const [d, p] = await Promise.all([pcDashboard(), pcListProjects()]);
-    if (!p.ok) { setErr(pcErr(p.error)); setPhase("error"); return; }
-    if (d.ok) setDash(d.data);
-    setProjects(p.data);
-    setPhase("ready");
+    const r = await pcDashboard({ filter: f, search: s || undefined, limit: 200 });
+    if (!r.ok) { setErr(pcErr(r.error)); setPhase("error"); return; }
+    setData(r.data); setPhase("ready");
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(filter, search); }, [load, filter]);   // البحث عبر زر/Enter
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const stageOf = (p: OperationalProject): PcStage | null => p.project_core?.core_stage ?? null;
-  const filtered = projects.filter((p) => {
-    const c = p.project_core;
-    if (filter === "all") return true;
-    if (filter === "active") return !c || !["closed", "delivered"].includes(c.core_stage);
-    if (filter === "overdue") return !!c?.due_date && c.due_date < todayStr && !["closed", "delivered"].includes(c.core_stage);
-    if (filter === "awaiting_client") return c?.core_stage === "client_review";
-    if (filter === "at_risk") return c?.health === "at_risk" || c?.health === "off_track";
-    return true;
-  });
-
-  if (selected) {
-    return (
-      <div className="space-y-3">
-        <button onClick={() => { setSelected(null); void load(); }} className="text-xs text-stone-400 hover:text-white">← {t({ ar: "رجوع للوحة القيادة", en: "Back to dashboard" })}</button>
-        <ProjectOps projectId={selected.id} projectName={selected.project_name ?? selected.id} onChanged={load} />
-      </div>
-    );
-  }
-
-  const chips: { k: typeof filter; ar: string; en: string; n: number }[] = dash ? [
-    { k: "active", ar: "نشطة", en: "Active", n: dash.active },
-    { k: "overdue", ar: "متأخرة", en: "Overdue", n: dash.overdue },
-    { k: "awaiting_client", ar: "بانتظار العميل", en: "Awaiting Client", n: dash.awaiting_client },
-    { k: "at_risk", ar: "معرّضة للخطر", en: "At Risk", n: dash.at_risk },
+  const c = data?.counters;
+  // بطاقات العدّادات — كلها فلاتر فعلية (k مطابق لتعريف الخادم).
+  const cards: { k: DashFilter; ar: string; en: string; n: number | null; cls?: string }[] = c ? [
+    { k: "all", ar: "إجمالي", en: "Total", n: c.total, cls: "text-white" },
+    { k: "active", ar: "نشطة", en: "Active", n: c.active, cls: "text-emerald-400" },
+    { k: "planning", ar: "تخطيط", en: "Planning", n: c.planning },
+    { k: "ready", ar: "جاهزة", en: "Ready", n: c.ready },
+    { k: "scheduled", ar: "مجدولة", en: "Scheduled", n: c.scheduled },
+    { k: "in_production", ar: "قيد الإنتاج", en: "In Production", n: c.in_production },
+    { k: "post_production", ar: "ما بعد الإنتاج", en: "Post", n: c.post_production },
+    { k: "internal_review", ar: "مراجعة داخلية", en: "Internal", n: c.internal_review },
+    { k: "awaiting_client", ar: "بانتظار العميل", en: "Awaiting Client", n: c.awaiting_client, cls: "text-sky-400" },
+    { k: "revision", ar: "تعديلات", en: "Revision", n: c.revision, cls: "text-amber-400" },
+    { k: "near_delivery", ar: "قرب التسليم", en: "Near Delivery", n: c.near_delivery, cls: "text-indigo-400" },
+    { k: "overdue", ar: "متأخرة", en: "Overdue", n: c.overdue, cls: "text-red-400" },
+    { k: "at_risk", ar: "معرّضة للخطر", en: "At Risk", n: c.at_risk, cls: "text-red-400" },
+    { k: "closed", ar: "مغلقة", en: "Closed", n: c.closed, cls: "text-stone-400" },
+    { k: "no_manager", ar: "بلا مدير", en: "No Manager", n: c.no_manager },
+    { k: "no_due", ar: "بلا موعد", en: "No Due Date", n: c.no_due },
+    ...(caps.canSeeFinancials ? [{ k: "negative_profit" as DashFilter, ar: "ربحية سالبة", en: "Negative Profit", n: c.negative_profit, cls: "text-red-400" }] : []),
+  ] : [];
+  // بطاقات معلوماتية (غير قابلة للفلترة) — تُعرض منفصلة.
+  const infoCards: { ar: string; en: string; v: string; cls?: string }[] = c ? [
+    { ar: "مهام متأخرة", en: "Overdue Tasks", v: String(c.overdue_tasks), cls: "text-red-400" },
+    { ar: "اعتمادات معلّقة", en: "Pending Approvals", v: String(c.pending_approvals), cls: "text-amber-400" },
+    { ar: "ساعات الشهر", en: "Hours (month)", v: String(c.hours_month), cls: "text-sky-400" },
+    ...(caps.canSeeFinancials ? [
+      { ar: "الميزانية", en: "Budget", v: money(c.total_budget) },
+      { ar: "التكلفة الفعلية", en: "Actual Cost", v: money(c.actual_cost) },
+      { ar: "الربحية المتوقعة", en: "Expected Profit", v: money(c.expected_profit), cls: (c.expected_profit ?? 0) < 0 ? "text-red-400" : "text-emerald-400" },
+      { ar: "الربحية الفعلية", en: "Actual Profit", v: money(c.actual_profit), cls: (c.actual_profit ?? 0) < 0 ? "text-red-400" : "text-emerald-400" },
+    ] : []),
   ] : [];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="text-lg font-semibold text-white">{t({ ar: "منصّة إدارة المشاريع", en: "Project Core" })}</h2>
-        <button onClick={() => void load()} className="text-xs text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => void load(filter, search)} className="text-xs text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+          {caps.isAdminArea && <button onClick={() => setShowCreate(true)} className="rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2">+ {t({ ar: "إنشاء مشروع", en: "Create Project" })}</button>}
+        </div>
+      </div>
+
+      {/* بحث */}
+      <div className="flex gap-2">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void load(filter, search); }}
+          placeholder={t({ ar: "بحث: اسم المشروع / العميل / مدير المشروع…", en: "Search: project / client / manager…" })}
+          className="flex-1 bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500" />
+        <button onClick={() => void load(filter, search)} className="rounded-lg bg-stone-800 border border-stone-700 text-stone-200 text-sm px-4">{t({ ar: "بحث", en: "Search" })}</button>
+        {search && <button onClick={() => { setSearch(""); void load(filter, ""); }} className="rounded-lg bg-stone-800 border border-stone-700 text-stone-400 text-sm px-3">✕</button>}
       </div>
 
       {phase === "error" && <div className={`${card} p-4 text-sm text-red-300`}>{err}</div>}
 
-      {/* عدّادات */}
-      {dash && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-          {[
-            { ar: "نشطة", en: "Active", n: dash.active, cls: "text-emerald-400" },
-            { ar: "متأخرة", en: "Overdue", n: dash.overdue, cls: "text-red-400" },
-            { ar: "بانتظار العميل", en: "Awaiting Client", n: dash.awaiting_client, cls: "text-sky-400" },
-            { ar: "بانتظار الفريق", en: "Awaiting Staff", n: dash.awaiting_staff, cls: "text-amber-400" },
-            { ar: "قرب التسليم", en: "Near Delivery", n: dash.near_delivery, cls: "text-indigo-400" },
-            { ar: "مغلقة", en: "Closed", n: dash.closed, cls: "text-stone-400" },
-            { ar: "مهامي المفتوحة", en: "My Open Tasks", n: dash.my_tasks, cls: "text-white" },
-            { ar: "مهام متأخرة", en: "Overdue Tasks", n: dash.overdue_tasks, cls: "text-red-400" },
-            { ar: "اعتمادات معلّقة", en: "Pending Approvals", n: dash.pending_approvals, cls: "text-amber-400" },
-            { ar: "ساعات (30ي)", en: "Hours (30d)", n: dash.hours_logged_30d, cls: "text-sky-400" },
-            { ar: "الميزانية", en: "Budget", n: dash.total_budget, cls: "text-stone-300" },
-            { ar: "التكلفة", en: "Cost", n: dash.total_cost, cls: "text-stone-300" },
-          ].map((c, i) => (
-            <div key={i} className={`${card} p-3`}>
-              <div className={`text-xl font-bold ${c.cls}`}>{c.n}</div>
-              <div className="text-[11px] text-stone-500">{t({ ar: c.ar, en: c.en })}</div>
+      {/* عدّادات-فلاتر */}
+      {c && (
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+          {cards.map((cd) => (
+            <button key={cd.k} onClick={() => setFilter(cd.k as DashFilter)}
+              className={`${card} p-2.5 text-right transition ${filter === cd.k ? "ring-2 ring-red-500 border-red-600" : "hover:border-stone-600"}`}>
+              <div className={`text-lg font-bold ${cd.cls ?? "text-stone-200"}`}>{cd.n ?? 0}</div>
+              <div className="text-[10px] text-stone-500 leading-tight">{t({ ar: cd.ar, en: cd.en })}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      {/* بطاقات معلوماتية */}
+      {infoCards.length > 0 && (
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {infoCards.map((cd, i) => (
+            <div key={i} className={`${card} p-2.5`}>
+              <div className={`text-base font-bold ${cd.cls ?? "text-stone-300"}`}>{cd.v}</div>
+              <div className="text-[10px] text-stone-500">{t({ ar: cd.ar, en: cd.en })}</div>
             </div>
           ))}
         </div>
       )}
 
-      {/* فلاتر */}
-      <div className="flex flex-wrap gap-2">
-        {([{ k: "all", ar: "الكل", en: "All" }, ...chips.map((c) => ({ k: c.k, ar: c.ar, en: c.en }))] as { k: typeof filter; ar: string; en: string }[]).map((f) => (
-          <button key={f.k} onClick={() => setFilter(f.k)} className={`px-3 py-1.5 rounded-lg text-xs ${filter === f.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>{t({ ar: f.ar, en: f.en })}</button>
-        ))}
+      {/* شريط الفلتر النشط */}
+      {filter !== "all" && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-stone-400">{t({ ar: "الفلتر:", en: "Filter:" })}</span>
+          <span className="px-2 py-0.5 rounded bg-red-900/40 text-red-300">{data?.total_count ?? 0} {t({ ar: "مشروع", en: "projects" })}</span>
+          <button onClick={() => setFilter("all")} className="text-stone-400 hover:text-white">✕ {t({ ar: "إلغاء الفلتر", en: "Clear" })}</button>
+        </div>
+      )}
+
+      {/* القائمة */}
+      {phase === "loading" && !data && <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
+      {phase === "ready" && (data?.rows.length ?? 0) === 0 && (
+        <div className={`${card} p-8 text-center`}>
+          <p className="text-sm text-stone-400">{t({ ar: "لا توجد مشاريع مطابقة لهذا الفلتر.", en: "No projects match this filter." })}</p>
+          {caps.isAdminArea && filter === "all" && <button onClick={() => setShowCreate(true)} className="mt-3 rounded-lg bg-red-600 text-white text-sm px-4 py-2">+ {t({ ar: "إنشاء أول مشروع", en: "Create your first project" })}</button>}
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {(data?.rows ?? []).map((p) => <ProjectRowCard key={p.id} p={p} canFin={caps.canSeeFinancials} />)}
       </div>
 
-      {/* قائمة المشاريع */}
-      {phase === "loading" && <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
-      {phase === "ready" && filtered.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد مشاريع مطابقة.", en: "No matching projects." })}</p>}
-      <div className="space-y-1.5">
-        {filtered.map((p) => {
-          const c = p.project_core;
-          const stage = stageOf(p);
-          const overdue = !!c?.due_date && c.due_date < todayStr && stage !== "closed" && stage !== "delivered";
-          return (
-            <button key={p.id} onClick={() => setSelected(p)} className={`${card} p-3 w-full text-right hover:border-stone-600 transition`}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm text-stone-100 truncate" dir="auto">{p.project_name || p.id}</div>
-                  <div className="flex items-center gap-2 mt-0.5 text-[11px]">
-                    <span className="px-1.5 py-0.5 rounded bg-stone-800 text-stone-300">{stage ? t(PC_STAGE_LABELS[stage]) : t({ ar: "غير مهيّأ", en: "Not initialized" })}</span>
-                    {c && <span className={PRIO_CLS[c.priority]}>{t(PRIORITY_LABELS[c.priority])}</span>}
-                    {c && <span className={HEALTH_CLS[c.health]}>{t(HEALTH_LABELS[c.health])}</span>}
-                    {c?.due_date && <span className={overdue ? "text-red-400" : "text-stone-500"} dir="ltr">⏱ {c.due_date}</span>}
-                  </div>
-                </div>
-                {c && <div className="shrink-0 text-left">
-                  <div className="text-xs text-stone-400">{c.progress_pct}%</div>
-                  <div className="w-16 h-1.5 bg-stone-800 rounded mt-1 overflow-hidden"><div className="h-full bg-red-600" style={{ width: `${c.progress_pct}%` }} /></div>
-                </div>}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {showCreate && <CreateProjectWizard onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(filter, search); }} />}
     </div>
+  );
+}
+
+function ProjectRowCard({ p, canFin }: { p: DashRow; canFin: boolean }) {
+  const { t } = useI18n();
+  const overdue = p.days_remaining != null && p.days_remaining < 0 && p.stage !== "closed" && p.stage !== "delivered";
+  return (
+    <Link href={`/client-portal/project-core/${p.id}`} className={`${card} p-3 block hover:border-stone-600 transition`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm text-stone-100 truncate" dir="auto">{p.project_name || t({ ar: "بلا اسم", en: "Untitled" })}</div>
+          <div className="text-[11px] text-stone-500 truncate">{p.client_name || t({ ar: "بلا عميل", en: "No client" })}{p.manager_name ? ` · ${t({ ar: "مدير", en: "PM" })}: ${p.manager_name}` : ` · ${t({ ar: "بلا مدير", en: "no PM" })}`}</div>
+          <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px]">
+            <span className="px-1.5 py-0.5 rounded bg-stone-800 text-stone-300">{t(PC_STAGE_LABELS[p.stage])}</span>
+            <span className={PRIO_CLS[p.priority]}>{t(PRIORITY_LABELS[p.priority])}</span>
+            <span className={HEALTH_CLS[p.health]}>● {t(HEALTH_LABELS[p.health])}</span>
+            {p.due_date && <span className={overdue ? "text-red-400" : "text-stone-500"} dir="ltr">⏱ {p.due_date}{p.days_remaining != null ? ` (${p.days_remaining}${t({ ar: "ي", en: "d" })})` : ""}</span>}
+            {p.open_tasks > 0 && <span className="text-stone-400">{p.open_tasks} {t({ ar: "مهمة", en: "tasks" })}{p.overdue_tasks > 0 ? ` · ${p.overdue_tasks} ${t({ ar: "متأخرة", en: "overdue" })}` : ""}</span>}
+            {p.pending_approvals > 0 && <span className="text-amber-400">{p.pending_approvals} {t({ ar: "اعتماد معلّق", en: "approvals" })}</span>}
+            {canFin && p.profit != null && <span className={p.profit < 0 ? "text-red-400" : "text-emerald-400"} dir="ltr">{new Intl.NumberFormat("en-US").format(Math.round(p.profit))}</span>}
+          </div>
+        </div>
+        <div className="shrink-0 text-left">
+          <div className="text-xs text-stone-400">{p.progress_pct}%</div>
+          <div className="w-16 h-1.5 bg-stone-800 rounded mt-1 overflow-hidden"><div className="h-full bg-red-600" style={{ width: `${p.progress_pct}%` }} /></div>
+        </div>
+      </div>
+    </Link>
   );
 }

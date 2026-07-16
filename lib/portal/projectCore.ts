@@ -80,11 +80,39 @@ export interface ProjectApproval {
   requested_by: string | null; decided_by: string | null; decided_at: string | null; created_at: string;
 }
 export interface StatusHistoryRow { id: string; project_id: string; from_stage: string | null; to_stage: string; note: string | null; changed_by: string | null; created_at: string }
-export interface ProjectCoreDashboard {
-  active: number; overdue: number; awaiting_client: number; awaiting_staff: number; near_delivery: number;
-  closed: number; at_risk: number; total_budget: number; total_cost: number;
-  open_tasks: number; my_tasks: number; overdue_tasks: number; pending_approvals: number; hours_logged_30d: number;
+export interface DashCounters {
+  total: number; active: number; planning: number; ready: number; scheduled: number; in_production: number;
+  post_production: number; internal_review: number; awaiting_client: number; revision: number; near_delivery: number;
+  overdue: number; at_risk: number; closed: number; no_manager: number; no_due: number;
+  overdue_tasks: number; pending_approvals: number; hours_month: number;
+  total_budget: number | null; actual_cost: number | null; expected_profit: number | null; actual_profit: number | null;
+  negative_profit: number | null;
 }
+export interface DashRow {
+  id: string; project_name: string | null; status: string | null; client_id: string | null;
+  stage: PcStage; priority: PcPriority; health: PcHealth; progress_pct: number;
+  due_date: string | null; delivery_date: string | null; project_type: string | null;
+  budget_amount: number | null; estimated_cost: number | null; actual_cost: number | null; profit: number | null;
+  client_name: string | null; manager_name: string | null; manager_id: string | null;
+  team_count: number; open_tasks: number; overdue_tasks: number; pending_approvals: number;
+  last_activity_at: string | null; days_remaining: number | null;
+}
+export interface DashboardResponse { counters: DashCounters; total_count: number; rows: DashRow[] }
+export type DashFilter = "all" | "active" | "planning" | "ready" | "scheduled" | "in_production" | "post_production"
+  | "internal_review" | "awaiting_client" | "revision" | "near_delivery" | "overdue" | "at_risk" | "closed"
+  | "no_manager" | "no_due" | "negative_profit";
+
+// وحدات المشروع
+export interface ProjectMemberRow { id: string; project_id: string; user_id: string; role: string; created_at: string; is_deleted: boolean }
+export interface ProjectCost { id: string; project_id: string; category: string; description: string | null; amount: number; currency: string; cost_date: string; created_at: string }
+export interface ProjectRisk { id: string; project_id: string; title: string; description: string | null; severity: string; likelihood: string; status: string; mitigation: string | null; created_at: string }
+export interface ProjectMeeting { id: string; project_id: string; title: string; scheduled_at: string | null; duration_minutes: number | null; location: string | null; meeting_url: string | null; notes: string | null; created_at: string }
+export interface ShootSession {
+  id: string; project_id: string; title: string; session_date: string | null; call_time: string | null; location: string | null;
+  client_contact: string | null; permits: string | null; safety_notes: string | null; weather_note: string | null;
+  status: string; completion_report: string | null; created_at: string;
+}
+export interface Deliverable { id: string; project_id: string; title: string; type: string; status: string; version: number; preview_url: string | null; created_at: string }
 
 // ─── القراءات ───
 export async function pcListProjects(): Promise<Result<OperationalProject[]>> {
@@ -141,9 +169,54 @@ export const pcApprovalRequest = (projectId: string, kind: PcApprovalKind, title
 export const pcApprovalDecide = (approvalId: string, decision: Exclude<PcApprovalStatus, "pending">, note?: string) =>
   prpc<ProjectApproval>("pc_approval_decide", { p_approval: approvalId, p_decision: decision, p_note: note ?? null });
 
-export const pcDashboard = () => prpc<ProjectCoreDashboard>("project_core_dashboard");
+export const pcDashboard = (opts?: { filter?: DashFilter; search?: string; manager?: string; client?: string; from?: string; to?: string; limit?: number; offset?: number }) =>
+  prpc<DashboardResponse>("project_core_dashboard", {
+    p_filter: opts?.filter ?? "all", p_search: opts?.search?.trim() || null,
+    p_manager: opts?.manager ?? null, p_client: opts?.client ?? null,
+    p_from: opts?.from ?? null, p_to: opts?.to ?? null,
+    p_limit: opts?.limit ?? 100, p_offset: opts?.offset ?? 0,
+  });
 export const pcCalendar = (from: string, to: string, projectId?: string) =>
   prpc<{ tasks: unknown[]; meetings: unknown[]; shoots: unknown[] }>("project_core_calendar", { p_from: from, p_to: to, p_project: projectId ?? null });
+export const pcCreateProject = (data: Record<string, unknown>) =>
+  prpc<{ ok: boolean; project_id: string; stage: string }>("project_core_create_project", { p_data: data });
+
+// ─── وحدات المشروع (قراءات + كتابات) ───
+export const pcListMembers = (projectId: string) =>
+  pget<ProjectMemberRow[]>(`project_members?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=id,project_id,user_id,role,created_at,is_deleted&order=created_at.asc`);
+export const pcMemberAdd = (projectId: string, userId: string, role: string) =>
+  prpc<boolean>("pc_member_add", { p_project: projectId, p_user: userId, p_role: role });
+export const pcMemberRemove = (projectId: string, userId: string) =>
+  prpc<boolean>("pc_member_remove", { p_project: projectId, p_user: userId });
+
+export const pcListCosts = (projectId: string) =>
+  pget<ProjectCost[]>(`project_costs?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=cost_date.desc`);
+export const pcCostAdd = (projectId: string, data: Record<string, unknown>) => prpc<ProjectCost>("pc_cost_add", { p_project: projectId, p_data: data });
+export const pcCostDelete = (costId: string) => prpc<boolean>("pc_cost_delete", { p_cost: costId });
+
+export const pcListRisks = (projectId: string) =>
+  pget<ProjectRisk[]>(`project_risks?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=created_at.desc`);
+export const pcRiskUpsert = (projectId: string, data: Record<string, unknown>) => prpc<ProjectRisk>("pc_risk_upsert", { p_project: projectId, p_data: data });
+
+export const pcListMeetings = (projectId: string) =>
+  pget<ProjectMeeting[]>(`project_meetings?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=scheduled_at.desc.nullslast`);
+export const pcMeetingUpsert = (projectId: string, data: Record<string, unknown>) => prpc<ProjectMeeting>("pc_meeting_upsert", { p_project: projectId, p_data: data });
+
+export const pcListShoots = (projectId: string) =>
+  pget<ShootSession[]>(`project_shoot_sessions?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=session_date.desc.nullslast`);
+export const pcShootUpsert = (projectId: string, data: Record<string, unknown>) => prpc<ShootSession>("pc_shoot_upsert", { p_project: projectId, p_data: data });
+
+export const pcListDeliverables = (projectId: string) =>
+  pget<Deliverable[]>(`deliverables?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=id,project_id,title,type,status,version,preview_url,created_at&order=created_at.desc`);
+
+export interface ClientLite { id: string; full_name: string | null; company: string | null }
+export const pcListClients = () =>
+  pget<ClientLite[]>(`clients?is_deleted=eq.false&select=id,full_name,company&order=created_at.desc&limit=300`);
+export interface StaffLite { id: string; full_name: string | null; staff_role: string | null }
+export const pcListStaff = () =>
+  pget<StaffLite[]>(`profiles?staff_role=not.is.null&select=id,full_name,staff_role&order=full_name.asc`);
+// أرشفة المشروع (soft delete عام موجود مسبقًا).
+export const pcArchiveProject = (projectId: string) => prpc<boolean>("soft_delete", { p_table: "projects", p_id: projectId });
 
 // خريطة رسائل الأخطاء الشائعة → عربي.
 export function pcErr(e: string): string {
@@ -154,7 +227,28 @@ export function pcErr(e: string): string {
   if (/body_required/.test(e)) return "النص إلزامي.";
   if (/bad_stage/.test(e)) return "مرحلة غير صالحة.";
   if (/bad_minutes/.test(e)) return "مدة غير صحيحة.";
+  if (/reason_required/.test(e)) return "السبب إلزامي للرجوع للخلف أو الإغلاق.";
+  if (/no_stage_skip/.test(e)) return "لا يمكن تجاوز أكثر من مرحلة — انتقل خطوة بخطوة (أو المالك فقط).";
+  if (/need_manager/.test(e)) return "يجب تعيين مدير مشروع قبل هذه المرحلة.";
+  if (/need_due_date/.test(e)) return "يجب تحديد موعد نهائي قبل هذه المرحلة.";
+  if (/name_required/.test(e)) return "اسم المشروع إلزامي.";
+  if (/client_required|bad_client/.test(e)) return "اختر عميلًا صحيحًا للمشروع.";
   if (/not_found/.test(e)) return "العنصر غير موجود.";
   if (/cross_project_dependency|self_dependency/.test(e)) return "اعتمادية غير صالحة.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";
 }
+
+export const SEVERITY_LABELS: Record<string, { ar: string; en: string }> = {
+  low: { ar: "منخفض", en: "Low" }, medium: { ar: "متوسط", en: "Medium" }, high: { ar: "عالٍ", en: "High" }, critical: { ar: "حرج", en: "Critical" },
+};
+export const RISK_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
+  open: { ar: "مفتوح", en: "Open" }, mitigating: { ar: "قيد المعالجة", en: "Mitigating" }, closed: { ar: "مغلق", en: "Closed" }, accepted: { ar: "مقبول", en: "Accepted" },
+};
+export const SHOOT_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
+  planned: { ar: "مخطّطة", en: "Planned" }, confirmed: { ar: "مؤكّدة", en: "Confirmed" }, in_progress: { ar: "جارية", en: "In Progress" }, completed: { ar: "مكتملة", en: "Completed" }, cancelled: { ar: "ملغاة", en: "Cancelled" },
+};
+export const DLV_LABEL: Record<string, { ar: string; en: string }> = {
+  draft: { ar: "مسودة", en: "Draft" }, internal_review: { ar: "مراجعة داخلية", en: "Internal Review" },
+  client_review: { ar: "مراجعة العميل", en: "Client Review" }, revision_requested: { ar: "طلب تعديل", en: "Revision" },
+  approved: { ar: "معتمد", en: "Approved" }, final_delivered: { ar: "تسليم نهائي", en: "Final Delivered" }, archived: { ar: "مؤرشف", en: "Archived" },
+};
