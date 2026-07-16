@@ -364,6 +364,67 @@ export const pcRevenueUpsert = (projectId: string, data: Record<string, unknown>
 export const pcListFinAlerts = (projectId: string) => pget<FinAlert[]>(`project_financial_alerts?project_id=eq.${enc(projectId)}&resolved_at=is.null&select=*&order=level.desc`);
 export const pcFinAlertsRecompute = (projectId: string) => prpc<number>("pc_finance_alerts_recompute", { p_project: projectId });
 
+// ─── Batch 1: الخطة الزمنية الموحّدة (Schedule + Calendar + Gantt من مصدر واحد) ───
+export type ScheduleEventType =
+  | "project_phase" | "milestone" | "task" | "shoot_session" | "meeting" | "internal_review" | "client_review"
+  | "deliverable_due" | "final_delivery" | "equipment_preparation" | "equipment_return" | "travel" | "approval" | "custom_event";
+export type ScheduleStatus = "planned" | "confirmed" | "in_progress" | "done" | "cancelled";
+export const SCHED_TYPE_LABELS: Record<ScheduleEventType, { ar: string; en: string }> = {
+  project_phase: { ar: "مرحلة مشروع", en: "Phase" }, milestone: { ar: "معلَم", en: "Milestone" },
+  task: { ar: "مهمة", en: "Task" }, shoot_session: { ar: "جلسة تصوير", en: "Shoot" },
+  meeting: { ar: "اجتماع", en: "Meeting" }, internal_review: { ar: "مراجعة داخلية", en: "Internal Review" },
+  client_review: { ar: "مراجعة العميل", en: "Client Review" }, deliverable_due: { ar: "استحقاق مخرَج", en: "Deliverable Due" },
+  final_delivery: { ar: "تسليم نهائي", en: "Final Delivery" }, equipment_preparation: { ar: "تجهيز معدات", en: "Equip. Prep" },
+  equipment_return: { ar: "إرجاع معدات", en: "Equip. Return" }, travel: { ar: "انتقال/سفر", en: "Travel" },
+  approval: { ar: "اعتماد", en: "Approval" }, custom_event: { ar: "حدث مخصّص", en: "Custom" },
+};
+export const SCHED_STATUS_LABELS: Record<ScheduleStatus, { ar: string; en: string }> = {
+  planned: { ar: "مخطّط", en: "Planned" }, confirmed: { ar: "مؤكّد", en: "Confirmed" },
+  in_progress: { ar: "جارٍ", en: "In Progress" }, done: { ar: "منجز", en: "Done" }, cancelled: { ar: "ملغى", en: "Cancelled" },
+};
+export interface ScheduleItem {
+  id: string; source: "schedule" | "task" | "meeting" | "shoot" | "project";
+  event_type: ScheduleEventType; title: string; description?: string | null;
+  start_at: string; end_at: string | null; all_day: boolean; status: string; priority: string; progress: number;
+  assignee_id: string | null; participants?: string[]; is_milestone: boolean; client_visible: boolean;
+  phase?: string | null; location_id?: string | null; shoot_session_id?: string | null; task_id?: string | null;
+  meeting_id?: string | null; deliverable_id?: string | null; reminder_at?: string | null; notes?: string | null;
+  cancel_reason?: string | null; deleted: boolean; delete_reason?: string | null; updated_at: string; location_text?: string | null;
+}
+export const pcScheduleFeed = (projectId: string, opts?: { from?: string; to?: string; types?: string[]; assignee?: string; deleted?: boolean }) =>
+  prpc<{ items: ScheduleItem[] }>("project_core_schedule", {
+    p_project: projectId, p_from: opts?.from ?? null, p_to: opts?.to ?? null,
+    p_types: opts?.types ?? null, p_assignee: opts?.assignee ?? null, p_deleted: opts?.deleted ?? false,
+  });
+export const pcScheduleUpsert = (projectId: string, data: Record<string, unknown>) =>
+  prpc<{ id: string; updated_at: string }>("pc_schedule_upsert", { p_project: projectId, p_data: data });
+// قراءة عنصر خطة واحد كاملًا (لفتح المحرّر من Gantt دون فقدان الحقول غير المعروضة).
+export const pcGetScheduleItem = async (id: string): Promise<Result<ScheduleItem | null>> => {
+  const r = await pget<(Record<string, unknown> & { assigned_to: string | null; is_deleted: boolean })[]>(
+    `project_schedule_items?id=eq.${enc(id)}&select=*`);
+  if (!r.ok) return r;
+  const row = r.data[0];
+  if (!row) return { ok: true, data: null };
+  return { ok: true, data: { ...row, source: "schedule", assignee_id: row.assigned_to, deleted: row.is_deleted } as unknown as ScheduleItem };
+};
+export const pcScheduleSetStatus = (itemId: string, status: ScheduleStatus, reason?: string) =>
+  prpc<{ id: string }>("pc_schedule_set_status", { p_item: itemId, p_status: status, p_reason: reason ?? null });
+export const pcScheduleDelete = (itemId: string, reason: string) =>
+  prpc<boolean>("pc_schedule_delete", { p_item: itemId, p_reason: reason });
+export const pcScheduleRestore = (itemId: string) => prpc<{ id: string }>("pc_schedule_restore", { p_item: itemId });
+export const pcScheduleDepSet = (itemId: string, dependsOn: string, on = true) =>
+  prpc<boolean>("pc_schedule_dependency_set", { p_item: itemId, p_depends_on: dependsOn, p_on: on });
+export const pcListScheduleDeps = (projectId: string) =>
+  pget<{ item_id: string; depends_on_item_id: string }[]>(
+    `project_schedule_dependencies?select=item_id,depends_on_item_id,project_schedule_items!project_schedule_dependencies_item_id_fkey!inner(project_id)&project_schedule_items.project_id=eq.${enc(projectId)}`);
+export interface GanttBar {
+  id: string; raw_id: string; source: "schedule" | "task" | "shoot"; kind: string; title: string;
+  start: string; end: string; progress: number; status: string; assignee_id: string | null;
+  milestone: boolean; phase: string | null; updated_at: string;
+}
+export interface GanttData { bars: GanttBar[]; deps: { from: string; to: string }[]; project: { due_date: string | null; delivery_date: string | null; start_date: string | null } | null }
+export const pcGanttData = (projectId: string) => prpc<GanttData>("project_core_gantt", { p_project: projectId });
+
 // تنسيق تاريخ/وقت موحّد بأرقام لاتينية وترتيب DD/MM/YYYY (يتجنّب لبس 2026/16/07). دائمًا dir=ltr.
 export const fmtD = (s: string | null | undefined) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
 export const fmtDT = (s: string | null | undefined) => s ? new Date(s).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -402,6 +463,12 @@ export function pcErr(e: string): string {
   if (/phase_required/.test(e)) return "اسم المرحلة إلزامي.";
   if (/not_found/.test(e)) return "العنصر غير موجود.";
   if (/cross_project_dependency|self_dependency/.test(e)) return "اعتمادية غير صالحة.";
+  if (/circular_dependency/.test(e)) return "لا يمكن إنشاء اعتمادية دائرية.";
+  if (/start_required/.test(e)) return "تاريخ البداية إلزامي.";
+  if (/bad_dates/.test(e)) return "تاريخ النهاية قبل البداية.";
+  if (/bad_timezone/.test(e)) return "منطقة زمنية غير معروفة.";
+  if (/bad_link/.test(e)) return "العنصر المرتبط لا ينتمي لهذا المشروع.";
+  if (/item_deleted/.test(e)) return "العنصر محذوف — استعده أولًا.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";
 }
 

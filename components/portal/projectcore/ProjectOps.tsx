@@ -18,7 +18,8 @@ import {
   type TaskChecklistItem, type TaskComment, type ProjectApproval, type ProjectActivity, type PcApprovalKind,
 } from "@/lib/portal/projectCore";
 import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
-import { CalendarTab, GanttTab, LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
+import { LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
+import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import { FinanceTab } from "./ProjectFinance";
 import { pcProgress, pcSetProgress, type ProgressInfo } from "@/lib/portal/projectCore";
 
@@ -29,8 +30,9 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity";
+type TabKey = "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
+  { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
   { k: "team", ar: "الفريق", en: "Team" }, { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
   { k: "finance", ar: "حسابات المشروع", en: "Accounts" }, { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
@@ -64,7 +66,8 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     setProg(r.data); void loadCore(); flash(t({ ar: "تم تحديث التقدّم.", en: "Progress updated." }));
   }
   const [toast, setToast] = useState<string | null>(null);
-  const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); };
+  // هوية ثابتة — flash داخل deps للـload في التبويبات؛ هوية متغيّرة تسبّب حلقة إعادة جلب.
+  const flash = useCallback((m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); }, []);
 
   // pcEnsure يُنشئ صفّ project_core إن لم يوجد (Idempotent) فلا يكون شريط المراحل معطّلًا صامتًا.
   const loadCore = useCallback(async () => {
@@ -170,9 +173,10 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
         ))}
       </div>
 
+      {tab === "schedule" && <ScheduleTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
       {tab === "tasks" && <TasksTab projectId={projectId} canManage={canManage} flash={flash} />}
-      {tab === "gantt" && <GanttTab projectId={projectId} canManage={canManage} flash={flash} />}
-      {tab === "calendar" && <CalendarTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "gantt" && <UnifiedGanttTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
+      {tab === "calendar" && <UnifiedCalendarTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
       {tab === "locations" && <LocationsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "tags" && <TagsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "team" && <TeamTab projectId={projectId} canManage={canManage} flash={flash} />}
