@@ -315,6 +315,55 @@ export const pcDeliverableVersionSet = (versionId: string, patch: Record<string,
   ppatch<DeliverableVersion[]>(`project_deliverable_versions?id=eq.${enc(versionId)}`, patch);
 
 // خريطة رسائل الأخطاء الشائعة → عربي.
+// ─── Batch 5: الحسابات المالية (finance-only) ───
+export interface FinanceSettings {
+  project_id: string; accountant_id: string | null; currency: string; contract_value_excl_vat: number; discount: number;
+  vat_rate: number; approved_budget: number; estimated_remaining_cost: number; target_margin_pct: number;
+  warn_threshold_pct: number; critical_threshold_pct: number; approve_limit_accountant: number; approve_limit_admin: number;
+}
+export interface ProjectExpense {
+  id: string; project_id: string; phase: string | null; category: string; description: string | null; supplier: string | null;
+  quantity: number; unit_cost: number; amount_excl_vat: number; vat_amount: number; amount_incl_vat: number;
+  kind: string; billable: boolean; payment_status: string; status: string; currency: string; expense_date: string;
+  due_date: string | null; paid_date: string | null; receipt_url: string | null; notes: string | null;
+  entered_by: string | null; approved_by: string | null; reject_reason: string | null; created_at: string;
+}
+export interface PhaseBudget { id: string; project_id: string; phase: string; allocated: number; note: string | null }
+export interface RevenueRow {
+  id: string; project_id: string; name: string; pct: number | null; amount_excl_vat: number; vat_amount: number;
+  amount_incl_vat: number; due_date: string | null; collected_date: string | null; collected_amount: number; status: string; notes: string | null;
+}
+export interface FinAlert { id: string; project_id: string; level: "info" | "warning" | "critical"; kind: string; phase: string | null; message: string; amount: number | null; pct: number | null; created_at: string }
+export interface FinanceSummary {
+  currency: string; net_revenue: number; contract_incl_vat: number; approved_budget: number; actual_cost: number;
+  committed_cost: number; forecast_cost: number; remaining_budget: number; budget_used_pct: number; collected: number;
+  receivable: number; actual_profit: number; projected_profit: number; actual_margin_pct: number; projected_margin_pct: number;
+  budget_variance: number; target_margin_pct: number; pending_expenses: number; open_alerts: number; accountant_id: string | null; projected_loss: boolean;
+}
+export const EXPENSE_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
+  draft: { ar: "مسودّة", en: "Draft" }, submitted: { ar: "مقدَّم", en: "Submitted" }, under_review: { ar: "قيد المراجعة", en: "Review" },
+  approved: { ar: "معتمد", en: "Approved" }, rejected: { ar: "مرفوض", en: "Rejected" }, scheduled_for_payment: { ar: "مجدول للدفع", en: "Scheduled" },
+  partially_paid: { ar: "مدفوع جزئيًا", en: "Partial" }, paid: { ar: "مدفوع", en: "Paid" }, refunded: { ar: "مسترد", en: "Refunded" }, voided: { ar: "ملغى", en: "Voided" },
+};
+export const pcFinanceSummary = (projectId: string) => prpc<FinanceSummary>("pc_finance_summary", { p_project: projectId });
+export const pcFinanceSettings = async (projectId: string): Promise<Result<FinanceSettings | null>> => {
+  const r = await pget<FinanceSettings[]>(`project_finance_settings?project_id=eq.${enc(projectId)}&select=*`);
+  return r.ok ? { ok: true, data: r.data[0] ?? null } : r;
+};
+export const pcFinanceSettingsSet = (projectId: string, data: Record<string, unknown>) => prpc<FinanceSettings>("pc_finance_settings_set", { p_project: projectId, p_data: data });
+export const pcFinanceAssignAccountant = (projectId: string, userId: string | null) => prpc<{ ok: boolean }>("pc_finance_assign_accountant", { p_project: projectId, p_user: userId });
+export const pcListFinanceStaff = () => pget<StaffLite[]>(`profiles?staff_role=eq.finance&account_status=eq.active&select=id,full_name,staff_role&order=full_name.asc`);
+export const pcListExpenses = (projectId: string) => pget<ProjectExpense[]>(`project_expenses?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=expense_date.desc,created_at.desc`);
+export const pcExpenseCreate = (projectId: string, data: Record<string, unknown>) => prpc<ProjectExpense>("pc_expense_create", { p_project: projectId, p_data: data });
+export const pcExpenseTransition = (expenseId: string, action: string, reason?: string, override = false) => prpc<ProjectExpense>("pc_expense_transition", { p_expense: expenseId, p_action: action, p_reason: reason ?? null, p_override: override });
+export const pcExpenseDelete = (expenseId: string, reason: string) => prpc<boolean>("pc_expense_delete", { p_expense: expenseId, p_reason: reason });
+export const pcListPhaseBudgets = (projectId: string) => pget<PhaseBudget[]>(`project_phase_budgets?project_id=eq.${enc(projectId)}&select=*&order=created_at.asc`);
+export const pcPhaseBudgetUpsert = (projectId: string, phase: string, allocated: number, note?: string) => prpc<PhaseBudget>("pc_phase_budget_upsert", { p_project: projectId, p_phase: phase, p_allocated: allocated, p_note: note ?? null });
+export const pcListRevenue = (projectId: string) => pget<RevenueRow[]>(`project_revenue_schedule?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=due_date.asc.nullslast`);
+export const pcRevenueUpsert = (projectId: string, data: Record<string, unknown>) => prpc<RevenueRow>("pc_revenue_upsert", { p_project: projectId, p_data: data });
+export const pcListFinAlerts = (projectId: string) => pget<FinAlert[]>(`project_financial_alerts?project_id=eq.${enc(projectId)}&resolved_at=is.null&select=*&order=level.desc`);
+export const pcFinAlertsRecompute = (projectId: string) => prpc<number>("pc_finance_alerts_recompute", { p_project: projectId });
+
 // تنسيق تاريخ/وقت موحّد بأرقام لاتينية وترتيب DD/MM/YYYY (يتجنّب لبس 2026/16/07). دائمًا dir=ltr.
 export const fmtD = (s: string | null | undefined) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
 export const fmtDT = (s: string | null | undefined) => s ? new Date(s).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -343,6 +392,14 @@ export function pcErr(e: string): string {
   if (/already_sent/.test(e)) return "أُرسلت هذه النسخة مسبقًا — أنشئ نسخة جديدة للتعديل.";
   if (/not_draft/.test(e)) return "لا يمكن تعديل نسخة مُرسَلة — أنشئ نسخة جديدة.";
   if (/incomplete_call_sheet/.test(e)) return "أكمل تاريخ التصوير والموقع قبل الإرسال.";
+  if (/not_finance_user/.test(e)) return "محاسب المشروع يجب أن يكون من قسم المالية.";
+  if (/approval_limit/.test(e)) return "المبلغ يتجاوز حدّ اعتمادك — يحتاج صلاحية أعلى.";
+  if (/over_budget/.test(e)) return "الاعتماد يتجاوز ميزانية المشروع — يحتاج تجاوزًا من المالك.";
+  if (/override_required/.test(e)) return "تجاوز الميزانية يتطلّب سببًا وتأكيدًا من المالك.";
+  if (/cannot_void_paid/.test(e)) return "لا يمكن إلغاء مصروف مدفوع — استخدم استردادًا.";
+  if (/cannot_delete_approved/.test(e)) return "لا يمكن حذف مصروف معتمد/مدفوع (المالك فقط).";
+  if (/bad_state/.test(e)) return "حالة المصروف لا تسمح بهذا الإجراء.";
+  if (/phase_required/.test(e)) return "اسم المرحلة إلزامي.";
   if (/not_found/.test(e)) return "العنصر غير موجود.";
   if (/cross_project_dependency|self_dependency/.test(e)) return "اعتمادية غير صالحة.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

@@ -19,6 +19,7 @@ import {
 } from "@/lib/portal/projectCore";
 import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
 import { CalendarTab, GanttTab, LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
+import { FinanceTab } from "./ProjectFinance";
 import { pcProgress, pcSetProgress, type ProgressInfo } from "@/lib/portal/projectCore";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
@@ -28,11 +29,11 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity";
+type TabKey = "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
   { k: "team", ar: "الفريق", en: "Team" }, { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
-  { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
+  { k: "finance", ar: "حسابات المشروع", en: "Accounts" }, { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
   { k: "meetings", ar: "الاجتماعات", en: "Meetings" }, { k: "shoots", ar: "جلسات التصوير", en: "Shoots" },
   { k: "locations", ar: "المواقع", en: "Locations" }, { k: "tags", ar: "الوسوم", en: "Tags" },
   { k: "timeline", ar: "سجل المراحل", en: "Stage History" }, { k: "activity", ar: "سجل النشاط", en: "Activity Log" },
@@ -40,8 +41,9 @@ const TABS: { k: TabKey; ar: string; en: string }[] = [
 
 export default function ProjectOps({ projectId, projectName, onChanged, initialTab }: { projectId: string; projectName: string; onChanged?: () => void; initialTab?: string }) {
   const { t } = useI18n();
-  const { caps } = usePortal();
+  const { caps, profile } = usePortal();
   const canManage = caps.isAdminArea || caps.isEditor;
+  const isFinance = caps.isOwner || profile.staff_role === "finance";   // عزل الحسابات
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((TABS.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   const [busy, setBusy] = useState(false);
@@ -161,7 +163,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
 
       {/* تبويبات */}
       <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-        {TABS.filter((tb) => tb.k !== "costs" || caps.canSeeFinancials).map((tb) => (
+        {TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance)).map((tb) => (
           <button key={tb.k} onClick={() => setTab(tb.k)} className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
             {t({ ar: tb.ar, en: tb.en })}
           </button>
@@ -176,6 +178,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "team" && <TeamTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "deliverables" && <DeliverablesTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
+      {tab === "finance" && isFinance && <FinanceTab projectId={projectId} flash={flash} />}
       {tab === "costs" && <CostsTab projectId={projectId} flash={flash} />}
       {tab === "risks" && <RisksTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "meetings" && <MeetingsTab projectId={projectId} canManage={canManage} flash={flash} />}
