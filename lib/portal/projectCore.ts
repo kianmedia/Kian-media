@@ -315,6 +315,10 @@ export const pcDeliverableVersionSet = (versionId: string, patch: Record<string,
   ppatch<DeliverableVersion[]>(`project_deliverable_versions?id=eq.${enc(versionId)}`, patch);
 
 // خريطة رسائل الأخطاء الشائعة → عربي.
+// تنسيق تاريخ/وقت موحّد بأرقام لاتينية وترتيب DD/MM/YYYY (يتجنّب لبس 2026/16/07). دائمًا dir=ltr.
+export const fmtD = (s: string | null | undefined) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
+export const fmtDT = (s: string | null | undefined) => s ? new Date(s).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+
 export function pcErr(e: string): string {
   if (/could not find|schema cache|PGRST\d|does not exist|function .* does not/i.test(e)) return "منصة المشاريع غير مطبّقة في قاعدة البيانات — شغّل project_core_FINAL_RUNME.sql.";
   if (/not authorized|permission denied/i.test(e)) return "لا تملك صلاحية هذا الإجراء.";

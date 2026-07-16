@@ -50,8 +50,9 @@ export function usePortal(): PortalCtx {
 
 type Phase = "loading" | "auth" | "blocked" | "error" | "ready";
 
-export default function PortalShell({ children }: { children: ReactNode }) {
+export default function PortalShell({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
   const { t, isAr } = useI18n();
+  const wrap = wide ? "max-w-7xl mx-auto px-4 sm:px-6" : "max-w-5xl mx-auto px-5 sm:px-6";
   const pathname = usePathname();
   const [phase, setPhase] = useState<Phase>("loading");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -171,7 +172,7 @@ export default function PortalShell({ children }: { children: ReactNode }) {
       {readOnly && <InactiveBanner />}
 
       {/* ─── Tab bar ─── */}
-      <div className="max-w-5xl mx-auto px-5 sm:px-6">
+      <div className={wrap}>
         <div className="flex flex-wrap items-center gap-2 mb-10" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "14px" }}>
           {tabs.map((tab) => {
             const active = pathname === tab.href;
@@ -213,7 +214,7 @@ export default function PortalShell({ children }: { children: ReactNode }) {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-5 sm:px-6">{children}</div>
+      <div className={wrap}>{children}</div>
     </Ctx.Provider>
   );
 }

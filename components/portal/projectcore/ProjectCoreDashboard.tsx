@@ -208,7 +208,7 @@ function ProjectRowCard({ p, canFin }: { p: DashRow; canFin: boolean }) {
           </div>
         </div>
         <div className="shrink-0 text-left">
-          <div className="text-xs text-stone-400">{p.progress_pct}%</div>
+          <div className="text-xs text-stone-400" dir="ltr">{p.progress_pct}%</div>
           <div className="w-16 h-1.5 bg-stone-800 rounded mt-1 overflow-hidden"><div className="h-full bg-red-600" style={{ width: `${p.progress_pct}%` }} /></div>
         </div>
       </div>

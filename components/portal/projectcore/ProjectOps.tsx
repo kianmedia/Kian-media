@@ -8,6 +8,7 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   PC_STAGES, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, TASK_STATUS_LABELS, APPROVAL_STATUS_LABELS,
+  fmtDT,
   pcEnsure, pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate, pcTaskDelete,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcListTaskComments, pcTaskComment,
   pcTaskSetDependency, pcListTaskDeps,
@@ -34,7 +35,7 @@ const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
   { k: "meetings", ar: "الاجتماعات", en: "Meetings" }, { k: "shoots", ar: "جلسات التصوير", en: "Shoots" },
   { k: "locations", ar: "المواقع", en: "Locations" }, { k: "tags", ar: "الوسوم", en: "Tags" },
-  { k: "timeline", ar: "الجدول الزمني", en: "Timeline" }, { k: "activity", ar: "النشاط", en: "Activity" },
+  { k: "timeline", ar: "سجل المراحل", en: "Stage History" }, { k: "activity", ar: "سجل النشاط", en: "Activity Log" },
 ];
 
 export default function ProjectOps({ projectId, projectName, onChanged, initialTab }: { projectId: string; projectName: string; onChanged?: () => void; initialTab?: string }) {
@@ -150,7 +151,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
         {prog && (
           <div className="mt-3 border-t border-stone-800 pt-3">
             <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
-              <span className="text-[11px] text-stone-500">{t({ ar: "التقدّم", en: "Progress" })}: <span className="text-stone-200 font-semibold">{prog.final}%</span>{prog.manual != null && <span className="text-amber-400"> ({t({ ar: "يدوي", en: "manual" })})</span>} · {t({ ar: "تلقائي", en: "auto" })} {prog.auto}%</span>
+              <span className="text-[11px] text-stone-500">{t({ ar: "التقدّم", en: "Progress" })}: <span className="text-stone-200 font-semibold" dir="ltr">{prog.final}%</span>{prog.manual != null && <span className="text-amber-400"> ({t({ ar: "يدوي", en: "manual" })})</span>} · {t({ ar: "تلقائي", en: "auto" })} <span dir="ltr">{prog.auto}%</span></span>
               {canManage && <button onClick={() => void overrideProgress()} className="text-[11px] text-sky-400 hover:text-sky-300">{prog.manual != null ? t({ ar: "تعديل/إلغاء التجاوز", en: "Edit/clear override" }) : t({ ar: "تجاوز يدوي", en: "Override" })}</button>}
             </div>
             <div className="h-2 bg-stone-800 rounded overflow-hidden"><div className="h-full bg-red-600" style={{ width: `${prog.final}%` }} /></div>
@@ -350,7 +351,7 @@ function TaskDetail({ task, canManage, flash, onChanged }: { task: PcTask; canMa
       <div>
         <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "التعليقات", en: "Comments" })}</div>
         <div className="space-y-1.5">
-          {comments.map((c) => <div key={c.id} className="bg-stone-950 border border-stone-800 rounded p-1.5 text-stone-300"><span dir="auto">{c.body}</span><span className="block text-[10px] text-stone-600" dir="ltr">{new Date(c.created_at).toLocaleString("ar")}</span></div>)}
+          {comments.map((c) => <div key={c.id} className="bg-stone-950 border border-stone-800 rounded p-1.5 text-stone-300"><span dir="auto">{c.body}</span><span className="block text-[10px] text-stone-600" dir="ltr">{fmtDT(c.created_at)}</span></div>)}
           <div className="flex gap-1.5">
             <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder={t({ ar: "أضف تعليقًا…", en: "Add comment…" })} className={`${inp} flex-1 py-1`} onKeyDown={(e) => { if (e.key === "Enter") void addComment(); }} />
             <button disabled={busy} onClick={() => void addComment()} className={`${btnGhost} px-2`}>↵</button>
@@ -428,7 +429,7 @@ function ActivityTab({ projectId }: { projectId: string }) {
       {rows.map((a) => (
         <div key={a.id} className={`${card} p-2 text-xs flex items-center justify-between gap-2`}>
           <span className="text-stone-300">{ACTIONS[a.action] ?? a.action}</span>
-          <span className="text-[10px] text-stone-600" dir="ltr">{new Date(a.created_at).toLocaleString("ar")}</span>
+          <span className="text-[10px] text-stone-600" dir="ltr">{fmtDT(a.created_at)}</span>
         </div>
       ))}
     </div>

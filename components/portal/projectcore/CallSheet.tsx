@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  pcListCallSheets, pcCallSheetSave, pcCallSheetSend, pcErr,
+  pcListCallSheets, pcCallSheetSave, pcCallSheetSend, pcErr, fmtDT,
   type CallSheet, type ShootSession,
 } from "@/lib/portal/projectCore";
 
@@ -17,7 +17,7 @@ const btnRed = "rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-
 const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200 text-sm disabled:opacity-50";
 const lines = (arr: unknown[]) => (arr ?? []).map((x) => typeof x === "string" ? x : JSON.stringify(x)).join("\n");
 const toArr = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
-const fmt = (s: string | null) => s ? new Date(s).toLocaleString("ar") : "—";
+const fmt = (s: string | null) => fmtDT(s);
 
 export function CallSheetManager({ shoot, canManage, flash }: { shoot: ShootSession; canManage: boolean; flash: (m: string) => void }) {
   const { t } = useI18n();

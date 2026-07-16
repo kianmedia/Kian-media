@@ -13,7 +13,7 @@ import {
   pcListCosts, pcCostAdd, pcCostDelete, pcListRisks, pcRiskUpsert,
   pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory,
   pcListDeliverableVersions, pcDeliverableVersionAdd, pcMeetingToTask,
-  PC_STAGE_LABELS, SEVERITY_LABELS, RISK_STATUS_LABELS, SHOOT_STATUS_LABELS, DLV_LABEL, pcErr,
+  PC_STAGE_LABELS, SEVERITY_LABELS, RISK_STATUS_LABELS, SHOOT_STATUS_LABELS, DLV_LABEL, pcErr, fmtDT,
   type ProjectMemberRow, type StaffLite, type Deliverable, type ProjectCost, type ProjectRisk,
   type ProjectMeeting, type ShootSession, type StatusHistoryRow, type PcStage, type DeliverableVersion,
 } from "@/lib/portal/projectCore";
@@ -219,7 +219,7 @@ export function MeetingsTab({ projectId, canManage, flash }: { projectId: string
       {rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد اجتماعات.", en: "No meetings." })}</p>}
       {rows.map((m) => (
         <div key={m.id} className={`${card} p-3 text-xs flex items-center justify-between gap-2`}>
-          <span className="text-stone-200 min-w-0 truncate">{m.title}{m.scheduled_at && <span className="mr-2 text-stone-500" dir="ltr">{new Date(m.scheduled_at).toLocaleString("ar")}</span>}</span>
+          <span className="text-stone-200 min-w-0 truncate">{m.title}{m.scheduled_at && <span className="mr-2 text-stone-500" dir="ltr">{fmtDT(m.scheduled_at)}</span>}</span>
           {canManage && <button onClick={() => void toTask(m)} className="text-[11px] text-sky-400 hover:text-sky-300 shrink-0">{t({ ar: "→ مهمة", en: "→ Task" })}</button>}
         </div>
       ))}
@@ -282,7 +282,7 @@ export function TimelineTab({ projectId }: { projectId: string }) {
         <div key={h.id} className={`${card} p-2.5 text-xs`}>
           <div className="flex items-center justify-between gap-2">
             <span className="text-stone-200">{label(h.from_stage)} <span className="text-stone-600">→</span> {label(h.to_stage)}</span>
-            <span className="text-[10px] text-stone-600" dir="ltr">{new Date(h.created_at).toLocaleString("ar")}</span>
+            <span className="text-[10px] text-stone-600" dir="ltr">{fmtDT(h.created_at)}</span>
           </div>
           {h.note && <div className="text-[11px] text-stone-500 mt-0.5">{h.note}</div>}
         </div>
