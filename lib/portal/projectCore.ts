@@ -299,6 +299,23 @@ export const pcApplyTemplateV2 = (projectId: string, templateId: string, modules
   prpc<TemplateApplyResult>("project_core_apply_template_v2", { p_project: projectId, p_template: templateId, p_modules: modules ?? null, p_start: start ?? null });
 export const pcListAllTemplates = () => pget<ProjectTemplate[]>(`project_templates?select=*&order=name.asc`);
 
+// ─── Batch 7: مراقبة الإشعارات والبريد (للإدارة) ───
+export interface EmailDeliveryRow {
+  id: string; status: "pending" | "processing" | "sent" | "failed" | "skipped" | "bounced";
+  attempts: number; subject: string; recipient_email: string | null; recipient_name: string | null;
+  event_type: string | null; severity: string | null; direct_url: string | null;
+  last_error: string | null; next_attempt_at: string | null; sent_at: string | null; created_at: string;
+}
+export interface NotifyMonitorData { items: EmailDeliveryRow[]; counts: Record<string, number> | null }
+export const pcNotifyMonitor = (limit = 100) => prpc<NotifyMonitorData>("pc_notify_monitor", { p_limit: limit });
+export const pcEmailRetry = (id: string) => prpc<boolean>("pc_email_retry", { p_id: id });
+export const pcEmailCancel = (id: string) => prpc<boolean>("pc_email_cancel", { p_id: id });
+export const EMAIL_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
+  pending: { ar: "بانتظار الإرسال", en: "Pending" }, processing: { ar: "قيد الإرسال", en: "Processing" },
+  sent: { ar: "أُرسل", en: "Sent" }, failed: { ar: "فشل", en: "Failed" },
+  skipped: { ar: "تُخطّي", en: "Skipped" }, bounced: { ar: "ارتدّ", en: "Bounced" },
+};
+
 // ─── ملفات المخرجات: Storage خاص (staff فقط) + Signed URLs مؤقتة ───
 export const PC_DLV_BUCKET = "project-deliverables";
 const pcSafeName = (n: string) => n.replace(/[^\w.\-]+/g, "_").slice(-80);

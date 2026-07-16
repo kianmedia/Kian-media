@@ -5,6 +5,13 @@
   "installCommand": "npm install",
   "framework": "nextjs",
   "crons": [
-    { "path": "/api/cron/custody-alerts", "schedule": "0 3 * * *" }
+    {
+      "path": "/api/cron/custody-alerts",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/notify-email",
+      "schedule": "10 3 * * *"
+    }
   ]
 }

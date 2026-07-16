@@ -46,6 +46,8 @@ begin
   if to_regprocedure('public.pc_can_see_finance(uuid)')                              is null then miss := miss || ' pc_can_see_finance (شغّل project_core_FINANCE_RUNME.sql)'; end if;
   if to_regprocedure('public.pc_expense_delete(uuid,text)')                          is null then miss := miss || ' pc_expense_delete (شغّل project_core_FINANCE_RUNME.sql)'; end if;
   if to_regprocedure('public.can_final_deliver()')                                   is null then miss := miss || ' can_final_deliver (شغّل staff_roles_task_assignment_RUNME.sql)'; end if;
+  if to_regprocedure('public.notify(uuid,text,text,text,uuid,text,text)')            is null then miss := miss || ' notify()'; end if;
+  if to_regclass('public.notification_preferences') is null then miss := miss || ' notification_preferences'; end if;
   if miss <> '' then
     raise exception 'نقص في الاعتمادات: الدوال التالية غير موجودة (%). شغّل ملفات Project Core السابقة بالترتيب أولًا.', miss;
   end if;
@@ -1927,6 +1929,359 @@ begin
 end $g6$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 7 — محرك الأحداث/البريد/التذكيرات (Outbox + Queue + Retry + Idempotency)
+-- يمتد فوق notifications/notify() القائمة — لا نظام موازيًا للمنصة الداخلية.
+-- إرسال البريد الفعلي عبر /api/cron/notify-email (Vercel Cron + مفتاح الخدمة).
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B7.1 صندوق الأحداث الموحّد (Outbox) ═══
+create table if not exists public.notification_events (
+  id              uuid primary key default gen_random_uuid(),
+  project_id      uuid references public.projects(id) on delete cascade,
+  event_type      text not null,
+  entity_type     text,
+  entity_id       uuid,
+  actor_id        uuid,
+  occurred_at     timestamptz not null default now(),
+  title_ar        text not null,
+  title_en        text not null,
+  body_ar         text,
+  body_en         text,
+  severity        text not null default 'info' check (severity in ('critical','action','info','digest')),
+  direct_url      text,
+  metadata        jsonb not null default '{}',
+  audience        text,
+  is_internal     boolean not null default true,
+  idempotency_key text unique,
+  created_at      timestamptz not null default now()
+);
+
+-- ═══ B7.2 طابور البريد (لكل مستلم صف — منع Double Send بقيد فريد) ═══
+create table if not exists public.email_deliveries (
+  id                  uuid primary key default gen_random_uuid(),
+  event_id            uuid references public.notification_events(id) on delete cascade,
+  notification_id     uuid unique,                       -- جسر إشعارات المنصة الاختيارية بالبريد
+  recipient_id        uuid,
+  recipient_email     text,
+  subject             text not null,
+  body_text           text,
+  direct_url          text,
+  status              text not null default 'pending'
+                      check (status in ('pending','processing','sent','failed','skipped','bounced')),
+  attempts            int not null default 0,
+  next_attempt_at     timestamptz,
+  provider_message_id text,
+  last_error          text,
+  sent_at             timestamptz,
+  created_at          timestamptz not null default now(),
+  unique (event_id, recipient_id)
+);
+create index if not exists idx_edel_pending on public.email_deliveries(status, next_attempt_at) where status = 'pending';
+
+-- ═══ B7.3 تتبع التذكيرات (reminder_key + last_sent + next_eligible) ═══
+create table if not exists public.reminder_tracking (
+  reminder_key     text primary key,
+  user_id          uuid,
+  project_id       uuid,
+  entity_type      text,
+  entity_id        uuid,
+  last_sent_at     timestamptz not null default now(),
+  next_eligible_at timestamptz not null default now() + interval '20 hours'
+);
+
+-- ═══ B7.4 بثّ حدث موحّد (داخلي): Outbox + إشعار منصة + طابور بريد ═══
+-- الحرج/المطلوب إجراء ⇒ بريد إلزامي (لا يُعطَّل بالتفضيلات)؛ المعلوماتي ⇒ حسب email_enabled.
+create or replace function public.pc_event_emit(
+  p_project uuid, p_event text, p_etype text, p_eid uuid, p_severity text,
+  p_title_ar text, p_title_en text, p_body_ar text, p_body_en text,
+  p_url text, p_recipients uuid[], p_idem text default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid; u uuid; v_email text; v_pref boolean;
+begin
+  -- كبح جسر البريد أثناء البثّ — الحدث يصفّ بريده الغني بنفسه (لا بريد مزدوج).
+  perform set_config('kian.pc_emit', '1', true);
+  if p_idem is not null then
+    select id into v_id from public.notification_events where idempotency_key = p_idem;
+    if v_id is not null then return v_id; end if;   -- Idempotent: الحدث مبثوث سابقًا
+  end if;
+  insert into public.notification_events(project_id, event_type, entity_type, entity_id, actor_id,
+      title_ar, title_en, body_ar, body_en, severity, direct_url, idempotency_key)
+    values (p_project, p_event, p_etype, p_eid, auth.uid(), p_title_ar, p_title_en, p_body_ar, p_body_en,
+      coalesce(p_severity,'info'), p_url, p_idem)
+    on conflict (idempotency_key) do nothing
+    returning id into v_id;
+  if v_id is null then
+    select id into v_id from public.notification_events where idempotency_key = p_idem;
+    return v_id;
+  end if;
+  foreach u in array coalesce(p_recipients, '{}') loop
+    -- إشعار المنصة (notify يحترم portal_enabled داخليًا؛ الأنواع الأساسية القائمة).
+    perform public.notify(u, 'user',
+      case when coalesce(p_severity,'info') = 'critical' then 'project_status_changed' else 'project_note_new' end,
+      p_etype, p_eid, p_title_ar, p_title_en);
+    -- البريد: حرِج/إجراء = دائمًا؛ معلوماتي = فقط لمن فعّل email_enabled.
+    select email into v_email from public.profiles where id = u;
+    select email_enabled into v_pref from public.notification_preferences where user_id = u;
+    if coalesce(p_severity,'info') in ('critical','action') or coalesce(v_pref, false) then
+      insert into public.email_deliveries(event_id, recipient_id, recipient_email, subject, body_text, direct_url, status)
+        values (v_id, u, v_email, p_title_ar, p_body_ar, p_url,
+          case when v_email is null or position('@' in coalesce(v_email,'')) = 0 then 'skipped' else 'pending' end)
+        on conflict (event_id, recipient_id) do nothing;
+    end if;
+  end loop;
+  return v_id;
+end $$;
+
+-- ═══ B7.5 جسر اختياري: إشعار منصة ⟶ بريد لمن فعّل email_enabled (معلوماتي Opt-in) ═══
+create or replace function public.pc_notify_email_bridge()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_email text;
+begin
+  if new.recipient_id is null then return new; end if;
+  -- لا بريد مزدوج: أحداث pc_event_emit تصفّ بريدها بنفسها.
+  if current_setting('kian.pc_emit', true) = '1' then return new; end if;
+  -- نطاق الجسر: إشعارات المشاريع/المخرجات فقط — HR/العهدة/الرسائل لها قنوات بريد مستقلة.
+  if new.type not in ('project_note_new','project_status_changed','deliverable_new',
+    'revision_requested','deliverable_approved','deliverable_final_delivered','file_link_new') then
+    return new;
+  end if;
+  if not exists (select 1 from public.notification_preferences
+                 where user_id = new.recipient_id and email_enabled = true) then return new; end if;
+  select email into v_email from public.profiles where id = new.recipient_id;
+  if v_email is null or position('@' in v_email) = 0 then return new; end if;
+  insert into public.email_deliveries(notification_id, recipient_id, recipient_email, subject, direct_url, status)
+    values (new.id, new.recipient_id, v_email, new.title_ar,
+      '/client-portal?notif=' || new.id, 'pending')
+    on conflict (notification_id) do nothing;
+  return new;
+end $$;
+drop trigger if exists trg_notif_email_bridge on public.notifications;
+create trigger trg_notif_email_bridge after insert on public.notifications
+  for each row execute function public.pc_notify_email_bridge();
+
+-- ═══ B7.6 ماسح التذكيرات (يستدعيه الكرون بمفتاح الخدمة) — dedup عبر reminder_tracking ═══
+create or replace function public.pc_reminders_scan()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare rec record; v_n int := 0; v_key text; v_team uuid[]; v_acct uuid; v_admins uuid[];
+begin
+  select coalesce(array_agg(id), '{}') into v_admins from public.profiles where account_type = 'admin';
+
+  -- 1) مهام مستحقة غدًا أو متأخرة (للمكلَّف) — Action.
+  for rec in
+    select t.id, t.title, t.assignee_id, t.project_id, t.due_date
+    from public.project_tasks t
+    where t.is_deleted = false and t.assignee_id is not null
+      and t.status not in ('done','cancelled')
+      and t.due_date is not null and t.due_date <= current_date + 1
+  loop
+    v_key := 'task_due:' || rec.id;   -- مفتاح التتبع بلا تاريخ (البوابة next_eligible_at)
+    if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+    perform public.pc_event_emit(rec.project_id, 'task_due_reminder', 'task', rec.id, 'action',
+      case when rec.due_date < current_date then 'مهمة متأخرة: ' || rec.title else 'مهمة تستحق غدًا: ' || rec.title end,
+      'Task due: ' || rec.title, 'الموعد: ' || rec.due_date::text, null,
+      '/client-portal/project-core/' || rec.project_id || '?tab=tasks', array[rec.assignee_id], v_key || ':' || current_date);
+    insert into public.reminder_tracking(reminder_key, user_id, project_id, entity_type, entity_id)
+      values (v_key, rec.assignee_id, rec.project_id, 'task', rec.id)
+      on conflict (reminder_key) do update set last_sent_at = now(),
+        -- المتأخر يُذكَّر كل 3 أيام لا يوميًا (لا وابل بريد لمهمة متأخرة 60 يومًا).
+        next_eligible_at = now() + case when excluded.entity_id is not null and exists (
+          select 1 from public.project_tasks tt where tt.id = excluded.entity_id and tt.due_date < current_date)
+          then interval '72 hours' else interval '20 hours' end;
+    v_n := v_n + 1;
+  end loop;
+
+  -- 2) جلسات تصوير غدًا (لفريق المشروع) — Action.
+  for rec in
+    select s.id, s.title, s.project_id, s.session_date, s.call_time
+    from public.project_shoot_sessions s
+    where s.is_deleted = false and s.status in ('planned','confirmed') and s.session_date = current_date + 1
+  loop
+    v_key := 'shoot:' || rec.id;
+    if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+    select coalesce(array_agg(pm.user_id), '{}') into v_team from public.project_members pm
+      where pm.project_id = rec.project_id and pm.is_deleted = false and pm.role like 'kian_%';
+    perform public.pc_event_emit(rec.project_id, 'shoot_tomorrow', 'shoot', rec.id, 'action',
+      'جلسة تصوير غدًا: ' || rec.title || coalesce(' · Call ' || to_char(rec.call_time, 'HH24:MI'), ''),
+      'Shoot tomorrow: ' || rec.title, null, null,
+      '/client-portal/project-core/' || rec.project_id || '?tab=shoots', v_team, v_key || ':' || current_date);
+    insert into public.reminder_tracking(reminder_key, project_id, entity_type, entity_id)
+      values (v_key, rec.project_id, 'shoot', rec.id)
+      on conflict (reminder_key) do update set last_sent_at = now(), next_eligible_at = now() + interval '20 hours';
+    v_n := v_n + 1;
+  end loop;
+
+  -- 3) اجتماعات خلال 24 ساعة (للفريق) — Info.
+  for rec in
+    select m.id, m.title, m.project_id, m.scheduled_at
+    from public.project_meetings m
+    where m.is_deleted = false and m.scheduled_at between now() and now() + interval '24 hours'
+  loop
+    v_key := 'meeting:' || rec.id;
+    if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+    select coalesce(array_agg(pm.user_id), '{}') into v_team from public.project_members pm
+      where pm.project_id = rec.project_id and pm.is_deleted = false and pm.role like 'kian_%';
+    perform public.pc_event_emit(rec.project_id, 'meeting_soon', 'meeting', rec.id, 'info',
+      'اجتماع قريب: ' || rec.title || ' · ' || to_char(rec.scheduled_at, 'DD/MM HH24:MI'),
+      'Meeting soon: ' || rec.title, null, null,
+      '/client-portal/project-core/' || rec.project_id || '?tab=meetings', v_team, v_key);
+    insert into public.reminder_tracking(reminder_key, project_id, entity_type, entity_id)
+      values (v_key, rec.project_id, 'meeting', rec.id)
+      on conflict (reminder_key) do update set last_sent_at = now(), next_eligible_at = now() + interval '20 hours';
+    v_n := v_n + 1;
+  end loop;
+
+  -- 4) مخرجات تستحق غدًا/متأخرة (للمكلَّف) — Action.
+  for rec in
+    select d.id, d.title, d.project_id, d.assignee_id, d.due_date
+    from public.deliverables d
+    where d.is_deleted = false and d.assignee_id is not null and d.due_date is not null
+      and d.due_date <= current_date + 1 and d.status not in ('final_delivered','archived','approved')
+  loop
+    v_key := 'dlv_due:' || rec.id;
+    if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+    perform public.pc_event_emit(rec.project_id, 'deliverable_due_reminder', 'deliverable', rec.id, 'action',
+      'مخرَج يقترب استحقاقه: ' || rec.title, 'Deliverable due: ' || rec.title, 'الموعد: ' || rec.due_date::text, null,
+      '/client-portal/project-core/' || rec.project_id || '?tab=deliverables', array[rec.assignee_id], v_key || ':' || current_date);
+    insert into public.reminder_tracking(reminder_key, user_id, project_id, entity_type, entity_id)
+      values (v_key, rec.assignee_id, rec.project_id, 'deliverable', rec.id)
+      on conflict (reminder_key) do update set last_sent_at = now(), next_eligible_at = now() + interval '20 hours';
+    v_n := v_n + 1;
+  end loop;
+
+  -- 5) دفعات عميل متأخرة (للمحاسب + الملّاك) — Critical (بريد إلزامي).
+  for rec in
+    select r.id, r.name, r.project_id, r.due_date, (r.amount_incl_vat - r.collected_amount) as outstanding,
+           (select accountant_id from public.project_finance_settings s where s.project_id = r.project_id) as acct
+    from public.project_revenue_schedule r
+    where r.is_deleted = false and r.due_date < current_date
+      and r.status not in ('paid','cancelled','refunded') and (r.amount_incl_vat - r.collected_amount) > 0
+  loop
+    v_key := 'rev_overdue:' || rec.id;   -- التتبع بلا تاريخ؛ الأسبوعية عبر next_eligible_at
+    if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+    perform public.pc_event_emit(rec.project_id, 'client_payment_overdue', 'revenue', rec.id, 'critical',
+      'دفعة عميل متأخرة: ' || rec.name, 'Client payment overdue: ' || rec.name,
+      'المتبقي: ' || rec.outstanding || ' · الاستحقاق: ' || rec.due_date::text, null,
+      '/client-portal/project-core/' || rec.project_id || '?tab=finance',
+      (select coalesce(array_agg(distinct x), '{}') from unnest(v_admins || rec.acct) as t(x) where x is not null),
+      v_key || ':' || to_char(current_date, 'IYYY-IW'));
+    insert into public.reminder_tracking(reminder_key, project_id, entity_type, entity_id)
+      values (v_key, rec.project_id, 'revenue', rec.id)
+      on conflict (reminder_key) do update set last_sent_at = now(), next_eligible_at = now() + interval '6 days';
+    v_n := v_n + 1;
+  end loop;
+
+  -- 6) تنبيهات مالية حرجة مفتوحة (خسارة متوقعة/تجاوز) — Critical.
+  for rec in
+    select a.id, a.project_id, a.message,
+           (select accountant_id from public.project_finance_settings s where s.project_id = a.project_id) as acct
+    from public.project_financial_alerts a
+    where a.resolved_at is null and a.level = 'critical'
+  loop
+    v_key := 'fin_alert:' || rec.id;
+    if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+    perform public.pc_event_emit(rec.project_id, 'budget_critical', 'project', rec.project_id, 'critical',
+      'تنبيه مالي حرج: ' || rec.message, 'Critical financial alert', null, null,
+      '/client-portal/project-core/' || rec.project_id || '?tab=finance',
+      (select coalesce(array_agg(distinct x), '{}') from unnest(v_admins || rec.acct) as t(x) where x is not null),
+      v_key || ':' || to_char(current_date, 'IYYY-IW'));
+    insert into public.reminder_tracking(reminder_key, project_id, entity_type, entity_id)
+      values (v_key, rec.project_id, 'fin_alert', rec.id)
+      on conflict (reminder_key) do update set last_sent_at = now(), next_eligible_at = now() + interval '6 days';
+    v_n := v_n + 1;
+  end loop;
+
+  -- 7) عهدة تجاوزت موعد الإرجاع (للمستلم) — Action (إن كان نظام العهدة مطبّقًا).
+  if to_regclass('public.custody_inventory_assignments') is not null then
+    for rec in
+      execute $q3$select g.id, g.assignment_number, g.employee_user_id, g.project_id
+        from public.custody_inventory_assignments g
+        where g.is_deleted = false and g.expected_return_at < now()
+          and g.status in ('active','partially_returned')$q3$
+    loop
+      v_key := 'custody_overdue:' || rec.id;
+      if exists (select 1 from public.reminder_tracking where reminder_key = v_key and next_eligible_at > now()) then continue; end if;
+      perform public.pc_event_emit(rec.project_id, 'custody_return_overdue', 'custody', rec.id, 'action',
+        'موعد إرجاع عهدة تجاوز: ' || rec.assignment_number, 'Custody return overdue', null, null,
+        '/client-portal?tab=custody', array[rec.employee_user_id], v_key || ':' || to_char(current_date, 'IYYY-IW'));
+      insert into public.reminder_tracking(reminder_key, user_id, entity_type, entity_id)
+        values (v_key, rec.employee_user_id, 'custody', rec.id)
+        on conflict (reminder_key) do update set last_sent_at = now(), next_eligible_at = now() + interval '6 days';
+      v_n := v_n + 1;
+    end loop;
+  end if;
+
+  return jsonb_build_object('ok', true, 'reminders', v_n);
+end $$;
+
+-- ═══ B7.7 مراقبة الإشعارات (للإدارة) + إعادة المحاولة/الإلغاء ═══
+create or replace function public.pc_notify_monitor(p_limit int default 100)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  if not public.can_manage_projects() then raise exception 'not authorized'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', d.id, 'status', d.status, 'attempts', d.attempts, 'subject', d.subject,
+      'recipient_email', d.recipient_email,
+      'recipient_name', (select pr.full_name from public.profiles pr where pr.id = d.recipient_id),
+      'event_type', e.event_type, 'severity', e.severity, 'direct_url', coalesce(d.direct_url, e.direct_url),
+      'last_error', d.last_error, 'next_attempt_at', d.next_attempt_at, 'sent_at', d.sent_at, 'created_at', d.created_at
+    ) order by d.created_at desc), '[]'::jsonb) into v
+  from (select * from public.email_deliveries order by created_at desc limit least(coalesce(p_limit,100), 300)) d
+  left join public.notification_events e on e.id = d.event_id;
+  return jsonb_build_object(
+    'items', v,
+    'counts', (select jsonb_object_agg(status, n) from
+      (select status, count(*) as n from public.email_deliveries group by status) c));
+end $$;
+
+create or replace function public.pc_email_retry(p_id uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not public.can_manage_projects() then raise exception 'not authorized'; end if;
+  update public.email_deliveries set status = 'pending', attempts = 0, next_attempt_at = null, last_error = null
+    where id = p_id and status in ('failed','skipped');
+  return found;
+end $$;
+
+create or replace function public.pc_email_cancel(p_id uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not public.can_manage_projects() then raise exception 'not authorized'; end if;
+  update public.email_deliveries set status = 'skipped', last_error = 'cancelled_by_admin'
+    where id = p_id and status in ('pending','processing','failed');
+  return found;
+end $$;
+
+-- ═══ B7.8 RLS + Grants — الإدارة تقرأ؛ الكتابة عبر الدوال/مفتاح الخدمة فقط ═══
+alter table public.notification_events enable row level security;
+alter table public.email_deliveries    enable row level security;
+alter table public.reminder_tracking   enable row level security;
+drop policy if exists nev_admin_read on public.notification_events;
+create policy nev_admin_read on public.notification_events for select to authenticated using (public.can_manage_projects());
+drop policy if exists edel_admin_read on public.email_deliveries;
+create policy edel_admin_read on public.email_deliveries for select to authenticated using (public.can_manage_projects());
+grant select on public.notification_events, public.email_deliveries to authenticated;
+
+do $g7$
+declare f text;
+begin
+  foreach f in array array[
+    'public.pc_notify_monitor(int)',
+    'public.pc_email_retry(uuid)',
+    'public.pc_email_cancel(uuid)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+  -- داخلية: البثّ والماسح والجسر (تُستدعى من دوال أخرى أو الكرون بمفتاح الخدمة).
+  execute 'revoke all on function public.pc_event_emit(uuid,text,text,uuid,text,text,text,text,text,text,uuid[],text) from public, anon, authenticated';
+  execute 'revoke all on function public.pc_reminders_scan() from public, anon, authenticated';
+  execute 'revoke all on function public.pc_notify_email_bridge() from public, anon, authenticated';
+  -- مفتاح الخدمة (service_role) يشغّل الماسح من الكرون.
+  execute 'grant execute on function public.pc_reminders_scan() to service_role';
+end $g7$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -1979,6 +2334,13 @@ begin
   if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_deliverable_versions' and column_name='client_visible') = 0
     then miss := miss || ' col(project_deliverable_versions.client_visible)'; end if;
   if not exists (select 1 from storage.buckets where id = 'project-deliverables') then miss := miss || ' bucket(project-deliverables)'; end if;
+  -- Batch 7
+  if to_regclass('public.notification_events') is null then miss := miss || ' notification_events'; end if;
+  if to_regclass('public.email_deliveries')    is null then miss := miss || ' email_deliveries'; end if;
+  if to_regclass('public.reminder_tracking')   is null then miss := miss || ' reminder_tracking'; end if;
+  if to_regprocedure('public.pc_event_emit(uuid,text,text,uuid,text,text,text,text,text,text,uuid[],text)') is null then miss := miss || ' pc_event_emit'; end if;
+  if to_regprocedure('public.pc_reminders_scan()')     is null then miss := miss || ' pc_reminders_scan'; end if;
+  if not exists (select 1 from pg_trigger where tgname = 'trg_notif_email_bridge') then miss := miss || ' trg_notif_email_bridge'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;

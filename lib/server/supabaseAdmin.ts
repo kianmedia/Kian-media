@@ -213,3 +213,31 @@ export async function rpcAsUser<T>(fn: string, args: Record<string, unknown>, be
   }
   return { ok: true, data: body as T };
 }
+
+/** Patch rows via PostgREST as the service_role (server-only; bypasses RLS).
+ *  Returns ok=false when zero rows matched (Prefer: return=representation). */
+export async function patchAsService(query: string, body: Record<string, unknown>): Promise<AdminResult<unknown>> {
+  if (!adminConfigured()) return { ok: false, error: "server_supabase_not_configured", status: 500 };
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, {
+      method: "PATCH",
+      headers: {
+        apikey: SERVICE_KEY,
+        Authorization: `Bearer ${SERVICE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (e) {
+    return { ok: false, error: String(e), status: 502 };
+  }
+  const text = await res.text();
+  let parsed: unknown = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, status: res.status };
+  if (Array.isArray(parsed) && parsed.length === 0) return { ok: false, error: "no_rows", status: 200 };
+  return { ok: true, data: parsed };
+}

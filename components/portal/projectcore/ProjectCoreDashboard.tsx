@@ -13,6 +13,7 @@ import {
   type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth, type DeletedProject,
 } from "@/lib/portal/projectCore";
 import CreateProjectWizard from "./CreateProjectWizard";
+import { NotifyMonitor } from "./NotifyMonitor";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const HEALTH_CLS: Record<PcHealth, string> = { on_track: "text-emerald-400", at_risk: "text-amber-400", off_track: "text-red-400" };
@@ -29,6 +30,9 @@ export default function ProjectCoreDashboard() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
+  const [showNotify, setShowNotify] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const flash = useCallback((m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); }, []);
 
   const load = useCallback(async (f: DashFilter, s: string) => {
     setPhase("loading");
@@ -78,10 +82,19 @@ export default function ProjectCoreDashboard() {
         <h2 className="text-lg font-semibold text-white">{t({ ar: "منصّة إدارة المشاريع", en: "Project Core" })}</h2>
         <div className="flex items-center gap-2">
           <button onClick={() => void load(filter, search)} className="text-xs text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+          {caps.isAdminArea && <button onClick={() => setShowNotify((v) => !v)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "مراقبة الإشعارات", en: "Notify Monitor" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowDeleted(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "المحذوفة/المؤرشفة", en: "Deleted/Archived" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowCreate(true)} className="rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2">+ {t({ ar: "إنشاء مشروع", en: "Create Project" })}</button>}
         </div>
       </div>
+
+      {showNotify && caps.isAdminArea && (
+        <section className={`${card} p-3`}>
+          <h3 className="text-sm font-semibold text-white mb-2">{t({ ar: "مراقبة الإشعارات والبريد", en: "Notifications & Email Monitor" })}</h3>
+          <NotifyMonitor flash={flash} />
+        </section>
+      )}
+      {toast && <div className="fixed bottom-4 inset-x-4 z-[80] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
 
       {/* بحث */}
       <div className="flex gap-2">
