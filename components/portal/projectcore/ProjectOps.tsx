@@ -9,7 +9,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import {
   PC_STAGES, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, TASK_STATUS_LABELS, APPROVAL_STATUS_LABELS,
   fmtDT,
-  pcEnsure, pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate, pcTaskDelete,
+  pcEnsure, pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcListTaskComments, pcTaskComment,
   pcTaskSetDependency, pcListTaskDeps,
   pcListApprovals, pcApprovalRequest, pcApprovalDecide, pcListActivity, pcStageRequirements, pcErr,
@@ -20,6 +20,8 @@ import {
 import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
 import { LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
+import { TrashTab } from "./ProjectTrash";
+import { pcEntityDelete } from "@/lib/portal/projectCore";
 import { FinanceTab } from "./ProjectFinance";
 import { pcProgress, pcSetProgress, type ProgressInfo } from "@/lib/portal/projectCore";
 
@@ -30,7 +32,7 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity";
+type TabKey = "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
@@ -39,6 +41,7 @@ const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "meetings", ar: "الاجتماعات", en: "Meetings" }, { k: "shoots", ar: "جلسات التصوير", en: "Shoots" },
   { k: "locations", ar: "المواقع", en: "Locations" }, { k: "tags", ar: "الوسوم", en: "Tags" },
   { k: "timeline", ar: "سجل المراحل", en: "Stage History" }, { k: "activity", ar: "سجل النشاط", en: "Activity Log" },
+  { k: "trash", ar: "المحذوفات", en: "Trash" },
 ];
 
 export default function ProjectOps({ projectId, projectName, onChanged, initialTab }: { projectId: string; projectName: string; onChanged?: () => void; initialTab?: string }) {
@@ -166,7 +169,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
 
       {/* تبويبات */}
       <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-        {TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance)).map((tb) => (
+        {TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage)).map((tb) => (
           <button key={tb.k} onClick={() => setTab(tb.k)} className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
             {t({ ar: tb.ar, en: tb.en })}
           </button>
@@ -189,6 +192,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "shoots" && <ShootsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "timeline" && <TimelineTab projectId={projectId} />}
       {tab === "activity" && <ActivityTab projectId={projectId} />}
+      {tab === "trash" && canManage && <TrashTab projectId={projectId} flash={flash} />}
 
       {reqPrompt && core && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onMouseDown={() => setReqPrompt(null)}>
@@ -235,9 +239,13 @@ function TasksTab({ projectId, canManage, flash }: { projectId: string; canManag
     await load();
   }
   async function del(task: PcTask) {
-    if (!window.confirm(t({ ar: "حذف المهمة؟", en: "Delete task?" }))) return;
-    const r = await pcTaskDelete(task.id);
+    // حذف ناعم بسبب إلزامي + يشمل المهام الفرعية — قابل للاستعادة من «المحذوفات».
+    const rs = window.prompt(t({ ar: `حذف «${task.title}» ومهامها الفرعية — سبب الحذف (إلزامي):`, en: "Delete reason (required):" }));
+    if (rs === null) return;
+    if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+    const r = await pcEntityDelete("task", task.id, rs.trim());
     if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "حُذفت المهمة (استعادة من تبويب المحذوفات).", en: "Deleted (restorable from Trash)." }));
     await load();
   }
 

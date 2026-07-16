@@ -417,6 +417,27 @@ export const pcScheduleDepSet = (itemId: string, dependsOn: string, on = true) =
 export const pcListScheduleDeps = (projectId: string) =>
   pget<{ item_id: string; depends_on_item_id: string }[]>(
     `project_schedule_dependencies?select=item_id,depends_on_item_id,project_schedule_items!project_schedule_dependencies_item_id_fkey!inner(project_id)&project_schedule_items.project_id=eq.${enc(projectId)}`);
+// ─── Batch 2: الحذف الناعم الشامل + الاستعادة + مركز المحذوفات ───
+export type TrashEntity = "task" | "comment" | "meeting" | "risk" | "location" | "cost" | "shoot"
+  | "deliverable" | "call_sheet" | "revenue" | "expense" | "schedule" | "member";
+export const ENTITY_LABELS: Record<TrashEntity, { ar: string; en: string }> = {
+  task: { ar: "مهمة", en: "Task" }, comment: { ar: "تعليق", en: "Comment" }, meeting: { ar: "اجتماع", en: "Meeting" },
+  risk: { ar: "خطر", en: "Risk" }, location: { ar: "موقع", en: "Location" }, cost: { ar: "تكلفة", en: "Cost" },
+  shoot: { ar: "جلسة تصوير", en: "Shoot" }, deliverable: { ar: "مخرَج", en: "Deliverable" },
+  call_sheet: { ar: "Call Sheet", en: "Call Sheet" }, revenue: { ar: "دفعة إيراد", en: "Revenue" },
+  expense: { ar: "مصروف", en: "Expense" }, schedule: { ar: "عنصر خطة", en: "Schedule" }, member: { ar: "عضو فريق", en: "Member" },
+};
+export interface TrashRow {
+  entity: TrashEntity; id: string; title: string | null; project_id: string; project_name: string | null;
+  deleted_at: string | null; deleted_by: string | null; deleted_by_name: string | null; reason: string | null;
+}
+export const pcEntityDelete = (entity: TrashEntity, id: string, reason: string) =>
+  prpc<{ ok: boolean; title?: string }>("pc_entity_delete", { p_type: entity, p_id: id, p_reason: reason });
+export const pcEntityRestore = (entity: TrashEntity, id: string) =>
+  prpc<{ ok: boolean; title?: string }>("pc_entity_restore", { p_type: entity, p_id: id });
+export const pcTrashList = (projectId?: string) =>
+  prpc<{ items: TrashRow[] }>("project_core_trash", { p_project: projectId ?? null });
+
 export interface GanttBar {
   id: string; raw_id: string; source: "schedule" | "task" | "shoot"; kind: string; title: string;
   start: string; end: string; progress: number; status: string; assignee_id: string | null;
@@ -467,6 +488,11 @@ export function pcErr(e: string): string {
   if (/start_required/.test(e)) return "تاريخ البداية إلزامي.";
   if (/bad_dates/.test(e)) return "تاريخ النهاية قبل البداية.";
   if (/bad_timezone/.test(e)) return "منطقة زمنية غير معروفة.";
+  if (/must_cancel_first/.test(e)) return "الجلسة بدأت أو اكتملت — ألغِها رسميًا أولًا ولا تُحذف.";
+  if (/archive_instead/.test(e)) return "مخرَج معتمد/مُسلَّم لا يُحذف — استخدم الأرشفة.";
+  if (/sent_locked/.test(e)) return "نسخة مُرسلة سجلّ تشغيلي — لا تُحذف.";
+  if (/cannot_delete_collected/.test(e)) return "دفعة حُصِّل منها مبلغ — قيد مالي لا يُحذف.";
+  if (/bad_entity_type/.test(e)) return "نوع عنصر غير مدعوم.";
   if (/bad_link/.test(e)) return "العنصر المرتبط لا ينتمي لهذا المشروع.";
   if (/item_deleted/.test(e)) return "العنصر محذوف — استعده أولًا.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

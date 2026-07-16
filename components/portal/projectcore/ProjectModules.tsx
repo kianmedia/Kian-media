@@ -10,7 +10,7 @@ import { PROJECT_STAFF_ROLES, STAFF_ROLE_LABELS } from "@/lib/portal/roles";
 import { CallSheetManager } from "./CallSheet";
 import {
   pcListMembers, pcMemberAdd, pcMemberRemove, pcListStaff, pcListDeliverables,
-  pcListCosts, pcCostAdd, pcCostDelete, pcListRisks, pcRiskUpsert,
+  pcListCosts, pcCostAdd, pcListRisks, pcRiskUpsert, pcEntityDelete, type TrashEntity,
   pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory,
   pcListDeliverableVersions, pcDeliverableVersionAdd, pcMeetingToTask,
   PC_STAGE_LABELS, SEVERITY_LABELS, RISK_STATUS_LABELS, SHOOT_STATUS_LABELS, DLV_LABEL, pcErr, fmtDT,
@@ -24,6 +24,18 @@ const btnRed = "rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-
 const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200 text-sm disabled:opacity-50";
 type Flash = (m: string) => void;
 const money = (n: number) => new Intl.NumberFormat("en-US").format(Math.round(n));
+
+// حذف موحّد بسبب إلزامي (Soft Delete قابل للاستعادة من تبويب «المحذوفات»).
+async function delWithReason(entity: TrashEntity, id: string, label: string,
+  t: (v: { ar: string; en: string }) => string, flash: Flash, after: () => void | Promise<void>) {
+  const rs = window.prompt(t({ ar: `حذف «${label}» — سبب الحذف (إلزامي):`, en: "Delete reason (required):" }));
+  if (rs === null) return;
+  if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+  const r = await pcEntityDelete(entity, id, rs.trim());
+  if (!r.ok) { flash(pcErr(r.error)); return; }
+  flash(t({ ar: "حُذف (استعادة من تبويب المحذوفات).", en: "Deleted (restorable from Trash)." }));
+  await after();
+}
 
 // ─── الفريق ───
 export function TeamTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: Flash }) {
@@ -132,7 +144,7 @@ export function CostsTab({ projectId, flash }: { projectId: string; flash: Flash
   const total = rows.reduce((s, r) => s + Number(r.amount), 0);
   const CATS = ["general", "crew", "equipment", "transport", "location", "post", "licensing", "other"];
   async function add() { if (busy || !amount) return; setBusy(true); const r = await pcCostAdd(projectId, { amount, description: desc, category: cat }); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setAmount(""); setDesc(""); await load(); }
-  async function del(c: ProjectCost) { if (!window.confirm(t({ ar: "حذف التكلفة؟", en: "Delete cost?" }))) return; const r = await pcCostDelete(c.id); if (!r.ok) { flash(pcErr(r.error)); return; } await load(); }
+  const del = (c: ProjectCost) => delWithReason("cost", c.id, c.description ?? c.category, t, flash, load);
   return (
     <div className="space-y-3">
       <div className={`${card} p-3 flex items-center justify-between`}><span className="text-xs text-stone-400">{t({ ar: "إجمالي التكاليف", en: "Total costs" })}</span><span className="text-lg font-bold text-stone-200" dir="ltr">{money(total)} SAR</span></div>
@@ -183,6 +195,7 @@ export function RisksTab({ projectId, canManage, flash }: { projectId: string; c
             ) : <span className="text-stone-400">{t(RISK_STATUS_LABELS[r.status])}</span>}
           </div>
           {r.mitigation && <div className="text-[11px] text-stone-500 mt-1">{r.mitigation}</div>}
+          {canManage && <div className="mt-1 text-left"><button onClick={() => void delWithReason("risk", r.id, r.title, t, flash, load)} className="text-[10px] text-stone-600 hover:text-red-400">{t({ ar: "حذف بسبب", en: "Delete" })}</button></div>}
         </div>
       ))}
     </div>
@@ -220,7 +233,12 @@ export function MeetingsTab({ projectId, canManage, flash }: { projectId: string
       {rows.map((m) => (
         <div key={m.id} className={`${card} p-3 text-xs flex items-center justify-between gap-2`}>
           <span className="text-stone-200 min-w-0 truncate">{m.title}{m.scheduled_at && <span className="mr-2 text-stone-500" dir="ltr">{fmtDT(m.scheduled_at)}</span>}</span>
-          {canManage && <button onClick={() => void toTask(m)} className="text-[11px] text-sky-400 hover:text-sky-300 shrink-0">{t({ ar: "→ مهمة", en: "→ Task" })}</button>}
+          {canManage && (
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => void toTask(m)} className="text-[11px] text-sky-400 hover:text-sky-300">{t({ ar: "→ مهمة", en: "→ Task" })}</button>
+              <button onClick={() => void delWithReason("meeting", m.id, m.title, t, flash, load)} className="text-[11px] text-stone-600 hover:text-red-400">{t({ ar: "حذف", en: "Delete" })}</button>
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -262,6 +280,7 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
             ) : <span className={stCls[sh.status]}>{t(SHOOT_STATUS_LABELS[sh.status])}</span>}
           </div>
           {sh.session_date && <div className="text-[11px] text-stone-600 mt-0.5" dir="ltr">{sh.session_date}</div>}
+          {canManage && <div className="mt-1 text-left"><button onClick={() => void delWithReason("shoot", sh.id, sh.title, t, flash, load)} className="text-[10px] text-stone-600 hover:text-red-400">{t({ ar: "حذف بسبب", en: "Delete" })}</button></div>}
           {open === sh.id && <CallSheetManager shoot={sh} canManage={canManage} flash={flash} />}
         </div>
       ))}

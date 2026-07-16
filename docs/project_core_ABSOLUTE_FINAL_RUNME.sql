@@ -471,6 +471,352 @@ begin
 end $g1$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 2 — الحذف الناعم الشامل + الاستعادة + مركز المحذوفات + قفل تفاؤلي للمهام
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B2.1 أعمدة بيانات الحذف (سبب/منفّذ/وقت) — إضافية آمنة ═══
+do $b2c$
+declare tbl text;
+begin
+  foreach tbl in array array[
+    'project_tasks','task_comments','project_meetings','project_shoot_sessions','project_locations',
+    'project_risks','project_costs','deliverables','project_call_sheets','project_expenses',
+    'project_revenue_schedule','project_members'
+  ] loop
+    execute format('alter table public.%I add column if not exists deleted_at timestamptz', tbl);
+    execute format('alter table public.%I add column if not exists deleted_by uuid', tbl);
+    execute format('alter table public.%I add column if not exists delete_reason text', tbl);
+  end loop;
+end $b2c$;
+
+-- ═══ B2.2 حذف ناعم موحّد بسبب إلزامي + حواجز لكل نوع ═══
+create or replace function public.pc_entity_delete(p_type text, p_id uuid, p_reason text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_proj uuid; v_title text; v_status text; v_num numeric;
+begin
+  if coalesce(btrim(p_reason),'') = '' then raise exception 'reason_required'; end if;
+
+  -- الأنواع ذات المنطق الخاص تُفوَّض لدوالها (حواجزها قائمة).
+  if p_type = 'expense'  then perform public.pc_expense_delete(p_id, p_reason);  return jsonb_build_object('ok', true); end if;
+  if p_type = 'schedule' then perform public.pc_schedule_delete(p_id, p_reason); return jsonb_build_object('ok', true); end if;
+
+  if p_type = 'task' then
+    select project_id, title into v_proj, v_title from public.project_tasks where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    with recursive sub(id) as (
+      select id from public.project_tasks where id = p_id
+      union all
+      select t.id from public.project_tasks t join sub on t.parent_task_id = sub.id
+    )
+    update public.project_tasks set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500), updated_at = now()
+      where id in (select id from sub) and is_deleted = false;
+  elsif p_type = 'comment' then
+    select t.project_id, left(c.body,80) into v_proj, v_title
+      from public.task_comments c join public.project_tasks t on t.id = c.task_id
+      where c.id = p_id and c.is_deleted = false;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.task_comments set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'meeting' then
+    select project_id, title into v_proj, v_title from public.project_meetings where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_meetings set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'risk' then
+    select project_id, title into v_proj, v_title from public.project_risks where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_risks set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'location' then
+    select project_id, name into v_proj, v_title from public.project_locations where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_locations set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'cost' then
+    select project_id, coalesce(description, category) into v_proj, v_title from public.project_costs where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_costs set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'shoot' then
+    select project_id, title, status into v_proj, v_title, v_status
+      from public.project_shoot_sessions where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    -- جلسة بدأت أو اكتملت لا تُحذف — تُلغى رسميًا أولًا (سجل تاريخي).
+    if v_status in ('in_progress','completed') then raise exception 'must_cancel_first'; end if;
+    update public.project_shoot_sessions set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500), updated_at = now() where id = p_id;
+  elsif p_type = 'deliverable' then
+    select project_id, title, status into v_proj, v_title, v_status from public.deliverables where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    -- مخرَج معتمد/مُسلَّم لا يُحذف — يُؤرشف.
+    if v_status in ('approved','final_delivered') then raise exception 'archive_instead'; end if;
+    update public.deliverables set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'call_sheet' then
+    select project_id, coalesce(title,'Call Sheet'), status into v_proj, v_title, v_status
+      from public.project_call_sheets where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    -- نسخة مُرسلة سجلّ تشغيلي — لا تُحذف.
+    if v_status = 'sent' then raise exception 'sent_locked'; end if;
+    update public.project_call_sheets set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'revenue' then
+    select project_id, name, collected_amount into v_proj, v_title, v_num
+      from public.project_revenue_schedule where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    if not public.pc_can_see_finance(v_proj) then raise exception 'not authorized'; end if;
+    -- دفعة حُصِّل منها شيء = قيد مالي — لا تُحذف.
+    if coalesce(v_num,0) > 0 then raise exception 'cannot_delete_collected'; end if;
+    update public.project_revenue_schedule set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  elsif p_type = 'member' then
+    select project_id into v_proj from public.project_members where id = p_id and is_deleted = false for update;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    v_title := 'عضو فريق';
+    update public.project_members set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+      delete_reason = left(btrim(p_reason),500) where id = p_id;
+  else
+    raise exception 'bad_entity_type';
+  end if;
+
+  perform public.pc_log(v_proj, 'entity_deleted', p_type, p_id,
+    jsonb_build_object('title', v_title, 'reason', left(btrim(p_reason),500)));
+  return jsonb_build_object('ok', true, 'entity', p_type, 'title', v_title);
+end $$;
+
+-- ═══ B2.3 استعادة موحّدة ═══
+create or replace function public.pc_entity_restore(p_type text, p_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_proj uuid; v_title text;
+begin
+  if p_type = 'schedule' then perform public.pc_schedule_restore(p_id); return jsonb_build_object('ok', true); end if;
+
+  if p_type = 'task' then
+    select project_id, title into v_proj, v_title from public.project_tasks where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    -- الحذف شجري (مهمة + فروعها) — فالاستعادة كذلك.
+    with recursive sub(id) as (
+      select id from public.project_tasks where id = p_id
+      union all
+      select t.id from public.project_tasks t join sub on t.parent_task_id = sub.id
+    )
+    update public.project_tasks set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null,
+      updated_at = now() where id in (select id from sub) and is_deleted = true;
+  elsif p_type = 'comment' then
+    select t.project_id, left(c.body,80) into v_proj, v_title
+      from public.task_comments c join public.project_tasks t on t.id = c.task_id where c.id = p_id and c.is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.task_comments set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'meeting' then
+    select project_id, title into v_proj, v_title from public.project_meetings where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_meetings set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'risk' then
+    select project_id, title into v_proj, v_title from public.project_risks where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_risks set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'location' then
+    select project_id, name into v_proj, v_title from public.project_locations where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_locations set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'cost' then
+    select project_id, coalesce(description, category) into v_proj, v_title from public.project_costs where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_costs set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'shoot' then
+    select project_id, title into v_proj, v_title from public.project_shoot_sessions where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_shoot_sessions set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null,
+      updated_at = now() where id = p_id;
+  elsif p_type = 'deliverable' then
+    select project_id, title into v_proj, v_title from public.deliverables where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.deliverables set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'call_sheet' then
+    select project_id, coalesce(title,'Call Sheet') into v_proj, v_title from public.project_call_sheets where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_call_sheets set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'revenue' then
+    select project_id, name into v_proj, v_title from public.project_revenue_schedule where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    if not public.pc_can_see_finance(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_revenue_schedule set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'expense' then
+    select project_id, coalesce(description, category) into v_proj, v_title from public.project_expenses where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.pc_can_see_finance(v_proj) then raise exception 'not authorized'; end if;
+    update public.project_expenses set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  elsif p_type = 'member' then
+    select project_id into v_proj from public.project_members where id = p_id and is_deleted = true;
+    if v_proj is null then raise exception 'not_found'; end if;
+    if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+    v_title := 'عضو فريق';
+    update public.project_members set is_deleted = false, deleted_at = null, deleted_by = null, delete_reason = null where id = p_id;
+  else
+    raise exception 'bad_entity_type';
+  end if;
+
+  perform public.pc_log(v_proj, 'entity_restored', p_type, p_id, jsonb_build_object('title', v_title));
+  return jsonb_build_object('ok', true, 'entity', p_type, 'title', v_title);
+end $$;
+
+-- ═══ B2.4 مركز المحذوفات — لكل مشروع أو شامل (للمديرين) ═══
+create or replace function public.project_core_trash(p_project uuid default null)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  if p_project is not null then
+    if not (public.can_manage_projects() or public.can_edit_project(p_project)) then raise exception 'not authorized'; end if;
+  else
+    if not public.can_manage_projects() then raise exception 'not authorized'; end if;
+  end if;
+  select coalesce(jsonb_agg(row order by (row->>'deleted_at') desc nulls last), '[]'::jsonb) into v from (
+    select * from (
+      select jsonb_build_object('entity','task','id',x.id,'title',x.title,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason) as row
+      from public.project_tasks x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','meeting','id',x.id,'title',x.title,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_meetings x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','risk','id',x.id,'title',x.title,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_risks x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','location','id',x.id,'title',x.name,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_locations x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','cost','id',x.id,'title',coalesce(x.description,x.category),'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_costs x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','shoot','id',x.id,'title',x.title,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_shoot_sessions x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','deliverable','id',x.id,'title',x.title,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.deliverables x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','call_sheet','id',x.id,'title',coalesce(x.title,'Call Sheet'),'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_call_sheets x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','schedule','id',x.id,'title',x.title,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_schedule_items x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','expense','id',x.id,'title',coalesce(x.description,x.category),'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_expenses x
+      where x.is_deleted = true and (p_project is null or x.project_id = p_project) and public.pc_can_see_finance(x.project_id)
+      union all
+      select jsonb_build_object('entity','revenue','id',x.id,'title',x.name,'project_id',x.project_id,
+        'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_revenue_schedule x
+      where x.is_deleted = true and (p_project is null or x.project_id = p_project) and public.pc_can_see_finance(x.project_id)
+    ) u
+    where p_project is not null or public.pc_can_read_project((u.row->>'project_id')::uuid)
+    limit 500
+  ) rows(row);
+  -- إثراء: اسم المشروع + اسم منفّذ الحذف.
+  select coalesce(jsonb_agg(
+    r || jsonb_build_object(
+      'project_name', (select p.project_name from public.projects p where p.id = (r->>'project_id')::uuid),
+      'deleted_by_name', (select pr.full_name from public.profiles pr where pr.id = (r->>'deleted_by')::uuid)
+    ) order by (r->>'deleted_at') desc nulls last), '[]'::jsonb)
+  into v from jsonb_array_elements(v) as t(r);
+  return jsonb_build_object('items', v);
+end $$;
+
+-- ═══ B2.5 قفل تفاؤلي + Audit قبل/بعد لتحديث المهام (نفس التوقيع — لا Overload) ═══
+create or replace function public.pc_task_update(p_task uuid, p_data jsonb)
+returns public.project_tasks language plpgsql security definer set search_path = public as $$
+declare r public.project_tasks; v_old public.project_tasks; v_new_assignee uuid; v_exp timestamptz;
+begin
+  select * into v_old from public.project_tasks where id = p_task and is_deleted = false for update;
+  if v_old.id is null then raise exception 'not_found'; end if;
+  if not public.can_manage_projects() and not public.can_edit_project(v_old.project_id) then raise exception 'not authorized'; end if;
+  -- قفل تفاؤلي اختياري: المرسل يمرّر expected_updated_at داخل p_data.
+  v_exp := nullif(p_data->>'expected_updated_at','')::timestamptz;
+  if v_exp is not null and date_trunc('milliseconds', v_old.updated_at) <> date_trunc('milliseconds', v_exp) then
+    raise exception 'stale_update';
+  end if;
+  v_new_assignee := coalesce(nullif(p_data->>'assignee_id','')::uuid, v_old.assignee_id);
+  update public.project_tasks set
+    title          = coalesce(nullif(p_data->>'title',''), title),
+    description     = coalesce(nullif(p_data->>'description',''), description),
+    status          = coalesce(nullif(p_data->>'status',''), status),
+    priority        = coalesce(nullif(p_data->>'priority',''), priority),
+    assignee_id     = v_new_assignee,
+    start_date      = coalesce(nullif(p_data->>'start_date','')::date, start_date),
+    due_date        = coalesce(nullif(p_data->>'due_date','')::date, due_date),
+    estimated_hours = coalesce(nullif(p_data->>'estimated_hours','')::numeric, estimated_hours),
+    actual_hours    = coalesce(nullif(p_data->>'actual_hours','')::numeric, actual_hours),
+    progress_pct    = coalesce(nullif(p_data->>'progress_pct','')::int, progress_pct),
+    labels          = case when jsonb_typeof(p_data->'labels')='array'
+                        then coalesce((select array_agg(x) from jsonb_array_elements_text(p_data->'labels') x), labels) else labels end,
+    sort_order      = coalesce(nullif(p_data->>'sort_order','')::int, sort_order),
+    completed_at    = case when coalesce(nullif(p_data->>'status',''), status) = 'done' and completed_at is null then now()
+                           when coalesce(nullif(p_data->>'status',''), status) <> 'done' then null else completed_at end,
+    updated_at = now()
+    where id = p_task returning * into r;
+  -- Audit قبل/بعد للحقول الجوهرية.
+  perform public.pc_log(v_old.project_id, 'task_updated', 'task', p_task, jsonb_build_object(
+    'patch', p_data - 'labels' - 'expected_updated_at',
+    'before', jsonb_build_object('status', v_old.status, 'assignee', v_old.assignee_id, 'start', v_old.start_date, 'due', v_old.due_date, 'title', v_old.title),
+    'after',  jsonb_build_object('status', r.status, 'assignee', r.assignee_id, 'start', r.start_date, 'due', r.due_date, 'title', r.title)));
+  if v_new_assignee is distinct from v_old.assignee_id and v_new_assignee is not null then
+    insert into public.task_followers(task_id, user_id) values (p_task, v_new_assignee) on conflict do nothing;
+    perform public.pc_notify_user(v_new_assignee, 'project_note_new', 'task', p_task,
+      'أُسندت إليك مهمة: '||r.title, 'Task assigned to you: '||r.title);
+  end if;
+  if r.status is distinct from v_old.status then
+    perform public.pc_notify_team(v_old.project_id, 'project_note_new', 'task', p_task,
+      'تحدّثت حالة مهمة: '||r.title, 'Task status changed: '||r.title, auth.uid());
+  end if;
+  return r;
+end $$;
+
+-- ═══ B2.6 Grants (دوال Batch 2) ═══
+do $g2$
+declare f text;
+begin
+  foreach f in array array[
+    'public.pc_entity_delete(text,uuid,text)',
+    'public.pc_entity_restore(text,uuid)',
+    'public.project_core_trash(uuid)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $g2$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -485,6 +831,14 @@ begin
   if not (select relrowsecurity from pg_class where oid = 'public.project_schedule_dependencies'::regclass) then miss := miss || ' RLS(project_schedule_dependencies)'; end if;
   if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and p.proname = 'pc_schedule_upsert') <> 1 then miss := miss || ' overload(pc_schedule_upsert)'; end if;
+  -- Batch 2
+  if to_regprocedure('public.pc_entity_delete(text,uuid,text)')  is null then miss := miss || ' pc_entity_delete'; end if;
+  if to_regprocedure('public.pc_entity_restore(text,uuid)')      is null then miss := miss || ' pc_entity_restore'; end if;
+  if to_regprocedure('public.project_core_trash(uuid)')          is null then miss := miss || ' project_core_trash'; end if;
+  if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'pc_task_update') <> 1 then miss := miss || ' overload(pc_task_update)'; end if;
+  if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_tasks' and column_name='delete_reason') = 0
+    then miss := miss || ' col(project_tasks.delete_reason)'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;
