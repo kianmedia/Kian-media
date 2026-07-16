@@ -3,7 +3,7 @@
 // كل الكتابات عبر SECURITY DEFINER RPCs؛ القراءات عبر PostgREST (RLS-scoped).
 // يعتمد على docs/project_core_FINAL_RUNME.sql. لا supabase-js.
 // ════════════════════════════════════════════════════════════════════════════
-import { pget, prpc, enc, type Result } from "@/lib/portal/client";
+import { pget, prpc, ppost, ppatch, enc, currentUserId, type Result } from "@/lib/portal/client";
 
 // ─── الثوابت/الأنواع ───
 export const PC_STAGES = [
@@ -231,6 +231,67 @@ export interface StageRequirements { ok: boolean; missing: StageReqItem[] }
 export const pcStageRequirements = (projectId: string, target: string) =>
   prpc<StageRequirements>("project_core_stage_requirements", { p_project_id: projectId, p_target: target });
 
+// ─── التقدّم التلقائي ───
+export interface ProgressInfo { auto: number; manual: number | null; final: number }
+export const pcProgress = (projectId: string) => prpc<ProgressInfo>("project_core_progress", { p_project: projectId });
+export const pcSetProgress = (projectId: string, pct: number | null, reason?: string) =>
+  prpc<ProgressInfo>("project_core_set_progress", { p_project: projectId, p_pct: pct, p_reason: reason ?? null });
+
+// ─── التقويم (مُثرّى) ───
+export interface CalTask { id: string; project_id: string; title: string; date: string; status: string; priority: string }
+export interface CalMeeting { id: string; project_id: string; title: string; date: string; at: string }
+export interface CalShoot { id: string; project_id: string; title: string; date: string; call_time: string | null; status: string }
+export interface CalMilestone { project_id: string; title: string | null; date: string; kind: "due" | "delivery" }
+export interface CalendarData { tasks: CalTask[]; meetings: CalMeeting[]; shoots: CalShoot[]; milestones: CalMilestone[] }
+export const pcCalendarData = (from: string, to: string, projectId?: string) =>
+  prpc<CalendarData>("project_core_calendar", { p_from: from, p_to: to, p_project: projectId ?? null });
+
+// ─── مخطّط المهام (Gantt) ───
+export interface GraphTask { id: string; title: string; status: PcTaskStatus; priority: PcPriority; start_date: string | null; due_date: string | null; progress: number; assignee_id: string | null; parent_task_id: string | null }
+export interface GraphDep { task_id: string; depends_on: string }
+export interface TaskGraph { tasks: GraphTask[]; deps: GraphDep[] }
+export const pcTaskGraph = (projectId: string) => prpc<TaskGraph>("project_core_task_graph", { p_project: projectId });
+export const pcListTaskDeps = (taskId: string) =>
+  pget<{ task_id: string; depends_on_task_id: string }[]>(`task_dependencies?task_id=eq.${enc(taskId)}&select=task_id,depends_on_task_id`);
+
+// ─── القوالب ───
+export interface ProjectTemplate { id: string; name: string; description: string | null; spec: Record<string, unknown>; is_active: boolean; created_at: string }
+export const pcListTemplates = () => pget<ProjectTemplate[]>(`project_templates?is_active=eq.true&select=*&order=name.asc`);
+export const pcCreateTemplate = (v: { name: string; description?: string; spec?: Record<string, unknown> }) =>
+  ppost<ProjectTemplate[]>("project_templates", { name: v.name, description: v.description ?? null, spec: v.spec ?? {}, created_by: currentUserId() });
+export const pcUpdateTemplate = (id: string, patch: Record<string, unknown>) =>
+  ppatch<ProjectTemplate[]>(`project_templates?id=eq.${enc(id)}`, patch);
+export const pcArchiveTemplate = (id: string) => ppatch<ProjectTemplate[]>(`project_templates?id=eq.${enc(id)}`, { is_active: false });
+export const pcApplyTemplate = (projectId: string, templateId: string) =>
+  prpc<{ ok: boolean; tasks: number }>("project_core_apply_template", { p_project: projectId, p_template: templateId });
+
+// ─── إصدارات المخرجات ───
+export interface DeliverableVersion { id: string; deliverable_id: string; version: number; preview_url: string | null; note: string | null; created_by: string | null; created_at: string }
+export const pcListDeliverableVersions = (deliverableId: string) =>
+  pget<DeliverableVersion[]>(`project_deliverable_versions?deliverable_id=eq.${enc(deliverableId)}&select=*&order=version.desc`);
+export const pcDeliverableVersionAdd = (deliverableId: string, data: Record<string, unknown>) =>
+  prpc<DeliverableVersion>("project_core_deliverable_version_add", { p_deliverable: deliverableId, p_data: data });
+
+// ─── تحويل بند اجتماع إلى مهمة ───
+export const pcMeetingToTask = (meetingId: string, title: string, assignee?: string, due?: string) =>
+  prpc<PcTask>("project_core_meeting_to_task", { p_meeting: meetingId, p_title: title, p_assignee: assignee ?? null, p_due: due ?? null });
+
+// ─── المواقع ───
+export interface ProjectLocation { id: string; project_id: string; name: string; address: string | null; lat: number | null; lng: number | null; note: string | null; created_at: string }
+export const pcListLocations = (projectId: string) =>
+  pget<ProjectLocation[]>(`project_locations?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=created_at.desc`);
+export const pcLocationCreate = (projectId: string, v: Record<string, unknown>) =>
+  ppost<ProjectLocation[]>("project_locations", { project_id: projectId, ...v });
+export const pcLocationArchive = (id: string) => ppatch<ProjectLocation[]>(`project_locations?id=eq.${enc(id)}`, { is_deleted: true });
+
+// ─── الوسوم ───
+export interface Tag { id: string; name: string; color: string }
+export const pcListTags = () => pget<Tag[]>(`project_tags?select=id,name,color&order=name.asc`);
+export const pcTagCreate = (name: string, color?: string) => ppost<Tag[]>("project_tags", { name, color: color ?? "#6b7280" });
+export const pcListProjectTags = (projectId: string) =>
+  pget<{ tag_id: string; project_id: string }[]>(`project_tag_map?project_id=eq.${enc(projectId)}&select=tag_id,project_id`);
+export const pcTagLink = (projectId: string, tagId: string) => ppost<unknown>("project_tag_map", { project_id: projectId, tag_id: tagId });
+
 // خريطة رسائل الأخطاء الشائعة → عربي.
 export function pcErr(e: string): string {
   if (/could not find|schema cache|PGRST\d|does not exist|function .* does not/i.test(e)) return "منصة المشاريع غير مطبّقة في قاعدة البيانات — شغّل project_core_FINAL_RUNME.sql.";
@@ -248,6 +309,11 @@ export function pcErr(e: string): string {
   if (/client_required|bad_client/.test(e)) return "اختر عميلًا صحيحًا للمشروع.";
   if (/stale_update/.test(e)) return "عُدّل المشروع من مستخدم آخر — أعد التحميل ثم احفظ.";
   if (/active_custody/.test(e)) return "لا يمكن الحذف: توجد عهدة/معدات نشطة مرتبطة بالمشروع.";
+  if (/already_applied/.test(e)) return "هذا القالب مطبَّق على المشروع مسبقًا.";
+  if (/template_not_found/.test(e)) return "القالب غير موجود أو غير مفعّل.";
+  if (/duplicate_version/.test(e)) return "رقم النسخة موجود مسبقًا.";
+  if (/already_created/.test(e)) return "أُنشئت مهمة لهذا البند مسبقًا.";
+  if (/bad_progress/.test(e)) return "نسبة التقدّم يجب أن تكون بين 0 و100.";
   if (/not_found/.test(e)) return "العنصر غير موجود.";
   if (/cross_project_dependency|self_dependency/.test(e)) return "اعتمادية غير صالحة.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

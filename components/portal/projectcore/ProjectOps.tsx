@@ -10,12 +10,15 @@ import {
   PC_STAGES, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, TASK_STATUS_LABELS, APPROVAL_STATUS_LABELS,
   pcEnsure, pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate, pcTaskDelete,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcListTaskComments, pcTaskComment,
+  pcTaskSetDependency, pcListTaskDeps,
   pcListApprovals, pcApprovalRequest, pcApprovalDecide, pcListActivity, pcStageRequirements, pcErr,
   type StageReqItem,
   type ProjectCore, type PcTask, type PcStage, type PcPriority, type PcTaskStatus,
   type TaskChecklistItem, type TaskComment, type ProjectApproval, type ProjectActivity, type PcApprovalKind,
 } from "@/lib/portal/projectCore";
 import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
+import { CalendarTab, GanttTab, LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
+import { pcProgress, pcSetProgress, type ProgressInfo } from "@/lib/portal/projectCore";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const inp = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -24,12 +27,13 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "tasks" | "team" | "deliverables" | "approvals" | "costs" | "risks" | "meetings" | "shoots" | "timeline" | "activity";
+type TabKey = "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
-  { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "team", ar: "الفريق", en: "Team" },
-  { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
+  { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
+  { k: "team", ar: "الفريق", en: "Team" }, { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
   { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
   { k: "meetings", ar: "الاجتماعات", en: "Meetings" }, { k: "shoots", ar: "جلسات التصوير", en: "Shoots" },
+  { k: "locations", ar: "المواقع", en: "Locations" }, { k: "tags", ar: "الوسوم", en: "Tags" },
   { k: "timeline", ar: "الجدول الزمني", en: "Timeline" }, { k: "activity", ar: "النشاط", en: "Activity" },
 ];
 
@@ -42,6 +46,20 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
+  const [prog, setProg] = useState<ProgressInfo | null>(null);
+  const loadProg = useCallback(async () => { const r = await pcProgress(projectId); if (r.ok) setProg(r.data); }, [projectId]);
+  useEffect(() => { void loadProg(); }, [loadProg]);
+  async function overrideProgress() {
+    const pct = window.prompt(t({ ar: "نسبة التقدّم اليدوية 0-100 (فارغ = إلغاء التجاوز والعودة للتلقائي):", en: "Manual progress 0-100 (blank = clear override):" }), String(prog?.manual ?? ""));
+    if (pct === null) return;
+    const val = pct.trim() === "" ? null : Math.round(Number(pct));
+    if (val !== null && (isNaN(val) || val < 0 || val > 100)) { flash(t({ ar: "قيمة غير صحيحة (0-100).", en: "Invalid value (0-100)." })); return; }
+    let reason: string | undefined;
+    if (val !== null) { const rs = window.prompt(t({ ar: "سبب التجاوز (إلزامي):", en: "Override reason (required):" })); if (rs === null) return; if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; } reason = rs.trim(); }
+    const r = await pcSetProgress(projectId, val, reason);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setProg(r.data); void loadCore(); flash(t({ ar: "تم تحديث التقدّم.", en: "Progress updated." }));
+  }
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); };
 
@@ -96,9 +114,9 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
     <div className="space-y-4">
       {/* دورة الحياة */}
       <section className={`${card} p-4`}>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-white">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
-          <span className="text-[11px] text-stone-500 font-mono truncate max-w-[50%]" dir="auto">{projectName}</span>
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <h3 className="text-sm font-semibold text-white shrink-0">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
+          {canManage && <ApplyTemplateButton projectId={projectId} flash={flash} onApplied={() => { flash(t({ ar: "طُبِّق القالب — راجع تبويب المهام.", en: "Template applied — see Tasks." })); void loadProg(); }} />}
         </div>
         <div className="flex flex-wrap gap-1.5">
           {PC_STAGES.map((s, i) => (
@@ -128,9 +146,16 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
             <input type="date" disabled={!canManage} defaultValue={core?.delivery_date ?? ""} onBlur={(e) => e.target.value !== (core?.delivery_date ?? "") && void saveMeta({ delivery_date: e.target.value })} className={`${inp} w-full`} style={{ colorScheme: "dark" }} /></label>
           {caps.canSeeFinancials && <label className="space-y-1"><span className="text-stone-500">{t({ ar: "الميزانية", en: "Budget" })}</span>
             <input type="number" min={0} disabled={!canManage} defaultValue={core?.budget_amount ?? ""} onBlur={(e) => Number(e.target.value || 0) !== (core?.budget_amount ?? 0) && void saveMeta({ budget_amount: e.target.value })} className={`${inp} w-full`} placeholder="SAR" /></label>}
-          <label className="space-y-1"><span className="text-stone-500">{t({ ar: "التقدّم %", en: "Progress %" })}</span>
-            <input type="number" min={0} max={100} disabled={!canManage} defaultValue={core?.progress_pct ?? 0} onBlur={(e) => Number(e.target.value || 0) !== (core?.progress_pct ?? 0) && void saveMeta({ progress_pct: e.target.value })} className={`${inp} w-full`} /></label>
         </div>
+        {prog && (
+          <div className="mt-3 border-t border-stone-800 pt-3">
+            <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
+              <span className="text-[11px] text-stone-500">{t({ ar: "التقدّم", en: "Progress" })}: <span className="text-stone-200 font-semibold">{prog.final}%</span>{prog.manual != null && <span className="text-amber-400"> ({t({ ar: "يدوي", en: "manual" })})</span>} · {t({ ar: "تلقائي", en: "auto" })} {prog.auto}%</span>
+              {canManage && <button onClick={() => void overrideProgress()} className="text-[11px] text-sky-400 hover:text-sky-300">{prog.manual != null ? t({ ar: "تعديل/إلغاء التجاوز", en: "Edit/clear override" }) : t({ ar: "تجاوز يدوي", en: "Override" })}</button>}
+            </div>
+            <div className="h-2 bg-stone-800 rounded overflow-hidden"><div className="h-full bg-red-600" style={{ width: `${prog.final}%` }} /></div>
+          </div>
+        )}
       </section>
 
       {/* تبويبات */}
@@ -143,8 +168,12 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
       </div>
 
       {tab === "tasks" && <TasksTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "gantt" && <GanttTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "calendar" && <CalendarTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "locations" && <LocationsTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "tags" && <TagsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "team" && <TeamTab projectId={projectId} canManage={canManage} flash={flash} />}
-      {tab === "deliverables" && <DeliverablesTab projectId={projectId} />}
+      {tab === "deliverables" && <DeliverablesTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
       {tab === "costs" && <CostsTab projectId={projectId} flash={flash} />}
       {tab === "risks" && <RisksTab projectId={projectId} canManage={canManage} flash={flash} />}
@@ -259,15 +288,21 @@ function TaskDetail({ task, canManage, flash, onChanged }: { task: PcTask; canMa
   const { t } = useI18n();
   const [checklist, setChecklist] = useState<TaskChecklistItem[]>([]);
   const [comments, setComments] = useState<TaskComment[]>([]);
+  const [deps, setDeps] = useState<string[]>([]);
+  const [siblings, setSiblings] = useState<PcTask[]>([]);
+  const [depPick, setDepPick] = useState("");
   const [newItem, setNewItem] = useState("");
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [c, m] = await Promise.all([pcListChecklist(task.id), pcListTaskComments(task.id)]);
+    const [c, m, d, s] = await Promise.all([pcListChecklist(task.id), pcListTaskComments(task.id), pcListTaskDeps(task.id), pcListTasks(task.project_id)]);
     if (c.ok) setChecklist(c.data);
     if (m.ok) setComments(m.data);
-  }, [task.id]);
+    if (d.ok) setDeps(d.data.map((x) => x.depends_on_task_id));
+    if (s.ok) setSiblings(s.data.filter((x) => x.id !== task.id));
+  }, [task.id, task.project_id]);
+  async function toggleDep(depId: string, on: boolean) { const r = await pcTaskSetDependency(task.id, depId, on); if (!r.ok) { flash(pcErr(r.error)); return; } setDepPick(""); await load(); }
   useEffect(() => { void load(); }, [load]);
 
   async function addItem() { if (!newItem.trim()) return; setBusy(true); const r = await pcChecklistAdd(task.id, newItem.trim()); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setNewItem(""); await load(); }
@@ -290,6 +325,24 @@ function TaskDetail({ task, canManage, flash, onChanged }: { task: PcTask; canMa
             <div className="flex gap-1.5 pt-1">
               <input value={newItem} onChange={(e) => setNewItem(e.target.value)} placeholder={t({ ar: "عنصر…", en: "Item…" })} className={`${inp} flex-1 py-1`} onKeyDown={(e) => { if (e.key === "Enter") void addItem(); }} />
               <button disabled={busy} onClick={() => void addItem()} className={`${btnGhost} px-2`}>+</button>
+            </div>
+          )}
+        </div>
+      </div>
+      <div>
+        <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "الاعتماديات (يعتمد على)", en: "Dependencies (depends on)" })}</div>
+        <div className="space-y-1">
+          {deps.map((id) => { const dt = siblings.find((s) => s.id === id); return (
+            <div key={id} className="flex items-center gap-2 text-stone-300"><span className="flex-1 truncate">{dt?.title ?? id.slice(0, 6)}{dt && dt.status !== "done" && dt.status !== "cancelled" && <span className="text-amber-400"> ⏳</span>}</span>{canManage && <button onClick={() => void toggleDep(id, false)} className="text-stone-600 hover:text-red-400">✕</button>}</div>
+          ); })}
+          {deps.length === 0 && <span className="text-stone-600">{t({ ar: "لا اعتماديات.", en: "None." })}</span>}
+          {canManage && siblings.length > 0 && (
+            <div className="flex gap-1.5 pt-1">
+              <select value={depPick} onChange={(e) => setDepPick(e.target.value)} className={`${inp} flex-1 py-1`} style={{ colorScheme: "dark" }}>
+                <option value="">{t({ ar: "— أضف اعتمادية —", en: "— add dependency —" })}</option>
+                {siblings.filter((s) => !deps.includes(s.id)).map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+              </select>
+              <button disabled={!depPick} onClick={() => depPick && void toggleDep(depPick, true)} className={`${btnGhost} px-2`}>+</button>
             </div>
           )}
         </div>

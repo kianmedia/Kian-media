@@ -11,9 +11,10 @@ import {
   pcListMembers, pcMemberAdd, pcMemberRemove, pcListStaff, pcListDeliverables,
   pcListCosts, pcCostAdd, pcCostDelete, pcListRisks, pcRiskUpsert,
   pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory,
+  pcListDeliverableVersions, pcDeliverableVersionAdd, pcMeetingToTask,
   PC_STAGE_LABELS, SEVERITY_LABELS, RISK_STATUS_LABELS, SHOOT_STATUS_LABELS, DLV_LABEL, pcErr,
   type ProjectMemberRow, type StaffLite, type Deliverable, type ProjectCost, type ProjectRisk,
-  type ProjectMeeting, type ShootSession, type StatusHistoryRow, type PcStage,
+  type ProjectMeeting, type ShootSession, type StatusHistoryRow, type PcStage, type DeliverableVersion,
 } from "@/lib/portal/projectCore";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
@@ -67,20 +68,52 @@ export function TeamTab({ projectId, canManage, flash }: { projectId: string; ca
   );
 }
 
-// ─── المخرجات (قراءة من نظام المخرجات الحالي) ───
-export function DeliverablesTab({ projectId }: { projectId: string }) {
+// ─── المخرجات (من نظام المخرجات الحالي) + إدارة الإصدارات ───
+export function DeliverablesTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: Flash }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<Deliverable[]>([]);
+  const [open, setOpen] = useState<string | null>(null);
   useEffect(() => { void pcListDeliverables(projectId).then((r) => { if (r.ok) setRows(r.data); }); }, [projectId]);
-  if (rows.length === 0) return <p className="text-xs text-stone-500">{t({ ar: "لا توجد مخرجات بعد. تُدار المخرجات من صفحة المشروع في «المشاريع».", en: "No deliverables yet. Managed from the Projects page." })}</p>;
+  if (rows.length === 0) return <p className="text-xs text-stone-500">{t({ ar: "لا توجد مخرجات بعد. تُنشأ المخرجات من صفحة المشروع في «المشاريع»؛ وتُدار إصداراتها هنا.", en: "No deliverables yet — created from the Projects page; versions managed here." })}</p>;
   return (
     <div className="space-y-1.5">
       {rows.map((d) => (
-        <div key={d.id} className={`${card} p-3 flex items-center justify-between gap-2`}>
-          <div className="min-w-0"><div className="text-sm text-stone-200 truncate">{d.title}</div><div className="text-[11px] text-stone-500">v{d.version} · {d.type}</div></div>
-          <span className="text-[11px] px-2 py-0.5 rounded bg-stone-800 text-stone-300 shrink-0">{t(DLV_LABEL[d.status] ?? { ar: d.status, en: d.status })}</span>
+        <div key={d.id} className={`${card} p-3`}>
+          <div className="flex items-center justify-between gap-2">
+            <button onClick={() => setOpen(open === d.id ? null : d.id)} className="min-w-0 text-right flex-1"><div className="text-sm text-stone-200 truncate">{d.title}</div><div className="text-[11px] text-stone-500">v{d.version} · {d.type}</div></button>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-stone-800 text-stone-300 shrink-0">{t(DLV_LABEL[d.status] ?? { ar: d.status, en: d.status })}</span>
+          </div>
+          {open === d.id && <DeliverableVersions deliverableId={d.id} canManage={canManage} flash={flash} />}
         </div>
       ))}
+    </div>
+  );
+}
+
+function DeliverableVersions({ deliverableId, canManage, flash }: { deliverableId: string; canManage: boolean; flash: Flash }) {
+  const { t } = useI18n();
+  const [vers, setVers] = useState<DeliverableVersion[]>([]);
+  const [url, setUrl] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => { const r = await pcListDeliverableVersions(deliverableId); if (r.ok) setVers(r.data); }, [deliverableId]);
+  useEffect(() => { void load(); }, [load]);
+  async function add() { if (busy) return; setBusy(true); const r = await pcDeliverableVersionAdd(deliverableId, { preview_url: url.trim() || undefined, note: note.trim() || undefined }); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setUrl(""); setNote(""); await load(); }
+  return (
+    <div className="mt-2 pt-2 border-t border-stone-800 space-y-2 text-xs">
+      <div className="text-[11px] text-stone-500">{t({ ar: "الإصدارات", en: "Versions" })}</div>
+      {vers.map((v) => (
+        <div key={v.id} className="bg-stone-950 border border-stone-800 rounded p-2 flex items-center justify-between gap-2">
+          <div className="min-w-0"><span className="text-stone-200">v{v.version}</span>{v.note && <span className="mr-2 text-stone-500">· {v.note}</span>}</div>
+          {v.preview_url && <a href={v.preview_url} target="_blank" rel="noreferrer" className="text-sky-400 shrink-0" dir="ltr">{t({ ar: "معاينة", en: "Preview" })}</a>}
+        </div>
+      ))}
+      {vers.length === 0 && <p className="text-stone-600">{t({ ar: "لا إصدارات.", en: "No versions." })}</p>}
+      {canManage && (
+        <div className="flex flex-wrap gap-1.5">
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t({ ar: "رابط المعاينة", en: "Preview URL" })} className={`${inp} flex-1 min-w-[120px] py-1`} dir="ltr" />
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t({ ar: "ملاحظة", en: "Note" })} className={`${inp} flex-1 min-w-[100px] py-1`} />
+          <button disabled={busy || (!url.trim() && !note.trim())} onClick={() => void add()} className={`${btnRed} px-3 py-1`}>{t({ ar: "+ نسخة", en: "+ Version" })}</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -163,6 +196,16 @@ export function MeetingsTab({ projectId, canManage, flash }: { projectId: string
   const load = useCallback(async () => { const r = await pcListMeetings(projectId); if (r.ok) setRows(r.data); }, [projectId]);
   useEffect(() => { void load(); }, [load]);
   async function add() { if (busy || !title.trim()) return; setBusy(true); const r = await pcMeetingUpsert(projectId, { title: title.trim(), scheduled_at: at || undefined }); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setTitle(""); setAt(""); await load(); }
+  async function toTask(m: ProjectMeeting) {
+    if (busy) return;
+    const tl = window.prompt(t({ ar: "بند العمل → عنوان المهمة:", en: "Action item → task title:" }), m.title);
+    if (!tl || !tl.trim()) return;
+    setBusy(true);
+    const r = await pcMeetingToTask(m.id, tl.trim());
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "أُنشئت مهمة مرتبطة بالاجتماع.", en: "Task created from meeting." }));
+  }
   return (
     <div className="space-y-3">
       {canManage && (
@@ -174,9 +217,9 @@ export function MeetingsTab({ projectId, canManage, flash }: { projectId: string
       )}
       {rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد اجتماعات.", en: "No meetings." })}</p>}
       {rows.map((m) => (
-        <div key={m.id} className={`${card} p-3 text-xs flex items-center justify-between`}>
-          <span className="text-stone-200">{m.title}</span>
-          {m.scheduled_at && <span className="text-stone-500" dir="ltr">{new Date(m.scheduled_at).toLocaleString("ar")}</span>}
+        <div key={m.id} className={`${card} p-3 text-xs flex items-center justify-between gap-2`}>
+          <span className="text-stone-200 min-w-0 truncate">{m.title}{m.scheduled_at && <span className="mr-2 text-stone-500" dir="ltr">{new Date(m.scheduled_at).toLocaleString("ar")}</span>}</span>
+          {canManage && <button onClick={() => void toTask(m)} className="text-[11px] text-sky-400 hover:text-sky-300 shrink-0">{t({ ar: "→ مهمة", en: "→ Task" })}</button>}
         </div>
       ))}
     </div>
