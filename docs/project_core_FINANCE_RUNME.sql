@@ -1,31 +1,47 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- PROJECT CORE — BATCH 5: محاسب المشروع والرقابة المالية
+-- PROJECT CORE — BATCH 5: محاسب المشروع والرقابة المالية  (نسخة مُصحَّحة الترتيب)
 -- يُشغَّل مرة واحدة فوق ملفات Project Core السابقة المطبَّقة. Idempotent · Production-safe
 -- · لا حذف بيانات · لا نظام فواتير موازٍ (يربط quotes/invoices القائمة) · لا Foundation.
 --
+-- سبب الإصلاح: النسخة السابقة عرّفت دالة pc_can_see_finance (language sql — يتحقّق
+-- Postgres من جسمها لحظة الإنشاء) قبل إنشاء جدول project_finance_settings الذي تقرؤه
+-- → ERROR 42P01. الترتيب الآن: Preflight → الجداول → الفهارس → الدوال → RPCs →
+-- Triggers → RLS/Policies → Grants → Validation → NOTIFY → COMMIT.
+-- آمن سواء لم يُطبَّق شيء، أو أُعيد تشغيله أكثر من مرة (كل شيء IF NOT EXISTS/OR REPLACE).
+--
 -- العزل المالي أساسي: كل الجداول والدوال محميّة بـ pc_can_see_finance(project) =
 -- المالك/سوبر-أدمن/أدمن(account) أو staff_role=finance أو محاسب المشروع المُعيَّن.
--- لا يراها المدير غير المالي ولا المنتج/المصوّر/المونتير/العميل — عبر RLS + RPC + UI.
 -- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ Preflight — فحص الاعتمادات الأساسية قبل أي تنفيذ (خطأ عربي واضح عند النقص) ═══
+do $pf$
+begin
+  if to_regclass('public.projects') is null then
+    raise exception 'الاعتماد المفقود: جدول public.projects غير موجود — طبِّق أساس النظام أولًا.';
+  end if;
+  if to_regclass('public.profiles') is null then
+    raise exception 'الاعتماد المفقود: جدول public.profiles غير موجود — طبِّق أساس النظام أولًا.';
+  end if;
+  if to_regclass('public.project_shoot_sessions') is null then
+    raise exception 'الاعتماد المفقود: جدول public.project_shoot_sessions غير موجود — شغِّل docs/project_core_FINAL_RUNME.sql أولًا.';
+  end if;
+  if to_regprocedure('public.is_owner()') is null or to_regprocedure('public.staff_role()') is null then
+    raise exception 'الاعتماد المفقود: دوال الصلاحيات is_owner()/staff_role() — شغِّل docs/staff_roles_task_assignment_RUNME.sql أولًا.';
+  end if;
+  if to_regprocedure('public.pc_log(uuid,text,text,uuid,jsonb)') is null
+     or to_regprocedure('public.pc_notify_user(uuid,text,text,uuid,text,text)') is null
+     or to_regprocedure('public.pc_touch_updated_at()') is null then
+    raise exception 'الاعتماد المفقود: دوال Project Core (pc_log/pc_notify_user/pc_touch_updated_at) — شغِّل docs/project_core_FINAL_RUNME.sql أولًا.';
+  end if;
+end $pf$;
 
 begin;
 
--- ═══ 0) دالة العزل المالي ═══
-create or replace function public.pc_can_see_finance(p_project uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select public.is_owner()                                   -- owner/super_admin/admin(account)
-      or public.staff_role() = 'finance'
-      or exists (select 1 from public.project_finance_settings s
-                 where s.project_id = p_project and s.accountant_id = auth.uid());
-$$;
-revoke all on function public.pc_can_see_finance(uuid) from public, anon;
-grant  execute on function public.pc_can_see_finance(uuid) to authenticated;
+-- ════════════════════════════════════════════════════════════════════════════
+-- 1) الجداول (كلها أولًا — قبل أي دالة أو سياسة تعتمد عليها)
+-- ════════════════════════════════════════════════════════════════════════════
 
--- من يعتمد ماليًا نهائيًا (فوق الحدود) — المالك فقط. من يعتمد إداريًا — أدمن(account)/سوبر.
-create or replace function public.pc_finance_is_admin() returns boolean language sql stable
-  set search_path = public as $$ select public.is_owner(); $$;
-
--- ═══ 1) الإعدادات المالية 1:1 (قيمة العقد/الضريبة/الميزانية/حدود الاعتماد/المحاسب) ═══
+-- 1.1 الإعدادات المالية 1:1 (قيمة العقد/الضريبة/الميزانية/حدود الاعتماد/المحاسب)
 create table if not exists public.project_finance_settings (
   project_id             uuid primary key references public.projects(id) on delete cascade,
   accountant_id          uuid references auth.users(id),
@@ -46,7 +62,7 @@ create table if not exists public.project_finance_settings (
   updated_by             uuid references auth.users(id)
 );
 
--- ═══ 2) ميزانيات المراحل ═══
+-- 1.2 ميزانيات المراحل
 create table if not exists public.project_phase_budgets (
   id          uuid primary key default gen_random_uuid(),
   project_id  uuid not null references public.projects(id) on delete cascade,
@@ -58,7 +74,7 @@ create table if not exists public.project_phase_budgets (
   unique (project_id, phase)
 );
 
--- ═══ 3) المصروفات (سجل محاسبي بدورة اعتماد) ═══
+-- 1.3 المصروفات (سجل محاسبي بدورة اعتماد)
 create table if not exists public.project_expenses (
   id                   uuid primary key default gen_random_uuid(),
   project_id           uuid not null references public.projects(id) on delete cascade,
@@ -103,7 +119,7 @@ create table if not exists public.project_expenses (
   updated_at           timestamptz not null default now()
 );
 
--- ═══ 4) جدول الإيرادات/التحصيل (يربط بالفواتير القائمة، لا نظام فواتير موازٍ) ═══
+-- 1.4 جدول الإيرادات/التحصيل (يربط بالفواتير القائمة، لا نظام فواتير موازٍ)
 create table if not exists public.project_revenue_schedule (
   id               uuid primary key default gen_random_uuid(),
   project_id       uuid not null references public.projects(id) on delete cascade,
@@ -127,7 +143,7 @@ create table if not exists public.project_revenue_schedule (
   updated_at       timestamptz not null default now()
 );
 
--- ═══ 5) التنبيهات المالية ═══
+-- 1.5 التنبيهات المالية
 create table if not exists public.project_financial_alerts (
   id            uuid primary key default gen_random_uuid(),
   project_id    uuid not null references public.projects(id) on delete cascade,
@@ -142,39 +158,36 @@ create table if not exists public.project_financial_alerts (
   unique (project_id, kind, phase)
 );
 
--- ═══ Indexes ═══
+-- ════════════════════════════════════════════════════════════════════════════
+-- 2) الفهارس
+-- ════════════════════════════════════════════════════════════════════════════
 create index if not exists idx_pexp_project on public.project_expenses(project_id) where is_deleted = false;
 create index if not exists idx_pexp_status  on public.project_expenses(status) where is_deleted = false;
 create index if not exists idx_prev_project on public.project_revenue_schedule(project_id) where is_deleted = false;
 create index if not exists idx_pfa_project  on public.project_financial_alerts(project_id) where resolved_at is null;
 
--- ═══ RLS — قراءة مالية فقط؛ الكتابة عبر RPCs ═══
-alter table public.project_finance_settings   enable row level security;
-alter table public.project_phase_budgets      enable row level security;
-alter table public.project_expenses           enable row level security;
-alter table public.project_revenue_schedule   enable row level security;
-alter table public.project_financial_alerts   enable row level security;
+-- ════════════════════════════════════════════════════════════════════════════
+-- 3) دوال العزل المالي (بعد إنشاء الجداول التي تقرؤها — كانت قبلها فسبّبت 42P01)
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.pc_can_see_finance(p_project uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.is_owner()                                   -- owner/super_admin/admin(account)
+      or public.staff_role() = 'finance'
+      or exists (select 1 from public.project_finance_settings s
+                 where s.project_id = p_project and s.accountant_id = auth.uid());
+$$;
+revoke all on function public.pc_can_see_finance(uuid) from public, anon;
+grant  execute on function public.pc_can_see_finance(uuid) to authenticated;
 
-drop policy if exists pfs_read on public.project_finance_settings;
-create policy pfs_read on public.project_finance_settings for select to authenticated using (public.pc_can_see_finance(project_id));
-drop policy if exists ppb_read on public.project_phase_budgets;
-create policy ppb_read on public.project_phase_budgets for select to authenticated using (public.pc_can_see_finance(project_id));
-drop policy if exists pexp_read on public.project_expenses;
-create policy pexp_read on public.project_expenses for select to authenticated using (public.pc_can_see_finance(project_id));
-drop policy if exists prev_read on public.project_revenue_schedule;
-create policy prev_read on public.project_revenue_schedule for select to authenticated using (public.pc_can_see_finance(project_id));
-drop policy if exists pfa_read on public.project_financial_alerts;
-create policy pfa_read on public.project_financial_alerts for select to authenticated using (public.pc_can_see_finance(project_id));
+-- من يعتمد ماليًا نهائيًا (فوق الحدود) — المالك فقط. من يعتمد إداريًا — أدمن(account)/سوبر.
+create or replace function public.pc_finance_is_admin() returns boolean language sql stable
+  set search_path = public as $$ select public.is_owner(); $$;
 
-grant select on public.project_finance_settings, public.project_phase_budgets, public.project_expenses,
-  public.project_revenue_schedule, public.project_financial_alerts to authenticated;
+-- ════════════════════════════════════════════════════════════════════════════
+-- 4) RPCs
+-- ════════════════════════════════════════════════════════════════════════════
 
-drop trigger if exists trg_pfs_touch on public.project_finance_settings;
-create trigger trg_pfs_touch before update on public.project_finance_settings for each row execute function public.pc_touch_updated_at();
-drop trigger if exists trg_pexp_touch on public.project_expenses;
-create trigger trg_pexp_touch before update on public.project_expenses for each row execute function public.pc_touch_updated_at();
-
--- ═══ 6) تعيين محاسب المشروع (المالك/الأدمن/مدير المالية) ═══
+-- 4.1 تعيين محاسب المشروع (المالك/الأدمن/مدير المالية)
 create or replace function public.pc_finance_assign_accountant(p_project uuid, p_user uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 begin
@@ -189,7 +202,7 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
--- ═══ 7) الإعدادات المالية (قيمة العقد للمالك/المالية؛ الميزانية/الحدود للمالية) ═══
+-- 4.2 الإعدادات المالية (قيمة العقد للمالك/المالية؛ الحدود للمالك فقط)
 create or replace function public.pc_finance_settings_set(p_project uuid, p_data jsonb)
 returns public.project_finance_settings language plpgsql security definer set search_path = public as $$
 declare r public.project_finance_settings; v_admin boolean;
@@ -216,7 +229,7 @@ begin
   return r;
 end $$;
 
--- ═══ 8) ميزانية مرحلة ═══
+-- 4.3 ميزانية مرحلة
 create or replace function public.pc_phase_budget_upsert(p_project uuid, p_phase text, p_allocated numeric, p_note text default null)
 returns public.project_phase_budgets language plpgsql security definer set search_path = public as $$
 declare r public.project_phase_budgets;
@@ -233,7 +246,7 @@ begin
   return r;
 end $$;
 
--- ═══ 9) إنشاء مصروف (مسودّة) — يحسب VAT تلقائيًا من الصافي إن لم يُعطَ ═══
+-- 4.4 إنشاء مصروف (مسودّة) — يحسب VAT تلقائيًا من الصافي إن لم يُعطَ
 create or replace function public.pc_expense_create(p_project uuid, p_data jsonb)
 returns public.project_expenses language plpgsql security definer set search_path = public as $$
 declare r public.project_expenses; v_excl numeric; v_vat numeric; v_rate numeric;
@@ -262,7 +275,7 @@ begin
   return r;
 end $$;
 
--- ═══ 10) انتقالات دورة المصروف — منع Double Approval/Payment + حارس الصرف الزائد ═══
+-- 4.5 انتقالات دورة المصروف — منع Double Approval/Payment + حارس الصرف الزائد
 create or replace function public.pc_expense_transition(p_expense uuid, p_action text, p_reason text default null, p_override boolean default false)
 returns public.project_expenses language plpgsql security definer set search_path = public as $$
 declare r record; s record; v_actual numeric; v_committed numeric; v_after numeric; v_can_approve boolean;
@@ -319,7 +332,7 @@ begin
   return r;
 end $$;
 
--- ═══ 11) حذف مصروف ناعم (لا للمعتمد/المدفوع) ═══
+-- 4.6 حذف مصروف ناعم (لا للمعتمد/المدفوع إلا المالك)
 create or replace function public.pc_expense_delete(p_expense uuid, p_reason text)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare r record;
@@ -337,7 +350,7 @@ begin
   return true;
 end $$;
 
--- ═══ 12) دفعة إيراد (upsert) ═══
+-- 4.7 دفعة إيراد (upsert)
 create or replace function public.pc_revenue_upsert(p_project uuid, p_data jsonb)
 returns public.project_revenue_schedule language plpgsql security definer set search_path = public as $$
 declare r public.project_revenue_schedule; v_id uuid := nullif(p_data->>'id','')::uuid; v_excl numeric; v_vat numeric; v_rate numeric;
@@ -368,7 +381,7 @@ begin
   return r;
 end $$;
 
--- ═══ 13) ملخّص الربحية — VAT مستبعدة، حماية القسمة على صفر ═══
+-- 4.8 ملخّص الربحية — VAT مستبعدة، حماية القسمة على صفر
 create or replace function public.pc_finance_summary(p_project uuid)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare s record; v_net numeric; v_actual numeric; v_committed numeric; v_forecast numeric;
@@ -413,10 +426,10 @@ begin
   );
 end $$;
 
--- ═══ 14) إعادة توليد التنبيهات المالية (on-demand — Cron لدفعة الإشعارات لاحقًا) ═══
+-- 4.9 إعادة توليد التنبيهات المالية (on-demand)
 create or replace function public.pc_finance_alerts_recompute(p_project uuid)
 returns int language plpgsql security definer set search_path = public as $$
-declare s record; sm jsonb; ph record; v_n int := 0; v_today date := (now() at time zone 'utc')::date;
+declare s record; sm jsonb; v_n int := 0; v_today date := (now() at time zone 'utc')::date;
 begin
   if not public.pc_can_see_finance(p_project) then raise exception 'not authorized'; end if;
   delete from public.project_financial_alerts where project_id = p_project and resolved_at is null;
@@ -443,7 +456,40 @@ begin
   return v_n;
 end $$;
 
--- ═══ 15) الصلاحيات ═══
+-- ════════════════════════════════════════════════════════════════════════════
+-- 5) Triggers (بعد الجداول والدالة pc_touch_updated_at الموجودة مسبقًا)
+-- ════════════════════════════════════════════════════════════════════════════
+drop trigger if exists trg_pfs_touch on public.project_finance_settings;
+create trigger trg_pfs_touch before update on public.project_finance_settings for each row execute function public.pc_touch_updated_at();
+drop trigger if exists trg_pexp_touch on public.project_expenses;
+create trigger trg_pexp_touch before update on public.project_expenses for each row execute function public.pc_touch_updated_at();
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 6) RLS + Policies (بعد الجداول والدالة pc_can_see_finance)
+-- ════════════════════════════════════════════════════════════════════════════
+alter table public.project_finance_settings   enable row level security;
+alter table public.project_phase_budgets      enable row level security;
+alter table public.project_expenses           enable row level security;
+alter table public.project_revenue_schedule   enable row level security;
+alter table public.project_financial_alerts   enable row level security;
+
+drop policy if exists pfs_read on public.project_finance_settings;
+create policy pfs_read on public.project_finance_settings for select to authenticated using (public.pc_can_see_finance(project_id));
+drop policy if exists ppb_read on public.project_phase_budgets;
+create policy ppb_read on public.project_phase_budgets for select to authenticated using (public.pc_can_see_finance(project_id));
+drop policy if exists pexp_read on public.project_expenses;
+create policy pexp_read on public.project_expenses for select to authenticated using (public.pc_can_see_finance(project_id));
+drop policy if exists prev_read on public.project_revenue_schedule;
+create policy prev_read on public.project_revenue_schedule for select to authenticated using (public.pc_can_see_finance(project_id));
+drop policy if exists pfa_read on public.project_financial_alerts;
+create policy pfa_read on public.project_financial_alerts for select to authenticated using (public.pc_can_see_finance(project_id));
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 7) Grants/Revoke
+-- ════════════════════════════════════════════════════════════════════════════
+grant select on public.project_finance_settings, public.project_phase_budgets, public.project_expenses,
+  public.project_revenue_schedule, public.project_financial_alerts to authenticated;   -- الكتابة عبر RPCs فقط
+
 do $g$
 declare fn text;
 begin
@@ -458,12 +504,28 @@ begin
 end $g$;
 revoke all on function public.pc_finance_is_admin() from public, anon, authenticated;
 
-commit;
+-- ════════════════════════════════════════════════════════════════════════════
+-- 8) Validation داخل المعاملة — يرفع خطأ عربيًا واضحًا لو نقص شيء
+-- ════════════════════════════════════════════════════════════════════════════
+do $v$
+declare n int;
+begin
+  select count(*) into n from information_schema.tables where table_schema='public'
+    and table_name in ('project_finance_settings','project_phase_budgets','project_expenses','project_revenue_schedule','project_financial_alerts');
+  if n <> 5 then raise exception 'فشل التحقق: عدد الجداول المالية % من 5.', n; end if;
+  if to_regprocedure('public.pc_can_see_finance(uuid)') is null then raise exception 'فشل التحقق: دالة pc_can_see_finance غير موجودة.'; end if;
+  select count(*) into n from pg_proc where proname = 'pc_expense_transition';
+  if n <> 1 then raise exception 'فشل التحقق: pc_expense_transition لها % نسخة (Overload متعارض).', n; end if;
+  select count(*) into n from pg_class where relname in ('project_finance_settings','project_expenses') and relrowsecurity = true;
+  if n <> 2 then raise exception 'فشل التحقق: RLS غير مفعّلة على الجداول المالية.'; end if;
+end $v$;
 
 notify pgrst, 'reload schema';
 
+commit;
+
 -- ════════════════════════════════════════════════════════════════════════════
--- VALIDATION
+-- فحوص قراءة اختيارية بعد التطبيق (لا تُعدّل شيئًا)
 -- ════════════════════════════════════════════════════════════════════════════
 select count(*) as finance_tables from information_schema.tables where table_schema='public'
   and table_name in ('project_finance_settings','project_phase_budgets','project_expenses','project_revenue_schedule','project_financial_alerts');
