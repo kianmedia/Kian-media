@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { PROJECT_STAFF_ROLES, STAFF_ROLE_LABELS } from "@/lib/portal/roles";
+import { CallSheetManager } from "./CallSheet";
 import {
   pcListMembers, pcMemberAdd, pcMemberRemove, pcListStaff, pcListDeliverables,
   pcListCosts, pcCostAdd, pcCostDelete, pcListRisks, pcRiskUpsert,
@@ -231,6 +232,7 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
   const { t } = useI18n();
   const [rows, setRows] = useState<ShootSession[]>([]);
   const [title, setTitle] = useState(""); const [date, setDate] = useState(""); const [loc, setLoc] = useState(""); const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
   const load = useCallback(async () => { const r = await pcListShoots(projectId); if (r.ok) setRows(r.data); }, [projectId]);
   useEffect(() => { void load(); }, [load]);
   async function add() { if (busy || !title.trim()) return; setBusy(true); const r = await pcShootUpsert(projectId, { title: title.trim(), session_date: date || undefined, location: loc || undefined }); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setTitle(""); setDate(""); setLoc(""); await load(); }
@@ -252,7 +254,7 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
       {rows.map((sh) => (
         <div key={sh.id} className={`${card} p-3 text-xs`}>
           <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0"><span className="text-stone-200">{sh.title}</span>{sh.location && <span className="mr-2 text-stone-500">· {sh.location}</span>}</div>
+            <button onClick={() => setOpen(open === sh.id ? null : sh.id)} className="min-w-0 text-right flex-1"><span className="text-stone-200">{sh.title}</span>{sh.location && <span className="mr-2 text-stone-500">· {sh.location}</span>}</button>
             {canManage ? (
               <select value={sh.status} onChange={(e) => void setStatus(sh, e.target.value)} className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }}>
                 {Object.keys(SHOOT_STATUS_LABELS).map((s) => <option key={s} value={s}>{t(SHOOT_STATUS_LABELS[s])}</option>)}
@@ -260,6 +262,7 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
             ) : <span className={stCls[sh.status]}>{t(SHOOT_STATUS_LABELS[sh.status])}</span>}
           </div>
           {sh.session_date && <div className="text-[11px] text-stone-600 mt-0.5" dir="ltr">{sh.session_date}</div>}
+          {open === sh.id && <CallSheetManager shoot={sh} canManage={canManage} flash={flash} />}
         </div>
       ))}
     </div>

@@ -5,7 +5,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { getProject } from "@/lib/portal/projects";
@@ -17,6 +17,7 @@ import type { Project } from "@/lib/portal/types";
 export default function ProjectCoreDetailPage() {
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId;
+  const tabParam = useSearchParams().get("tab") ?? undefined;   // رابط مباشر: /project-core/[id]?tab=shoots
   const { t } = useI18n();
   const { caps } = usePortal();
   const [project, setProject] = useState<Project | null>(null);
@@ -75,7 +76,7 @@ export default function ProjectCoreDetailPage() {
           {caps.isOwner && <button onClick={() => void softDelete()} className="text-xs text-stone-500 hover:text-red-400 border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "حذف", en: "Delete" })}</button>}
         </div>
       </div>
-      <ProjectOps key={rev} projectId={projectId} projectName={project?.project_name ?? projectId} />
+      <ProjectOps key={rev} projectId={projectId} projectName={project?.project_name ?? projectId} initialTab={tabParam} />
       {showEdit && <EditProjectModal projectId={projectId} onClose={() => setShowEdit(false)} onSaved={() => { void getProject(projectId).then((r) => { if (r.ok && r.data) setProject(r.data); }); setRev((v) => v + 1); }} />}
     </div>
   );

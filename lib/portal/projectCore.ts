@@ -111,6 +111,7 @@ export interface ShootSession {
   id: string; project_id: string; title: string; session_date: string | null; call_time: string | null; location: string | null;
   client_contact: string | null; permits: string | null; safety_notes: string | null; weather_note: string | null;
   status: string; completion_report: string | null; created_at: string;
+  crew: unknown[]; equipment: unknown[]; vehicles: unknown[]; shot_list: unknown[]; attendance: unknown[];
 }
 export interface Deliverable { id: string; project_id: string; title: string; type: string; status: string; version: number; preview_url: string | null; created_at: string }
 
@@ -292,6 +293,27 @@ export const pcListProjectTags = (projectId: string) =>
   pget<{ tag_id: string; project_id: string }[]>(`project_tag_map?project_id=eq.${enc(projectId)}&select=tag_id,project_id`);
 export const pcTagLink = (projectId: string, tagId: string) => ppost<unknown>("project_tag_map", { project_id: projectId, tag_id: tagId });
 
+// ─── Call Sheets ───
+export interface CallSheet {
+  id: string; project_id: string; shoot_session_id: string; version_number: number; title: string | null;
+  shoot_date: string | null; call_time: string | null; wrap_time: string | null;
+  location_name: string | null; address: string | null; map_url: string | null;
+  client_contact: string | null; client_mobile: string | null;
+  crew: unknown[]; equipment: unknown[]; vehicles: unknown[]; permits: string | null; safety_notes: string | null;
+  weather_notes: string | null; schedule: unknown[]; shot_list: unknown[]; contacts: unknown[]; general_notes: string | null;
+  status: "draft" | "sent"; created_at: string; sent_at: string | null;
+}
+export const pcListCallSheets = (shootId: string) =>
+  pget<CallSheet[]>(`project_call_sheets?shoot_session_id=eq.${enc(shootId)}&is_deleted=eq.false&select=*&order=version_number.desc`);
+export const pcCallSheetSave = (shootId: string, data: Record<string, unknown>) =>
+  prpc<CallSheet>("project_core_call_sheet_save", { p_shoot: shootId, p_data: data });
+export const pcCallSheetSend = (callSheetId: string) =>
+  prpc<{ ok: boolean; status: string; version: number }>("project_core_call_sheet_send", { p_call_sheet: callSheetId });
+
+// تحديث حقول إصدار المخرَج (رؤية العميل / اعتماد / نهائي) — عبر RLS.
+export const pcDeliverableVersionSet = (versionId: string, patch: Record<string, unknown>) =>
+  ppatch<DeliverableVersion[]>(`project_deliverable_versions?id=eq.${enc(versionId)}`, patch);
+
 // خريطة رسائل الأخطاء الشائعة → عربي.
 export function pcErr(e: string): string {
   if (/could not find|schema cache|PGRST\d|does not exist|function .* does not/i.test(e)) return "منصة المشاريع غير مطبّقة في قاعدة البيانات — شغّل project_core_FINAL_RUNME.sql.";
@@ -311,9 +333,12 @@ export function pcErr(e: string): string {
   if (/active_custody/.test(e)) return "لا يمكن الحذف: توجد عهدة/معدات نشطة مرتبطة بالمشروع.";
   if (/already_applied/.test(e)) return "هذا القالب مطبَّق على المشروع مسبقًا.";
   if (/template_not_found/.test(e)) return "القالب غير موجود أو غير مفعّل.";
-  if (/duplicate_version/.test(e)) return "رقم النسخة موجود مسبقًا.";
+  if (/duplicate_version|duplicate key|violates unique|already exists/.test(e)) return "تعارض في الترقيم — أعد المحاولة.";
   if (/already_created/.test(e)) return "أُنشئت مهمة لهذا البند مسبقًا.";
   if (/bad_progress/.test(e)) return "نسبة التقدّم يجب أن تكون بين 0 و100.";
+  if (/already_sent/.test(e)) return "أُرسلت هذه النسخة مسبقًا — أنشئ نسخة جديدة للتعديل.";
+  if (/not_draft/.test(e)) return "لا يمكن تعديل نسخة مُرسَلة — أنشئ نسخة جديدة.";
+  if (/incomplete_call_sheet/.test(e)) return "أكمل تاريخ التصوير والموقع قبل الإرسال.";
   if (/not_found/.test(e)) return "العنصر غير موجود.";
   if (/cross_project_dependency|self_dependency/.test(e)) return "اعتمادية غير صالحة.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

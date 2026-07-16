@@ -37,12 +37,12 @@ const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "timeline", ar: "الجدول الزمني", en: "Timeline" }, { k: "activity", ar: "النشاط", en: "Activity" },
 ];
 
-export default function ProjectOps({ projectId, projectName, onChanged }: { projectId: string; projectName: string; onChanged?: () => void }) {
+export default function ProjectOps({ projectId, projectName, onChanged, initialTab }: { projectId: string; projectName: string; onChanged?: () => void; initialTab?: string }) {
   const { t } = useI18n();
   const { caps } = usePortal();
   const canManage = caps.isAdminArea || caps.isEditor;
   const [core, setCore] = useState<ProjectCore | null>(null);
-  const [tab, setTab] = useState<TabKey>("tasks");
+  const [tab, setTab] = useState<TabKey>((TABS.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
