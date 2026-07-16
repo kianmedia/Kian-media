@@ -557,6 +557,16 @@ begin
     if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
     -- جلسة بدأت أو اكتملت لا تُحذف — تُلغى رسميًا أولًا (سجل تاريخي).
     if v_status in ('in_progress','completed') then raise exception 'must_cancel_first'; end if;
+    -- لا حذف وجلستُها معدات غير مرجعة (عهدة فعّالة).
+    if public.pc_shoot_equipment_out(p_id) then raise exception 'equipment_out'; end if;
+    -- الحجوزات النشطة غير المصروفة تُلغى تلقائيًا مع حذف الجلسة (وإلا بقيت تحجب المعدات).
+    if to_regclass('public.custody_inventory_reservations') is not null then
+      execute $q$update public.custody_inventory_reservations
+        set status = 'cancelled',
+            note = coalesce(note,'') || ' | أُلغي بحذف الجلسة: ' || left(btrim($2),300),
+            updated_at = now()
+        where shoot_session_id = $1 and status = 'active'$q$ using p_id, p_reason;
+    end if;
     update public.project_shoot_sessions set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
       delete_reason = left(btrim(p_reason),500), updated_at = now() where id = p_id;
   elsif p_type = 'deliverable' then
@@ -877,6 +887,11 @@ begin
        and coalesce(btrim(p_data->>'cancel_reason'),'') = '' then
       raise exception 'reason_required';
     end if;
+    -- لا إكمال جلسة ومعداتها غير مرجعة (عهدة فعّالة).
+    if nullif(p_data->>'status','') = 'completed' and v_old_status <> 'completed'
+       and public.pc_shoot_equipment_out(v_id) then
+      raise exception 'equipment_out';
+    end if;
     update public.project_shoot_sessions set
       title = coalesce(nullif(btrim(p_data->>'title'),''), title),
       session_date = coalesce(nullif(p_data->>'session_date','')::date, session_date),
@@ -904,6 +919,12 @@ begin
       jsonb_build_object('status', r.status, 'from', v_old_status,
         'cancel_reason', case when r.status = 'cancelled' then r.cancel_reason end));
     if r.status = 'cancelled' and v_old_status <> 'cancelled' then
+      -- إلغاء الجلسة رسميًا يلغي حجوزات معداتها النشطة غير المصروفة.
+      if to_regclass('public.custody_inventory_reservations') is not null then
+        execute $q$update public.custody_inventory_reservations
+          set status = 'cancelled', note = coalesce(note,'') || ' | أُلغي بإلغاء الجلسة', updated_at = now()
+          where shoot_session_id = $1 and status = 'active'$q$ using v_id;
+      end if;
       perform public.pc_notify_team(p_project, 'project_note_new', 'shoot', v_id,
         'أُلغيت جلسة تصوير: '||coalesce(r.title,''), 'Shoot session cancelled', auth.uid());
     end if;
@@ -946,6 +967,244 @@ begin
 end $g3$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 4 — جسر جلسات التصوير ↔ نظام العهدة والمخزون الحالي (لا نظام موازٍ)
+-- الحجز لا يخصم المخزون؛ الخصم والإرجاع حصريًا عبر دورة العهدة القائمة.
+-- إن لم يكن نظام العهدة مطبَّقًا على قاعدة البيانات: الدوال تعمل وتُرجع خطأ عربيًا
+-- واضحًا وقت الاستدعاء (custody_system_missing) — ولا يفشل هذا الملف.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B4.1 أعمدة ربط إضافية على جدول الحجوزات القائم (شرطية — فقط إن وُجد النظام) ═══
+do $b4c$
+begin
+  if to_regclass('public.custody_inventory_reservations') is not null then
+    execute 'alter table public.custody_inventory_reservations add column if not exists shoot_session_id uuid references public.project_shoot_sessions(id) on delete set null';
+    execute 'alter table public.custody_inventory_reservations add column if not exists assignment_id uuid';
+    execute 'alter table public.custody_inventory_reservations add column if not exists approved_by uuid';
+    execute 'alter table public.custody_inventory_reservations add column if not exists approved_at timestamptz';
+    execute 'create index if not exists idx_civ_resv_shoot on public.custody_inventory_reservations(shoot_session_id) where status = ''active''';
+  end if;
+end $b4c$;
+
+-- ═══ B4.2 بحث المعدات (اسم/كود/رقم تسلسلي) — للموظفين ═══
+create or replace function public.pc_equipment_search(p_q text)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  if to_regclass('public.custody_inventory_assets') is null then raise exception 'custody_system_missing'; end if;
+  if not public.is_staff() then raise exception 'not authorized'; end if;
+  -- LIMIT داخل استعلام فرعي — قبل التجميع (وإلا كان بلا أثر على jsonb_agg).
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', a.id, 'code', a.asset_code, 'name', a.asset_name, 'serial', a.serial_number,
+      'type', a.asset_type, 'unit', a.unit, 'condition', a.condition_status, 'availability', a.availability_status,
+      'total', a.quantity_total, 'available', a.quantity_available,
+      'reserved_now', coalesce((select sum(r.quantity) from public.custody_inventory_reservations r
+         where r.asset_id = a.id and r.status = 'active' and (r.reserved_to is null or r.reserved_to >= now())), 0)
+    ) order by a.asset_name), '[]'::jsonb) into v
+  from (
+    select * from public.custody_inventory_assets a0
+    where a0.is_deleted = false
+      and (coalesce(btrim(p_q),'') = '' or a0.asset_name ilike '%'||btrim(p_q)||'%'
+           or a0.asset_code ilike '%'||btrim(p_q)||'%' or a0.serial_number ilike '%'||btrim(p_q)||'%')
+    order by a0.asset_name
+    limit 30
+  ) a;
+  return jsonb_build_object('items', v);
+end $$;
+
+-- ═══ B4.3 فحص التوفر في نافذة زمنية ═══
+create or replace function public.pc_equipment_availability(p_asset uuid, p_from timestamptz, p_to timestamptz)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare a record; v_overlap numeric;
+begin
+  if to_regclass('public.custody_inventory_assets') is null then raise exception 'custody_system_missing'; end if;
+  if not public.is_staff() then raise exception 'not authorized'; end if;
+  select * into a from public.custody_inventory_assets where id = p_asset and is_deleted = false;
+  if a.id is null then raise exception 'not_found'; end if;
+  select coalesce(sum(r.quantity), 0) into v_overlap from public.custody_inventory_reservations r
+    where r.asset_id = p_asset and r.status = 'active'
+      and coalesce(r.reserved_from, '-infinity') < coalesce(p_to, 'infinity')
+      and coalesce(r.reserved_to, 'infinity') > coalesce(p_from, '-infinity');
+  return jsonb_build_object(
+    'total', a.quantity_total, 'available_now', a.quantity_available,
+    'reserved_window', v_overlap, 'free_window', greatest(0, a.quantity_total - v_overlap),
+    'condition', a.condition_status, 'availability', a.availability_status,
+    'blocked', a.condition_status in ('damaged','lost','under_maintenance','retired')
+               or a.availability_status in ('maintenance','lost','retired'));
+end $$;
+
+-- ═══ B4.4 حجز معدات لجلسة تصوير — قفل صف الأصل + منع التداخل والتجاوز ═══
+create or replace function public.pc_shoot_reserve_equipment(
+  p_shoot uuid, p_asset uuid, p_qty numeric, p_from timestamptz, p_to timestamptz,
+  p_employee uuid default null, p_note text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare sh record; a record; v_overlap numeric; v_id uuid; v_from timestamptz; v_to timestamptz;
+begin
+  if to_regclass('public.custody_inventory_reservations') is null then raise exception 'custody_system_missing'; end if;
+  select * into sh from public.project_shoot_sessions where id = p_shoot and is_deleted = false;
+  if sh.id is null then raise exception 'not_found'; end if;
+  if sh.status = 'cancelled' then raise exception 'bad_state'; end if;
+  if not public.can_manage_projects() and not public.can_edit_project(sh.project_id) then raise exception 'not authorized'; end if;
+  -- النافذة: افتراضيًا من Call Time إلى Wrap (أو يوم الجلسة كاملًا).
+  v_from := coalesce(p_from, sh.call_time, sh.session_date::timestamptz);
+  v_to   := coalesce(p_to, sh.wrap_time, v_from + interval '1 day');
+  if v_from is null or v_to is null or v_to <= v_from then raise exception 'bad_window'; end if;
+  if coalesce(p_qty, 1) <= 0 then raise exception 'bad_quantity'; end if;
+
+  -- قفل صف الأصل (نفس ترتيب قفل دورة العهدة) — يمنع سباق حجزين متزامنين.
+  select * into a from public.custody_inventory_assets where id = p_asset and is_deleted = false for update;
+  if a.id is null then raise exception 'not_found'; end if;
+  if a.condition_status in ('damaged','lost','under_maintenance','retired')
+     or a.availability_status in ('maintenance','lost','retired') then raise exception 'asset_unavailable'; end if;
+  -- منع تكرار حجز نفس الأصل لنفس الجلسة.
+  if exists (select 1 from public.custody_inventory_reservations
+             where shoot_session_id = p_shoot and asset_id = p_asset and status = 'active') then
+    raise exception 'duplicate_reservation';
+  end if;
+  -- مجموع الحجوزات النشطة المتداخلة زمنيًا + الكمية المطلوبة ≤ الإجمالي.
+  select coalesce(sum(quantity), 0) into v_overlap from public.custody_inventory_reservations
+    where asset_id = p_asset and status = 'active'
+      and coalesce(reserved_from, '-infinity') < v_to and coalesce(reserved_to, 'infinity') > v_from;
+  if a.asset_type = 'serialized' then
+    if v_overlap > 0 then raise exception 'over_reserved'; end if;
+    p_qty := 1;
+  elsif v_overlap + coalesce(p_qty, 1) > a.quantity_total then
+    raise exception 'over_reserved';
+  end if;
+
+  insert into public.custody_inventory_reservations(
+      asset_id, quantity, employee_id, project_id, shoot_session_id, reserved_from, reserved_to, note, created_by)
+    values (p_asset, coalesce(p_qty, 1), p_employee, sh.project_id, p_shoot, v_from, v_to,
+      nullif(btrim(coalesce(p_note, '')), ''), auth.uid())
+    returning id into v_id;
+  perform public.pc_log(sh.project_id, 'equipment_reserved', 'shoot', p_shoot,
+    jsonb_build_object('asset', a.asset_code, 'qty', coalesce(p_qty,1), 'reservation', v_id));
+  perform public.civ_notify_managers('civ_reservation_created', p_asset,
+    'حجز معدات لجلسة تصوير: '||a.asset_code, 'Equipment reserved for a shoot: '||a.asset_code);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- ═══ B4.5 قائمة معدات الجلسة (حجوزات + حالة العهدة المرتبطة) ═══
+create or replace function public.pc_shoot_equipment_list(p_shoot uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb; v_proj uuid;
+begin
+  if to_regclass('public.custody_inventory_reservations') is null then raise exception 'custody_system_missing'; end if;
+  select project_id into v_proj from public.project_shoot_sessions where id = p_shoot;
+  if v_proj is null then raise exception 'not_found'; end if;
+  if not public.pc_can_read_project(v_proj) then raise exception 'not authorized'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', r.id, 'asset_id', r.asset_id, 'code', a.asset_code, 'name', a.asset_name,
+      'qty', r.quantity, 'from', r.reserved_from, 'to', r.reserved_to, 'status', r.status,
+      'employee_id', r.employee_id,
+      'employee_name', (select pr.full_name from public.profiles pr where pr.id = r.employee_id),
+      'note', r.note, 'approved_at', r.approved_at,
+      'assignment_id', r.assignment_id,
+      'assignment_no', (select g.assignment_number from public.custody_inventory_assignments g where g.id = r.assignment_id),
+      'assignment_status', (select g.status from public.custody_inventory_assignments g where g.id = r.assignment_id)
+    ) order by r.created_at), '[]'::jsonb) into v
+  from public.custody_inventory_reservations r
+  join public.custody_inventory_assets a on a.id = r.asset_id
+  where r.shoot_session_id = p_shoot;
+  return jsonb_build_object('items', v);
+end $$;
+
+-- ═══ B4.6 تعديل/إلغاء/اعتماد الحجز ═══
+create or replace function public.pc_reservation_cancel(p_id uuid, p_reason text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare r record;
+begin
+  if to_regclass('public.custody_inventory_reservations') is null then raise exception 'custody_system_missing'; end if;
+  if coalesce(btrim(p_reason),'') = '' then raise exception 'reason_required'; end if;
+  select * into r from public.custody_inventory_reservations where id = p_id and status = 'active' for update;
+  if r.id is null then raise exception 'not_found'; end if;
+  if not public.civ_can_manage() and not (r.project_id is not null and
+      (public.can_manage_projects() or public.can_edit_project(r.project_id))) then raise exception 'not authorized'; end if;
+  update public.custody_inventory_reservations
+    set status = 'cancelled',
+        note = coalesce(note,'') || ' | إلغاء: ' || left(btrim(p_reason),300),
+        updated_at = now() where id = p_id;
+  if r.project_id is not null then
+    perform public.pc_log(r.project_id, 'equipment_reservation_cancelled', 'shoot', r.shoot_session_id,
+      jsonb_build_object('reservation', p_id, 'reason', p_reason));
+  end if;
+  return true;
+end $$;
+
+create or replace function public.pc_reservation_approve(p_id uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare r record;
+begin
+  if to_regclass('public.custody_inventory_reservations') is null then raise exception 'custody_system_missing'; end if;
+  if not public.civ_can_manage() then raise exception 'not authorized'; end if;
+  select * into r from public.custody_inventory_reservations where id = p_id and status = 'active' for update;
+  if r.id is null then raise exception 'not_found'; end if;
+  update public.custody_inventory_reservations set approved_by = auth.uid(), approved_at = now(), updated_at = now()
+    where id = p_id;
+  if r.project_id is not null then
+    perform public.pc_log(r.project_id, 'equipment_reservation_approved', 'shoot', r.shoot_session_id,
+      jsonb_build_object('reservation', p_id));
+  end if;
+  return true;
+end $$;
+
+-- ═══ B4.7 تحويل الحجز إلى طلب عهدة — عبر دورة العهدة القائمة (هي التي تخصم المخزون) ═══
+create or replace function public.pc_reservation_to_custody(p_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r record; v_res jsonb;
+begin
+  if to_regclass('public.custody_inventory_reservations') is null then raise exception 'custody_system_missing'; end if;
+  if not public.civ_can_manage() then raise exception 'not authorized'; end if;   -- الصرف = مسؤول العهدة فقط
+  select * into r from public.custody_inventory_reservations where id = p_id and status = 'active' for update;
+  if r.id is null then raise exception 'not_found'; end if;
+  if r.employee_id is null then raise exception 'employee_required'; end if;
+  if r.assignment_id is not null then raise exception 'custody_already_issued'; end if;   -- منع Duplicate Custody Request
+  v_res := public.custody_inv_admin_create_assignment(jsonb_build_object(
+    'employee_user_id', r.employee_id, 'assignment_type', 'project',
+    'project_id', r.project_id, 'purpose', 'معدات جلسة تصوير (حجز مؤكد)',
+    'expected_return_at', r.reserved_to,
+    'items', jsonb_build_array(jsonb_build_object('asset_id', r.asset_id, 'quantity', r.quantity))));
+  update public.custody_inventory_reservations
+    set status = 'fulfilled', assignment_id = (v_res->>'id')::uuid, updated_at = now() where id = p_id;
+  if r.project_id is not null then
+    perform public.pc_log(r.project_id, 'equipment_custody_issued', 'shoot', r.shoot_session_id,
+      jsonb_build_object('reservation', p_id, 'assignment', v_res->>'assignment_number'));
+  end if;
+  return v_res;
+end $$;
+
+-- ═══ B4.8 حارس: لا حذف/إكمال جلسة ومعداتها غير مرجعة ═══
+create or replace function public.pc_shoot_equipment_out(p_shoot uuid)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+begin
+  if to_regclass('public.custody_inventory_reservations') is null then return false; end if;
+  return exists (
+    select 1 from public.custody_inventory_reservations r
+    join public.custody_inventory_assignments g on g.id = r.assignment_id
+    where r.shoot_session_id = p_shoot
+      and g.status in ('pending_employee_confirmation','active','return_requested','under_inspection','partially_returned','disputed'));
+end $$;
+
+-- ═══ B4.9 Grants (دوال Batch 4) ═══
+do $g4$
+declare f text;
+begin
+  foreach f in array array[
+    'public.pc_equipment_search(text)',
+    'public.pc_equipment_availability(uuid,timestamptz,timestamptz)',
+    'public.pc_shoot_reserve_equipment(uuid,uuid,numeric,timestamptz,timestamptz,uuid,text)',
+    'public.pc_shoot_equipment_list(uuid)',
+    'public.pc_reservation_cancel(uuid,text)',
+    'public.pc_reservation_approve(uuid)',
+    'public.pc_reservation_to_custody(uuid)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+  -- pc_shoot_equipment_out داخلية (تُستدعى من RPCs أخرى فقط).
+  execute 'revoke all on function public.pc_shoot_equipment_out(uuid) from public, anon, authenticated';
+end $g4$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -974,6 +1233,15 @@ begin
       where n.nspname = 'public' and p.proname = 'pc_shoot_upsert') <> 1 then miss := miss || ' overload(pc_shoot_upsert)'; end if;
   if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_shoot_sessions' and column_name='wrap_time') = 0
     then miss := miss || ' col(project_shoot_sessions.wrap_time)'; end if;
+  -- Batch 4
+  if to_regprocedure('public.pc_shoot_reserve_equipment(uuid,uuid,numeric,timestamptz,timestamptz,uuid,text)') is null then miss := miss || ' pc_shoot_reserve_equipment'; end if;
+  if to_regprocedure('public.pc_reservation_to_custody(uuid)') is null then miss := miss || ' pc_reservation_to_custody'; end if;
+  if to_regprocedure('public.pc_shoot_equipment_out(uuid)')    is null then miss := miss || ' pc_shoot_equipment_out'; end if;
+  -- إن كان نظام العهدة مطبَّقًا يجب أن يكون عمود الربط قد أُضيف.
+  if to_regclass('public.custody_inventory_reservations') is not null and
+     (select count(*) from information_schema.columns where table_schema='public'
+        and table_name='custody_inventory_reservations' and column_name='shoot_session_id') = 0
+    then miss := miss || ' col(custody_inventory_reservations.shoot_session_id)'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;

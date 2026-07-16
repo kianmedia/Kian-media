@@ -13,6 +13,10 @@ import {
   pcListCosts, pcCostAdd, pcListRisks, pcRiskUpsert, pcEntityDelete, type TrashEntity,
   pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory, pcGetCallSheetMeta,
   pcListDeliverableVersions, pcDeliverableVersionAdd, pcMeetingToTask,
+  pcEquipSearch, pcEquipAvailability, pcShootEquipList, pcShootReserve,
+  pcReservationCancel, pcReservationApprove, pcReservationToCustody,
+  CUSTODY_ASSIGN_LABELS, RESV_STATUS_LABELS,
+  type EquipAsset, type EquipReservation,
   PC_STAGE_LABELS, SEVERITY_LABELS, RISK_STATUS_LABELS, SHOOT_STATUS_LABELS, DLV_LABEL, pcErr, fmtDT,
   type ProjectMemberRow, type StaffLite, type Deliverable, type ProjectCost, type ProjectRisk,
   type ProjectMeeting, type ShootSession, type StatusHistoryRow, type PcStage, type DeliverableVersion,
@@ -322,12 +326,163 @@ function ShootDetail({ projectId, sh, onSaved, flash }: { projectId: string; sh:
   );
 }
 
+// ─── المعدات والتجهيزات (جسر نظام العهدة — الحجز لا يخصم المخزون؛ الصرف عبر دورة العهدة) ───
+function ShootEquipment({ sh, canManage, flash }: { sh: ShootSession; canManage: boolean; flash: Flash }) {
+  const { t } = useI18n();
+  const { caps, profile } = usePortal();
+  // civ_can_manage = المالك أو manager/custody_officer — نطابق الخادم لتجنّب أزرار ميتة.
+  const civMgr = caps.isOwner || ["manager", "custody_officer"].includes(profile.staff_role ?? "");
+  const [rows, setRows] = useState<EquipReservation[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<EquipAsset[]>([]);
+  const [sel, setSel] = useState<EquipAsset | null>(null);
+  const [avail, setAvail] = useState<{ free: number; now: number; blocked: boolean } | null>(null);
+  const [qty, setQty] = useState("1");
+  const [emp, setEmp] = useState("");
+  const [staff, setStaff] = useState<StaffLite[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  // نافذة الحجز — تُحسب مرة واحدة وتُمرَّر صراحة لفحص التوفر وللحجز معًا (لا انزياح).
+  const winFrom = sh.call_time ?? (sh.session_date ? new Date(`${sh.session_date}T00:00:00`).toISOString() : null);
+  const winTo = sh.wrap_time ?? (winFrom ? new Date(new Date(winFrom).getTime() + 86400000).toISOString() : null);
+
+  const load = useCallback(async () => {
+    const r = await pcShootEquipList(sh.id);
+    if (!r.ok) { setErr(pcErr(r.error)); return; }
+    setErr(null); setRows(r.data.items);
+  }, [sh.id]);
+  useEffect(() => { void load(); void pcListStaff().then((r) => { if (r.ok) setStaff(r.data); }); }, [load]);
+
+  async function search() {
+    const r = await pcEquipSearch(q.trim());
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setResults(r.data.items); setSel(null); setAvail(null);
+  }
+  async function pick(a: EquipAsset) {
+    setSel(a); setAvail(null); setQty("1");
+    if (!winFrom || !winTo) { setAvail({ free: -1, now: -1, blocked: false }); return; }
+    const r = await pcEquipAvailability(a.id, winFrom, winTo);
+    if (r.ok) setAvail({ free: r.data.free_window, now: r.data.available_now, blocked: r.data.blocked });
+    else setAvail({ free: -1, now: -1, blocked: false });
+  }
+  async function reserve() {
+    if (busy || !sel) return; setBusy(true);
+    // نفس النافذة المفحوصة تُرسل للحجز — لا اعتماد على افتراضات الخادم.
+    const r = await pcShootReserve(sh.id, sel.id, Math.max(1, Number(qty) || 1), winFrom ?? undefined, winTo ?? undefined, emp || undefined);
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "تم الحجز — لا يُخصم المخزون إلا عند صرف العهدة.", en: "Reserved." }));
+    setSel(null); setResults([]); setQ(""); void load();
+  }
+  async function cancel(x: EquipReservation) {
+    const rs = window.prompt(t({ ar: `إلغاء حجز «${x.name}» — السبب (إلزامي):`, en: "Cancel reason:" }));
+    if (rs === null) return; if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+    const r = await pcReservationCancel(x.id, rs.trim());
+    if (!r.ok) { flash(pcErr(r.error)); return; } void load();
+  }
+  async function approve(x: EquipReservation) {
+    const r = await pcReservationApprove(x.id);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "اعتُمد الحجز.", en: "Approved." })); void load();
+  }
+  async function toCustody(x: EquipReservation) {
+    if (!window.confirm(t({ ar: `إنشاء طلب عهدة وصرف «${x.name}» (×${x.qty})؟ سيُخصم المخزون.`, en: "Issue custody?" }))) return;
+    const r = await pcReservationToCustody(x.id);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: `أُنشئت العهدة ${r.data.assignment_number} — بانتظار تأكيد الموظف.`, en: "Custody created." })); void load();
+  }
+
+  return (
+    <div className="mt-2 pt-2 border-t border-stone-800 space-y-2 text-xs">
+      <div className="text-[11px] text-stone-500">{t({ ar: "المعدات والتجهيزات (نظام العهدة)", en: "Equipment (custody system)" })}</div>
+      {err && <p className="text-red-400 text-[11px]">{err}</p>}
+
+      {rows.map((x) => (
+        <div key={x.id} className="bg-stone-950 border border-stone-800 rounded p-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-stone-200">{x.name}</span>
+            <span className="text-[10px] text-stone-600" dir="ltr">{x.code}</span>
+            <span className="text-[10px] text-stone-500" dir="ltr">×{x.qty}</span>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] ${x.status === "active" ? "bg-sky-900/40 text-sky-300" : x.status === "fulfilled" ? "bg-emerald-900/40 text-emerald-300" : "bg-stone-800 text-stone-400"}`}>
+              {t(RESV_STATUS_LABELS[x.status] ?? { ar: x.status, en: x.status })}
+            </span>
+            {x.approved_at && x.status === "active" && <span className="text-[10px] text-emerald-400">✓ {t({ ar: "معتمد", en: "Approved" })}</span>}
+            {x.assignment_no && (
+              <span className="text-[10px] text-amber-300" dir="ltr">{x.assignment_no}
+                <span className="text-stone-500" dir="rtl"> · {t(CUSTODY_ASSIGN_LABELS[x.assignment_status ?? ""] ?? { ar: x.assignment_status ?? "", en: x.assignment_status ?? "" })}</span>
+              </span>
+            )}
+            <span className="flex-1" />
+            {x.status === "active" && canManage && <button onClick={() => void cancel(x)} className="text-[10px] text-red-400">{t({ ar: "إلغاء", en: "Cancel" })}</button>}
+            {x.status === "active" && civMgr && !x.approved_at && <button onClick={() => void approve(x)} className="text-[10px] text-emerald-400">{t({ ar: "اعتماد", en: "Approve" })}</button>}
+            {x.status === "active" && civMgr && (
+              x.employee_id
+                ? <button onClick={() => void toCustody(x)} className="text-[10px] text-amber-400">{t({ ar: "صرف عهدة", en: "Issue custody" })}</button>
+                : <span className="text-[10px] text-stone-600" title={t({ ar: "لا مستلم محددًا — ألغِ الحجز وأعد إنشاءه مع مستلم.", en: "No recipient set." })}>{t({ ar: "صرف عهدة (يتطلب مستلمًا)", en: "Needs recipient" })}</span>
+            )}
+          </div>
+          <div className="mt-0.5 text-[10px] text-stone-600 flex gap-3 flex-wrap">
+            {x.employee_name && <span>{t({ ar: "المستلم", en: "Recipient" })}: {x.employee_name}</span>}
+            {x.from && <span dir="ltr">{fmtDT(x.from)} ← {x.to ? fmtDT(x.to) : "—"}</span>}
+            {x.note && <span>{x.note}</span>}
+          </div>
+        </div>
+      ))}
+      {rows.length === 0 && !err && <p className="text-stone-600">{t({ ar: "لا معدات محجوزة لهذه الجلسة.", en: "No reservations." })}</p>}
+
+      {canManage && (
+        <div className="space-y-1.5">
+          <div className="flex gap-1.5">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t({ ar: "ابحث بالاسم/الكود/الرقم التسلسلي…", en: "Search…" })} className={`${inp} flex-1 py-1`} onKeyDown={(e) => { if (e.key === "Enter") void search(); }} />
+            <button onClick={() => void search()} className={`${btnGhost} px-3 py-1`}>{t({ ar: "بحث", en: "Search" })}</button>
+          </div>
+          {results.length > 0 && (
+            <div className="max-h-40 overflow-y-auto space-y-1">
+              {results.map((a) => (
+                <button key={a.id} onClick={() => void pick(a)} className={`w-full text-right bg-stone-950 border rounded p-1.5 ${sel?.id === a.id ? "border-red-600" : "border-stone-800"}`}>
+                  <span className="text-stone-200">{a.name}</span>
+                  <span className="mr-2 text-[10px] text-stone-600" dir="ltr">{a.code}{a.serial ? ` · ${a.serial}` : ""}</span>
+                  <span className="mr-2 text-[10px] text-stone-500" dir="ltr">{a.available}/{a.total}</span>
+                  <span className="mr-1 text-[10px] text-stone-500">{a.condition}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {sel && (
+            <div className="bg-stone-950 border border-stone-800 rounded p-2 space-y-1.5">
+              <div className="text-[11px] text-stone-400">{sel.name} — {avail === null
+                ? t({ ar: "جارٍ فحص التوفر…", en: "Checking…" })
+                : avail.blocked
+                  ? <span className="text-red-400">{t({ ar: "الأصل غير متاح (حالته لا تسمح).", en: "Blocked." })}</span>
+                  : avail.free < 0
+                    ? <span className="text-amber-400">{t({ ar: "حدّد تاريخ الجلسة أولًا لفحص التوفر.", en: "Set session date first." })}</span>
+                    : <span><span className="text-emerald-400" dir="ltr">{avail.free}</span> {t({ ar: "متاح في فترة الجلسة", en: "free in window" })} · <span className="text-stone-500" dir="ltr">{avail.now}</span> {t({ ar: "في المستودع الآن", en: "in stock now" })}</span>}
+              </div>
+              <div className="flex flex-wrap gap-1.5 items-center">
+                {sel.type === "quantity_based" && <input type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} className={`${inp} w-20 py-1`} dir="ltr" />}
+                <select value={emp} onChange={(e) => setEmp(e.target.value)} className={`${inp} py-1 text-[11px]`} style={{ colorScheme: "dark" }}>
+                  <option value="">{t({ ar: "— المستلم (اختياري للحجز) —", en: "— recipient —" })}</option>
+                  {staff.map((s) => <option key={s.id} value={s.id}>{s.full_name ?? s.id.slice(0, 6)}</option>)}
+                </select>
+                <button disabled={busy || (avail?.blocked ?? false)} onClick={() => void reserve()} className={`${btnRed} px-3 py-1`}>{busy ? "…" : t({ ar: "حجز", en: "Reserve" })}</button>
+              </div>
+              <p className="text-[10px] text-stone-600">{t({ ar: "الحجز لا يخصم المخزون — الخصم يتم عند «صرف عهدة» عبر دورة العهدة.", en: "Reservation doesn't deduct stock." })}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ShootsTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: Flash }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<ShootSession[]>([]);
   const [title, setTitle] = useState(""); const [date, setDate] = useState(""); const [loc, setLoc] = useState(""); const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [openCS, setOpenCS] = useState<string | null>(null);
+  const [openEq, setOpenEq] = useState<string | null>(null);
   const [deepCS, setDeepCS] = useState<string | null>(null);
   const load = useCallback(async () => { const r = await pcListShoots(projectId); if (r.ok) setRows(r.data); }, [projectId]);
   useEffect(() => { void load(); }, [load]);
@@ -401,6 +556,9 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
             <button onClick={() => setOpenCS(openCS === sh.id ? null : sh.id)} className={`${btnGhost} px-2.5 py-1 text-[11px] text-sky-300`}>
               Call Sheet {openCS === sh.id ? "▴" : "▾"}
             </button>
+            <button onClick={() => setOpenEq(openEq === sh.id ? null : sh.id)} className={`${btnGhost} px-2.5 py-1 text-[11px] text-lime-300`}>
+              {t({ ar: "المعدات والتجهيزات", en: "Equipment" })} {openEq === sh.id ? "▴" : "▾"}
+            </button>
             {canManage && <button onClick={() => void delWithReason("shoot", sh.id, sh.title, t, flash, load)} className={`${btnGhost} px-2.5 py-1 text-[11px] text-red-400 border-red-900/50`}>{t({ ar: "حذف بسبب", en: "Delete" })}</button>}
           </div>
           {open === sh.id && canManage && <ShootDetail projectId={projectId} sh={sh} onSaved={() => void load()} flash={flash} />}
@@ -411,6 +569,7 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
               {sh.completion_report && <div>{t({ ar: "تقرير الإكمال", en: "Report" })}: {sh.completion_report}</div>}
             </div>
           )}
+          {openEq === sh.id && <ShootEquipment sh={sh} canManage={canManage} flash={flash} />}
           {openCS === sh.id && <CallSheetManager shoot={sh} canManage={canManage} flash={flash} initialPreviewId={deepCS ?? undefined} />}
         </div>
       ))}

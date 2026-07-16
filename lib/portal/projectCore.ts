@@ -454,6 +454,46 @@ export interface GanttBar {
 export interface GanttData { bars: GanttBar[]; deps: { from: string; to: string }[]; project: { due_date: string | null; delivery_date: string | null; start_date: string | null } | null }
 export const pcGanttData = (projectId: string) => prpc<GanttData>("project_core_gantt", { p_project: projectId });
 
+// ─── Batch 4: جسر معدات جلسات التصوير ↔ نظام العهدة القائم ───
+export interface EquipAsset {
+  id: string; code: string; name: string; serial: string | null; type: "serialized" | "quantity_based";
+  unit: string; condition: string; availability: string; total: number; available: number; reserved_now: number;
+}
+export interface EquipAvailability {
+  total: number; available_now: number; reserved_window: number; free_window: number;
+  condition: string; availability: string; blocked: boolean;
+}
+export interface EquipReservation {
+  id: string; asset_id: string; code: string; name: string; qty: number;
+  from: string | null; to: string | null; status: string; employee_id: string | null; employee_name: string | null;
+  note: string | null; approved_at: string | null; assignment_id: string | null;
+  assignment_no: string | null; assignment_status: string | null;
+}
+export const pcEquipSearch = (q: string) => prpc<{ items: EquipAsset[] }>("pc_equipment_search", { p_q: q });
+export const pcEquipAvailability = (assetId: string, from: string, to: string) =>
+  prpc<EquipAvailability>("pc_equipment_availability", { p_asset: assetId, p_from: from, p_to: to });
+export const pcShootEquipList = (shootId: string) => prpc<{ items: EquipReservation[] }>("pc_shoot_equipment_list", { p_shoot: shootId });
+export const pcShootReserve = (shootId: string, assetId: string, qty: number, from?: string, to?: string, employee?: string, note?: string) =>
+  prpc<{ ok: boolean; id: string }>("pc_shoot_reserve_equipment", {
+    p_shoot: shootId, p_asset: assetId, p_qty: qty, p_from: from ?? null, p_to: to ?? null,
+    p_employee: employee ?? null, p_note: note ?? null,
+  });
+export const pcReservationCancel = (id: string, reason: string) => prpc<boolean>("pc_reservation_cancel", { p_id: id, p_reason: reason });
+export const pcReservationApprove = (id: string) => prpc<boolean>("pc_reservation_approve", { p_id: id });
+export const pcReservationToCustody = (id: string) =>
+  prpc<{ ok: boolean; id: string; assignment_number: string }>("pc_reservation_to_custody", { p_id: id });
+export const CUSTODY_ASSIGN_LABELS: Record<string, { ar: string; en: string }> = {
+  draft: { ar: "مسودّة", en: "Draft" }, pending_employee_confirmation: { ar: "بانتظار تأكيد الموظف", en: "Pending confirm" },
+  active: { ar: "عهدة نشطة", en: "Active" }, return_requested: { ar: "طلب إرجاع", en: "Return requested" },
+  under_inspection: { ar: "قيد الفحص", en: "Inspection" }, partially_returned: { ar: "إرجاع جزئي", en: "Partial return" },
+  returned: { ar: "مُرجَعة", en: "Returned" }, rejected: { ar: "مرفوضة", en: "Rejected" },
+  disputed: { ar: "نزاع", en: "Disputed" }, cancelled: { ar: "ملغاة", en: "Cancelled" },
+};
+export const RESV_STATUS_LABELS: Record<string, { ar: string; en: string }> = {
+  active: { ar: "حجز نشط", en: "Active" }, fulfilled: { ar: "صُرفت عهدة", en: "Fulfilled" },
+  cancelled: { ar: "ملغى", en: "Cancelled" }, expired: { ar: "منتهٍ", en: "Expired" },
+};
+
 // تنسيق تاريخ/وقت موحّد بأرقام لاتينية وترتيب DD/MM/YYYY (يتجنّب لبس 2026/16/07). دائمًا dir=ltr.
 export const fmtD = (s: string | null | undefined) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—";
 export const fmtDT = (s: string | null | undefined) => s ? new Date(s).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -502,6 +542,18 @@ export function pcErr(e: string): string {
   if (/cannot_delete_collected/.test(e)) return "دفعة حُصِّل منها مبلغ — قيد مالي لا يُحذف.";
   if (/bad_entity_type/.test(e)) return "نوع عنصر غير مدعوم.";
   if (/recipients_required/.test(e)) return "اختر مستلمًا موظفًا واحدًا على الأقل.";
+  if (/custody_system_missing/.test(e)) return "نظام العهدة والمخزون غير مطبَّق في قاعدة البيانات.";
+  if (/over_reserved/.test(e)) return "الكمية المطلوبة تتجاوز المتاح في هذه الفترة (حجوزات متداخلة).";
+  if (/duplicate_reservation/.test(e)) return "يوجد حجز نشط لهذا الأصل على نفس الجلسة.";
+  if (/asset_unavailable/.test(e)) return "الأصل غير متاح (تالف/مفقود/في الصيانة).";
+  if (/insufficient_stock/.test(e)) return "الكمية غير متوفرة في المخزون.";
+  if (/reserved_shortage/.test(e)) return "الصرف يكسر حجوزات نشطة لموظفين آخرين.";
+  if (/asset_already_assigned/.test(e)) return "الأصل مُسلَّم بالفعل في عهدة نشطة.";
+  if (/employee_required/.test(e)) return "حدّد الموظف المستلم أولًا.";
+  if (/equipment_out/.test(e)) return "توجد معدات غير مرجعة مرتبطة بالجلسة — أكمل دورة الإرجاع أولًا.";
+  if (/bad_window/.test(e)) return "حدّد فترة حجز صحيحة (النهاية بعد البداية).";
+  if (/bad_quantity/.test(e)) return "كمية غير صحيحة.";
+  if (/custody_already_issued/.test(e)) return "صُرفت عهدة لهذا الحجز مسبقًا.";
   if (/bad_link/.test(e)) return "العنصر المرتبط لا ينتمي لهذا المشروع.";
   if (/item_deleted/.test(e)) return "العنصر محذوف — استعده أولًا.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";
