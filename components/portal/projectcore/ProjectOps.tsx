@@ -18,7 +18,8 @@ import {
   type TaskChecklistItem, type TaskComment, type ProjectApproval, type ProjectActivity, type PcApprovalKind,
 } from "@/lib/portal/projectCore";
 import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
-import { LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
+import { LocationsTab, TagsTab } from "./ProjectAdvanced";
+import { TemplateManagerButton } from "./ProjectTemplates";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
@@ -131,7 +132,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           <h3 className="text-sm font-semibold text-white shrink-0">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
           <div className="flex gap-2 flex-wrap">
             <button onClick={() => setPrintPack(true)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "طباعة حزمة المشروع", en: "Print Pack" })}</button>
-            {canManage && <ApplyTemplateButton projectId={projectId} flash={flash} onApplied={() => { flash(t({ ar: "طُبِّق القالب — راجع تبويب المهام.", en: "Template applied — see Tasks." })); void loadProg(); }} />}
+            {caps.isAdminArea && <TemplateManagerButton projectId={projectId} flash={flash} onApplied={() => { void loadProg(); onChanged?.(); }} />}
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">

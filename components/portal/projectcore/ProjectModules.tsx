@@ -13,6 +13,9 @@ import {
   pcListCosts, pcCostAdd, pcListRisks, pcRiskUpsert, pcEntityDelete, type TrashEntity,
   pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory, pcGetCallSheetMeta,
   pcListDeliverableVersions, pcDeliverableVersionAdd, pcMeetingToTask,
+  pcDeliverableUpsert, pcDeliverableReview, pcDeliverableComment, pcListDeliverableComments,
+  pcDeliverableUpload, pcSignDeliverableFiles,
+  type DlvReviewAction, type InternalComment,
   pcEquipSearch, pcEquipAvailability, pcShootEquipList, pcShootReserve,
   pcReservationCancel, pcReservationApprove, pcReservationToCustody,
   CUSTODY_ASSIGN_LABELS, RESV_STATUS_LABELS,
@@ -89,48 +92,180 @@ export function TeamTab({ projectId, canManage, flash }: { projectId: string; ca
 export function DeliverablesTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: Flash }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<Deliverable[]>([]);
+  const [staff, setStaff] = useState<StaffLite[]>([]);
   const [open, setOpen] = useState<string | null>(null);
-  useEffect(() => { void pcListDeliverables(projectId).then((r) => { if (r.ok) setRows(r.data); }); }, [projectId]);
-  if (rows.length === 0) return <p className="text-xs text-stone-500">{t({ ar: "لا توجد مخرجات بعد. تُنشأ المخرجات من صفحة المشروع في «المشاريع»؛ وتُدار إصداراتها هنا.", en: "No deliverables yet — created from the Projects page; versions managed here." })}</p>;
+  const [f, setF] = useState({ title: "", type: "video", assignee: "", due: "" });
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => { const r = await pcListDeliverables(projectId); if (r.ok) setRows(r.data); }, [projectId]);
+  useEffect(() => { void load(); void pcListStaff().then((r) => { if (r.ok) setStaff(r.data); }); }, [load]);
+  async function add() {
+    if (busy || !f.title.trim()) return; setBusy(true);
+    const r = await pcDeliverableUpsert(projectId, { title: f.title.trim(), type: f.type, assignee_id: f.assignee || null, due_date: f.due || null });
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setF({ title: "", type: "video", assignee: "", due: "" }); await load();
+  }
+  const staffName = (id: string | null | undefined) => id ? (staff.find((x) => x.id === id)?.full_name ?? "—") : null;
   return (
     <div className="space-y-1.5">
+      {canManage && (
+        <div className={`${card} p-3 flex flex-wrap gap-2 items-end`}>
+          <input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder={t({ ar: "مخرَج جديد…", en: "New deliverable…" })} className={`${inp} flex-1 min-w-[140px]`} />
+          <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} className={inp} style={{ colorScheme: "dark" }}>
+            {["video", "photo", "other"].map((x) => <option key={x} value={x}>{t(x === "video" ? { ar: "فيديو", en: "Video" } : x === "photo" ? { ar: "صور", en: "Photo" } : { ar: "أخرى", en: "Other" })}</option>)}
+          </select>
+          <select value={f.assignee} onChange={(e) => setF({ ...f, assignee: e.target.value })} className={inp} style={{ colorScheme: "dark" }}>
+            <option value="">{t({ ar: "— المكلَّف —", en: "— assignee —" })}</option>
+            {staff.map((s) => <option key={s.id} value={s.id}>{s.full_name ?? s.id.slice(0, 6)}</option>)}
+          </select>
+          <input type="date" value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} className={inp} style={{ colorScheme: "dark" }} />
+          <button disabled={busy || !f.title.trim()} onClick={() => void add()} className={`${btnRed} px-4 py-2`}>{t({ ar: "إضافة", en: "Add" })}</button>
+        </div>
+      )}
+      {rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد مخرجات بعد.", en: "No deliverables yet." })}</p>}
       {rows.map((d) => (
         <div key={d.id} className={`${card} p-3`}>
-          <div className="flex items-center justify-between gap-2">
-            <button onClick={() => setOpen(open === d.id ? null : d.id)} className="min-w-0 text-right flex-1"><div className="text-sm text-stone-200 truncate">{d.title}</div><div className="text-[11px] text-stone-500">v{d.version} · {d.type}</div></button>
-            <span className="text-[11px] px-2 py-0.5 rounded bg-stone-800 text-stone-300 shrink-0">{t(DLV_LABEL[d.status] ?? { ar: d.status, en: d.status })}</span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <button onClick={() => setOpen(open === d.id ? null : d.id)} className="min-w-0 text-right flex-1">
+              <div className="text-sm text-stone-200 truncate">{d.title}</div>
+              <div className="text-[11px] text-stone-500">
+                {d.type}{staffName(d.assignee_id) ? ` · ${staffName(d.assignee_id)}` : ""}{d.due_date ? <span dir="ltr"> · {d.due_date}</span> : ""}
+                {d.watermark_required && <span> · {t({ ar: "علامة مائية", en: "WM" })}</span>}
+                {!d.allow_download && <span> · {t({ ar: "التنزيل ممنوع", en: "No DL" })}</span>}
+              </div>
+            </button>
+            <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${d.status === "approved" ? "bg-emerald-900/40 text-emerald-300" : d.status === "final_delivered" ? "bg-emerald-800/60 text-emerald-200" : d.status === "revision_requested" ? "bg-amber-900/40 text-amber-300" : d.status === "client_review" ? "bg-sky-900/40 text-sky-300" : "bg-stone-800 text-stone-300"}`}>{t(DLV_LABEL[d.status] ?? { ar: d.status, en: d.status })}</span>
           </div>
-          {open === d.id && <DeliverableVersions deliverableId={d.id} canManage={canManage} flash={flash} />}
+          {open === d.id && <DeliverableVersions d={d} canManage={canManage} flash={flash} onChanged={load} />}
         </div>
       ))}
     </div>
   );
 }
 
-function DeliverableVersions({ deliverableId, canManage, flash }: { deliverableId: string; canManage: boolean; flash: Flash }) {
+function DeliverableVersions({ d, canManage, flash, onChanged }: { d: Deliverable; canManage: boolean; flash: Flash; onChanged: () => Promise<void> }) {
   const { t } = useI18n();
   const [vers, setVers] = useState<DeliverableVersion[]>([]);
+  const [comments, setComments] = useState<InternalComment[]>([]);
   const [url, setUrl] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { const r = await pcListDeliverableVersions(deliverableId); if (r.ok) setVers(r.data); }, [deliverableId]);
+  const [signed, setSigned] = useState<Record<string, string>>({});
+  const [cBody, setCBody] = useState(""); const [cTc, setCTc] = useState("");
+  const load = useCallback(async () => {
+    const [v, c] = await Promise.all([pcListDeliverableVersions(d.id), pcListDeliverableComments(d.id)]);
+    if (v.ok) {
+      setVers(v.data);
+      const paths = v.data.map((x) => x.file_path).filter(Boolean) as string[];
+      if (paths.length) setSigned(await pcSignDeliverableFiles(paths));
+    }
+    if (c.ok) setComments(c.data);
+  }, [d.id]);
   useEffect(() => { void load(); }, [load]);
-  async function add() { if (busy) return; setBusy(true); const r = await pcDeliverableVersionAdd(deliverableId, { preview_url: url.trim() || undefined, note: note.trim() || undefined }); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setUrl(""); setNote(""); await load(); }
+  const final = d.status === "final_delivered";
+  async function add() {
+    if (busy) return; setBusy(true);
+    const r = await pcDeliverableVersionAdd(d.id, { preview_url: url.trim() || undefined, note: note.trim() || undefined });
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setUrl(""); setNote(""); await load(); await onChanged();
+  }
+  async function upload(file: File) {
+    if (busy) return; setBusy(true);
+    const up = await pcDeliverableUpload(d.project_id, d.id, file);
+    if (!up.ok) { setBusy(false); flash(t({ ar: "فشل رفع الملف.", en: "Upload failed." })); return; }
+    const r = await pcDeliverableVersionAdd(d.id, { file_path: up.data.path, note: note.trim() || file.name });
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setNote(""); await load(); await onChanged();
+    flash(t({ ar: "رُفع الملف وأُنشئت نسخة.", en: "Uploaded." }));
+  }
+  async function review(v: DeliverableVersion, action: DlvReviewAction) {
+    if (busy) return;
+    let noteTxt: string | undefined, force = false;
+    if (action === "revision" || action === "reject") {
+      const p = window.prompt(t({ ar: "ملاحظات التعديل/الرفض (إلزامية):", en: "Revision note:" }));
+      if (p === null) return; if (!p.trim()) { flash(t({ ar: "الملاحظة إلزامية.", en: "Required." })); return; }
+      noteTxt = p.trim();
+    }
+    setBusy(true);
+    let r = await pcDeliverableReview(v.id, action, noteTxt, force);
+    if (!r.ok && /old_version/.test(r.error) && (action === "approve" || action === "final")) {
+      setBusy(false);
+      if (!window.confirm(t({ ar: `v${v.version} ليست الأحدث — تأكيد ${action === "final" ? "التسليم النهائي" : "الاعتماد"} لنسخة أقدم؟`, en: "Older version — confirm?" }))) return;
+      setBusy(true);
+      r = await pcDeliverableReview(v.id, action, noteTxt, true);
+    }
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    await load(); await onChanged();
+  }
+  async function addComment() {
+    if (busy || !cBody.trim()) return; setBusy(true);
+    const tc = cTc.trim() ? (() => { const p = cTc.trim().split(":").map(Number); return p.length === 2 ? p[0] * 60 + p[1] : Number(cTc); })() : undefined;
+    const r = await pcDeliverableComment(d.id, cBody.trim(), Number.isFinite(tc) ? tc : undefined);
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setCBody(""); setCTc(""); await load();
+  }
+  const tcFmt = (s: number | null) => s == null ? null : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   return (
     <div className="mt-2 pt-2 border-t border-stone-800 space-y-2 text-xs">
-      <div className="text-[11px] text-stone-500">{t({ ar: "الإصدارات", en: "Versions" })}</div>
+      <div className="text-[11px] text-stone-500">{t({ ar: "الإصدارات ودورة الاعتماد", en: "Versions & approvals" })}</div>
       {vers.map((v) => (
-        <div key={v.id} className="bg-stone-950 border border-stone-800 rounded p-2 flex items-center justify-between gap-2">
-          <div className="min-w-0"><span className="text-stone-200">v{v.version}</span>{v.note && <span className="mr-2 text-stone-500">· {v.note}</span>}</div>
-          {v.preview_url && <a href={v.preview_url} target="_blank" rel="noreferrer" className="text-sky-400 shrink-0" dir="ltr">{t({ ar: "معاينة", en: "Preview" })}</a>}
+        <div key={v.id} className="bg-stone-950 border border-stone-800 rounded p-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-stone-200">v{v.version}</span>
+            {v.approved_at && !v.superseded && <span className="text-[10px] px-1.5 rounded bg-emerald-900/40 text-emerald-300">✓ {t({ ar: "معتمدة", en: "Approved" })}</span>}
+            {v.superseded && <span className="text-[10px] px-1.5 rounded bg-stone-800 text-stone-500">{t({ ar: "مستبدلة", en: "Superseded" })}</span>}
+            {v.is_final && <span className="text-[10px] px-1.5 rounded bg-emerald-800/60 text-emerald-200">{t({ ar: "تسليم نهائي", en: "Final" })}</span>}
+            {v.client_visible && <span className="text-[10px] px-1.5 rounded bg-sky-900/40 text-sky-300">{t({ ar: "مرئية للعميل", en: "Client" })}</span>}
+            {v.note && <span className="text-stone-500 truncate">· {v.note}</span>}
+            <span className="flex-1" />
+            {(v.file_path && signed[v.file_path]) ? <a href={signed[v.file_path]} target="_blank" rel="noreferrer" className="text-sky-400 shrink-0">{t({ ar: "معاينة (موقّعة)", en: "Preview" })}</a>
+              : v.preview_url ? <a href={v.preview_url} target="_blank" rel="noreferrer" className="text-sky-400 shrink-0" dir="ltr">{t({ ar: "معاينة", en: "Preview" })}</a> : null}
+          </div>
+          {canManage && !final && (
+            <div className="mt-1 flex gap-2 flex-wrap text-[10px]">
+              {!v.approved_at && <button disabled={busy} onClick={() => void review(v, "approve")} className="text-emerald-400">{t({ ar: "اعتماد", en: "Approve" })}</button>}
+              <button disabled={busy} onClick={() => void review(v, "revision")} className="text-amber-400">{t({ ar: "طلب تعديل", en: "Revision" })}</button>
+              {v.client_visible
+                ? <button disabled={busy} onClick={() => void review(v, "unshare")} className="text-stone-400">{t({ ar: "إخفاء عن العميل", en: "Unshare" })}</button>
+                : <button disabled={busy} onClick={() => void review(v, "send_client")} className="text-sky-400">{t({ ar: "إرسال لمراجعة العميل", en: "Send to client" })}</button>}
+              {v.approved_at && !v.superseded && <button disabled={busy} onClick={() => void review(v, "final")} className="text-emerald-300 font-semibold">{t({ ar: "تسليم نهائي", en: "Final delivery" })}</button>}
+            </div>
+          )}
         </div>
       ))}
       {vers.length === 0 && <p className="text-stone-600">{t({ ar: "لا إصدارات.", en: "No versions." })}</p>}
-      {canManage && (
-        <div className="flex flex-wrap gap-1.5">
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t({ ar: "رابط المعاينة", en: "Preview URL" })} className={`${inp} flex-1 min-w-[120px] py-1`} dir="ltr" />
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t({ ar: "ملاحظة", en: "Note" })} className={`${inp} flex-1 min-w-[100px] py-1`} />
-          <button disabled={busy || (!url.trim() && !note.trim())} onClick={() => void add()} className={`${btnRed} px-3 py-1`}>{t({ ar: "+ نسخة", en: "+ Version" })}</button>
+      {canManage && !final && (
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t({ ar: "رابط معاينة خارجي", en: "Preview URL" })} className={`${inp} flex-1 min-w-[120px] py-1`} dir="ltr" />
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t({ ar: "ملاحظة النسخة", en: "Note" })} className={`${inp} flex-1 min-w-[100px] py-1`} />
+            <button disabled={busy || (!url.trim() && !note.trim())} onClick={() => void add()} className={`${btnRed} px-3 py-1`}>{t({ ar: "+ نسخة", en: "+ Version" })}</button>
+            <label className={`${btnGhost} px-3 py-1 cursor-pointer`}>
+              {busy ? "…" : t({ ar: "رفع ملف ↑", en: "Upload" })}
+              <input type="file" className="hidden" onChange={(e) => { const fl = e.target.files?.[0]; if (fl) void upload(fl); e.target.value = ""; }} />
+            </label>
+          </div>
+          <p className="text-[10px] text-stone-600">{t({ ar: "الملفات تُخزن في مخزن خاص بالموظفين وتُعرض بروابط موقّتة (Signed URLs).", en: "Private storage; signed URLs." })}</p>
         </div>
       )}
+      {final && canManage && <button onClick={() => vers[0] && void review(vers[0], "archive")} className={`${btnGhost} px-3 py-1 text-[10px]`}>{t({ ar: "أرشفة المخرَج", en: "Archive" })}</button>}
+      <div className="pt-1 border-t border-stone-800/60">
+        <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "تعليقات داخلية (بكود زمني اختياري)", en: "Internal comments (timecode)" })}</div>
+        {comments.map((c) => (
+          <div key={c.id} className="flex items-start gap-2 text-stone-300 py-0.5">
+            {c.timecode_seconds != null && <span className="text-[10px] text-amber-400 shrink-0" dir="ltr">[{tcFmt(c.timecode_seconds)}]</span>}
+            <span className="flex-1" dir="auto">{c.body}</span>
+            <span className="text-[10px] text-stone-600 shrink-0" dir="ltr">{fmtDT(c.created_at)}</span>
+          </div>
+        ))}
+        <div className="flex gap-1.5 mt-1">
+          <input value={cTc} onChange={(e) => setCTc(e.target.value)} placeholder="mm:ss" className={`${inp} w-20 py-1`} dir="ltr" />
+          <input value={cBody} onChange={(e) => setCBody(e.target.value)} placeholder={t({ ar: "تعليق…", en: "Comment…" })} className={`${inp} flex-1 py-1`} onKeyDown={(e) => { if (e.key === "Enter") void addComment(); }} />
+          <button disabled={busy || !cBody.trim()} onClick={() => void addComment()} className={`${btnGhost} px-2`}>↵</button>
+        </div>
+      </div>
     </div>
   );
 }

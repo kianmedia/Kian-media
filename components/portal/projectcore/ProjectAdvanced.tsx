@@ -7,13 +7,14 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
   pcListLocations, pcLocationCreate, pcLocationArchive,
-  pcListTags, pcTagCreate, pcListProjectTags, pcTagLink, pcListTemplates, pcApplyTemplate, pcCreateTemplate, pcListTasks, pcErr,
-  type ProjectLocation, type Tag, type ProjectTemplate,
+  pcListTags, pcTagCreate, pcListProjectTags, pcTagLink, pcErr,
+  type ProjectLocation, type Tag,
 } from "@/lib/portal/projectCore";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const inp = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
 const btnRed = "rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium";
+
 const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200 text-sm disabled:opacity-50";
 type Flash = (m: string) => void;
 
@@ -82,51 +83,3 @@ export function TagsTab({ projectId, canManage, flash }: { projectId: string; ca
   );
 }
 
-// ─── تطبيق قالب (زر يفتح منتقيًا مع معاينة) ───
-export function ApplyTemplateButton({ projectId, onApplied, flash }: { projectId: string; onApplied: () => void; flash: Flash }) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const [tpls, setTpls] = useState<ProjectTemplate[]>([]);
-  const [sel, setSel] = useState<ProjectTemplate | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [newName, setNewName] = useState("");
-  useEffect(() => { if (open) void pcListTemplates().then((r) => { if (r.ok) setTpls(r.data); }); }, [open]);
-  const taskCount = (tpl: ProjectTemplate) => Array.isArray((tpl.spec as { tasks?: unknown[] })?.tasks) ? ((tpl.spec as { tasks: unknown[] }).tasks).length : 0;
-  async function apply() { if (busy || !sel) return; setBusy(true); const r = await pcApplyTemplate(projectId, sel.id); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } flash(t({ ar: `طُبِّق القالب (${r.data.tasks} مهمة).`, en: `Applied (${r.data.tasks} tasks).` })); setOpen(false); setSel(null); onApplied(); }
-  // «حفظ كقالب»: يلتقط مهام المشروع الحالية (المستوى الأعلى) إلى spec ليصبح القالب قابلًا للتطبيق فعليًا.
-  async function createTpl() {
-    if (busy || !newName.trim()) return; setBusy(true);
-    const tk = await pcListTasks(projectId);
-    const tasks = tk.ok ? tk.data.filter((x) => !x.parent_task_id).map((x) => ({ title: x.title, description: x.description ?? undefined, priority: x.priority, estimated_hours: x.estimated_hours ?? undefined })) : [];
-    const r = await pcCreateTemplate({ name: newName.trim(), spec: { tasks } });
-    setBusy(false);
-    if (!r.ok) { flash(pcErr(r.error)); return; }
-    flash(t({ ar: `حُفظ القالب (${tasks.length} مهمة).`, en: `Template saved (${tasks.length} tasks).` }));
-    setNewName(""); void pcListTemplates().then((x) => { if (x.ok) setTpls(x.data); });
-  }
-  return (
-    <>
-      <button onClick={() => setOpen(true)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "تطبيق قالب", en: "Apply Template" })}</button>
-      {open && (
-        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/70 p-3 sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
-          <div className="w-full max-w-md my-4 bg-stone-950 border border-stone-800 rounded-2xl p-4 space-y-3" dir="rtl" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-white">{t({ ar: "تطبيق قالب على المشروع", en: "Apply Template" })}</h3><button onClick={() => setOpen(false)} className="text-stone-400 text-sm">✕</button></div>
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {tpls.map((tpl) => <button key={tpl.id} onClick={() => setSel(tpl)} className={`${card} p-2.5 w-full text-right ${sel?.id === tpl.id ? "ring-2 ring-red-500" : ""}`}><div className="text-sm text-stone-200">{tpl.name}</div><div className="text-[11px] text-stone-500">{taskCount(tpl)} {t({ ar: "مهمة", en: "tasks" })}{tpl.description ? ` · ${tpl.description}` : ""}</div></button>)}
-              {tpls.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا قوالب. أنشئ واحدًا:", en: "No templates. Create one:" })}</p>}
-            </div>
-            <div className="space-y-1">
-              <div className="flex gap-2">
-                <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t({ ar: "احفظ مهام هذا المشروع كقالب…", en: "Save this project's tasks as a template…" })} className={`${inp} flex-1`} />
-                <button disabled={busy || !newName.trim()} onClick={() => void createTpl()} className={`${btnGhost} px-3`}>{t({ ar: "حفظ كقالب", en: "Save" })}</button>
-              </div>
-              <p className="text-[10px] text-stone-600">{t({ ar: "يلتقط مهام المشروع الحالية ليصبح قالبًا قابلًا للتطبيق.", en: "Captures current project tasks into a reusable template." })}</p>
-            </div>
-            {sel && <p className="text-[11px] text-amber-400">{t({ ar: `سيُنشئ ${taskCount(sel)} مهمة على المشروع.`, en: `Will create ${taskCount(sel)} tasks.` })}</p>}
-            <button disabled={busy || !sel} onClick={() => void apply()} className={`${btnRed} w-full py-2.5`}>{busy ? "…" : t({ ar: "تطبيق القالب", en: "Apply" })}</button>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}

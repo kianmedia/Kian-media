@@ -4,6 +4,7 @@
 // يعتمد على docs/project_core_FINAL_RUNME.sql. لا supabase-js.
 // ════════════════════════════════════════════════════════════════════════════
 import { pget, prpc, ppost, ppatch, enc, currentUserId, type Result } from "@/lib/portal/client";
+import { SUPABASE_URL, SUPABASE_KEY, getValidSession } from "@/lib/portalAuth";
 
 // ─── الثوابت/الأنواع ───
 export const PC_STAGES = [
@@ -114,7 +115,10 @@ export interface ShootSession {
   start_time?: string | null; wrap_time?: string | null; cancel_reason?: string | null;
   crew: unknown[]; equipment: unknown[]; vehicles: unknown[]; shot_list: unknown[]; attendance: unknown[];
 }
-export interface Deliverable { id: string; project_id: string; title: string; type: string; status: string; version: number; preview_url: string | null; created_at: string }
+export interface Deliverable {
+  id: string; project_id: string; title: string; type: string; status: string; version: number; preview_url: string | null; created_at: string;
+  assignee_id?: string | null; due_date?: string | null; watermark_required?: boolean; allow_download?: boolean;
+}
 
 // ─── القراءات ───
 export async function pcListProjects(): Promise<Result<OperationalProject[]>> {
@@ -209,7 +213,7 @@ export const pcListShoots = (projectId: string) =>
 export const pcShootUpsert = (projectId: string, data: Record<string, unknown>) => prpc<ShootSession>("pc_shoot_upsert", { p_project: projectId, p_data: data });
 
 export const pcListDeliverables = (projectId: string) =>
-  pget<Deliverable[]>(`deliverables?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=id,project_id,title,type,status,version,preview_url,created_at&order=created_at.desc`);
+  pget<Deliverable[]>(`deliverables?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=id,project_id,title,type,status,version,preview_url,created_at,assignee_id,due_date,watermark_required,allow_download&order=created_at.desc`);
 
 export interface ClientLite { id: string; full_name: string | null; company: string | null }
 export const pcListClients = () =>
@@ -268,11 +272,71 @@ export const pcApplyTemplate = (projectId: string, templateId: string) =>
   prpc<{ ok: boolean; tasks: number }>("project_core_apply_template", { p_project: projectId, p_template: templateId });
 
 // ─── إصدارات المخرجات ───
-export interface DeliverableVersion { id: string; deliverable_id: string; version: number; preview_url: string | null; note: string | null; created_by: string | null; created_at: string }
+export interface DeliverableVersion {
+  id: string; deliverable_id: string; version: number; preview_url: string | null; note: string | null;
+  created_by: string | null; created_at: string;
+  file_path?: string | null; client_visible?: boolean; approved_at?: string | null; approved_by?: string | null;
+  is_final?: boolean; superseded?: boolean;
+}
 export const pcListDeliverableVersions = (deliverableId: string) =>
   pget<DeliverableVersion[]>(`project_deliverable_versions?deliverable_id=eq.${enc(deliverableId)}&select=*&order=version.desc`);
 export const pcDeliverableVersionAdd = (deliverableId: string, data: Record<string, unknown>) =>
   prpc<DeliverableVersion>("project_core_deliverable_version_add", { p_deliverable: deliverableId, p_data: data });
+
+// ─── Batch 6: دورة حياة المخرَج + القوالب v2 ───
+export const pcDeliverableUpsert = (projectId: string, data: Record<string, unknown>) =>
+  prpc<Deliverable>("pc_deliverable_upsert", { p_project: projectId, p_data: data });
+export type DlvReviewAction = "send_client" | "unshare" | "approve" | "reject" | "revision" | "final" | "archive";
+export const pcDeliverableReview = (versionId: string, action: DlvReviewAction, note?: string, force = false) =>
+  prpc<{ ok: boolean; action: string; version: number }>("pc_deliverable_review", { p_version: versionId, p_action: action, p_note: note ?? null, p_force: force });
+export const pcDeliverableComment = (deliverableId: string, body: string, timecode?: number) =>
+  prpc<{ ok: boolean; id: string }>("pc_deliverable_comment", { p_deliverable: deliverableId, p_body: body, p_timecode: timecode ?? null });
+export interface InternalComment { id: string; deliverable_id: string | null; author_id: string; body: string; timecode_seconds: number | null; created_at: string }
+export const pcListDeliverableComments = (deliverableId: string) =>
+  pget<InternalComment[]>(`internal_comments?deliverable_id=eq.${enc(deliverableId)}&select=id,deliverable_id,author_id,body,timecode_seconds,created_at&order=created_at.desc&limit=100`);
+export interface TemplateApplyResult { ok: boolean; application_id: string; tasks: number; milestones: number; deliverables: number; risks: number; meetings: number; shoots: number }
+export const pcApplyTemplateV2 = (projectId: string, templateId: string, modules?: string[], start?: string) =>
+  prpc<TemplateApplyResult>("project_core_apply_template_v2", { p_project: projectId, p_template: templateId, p_modules: modules ?? null, p_start: start ?? null });
+export const pcListAllTemplates = () => pget<ProjectTemplate[]>(`project_templates?select=*&order=name.asc`);
+
+// ─── ملفات المخرجات: Storage خاص (staff فقط) + Signed URLs مؤقتة ───
+export const PC_DLV_BUCKET = "project-deliverables";
+const pcSafeName = (n: string) => n.replace(/[^\w.\-]+/g, "_").slice(-80);
+async function pcStorageFetch(path: string, init: RequestInit): Promise<Response> {
+  const s = await getValidSession();
+  if (!s) throw new Error("not_authenticated");
+  const doFetch = (token: string) => fetch(`${SUPABASE_URL}/storage/v1${path}`, {
+    ...init, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, ...(init.headers || {}) },
+  });
+  let res = await doFetch(s.access_token);
+  if (res.status === 401) { const s2 = await getValidSession(); if (s2) res = await doFetch(s2.access_token); }
+  return res;
+}
+export async function pcDeliverableUpload(projectId: string, deliverableId: string, file: File): Promise<Result<{ path: string }>> {
+  if (file.size > 100 * 1024 * 1024) return { ok: false, error: "الملف أكبر من 100MB" };
+  const path = `${projectId}/${deliverableId}/${Date.now()}_${pcSafeName(file.name)}`;
+  try {
+    const res = await pcStorageFetch(`/object/${PC_DLV_BUCKET}/${path}`, {
+      method: "POST", headers: { "x-upsert": "true", "Content-Type": file.type || "application/octet-stream" }, body: file,
+    });
+    if (!res.ok) return { ok: false, error: `upload_failed_${res.status}`, status: res.status };
+    return { ok: true, data: { path } };
+  } catch { return { ok: false, error: "network_error" }; }
+}
+export async function pcSignDeliverableFiles(paths: string[]): Promise<Record<string, string>> {
+  const uniq = Array.from(new Set(paths.filter(Boolean)));
+  if (uniq.length === 0) return {};
+  try {
+    const res = await pcStorageFetch(`/object/sign/${PC_DLV_BUCKET}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expiresIn: 3600, paths: uniq }),
+    });
+    if (!res.ok) return {};
+    const arr = (await res.json()) as { path?: string; signedURL?: string }[];
+    const out: Record<string, string> = {};
+    for (const r of arr) if (r.path && r.signedURL) out[r.path] = `${SUPABASE_URL}/storage/v1${r.signedURL}`;
+    return out;
+  } catch { return {}; }
+}
 
 // ─── تحويل بند اجتماع إلى مهمة ───
 export const pcMeetingToTask = (meetingId: string, title: string, assignee?: string, due?: string) =>
@@ -318,9 +382,7 @@ export const pcGetCallSheetMeta = async (id: string): Promise<Result<{ id: strin
 export const pcCallSheetSendTo = (callSheetId: string, users: string[]) =>
   prpc<{ ok: boolean; sent_to: number; version: number }>("project_core_call_sheet_send_to", { p_call_sheet: callSheetId, p_users: users });
 
-// تحديث حقول إصدار المخرَج (رؤية العميل / اعتماد / نهائي) — عبر RLS.
-export const pcDeliverableVersionSet = (versionId: string, patch: Record<string, unknown>) =>
-  ppatch<DeliverableVersion[]>(`project_deliverable_versions?id=eq.${enc(versionId)}`, patch);
+// (أُزيل pcDeliverableVersionSet — كتابة النسخ عبر RPCs المحروسة فقط؛ لا PATCH مباشر.)
 
 // خريطة رسائل الأخطاء الشائعة → عربي.
 // ─── Batch 5: الحسابات المالية (finance-only) ───
@@ -519,7 +581,7 @@ export const fmtDT = (s: string | null | undefined) => s ? new Date(s).toLocaleS
 
 export function pcErr(e: string): string {
   if (/could not find|schema cache|PGRST\d|does not exist|function .* does not/i.test(e)) return "منصة المشاريع غير مطبّقة في قاعدة البيانات — شغّل project_core_FINAL_RUNME.sql.";
-  if (/not authorized|permission denied/i.test(e)) return "لا تملك صلاحية هذا الإجراء.";
+  if (/not authorized|permission denied|row-level security/i.test(e)) return "لا تملك صلاحية هذا الإجراء.";
   if (/already_decided/.test(e)) return "تم البتّ في هذا الاعتماد مسبقًا.";
   if (/title_required/.test(e)) return "العنوان إلزامي.";
   if (/body_required/.test(e)) return "النص إلزامي.";
@@ -578,6 +640,9 @@ export function pcErr(e: string): string {
   if (/already_closed/.test(e)) return "الحسابات مُغلقة بالفعل.";
   if (/not_closed/.test(e)) return "الحسابات ليست مُغلقة.";
   if (/budget_managed_by_finance/.test(e)) return "الميزانية تُدار من تبويب «حسابات المشروع» — عدّلها هناك.";
+  if (/old_version/.test(e)) return "توجد نسخة أحدث — أكّد اعتماد النسخة الأقدم صراحة.";
+  if (/no_approved_version/.test(e)) return "لا تسليم نهائيًا بلا نسخة معتمدة فعّالة.";
+  if (/already_final/.test(e)) return "المخرَج مُسلَّم نهائيًا — لا تعديل ولا نسخ جديدة.";
   if (/bad_link/.test(e)) return "العنصر المرتبط لا ينتمي لهذا المشروع.";
   if (/item_deleted/.test(e)) return "العنصر محذوف — استعده أولًا.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

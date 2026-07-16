@@ -27,6 +27,9 @@ begin
   if to_regclass('public.project_expenses')        is null then miss := miss || ' project_expenses (شغّل project_core_FINANCE_RUNME.sql)'; end if;
   if to_regclass('public.project_revenue_schedule') is null then miss := miss || ' project_revenue_schedule (شغّل project_core_FINANCE_RUNME.sql)'; end if;
   if to_regclass('public.project_members')         is null then miss := miss || ' project_members'; end if;
+  if to_regclass('public.internal_comments')       is null then miss := miss || ' internal_comments'; end if;
+  if to_regclass('public.project_templates')       is null then miss := miss || ' project_templates'; end if;
+  if to_regclass('public.project_deliverable_versions') is null then miss := miss || ' project_deliverable_versions'; end if;
   if miss <> '' then
     raise exception 'نقص في الاعتمادات: الجداول التالية غير موجودة (%). شغّل project_core_FINAL_RUNME.sql وبقية ملفات Project Core أولًا.', miss;
   end if;
@@ -42,6 +45,7 @@ begin
   if to_regprocedure('public.pc_touch_updated_at()')                                 is null then miss := miss || ' pc_touch_updated_at()'; end if;
   if to_regprocedure('public.pc_can_see_finance(uuid)')                              is null then miss := miss || ' pc_can_see_finance (شغّل project_core_FINANCE_RUNME.sql)'; end if;
   if to_regprocedure('public.pc_expense_delete(uuid,text)')                          is null then miss := miss || ' pc_expense_delete (شغّل project_core_FINANCE_RUNME.sql)'; end if;
+  if to_regprocedure('public.can_final_deliver()')                                   is null then miss := miss || ' can_final_deliver (شغّل staff_roles_task_assignment_RUNME.sql)'; end if;
   if miss <> '' then
     raise exception 'نقص في الاعتمادات: الدوال التالية غير موجودة (%). شغّل ملفات Project Core السابقة بالترتيب أولًا.', miss;
   end if;
@@ -1600,6 +1604,329 @@ begin
 end $g5$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 6 — القوالب الكاملة (وحدات متعددة + تواريخ نسبية) + دورة حياة المخرجات
+--           (إصدارات/اعتماد/رؤية العميل/تسليم نهائي/تجاوز) — فوق الجداول القائمة
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B6.1 أعمدة إضافية ═══
+alter table public.deliverables add column if not exists assignee_id uuid references auth.users(id) on delete set null;
+alter table public.deliverables add column if not exists due_date date;
+alter table public.project_deliverable_versions add column if not exists file_path      text;
+alter table public.project_deliverable_versions add column if not exists client_visible boolean not null default false;
+alter table public.project_deliverable_versions add column if not exists approved_at    timestamptz;
+alter table public.project_deliverable_versions add column if not exists approved_by    uuid;
+alter table public.project_deliverable_versions add column if not exists is_final       boolean not null default false;
+alter table public.project_deliverable_versions add column if not exists superseded     boolean not null default false;
+alter table public.project_templates add column if not exists service_type          text;
+alter table public.project_templates add column if not exists default_duration_days int;
+
+-- ═══ B6.2 مخزن ملفات المخرجات — خاص، للموظفين فقط؛ العرض عبر Signed URLs ═══
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('project-deliverables','project-deliverables', false, 104857600)
+on conflict (id) do update set public = false, file_size_limit = 104857600;
+drop policy if exists pdlv_files_read on storage.objects;
+create policy pdlv_files_read on storage.objects for select to authenticated
+  using (bucket_id = 'project-deliverables' and public.is_staff());
+drop policy if exists pdlv_files_write on storage.objects;
+create policy pdlv_files_write on storage.objects for insert to authenticated
+  with check (bucket_id = 'project-deliverables' and public.is_staff());
+
+-- ═══ B6.2b إغلاق الباب الخلفي: كتابة النسخ عبر RPCs فقط (لا PATCH مباشر يتجاوز
+--     حواجز الاعتماد/النهائي/الاستبدال). سياسة الكتابة القديمة تُزال والصلاحيات تُسحب. ═══
+drop policy if exists project_deliverable_versions_write on public.project_deliverable_versions;
+revoke insert, update, delete on public.project_deliverable_versions from authenticated;
+
+-- ═══ B6.2c قراءة التعليقات الداخلية للكوادر (تتماشى مع بوابة الكتابة pc_can_read_project) ═══
+drop policy if exists internal_comments_staff_read on public.internal_comments;
+create policy internal_comments_staff_read on public.internal_comments for select to authenticated
+  using (is_deleted = false and public.pc_can_read_project(
+    coalesce(project_id, (select d.project_id from public.deliverables d where d.id = deliverable_id))));
+
+-- ═══ B6.3 إنشاء/تعديل مخرَج ═══
+create or replace function public.pc_deliverable_upsert(p_project uuid, p_data jsonb)
+returns public.deliverables language plpgsql security definer set search_path = public as $$
+declare r public.deliverables; v_id uuid := nullif(p_data->>'id','')::uuid;
+begin
+  if not public.can_manage_projects() and not public.can_edit_project(p_project) then raise exception 'not authorized'; end if;
+  if v_id is null then
+    if coalesce(btrim(p_data->>'title'),'') = '' then raise exception 'title_required'; end if;
+    insert into public.deliverables(project_id, title, type, assignee_id, due_date, watermark_required, allow_download)
+      values (p_project, btrim(p_data->>'title'), coalesce(nullif(p_data->>'type',''),'video'),
+        nullif(p_data->>'assignee_id','')::uuid, nullif(p_data->>'due_date','')::date,
+        coalesce((p_data->>'watermark_required')::boolean, true), coalesce((p_data->>'allow_download')::boolean, false))
+      returning * into r;
+    perform public.pc_log(p_project, 'deliverable_created', 'deliverable', r.id, jsonb_build_object('title', r.title));
+    if r.assignee_id is not null and r.assignee_id <> auth.uid() then
+      perform public.pc_notify_user(r.assignee_id, 'project_note_new', 'deliverable', r.id,
+        'كُلِّفت بمخرَج: '||r.title, 'Deliverable assigned: '||r.title);
+    end if;
+  else
+    select * into r from public.deliverables where id = v_id and project_id = p_project and is_deleted = false for update;
+    if r.id is null then raise exception 'not_found'; end if;
+    if r.status = 'final_delivered' and (p_data ? 'title' or p_data ? 'type') then raise exception 'already_final'; end if;
+    update public.deliverables set
+      title = coalesce(nullif(btrim(p_data->>'title'),''), title),
+      type = coalesce(nullif(p_data->>'type',''), type),
+      assignee_id = case when p_data ? 'assignee_id' then nullif(p_data->>'assignee_id','')::uuid else assignee_id end,
+      due_date = case when p_data ? 'due_date' then nullif(p_data->>'due_date','')::date else due_date end,
+      watermark_required = coalesce((p_data->>'watermark_required')::boolean, watermark_required),
+      allow_download = coalesce((p_data->>'allow_download')::boolean, allow_download)
+      where id = v_id returning * into r;
+    perform public.pc_log(p_project, 'deliverable_updated', 'deliverable', v_id, '{}');
+  end if;
+  return r;
+end $$;
+
+-- ═══ B6.4 إضافة نسخة (نفس التوقيع؛ تدعم ملف المخزن + منع الإضافة بعد التسليم النهائي) ═══
+create or replace function public.project_core_deliverable_version_add(p_deliverable uuid, p_data jsonb)
+returns public.project_deliverable_versions language plpgsql security definer set search_path = public as $$
+declare r public.project_deliverable_versions; v_proj uuid; v_ver int; v_status text;
+begin
+  select project_id, status into v_proj, v_status from public.deliverables where id = p_deliverable and is_deleted = false;
+  if v_proj is null then raise exception 'not_found'; end if;
+  if not public.can_manage_projects() and not public.can_edit_project(v_proj) then raise exception 'not authorized'; end if;
+  if v_status = 'final_delivered' then raise exception 'already_final'; end if;
+  v_ver := coalesce(nullif(p_data->>'version','')::int,
+                    (select coalesce(max(version),0)+1 from public.project_deliverable_versions where deliverable_id = p_deliverable));
+  if exists (select 1 from public.project_deliverable_versions where deliverable_id = p_deliverable and version = v_ver)
+    then raise exception 'duplicate_version'; end if;
+  insert into public.project_deliverable_versions(deliverable_id, version, preview_url, file_path, note, created_by)
+    values (p_deliverable, v_ver, nullif(btrim(coalesce(p_data->>'preview_url','')),''),
+      nullif(btrim(coalesce(p_data->>'file_path','')),''), nullif(btrim(coalesce(p_data->>'note','')),''), auth.uid())
+    returning * into r;
+  -- نسخة جديدة تعيد المخرَج للمراجعة الداخلية.
+  update public.deliverables set status = 'internal_review' where id = p_deliverable and status in ('draft','revision_requested','client_review','approved');
+  perform public.pc_log(v_proj, 'deliverable_version_added', 'deliverable', p_deliverable, jsonb_build_object('version', v_ver));
+  perform public.pc_notify_team(v_proj, 'project_note_new', 'deliverable', p_deliverable,
+    'أُضيفت نسخة جديدة للمخرَج (v'||v_ver||')', 'New deliverable version (v'||v_ver||')', auth.uid());
+  return r;
+end $$;
+
+-- ═══ B6.5 دورة مراجعة النسخة — send_client/approve/reject/revision/final/unshare/archive ═══
+create or replace function public.pc_deliverable_review(p_version uuid, p_action text, p_note text default null, p_force boolean default false)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v record; d record; v_latest int;
+begin
+  select * into v from public.project_deliverable_versions where id = p_version for update;
+  if v.id is null then raise exception 'not_found'; end if;
+  select * into d from public.deliverables where id = v.deliverable_id and is_deleted = false for update;
+  if d.id is null then raise exception 'not_found'; end if;
+  if not public.can_manage_projects() and not public.can_edit_project(d.project_id) then raise exception 'not authorized'; end if;
+  select max(version) into v_latest from public.project_deliverable_versions where deliverable_id = d.id;
+
+  -- مخرَج مُسلَّم نهائيًا لا يقبل أي تحوّل مراجعة (الأرشفة فقط).
+  if d.status = 'final_delivered' and p_action in ('approve','reject','revision','send_client') then
+    raise exception 'already_final';
+  end if;
+
+  if p_action = 'send_client' then
+    -- إظهار نسخة للعميل = مراجعة عميل رسمية؛ النسخ الداخلية لا تُكشف إلا بهذا المسار.
+    update public.project_deliverable_versions set client_visible = true where id = p_version;
+    -- واجهة العميل تقرأ معاينة صف المخرَج — تُحدَّث لتطابق النسخة المُرسلة.
+    update public.deliverables set status = 'client_review',
+      preview_url = coalesce(v.preview_url, preview_url), version = v.version where id = d.id;
+    perform public.pc_log(d.project_id, 'deliverable_sent_client', 'deliverable', d.id, jsonb_build_object('version', v.version));
+  elsif p_action = 'unshare' then
+    update public.project_deliverable_versions set client_visible = false where id = p_version;
+    perform public.pc_log(d.project_id, 'deliverable_unshared', 'deliverable', d.id, jsonb_build_object('version', v.version));
+  elsif p_action = 'approve' then
+    if v.approved_at is not null then raise exception 'already_decided'; end if;
+    -- اعتماد نسخة أقدم من الأحدث يتطلب تأكيدًا صريحًا.
+    if v.version < v_latest and not p_force then raise exception 'old_version'; end if;
+    -- النسخة المعتمدة السابقة تُستبدل (Supersede) — لا اعتمادان فعّالان.
+    update public.project_deliverable_versions set superseded = true
+      where deliverable_id = d.id and approved_at is not null and superseded = false and id <> p_version;
+    update public.project_deliverable_versions set approved_at = now(), approved_by = auth.uid(), superseded = false
+      where id = p_version;
+    update public.deliverables set status = 'approved' where id = d.id;
+    perform public.pc_log(d.project_id, 'deliverable_approved', 'deliverable', d.id, jsonb_build_object('version', v.version, 'forced_old', v.version < v_latest));
+    perform public.pc_notify_team(d.project_id, 'project_note_new', 'deliverable', d.id,
+      'اعتُمدت نسخة المخرَج v'||v.version||' — '||d.title, 'Deliverable version approved', auth.uid());
+  elsif p_action in ('reject','revision') then
+    if coalesce(btrim(p_note),'') = '' then raise exception 'reason_required'; end if;
+    update public.deliverables set status = 'revision_requested' where id = d.id;
+    perform public.pc_log(d.project_id, 'deliverable_revision', 'deliverable', d.id,
+      jsonb_build_object('version', v.version, 'note', left(btrim(p_note),500), 'action', p_action));
+    if d.assignee_id is not null then
+      perform public.pc_notify_user(d.assignee_id, 'project_note_new', 'deliverable', d.id,
+        'طُلب تعديل على المخرَج: '||d.title, 'Revision requested: '||d.title);
+    end if;
+  elsif p_action = 'final' then
+    -- التسليم النهائي والأرشفة للمدير/المالك فقط (يوافق طبقة can_final_deliver القائمة).
+    if not public.can_final_deliver() then raise exception 'not authorized'; end if;
+    -- لا تسليم نهائي بلا نسخة معتمدة؛ ولا تسليم مزدوج؛ ونسخة أقدم من الأحدث تتطلب تأكيدًا.
+    if d.status = 'final_delivered' then raise exception 'already_final'; end if;
+    if v.approved_at is null or v.superseded then raise exception 'no_approved_version'; end if;
+    if v.version < v_latest and not p_force then raise exception 'old_version'; end if;
+    update public.project_deliverable_versions set is_final = true where id = p_version;
+    update public.deliverables set status = 'final_delivered' where id = d.id;
+    perform public.pc_log(d.project_id, 'deliverable_final', 'deliverable', d.id, jsonb_build_object('version', v.version));
+    perform public.pc_notify_team(d.project_id, 'project_note_new', 'deliverable', d.id,
+      'تسليم نهائي للمخرَج: '||d.title||' (v'||v.version||')', 'Final delivery', auth.uid());
+  elsif p_action = 'archive' then
+    if not public.can_final_deliver() then raise exception 'not authorized'; end if;
+    update public.deliverables set status = 'archived' where id = d.id;
+    perform public.pc_log(d.project_id, 'deliverable_archived', 'deliverable', d.id, '{}');
+  else
+    raise exception 'bad_state';
+  end if;
+  return jsonb_build_object('ok', true, 'action', p_action, 'version', v.version);
+end $$;
+
+-- ═══ B6.6 تعليق داخلي بكود زمني على مخرَج (يستخدم internal_comments القائم) ═══
+create or replace function public.pc_deliverable_comment(p_deliverable uuid, p_body text, p_timecode int default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_proj uuid; v_id uuid;
+begin
+  select project_id into v_proj from public.deliverables where id = p_deliverable and is_deleted = false;
+  if v_proj is null then raise exception 'not_found'; end if;
+  if not public.pc_can_read_project(v_proj) then raise exception 'not authorized'; end if;
+  if coalesce(btrim(p_body),'') = '' then raise exception 'body_required'; end if;
+  -- قيد one_parent: أب واحد فقط — التعليق على مخرَج ⇒ project_id يبقى NULL.
+  insert into public.internal_comments(project_id, deliverable_id, author_id, category, body, timecode_seconds)
+    values (null, p_deliverable, auth.uid(), 'qa', left(btrim(p_body),4000), p_timecode)
+    returning id into v_id;
+  perform public.pc_log(v_proj, 'deliverable_comment', 'deliverable', p_deliverable, jsonb_build_object('timecode', p_timecode));
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- ═══ B6.7 تطبيق قالب v2 — وحدات متعددة + تواريخ نسبية + منع التكرار + Audit ═══
+create or replace function public.project_core_apply_template_v2(
+  p_project uuid, p_template uuid, p_modules text[] default null, p_start date default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_spec jsonb; elem jsonb; sub jsonb; ck jsonb; v_task uuid; v_base date; v_app uuid := gen_random_uuid();
+  v_tasks int := 0; v_miles int := 0; v_dlvs int := 0; v_risks int := 0; v_meets int := 0; v_shoots int := 0; v_ck int;
+  v_idx int := 0; v_ids uuid[] := '{}'; v_dep int;
+  mod_on boolean;
+begin
+  if not public.can_manage_projects() and not public.can_edit_project(p_project) then raise exception 'not authorized'; end if;
+  select spec into v_spec from public.project_templates where id = p_template and is_active = true;
+  if v_spec is null then raise exception 'template_not_found'; end if;
+  if exists (select 1 from public.project_activity where project_id = p_project
+             and action in ('template_applied','template_applied_v2')
+             and detail->>'template_id' = p_template::text) then raise exception 'already_applied'; end if;
+  v_base := coalesce(p_start, (select start_date from public.project_core where project_id = p_project), current_date);
+  -- المهام (+ فرعية + قوائم تحقق + اعتماديات بالفهرس)
+  mod_on := p_modules is null or 'tasks' = any(p_modules);
+  if mod_on and jsonb_typeof(v_spec->'tasks') = 'array' then
+    for elem in select value from jsonb_array_elements(v_spec->'tasks') loop
+      insert into public.project_tasks(project_id, title, description, priority, estimated_hours, created_by,
+          start_date, due_date, sort_order)
+        values (p_project, coalesce(nullif(btrim(elem->>'title'),''),'مهمة'), nullif(btrim(coalesce(elem->>'description','')),''),
+          coalesce(nullif(elem->>'priority',''),'normal'), nullif(elem->>'estimated_hours','')::numeric, auth.uid(),
+          case when (elem->>'offset_days') ~ '^-?[0-9]+$' then v_base + (elem->>'offset_days')::int end,
+          case when (elem->>'due_offset_days') ~ '^-?[0-9]+$' then v_base + (elem->>'due_offset_days')::int
+               when (elem->>'offset_days') ~ '^-?[0-9]+$' then v_base + (elem->>'offset_days')::int end,
+          v_idx)
+        returning id into v_task;
+      v_ids := v_ids || v_task; v_idx := v_idx + 1; v_tasks := v_tasks + 1;
+      v_ck := 0;
+      for ck in select value from jsonb_array_elements(case when jsonb_typeof(elem->'checklist')='array' then elem->'checklist' else '[]'::jsonb end) loop
+        insert into public.project_task_checklists(task_id, label, sort_order)
+          values (v_task, coalesce(nullif(left(coalesce(ck->>'label', ck#>>'{}'),300),''),'بند'), v_ck);
+        v_ck := v_ck + 1;
+      end loop;
+      for sub in select value from jsonb_array_elements(case when jsonb_typeof(elem->'subtasks')='array' then elem->'subtasks' else '[]'::jsonb end) loop
+        insert into public.project_tasks(project_id, parent_task_id, title, priority, created_by, sort_order)
+          values (p_project, v_task, coalesce(nullif(left(coalesce(sub->>'title', sub#>>'{}'),300),''),'مهمة فرعية'),
+            coalesce(nullif(sub->>'priority',''),'normal'), auth.uid(), 0);
+        v_tasks := v_tasks + 1;
+      end loop;
+    end loop;
+    -- الاعتماديات بالفهرس (depends_on = فهرس مهمة سابقة في القالب).
+    v_idx := 0;
+    for elem in select value from jsonb_array_elements(v_spec->'tasks') loop
+      v_dep := case when (elem->>'depends_on') ~ '^[0-9]+$' then (elem->>'depends_on')::int end;
+      if v_dep is not null and v_dep < v_idx and v_dep >= 0 then
+        insert into public.task_dependencies(task_id, depends_on_task_id)
+          values (v_ids[v_idx + 1], v_ids[v_dep + 1]) on conflict do nothing;
+      end if;
+      v_idx := v_idx + 1;
+    end loop;
+  end if;
+  -- المعالم → عناصر الخطة الزمنية
+  mod_on := p_modules is null or 'milestones' = any(p_modules);
+  if mod_on and jsonb_typeof(v_spec->'milestones') = 'array' then
+    for elem in select value from jsonb_array_elements(v_spec->'milestones') loop
+      insert into public.project_schedule_items(project_id, title, event_type, start_at, all_day, is_milestone,
+          client_visible, created_by, updated_by)
+        values (p_project, coalesce(nullif(left(coalesce(elem->>'title', elem#>>'{}'),300),''),'معلَم'), 'milestone',
+          (v_base + case when (elem->>'offset_days') ~ '^-?[0-9]+$' then (elem->>'offset_days')::int else 0 end)::timestamptz, true, true,
+          coalesce((elem->>'client_visible')::boolean, false), auth.uid(), auth.uid());
+      v_miles := v_miles + 1;
+    end loop;
+  end if;
+  -- المخرجات
+  mod_on := p_modules is null or 'deliverables' = any(p_modules);
+  if mod_on and jsonb_typeof(v_spec->'deliverables') = 'array' then
+    for elem in select value from jsonb_array_elements(v_spec->'deliverables') loop
+      insert into public.deliverables(project_id, title, type, due_date)
+        values (p_project, coalesce(nullif(left(coalesce(elem->>'title', elem#>>'{}'),300),''),'مخرَج'),
+          coalesce(nullif(elem->>'type',''),'video'),
+          case when (elem->>'offset_days') ~ '^-?[0-9]+$' then v_base + (elem->>'offset_days')::int end);
+      v_dlvs := v_dlvs + 1;
+    end loop;
+  end if;
+  -- المخاطر
+  mod_on := p_modules is null or 'risks' = any(p_modules);
+  if mod_on and jsonb_typeof(v_spec->'risks') = 'array' then
+    for elem in select value from jsonb_array_elements(v_spec->'risks') loop
+      insert into public.project_risks(project_id, title, severity, likelihood, status, created_by)
+        values (p_project, coalesce(nullif(left(coalesce(elem->>'title', elem#>>'{}'),300),''),'خطر'),
+          case when elem->>'severity' in ('low','medium','high','critical') then elem->>'severity' else 'medium' end,
+          case when elem->>'likelihood' in ('rare','possible','likely','almost_certain') then elem->>'likelihood' else 'possible' end,
+          'open', auth.uid());
+      v_risks := v_risks + 1;
+    end loop;
+  end if;
+  -- الاجتماعات (Placeholders بتواريخ نسبية)
+  mod_on := p_modules is null or 'meetings' = any(p_modules);
+  if mod_on and jsonb_typeof(v_spec->'meetings') = 'array' then
+    for elem in select value from jsonb_array_elements(v_spec->'meetings') loop
+      insert into public.project_meetings(project_id, title, scheduled_at, created_by)
+        values (p_project, coalesce(nullif(left(coalesce(elem->>'title', elem#>>'{}'),300),''),'اجتماع'),
+          (v_base + case when (elem->>'offset_days') ~ '^-?[0-9]+$' then (elem->>'offset_days')::int else 0 end)::timestamptz + interval '10 hours', auth.uid());
+      v_meets := v_meets + 1;
+    end loop;
+  end if;
+  -- جلسات التصوير (Placeholders)
+  mod_on := p_modules is null or 'shoots' = any(p_modules);
+  if mod_on and jsonb_typeof(v_spec->'shoots') = 'array' then
+    for elem in select value from jsonb_array_elements(v_spec->'shoots') loop
+      insert into public.project_shoot_sessions(project_id, title, session_date, status, created_by)
+        values (p_project, coalesce(nullif(left(coalesce(elem->>'title', elem#>>'{}'),300),''),'جلسة تصوير'),
+          v_base + case when (elem->>'offset_days') ~ '^-?[0-9]+$' then (elem->>'offset_days')::int else 0 end, 'planned', auth.uid());
+      v_shoots := v_shoots + 1;
+    end loop;
+  end if;
+
+  perform public.pc_log(p_project, 'template_applied_v2', 'project', p_project, jsonb_build_object(
+    'template_id', p_template, 'application_id', v_app, 'base_date', v_base,
+    'tasks', v_tasks, 'milestones', v_miles, 'deliverables', v_dlvs, 'risks', v_risks, 'meetings', v_meets, 'shoots', v_shoots));
+  perform public.pc_notify_team(p_project, 'project_note_new', 'project', p_project,
+    'طُبِّق قالب على المشروع ('||v_tasks||' مهمة، '||v_miles||' معلَم، '||v_dlvs||' مخرَج)',
+    'Template applied', auth.uid());
+  return jsonb_build_object('ok', true, 'application_id', v_app, 'tasks', v_tasks, 'milestones', v_miles,
+    'deliverables', v_dlvs, 'risks', v_risks, 'meetings', v_meets, 'shoots', v_shoots);
+end $$;
+
+-- ═══ B6.8 Grants (دوال Batch 6) ═══
+do $g6$
+declare f text;
+begin
+  foreach f in array array[
+    'public.pc_deliverable_upsert(uuid,jsonb)',
+    'public.pc_deliverable_review(uuid,text,text,boolean)',
+    'public.pc_deliverable_comment(uuid,text,int)',
+    'public.project_core_apply_template_v2(uuid,uuid,text[],date)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $g6$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -1646,6 +1973,12 @@ begin
   if not exists (select 1 from pg_trigger where tgname = 'trg_pfs_budget_mirror') then miss := miss || ' trg_pfs_budget_mirror'; end if;
   if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_finance_settings' and column_name='closure_history') = 0
     then miss := miss || ' col(project_finance_settings.closure_history)'; end if;
+  -- Batch 6
+  if to_regprocedure('public.pc_deliverable_review(uuid,text,text,boolean)') is null then miss := miss || ' pc_deliverable_review'; end if;
+  if to_regprocedure('public.project_core_apply_template_v2(uuid,uuid,text[],date)') is null then miss := miss || ' apply_template_v2'; end if;
+  if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_deliverable_versions' and column_name='client_visible') = 0
+    then miss := miss || ' col(project_deliverable_versions.client_visible)'; end if;
+  if not exists (select 1 from storage.buckets where id = 'project-deliverables') then miss := miss || ' bucket(project-deliverables)'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;
