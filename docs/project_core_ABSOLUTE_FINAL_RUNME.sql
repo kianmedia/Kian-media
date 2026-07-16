@@ -1205,6 +1205,401 @@ begin
 end $g4$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 5 — توحيد الميزانية (مصدر الحقيقة: project_finance_settings.approved_budget)
+--           + الإغلاق المالي (Checklist + Snapshot + منع تعديل ما بعد الإغلاق) + تقرير شامل
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B5.1 عمود تاريخ الإغلاقات (سجل غير قابل للفقد عند إعادة الفتح) ═══
+alter table public.project_finance_settings add column if not exists closure_history jsonb not null default '[]';
+
+-- ═══ B5.2 مرآة الميزانية: approved_budget ← يُعكس تلقائيًا إلى project_core.budget_amount
+--     (الكود القديم يقرأ budget_amount؛ المصدر المالي هو الحقيقة — لا Trigger Loop:
+--      لا Trigger على project_core يكتب في finance_settings) ═══
+-- بذر عند إنشاء صف المالية كسولًا (تعيين محاسب/حفظ إعدادات): إن كانت approved_budget=0
+-- والمشروع له ميزانية تشغيلية قديمة > 0 → تُبذر منها (لا يُصفَّر شيء أبدًا).
+create or replace function public.pc_budget_seed()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(new.approved_budget, 0) = 0 then
+    new.approved_budget := coalesce((select pc.budget_amount from public.project_core pc
+                                     where pc.project_id = new.project_id), 0);
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_pfs_budget_seed on public.project_finance_settings;
+create trigger trg_pfs_budget_seed before insert on public.project_finance_settings
+  for each row execute function public.pc_budget_seed();
+
+create or replace function public.pc_budget_mirror()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  -- إدراج بقيمة 0 لا يعكس شيئًا (لا تصفير للميزانية التشغيلية عند الإنشاء الكسول).
+  if tg_op = 'INSERT' and coalesce(new.approved_budget, 0) = 0 then return new; end if;
+  insert into public.project_core(project_id) values (new.project_id) on conflict (project_id) do nothing;
+  update public.project_core set budget_amount = new.approved_budget, updated_at = now()
+    where project_id = new.project_id and budget_amount is distinct from new.approved_budget;
+  return new;
+end $$;
+drop trigger if exists trg_pfs_budget_mirror on public.project_finance_settings;
+create trigger trg_pfs_budget_mirror after insert or update of approved_budget on public.project_finance_settings
+  for each row execute function public.pc_budget_mirror();
+
+-- حارس مصدر الحقيقة: أي مسار (set_meta/update_project/أي RPC مستقبلي) لا يستطيع
+-- تعديل budget_amount بعيدًا عن approved_budget متى وُجد صف مالي.
+create or replace function public.pc_budget_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_ab numeric;
+begin
+  if new.budget_amount is distinct from old.budget_amount then
+    select approved_budget into v_ab from public.project_finance_settings where project_id = new.project_id;
+    if found and new.budget_amount is distinct from v_ab then
+      raise exception 'budget_managed_by_finance';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_pc_budget_guard on public.project_core;
+create trigger trg_pc_budget_guard before update of budget_amount on public.project_core
+  for each row execute function public.pc_budget_guard();
+
+-- ═══ B5.3 Backfill آمن (مرة واحدة — يتخطى ما سبق ترحيله عبر سجل النشاط):
+--     الميزانية التشغيلية القديمة > 0 والمالية 0/غائبة → تُنقل ولا تُستبدل ميزانية مالية موجودة ═══
+do $b5f$
+declare rec record; v_n int := 0;
+begin
+  for rec in
+    select pc.project_id, pc.budget_amount
+    from public.project_core pc
+    where coalesce(pc.budget_amount, 0) > 0
+      and not exists (select 1 from public.project_activity a
+                      where a.project_id = pc.project_id and a.action = 'budget_backfilled')
+  loop
+    insert into public.project_finance_settings(project_id, approved_budget)
+      values (rec.project_id, rec.budget_amount)
+      on conflict (project_id) do update set approved_budget = excluded.approved_budget
+      where public.project_finance_settings.approved_budget = 0
+        or public.project_finance_settings.approved_budget is null;
+    -- سجّل فقط إن حدث نقل فعلي (الصف الجديد أو المحدَّث يساوي القيمة القديمة).
+    if exists (select 1 from public.project_finance_settings s
+               where s.project_id = rec.project_id and s.approved_budget = rec.budget_amount) then
+      insert into public.project_activity(project_id, actor_id, action, entity_type, entity_id, detail)
+        values (rec.project_id, null, 'budget_backfilled', 'project', rec.project_id,
+          jsonb_build_object('from', 'project_core.budget_amount'));
+      v_n := v_n + 1;
+    end if;
+  end loop;
+  raise notice 'budget backfill: % مشروعًا رُحِّلت ميزانيته إلى المالية', v_n;
+  -- مزامنة المرآة لمرة واحدة للمشاريع التي لديها ميزانية مالية سابقة (الـTrigger يغطي ما بعدها).
+  update public.project_core pc set budget_amount = s.approved_budget, updated_at = now()
+    from public.project_finance_settings s
+    where s.project_id = pc.project_id and coalesce(s.approved_budget,0) > 0
+      and pc.budget_amount is distinct from s.approved_budget;
+end $b5f$;
+
+-- ═══ B5.4 project_core_set_meta (نفس التوقيع): الميزانية تُدار من «حسابات المشروع»
+--     متى وُجد صف مالي — يمنع ازدواج مصدر الحقيقة ═══
+create or replace function public.project_core_set_meta(p_project uuid, p_data jsonb)
+returns public.project_core language plpgsql security definer set search_path = public as $$
+declare r public.project_core; v_fin boolean;
+begin
+  if not public.can_manage_projects() and not public.can_edit_project(p_project) then raise exception 'not authorized'; end if;
+  v_fin := public.can_manage_projects() or public.can_see_financials();
+  -- مصدر الحقيقة المالي: بعد إنشاء صف المالية تُعدَّل الميزانية من تبويب الحسابات فقط.
+  if p_data ? 'budget_amount' and nullif(p_data->>'budget_amount','') is not null
+     and exists (select 1 from public.project_finance_settings s where s.project_id = p_project) then
+    raise exception 'budget_managed_by_finance';
+  end if;
+  insert into public.project_core(project_id, updated_by) values (p_project, auth.uid())
+    on conflict (project_id) do nothing;
+  update public.project_core set
+    priority       = coalesce(nullif(p_data->>'priority','')::text, priority),
+    health         = coalesce(nullif(p_data->>'health','')::text, health),
+    start_date     = coalesce(nullif(p_data->>'start_date','')::date, start_date),
+    due_date       = coalesce(nullif(p_data->>'due_date','')::date, due_date),
+    delivery_date  = coalesce(nullif(p_data->>'delivery_date','')::date, delivery_date),
+    budget_amount  = case when v_fin then coalesce(nullif(p_data->>'budget_amount','')::numeric, budget_amount) else budget_amount end,
+    estimated_cost = case when v_fin then coalesce(nullif(p_data->>'estimated_cost','')::numeric, estimated_cost) else estimated_cost end,
+    actual_cost    = case when v_fin then coalesce(nullif(p_data->>'actual_cost','')::numeric, actual_cost) else actual_cost end,
+    project_type   = coalesce(nullif(p_data->>'project_type','')::text, project_type),
+    progress_pct   = coalesce(nullif(p_data->>'progress_pct','')::int, progress_pct),
+    currency       = coalesce(nullif(p_data->>'currency','')::text, currency),
+    updated_at = now(), updated_by = auth.uid()
+    where project_id = p_project returning * into r;
+  perform public.pc_log(p_project, 'meta_updated', 'project', p_project,
+    (p_data - 'budget_amount' - 'estimated_cost' - 'actual_cost'));
+  return r;
+end $$;
+
+-- ═══ B5.5 حارس ما بعد الإغلاق (طبقة البيانات — يسري حتى عبر RPCs المالية القائمة):
+--     مسموح فقط: تحويل مصروف إلى refunded/voided. كل ما عداه يرفض project_closed ═══
+create or replace function public.pc_finance_closed(p_project uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.project_finance_settings s
+                 where s.project_id = p_project and s.closed_snapshot is not null);
+$$;
+
+create or replace function public.pc_finance_closed_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_proj uuid;
+begin
+  v_proj := coalesce(new.project_id, old.project_id);
+  -- تسلسل مع الإغلاق: قفل صف الإعدادات (إن وُجد) يمنع سباق «دفع أثناء الإغلاق»
+  -- فلا يلتقط الـSnapshot حالة قديمة (close يقفل نفس الصف).
+  perform 1 from public.project_finance_settings where project_id = v_proj for update;
+  if not public.pc_finance_closed(v_proj) then
+    return coalesce(new, old);
+  end if;
+  -- الاستثناء الوحيد: Reversal/Refund/Void لمصروف قائم بعد الإغلاق.
+  if tg_table_name = 'project_expenses' and tg_op = 'UPDATE'
+     and new.status is distinct from old.status and new.status in ('refunded','voided') then
+    return new;
+  end if;
+  raise exception 'project_closed';
+end $$;
+
+drop trigger if exists trg_pexp_closed  on public.project_expenses;
+create trigger trg_pexp_closed  before insert or update or delete on public.project_expenses
+  for each row execute function public.pc_finance_closed_guard();
+drop trigger if exists trg_prev_closed  on public.project_revenue_schedule;
+create trigger trg_prev_closed  before insert or update or delete on public.project_revenue_schedule
+  for each row execute function public.pc_finance_closed_guard();
+drop trigger if exists trg_ppb_closed   on public.project_phase_budgets;
+create trigger trg_ppb_closed   before insert or update or delete on public.project_phase_budgets
+  for each row execute function public.pc_finance_closed_guard();
+
+-- إعدادات المالية نفسها تُجمَّد بعد الإغلاق (عقد/خصم/VAT/ميزانية/حدود):
+-- المسموح فقط: عملية الإغلاق (snapshot من null→قيمة) وإعادة الفتح (قيمة→null).
+create or replace function public.pc_settings_closed_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if old.closed_snapshot is not null and new.closed_snapshot is not distinct from old.closed_snapshot then
+    raise exception 'project_closed';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_pfs_closed on public.project_finance_settings;
+create trigger trg_pfs_closed before update on public.project_finance_settings
+  for each row execute function public.pc_settings_closed_guard();
+
+-- استرداد مصروف مدفوع (Reversal) — المسار الوحيد المسموح بعد الإغلاق مع الإلغاء.
+create or replace function public.pc_expense_refund(p_expense uuid, p_reason text)
+returns public.project_expenses language plpgsql security definer set search_path = public as $$
+declare r public.project_expenses;
+begin
+  if coalesce(btrim(p_reason),'') = '' then raise exception 'reason_required'; end if;
+  select * into r from public.project_expenses where id = p_expense and is_deleted = false for update;
+  if r.id is null then raise exception 'not_found'; end if;
+  if not public.pc_can_see_finance(r.project_id) then raise exception 'not authorized'; end if;
+  if r.status <> 'paid' then raise exception 'bad_state'; end if;
+  update public.project_expenses set status = 'refunded',
+      notes = coalesce(notes,'') || ' | استرداد: ' || left(btrim(p_reason),300), updated_at = now()
+    where id = p_expense returning * into r;
+  perform public.pc_log(r.project_id, 'expense_refunded', 'expense', p_expense, jsonb_build_object('reason', left(btrim(p_reason),200)));
+  return r;
+end $$;
+
+-- ═══ B5.6 قائمة تدقيق الإغلاق المالي ═══
+create or replace function public.pc_finance_closure_checklist(p_project uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v_items jsonb := '[]'; v_crit int := 0;
+  v_cnt int; v_amt numeric; v_has_custody boolean := false;
+begin
+  if not public.pc_can_see_finance(p_project) then raise exception 'not authorized'; end if;
+
+  -- 1) دفعات عميل غير محصّلة بالكامل.
+  select count(*), coalesce(sum(amount_incl_vat - collected_amount), 0) into v_cnt, v_amt
+    from public.project_revenue_schedule
+    where project_id = p_project and is_deleted = false
+      and status not in ('paid','cancelled','refunded') and (amount_incl_vat - collected_amount) > 0;
+  v_items := v_items || jsonb_build_object('key','uncollected','ar','دفعات عميل غير محصّلة','count',v_cnt,'amount',v_amt,'ok',v_cnt=0,'critical',true);
+  if v_cnt > 0 then v_crit := v_crit + 1; end if;
+
+  -- 2) دفعات متأخرة (تفصيل إعلامي ضمن السابق).
+  select count(*) into v_cnt from public.project_revenue_schedule
+    where project_id = p_project and is_deleted = false and due_date < current_date
+      and status not in ('paid','cancelled','refunded') and (amount_incl_vat - collected_amount) > 0;
+  v_items := v_items || jsonb_build_object('key','overdue','ar','دفعات متأخرة عن استحقاقها','count',v_cnt,'ok',v_cnt=0,'critical',false);
+
+  -- 3) مصروفات معلّقة (مسودّة/مقدَّمة/قيد المراجعة).
+  select count(*) into v_cnt from public.project_expenses
+    where project_id = p_project and is_deleted = false and status in ('draft','submitted','under_review');
+  v_items := v_items || jsonb_build_object('key','pending_expenses','ar','مصروفات معلّقة غير مبتوت فيها','count',v_cnt,'ok',v_cnt=0,'critical',true);
+  if v_cnt > 0 then v_crit := v_crit + 1; end if;
+
+  -- 4) مصروفات معتمدة غير مدفوعة.
+  select count(*), coalesce(sum(amount_incl_vat), 0) into v_cnt, v_amt from public.project_expenses
+    where project_id = p_project and is_deleted = false and status in ('approved','scheduled_for_payment','partially_paid');
+  v_items := v_items || jsonb_build_object('key','approved_unpaid','ar','مصروفات معتمدة غير مدفوعة','count',v_cnt,'amount',v_amt,'ok',v_cnt=0,'critical',true);
+  if v_cnt > 0 then v_crit := v_crit + 1; end if;
+
+  -- 5) مستندات ناقصة: مصروف مدفوع بلا إيصال.
+  select count(*) into v_cnt from public.project_expenses
+    where project_id = p_project and is_deleted = false and status = 'paid' and coalesce(receipt_url,'') = '';
+  v_items := v_items || jsonb_build_object('key','missing_receipts','ar','مصروفات مدفوعة بلا إيصال','count',v_cnt,'ok',v_cnt=0,'critical',false);
+
+  -- 6) عهد/حجوزات معدات مفتوحة على المشروع (إن كان نظام العهدة مطبّقًا).
+  if to_regclass('public.custody_inventory_reservations') is not null then
+    execute $q2$select exists (
+        select 1 from public.custody_inventory_reservations r where r.project_id = $1 and r.status = 'active'
+        union all
+        select 1 from public.custody_inventory_assignments g where g.project_id = $1 and g.is_deleted = false
+          and g.status in ('pending_employee_confirmation','active','return_requested','under_inspection','partially_returned','disputed'))$q2$
+      into v_has_custody using p_project;
+  end if;
+  v_items := v_items || jsonb_build_object('key','open_custody','ar','عهد أو حجوزات معدات مفتوحة','ok', not v_has_custody,'critical',true);
+  if v_has_custody then v_crit := v_crit + 1; end if;
+
+  -- 7) تجاوز ميزانيات المراحل (أساس التكلفة: بلا VAT قابلة للاسترداد).
+  select count(*) into v_cnt from (
+    select b.phase, b.allocated,
+      coalesce((select sum(e.amount_excl_vat + case when e.recoverable_vat then 0 else e.vat_amount end)
+        from public.project_expenses e
+        where e.project_id = p_project and e.is_deleted = false and e.phase = b.phase
+          and e.status in ('approved','scheduled_for_payment','partially_paid','paid')), 0) as spent
+    from public.project_phase_budgets b where b.project_id = p_project
+  ) x where x.allocated > 0 and x.spent > x.allocated;
+  v_items := v_items || jsonb_build_object('key','phase_over','ar','مراحل تجاوزت ميزانيتها','count',v_cnt,'ok',v_cnt=0,'critical',false);
+
+  -- 8) تنبيهات مالية حرجة مفتوحة.
+  select count(*) into v_cnt from public.project_financial_alerts
+    where project_id = p_project and resolved_at is null and level = 'critical';
+  v_items := v_items || jsonb_build_object('key','critical_alerts','ar','تنبيهات مالية حرجة مفتوحة','count',v_cnt,'ok',v_cnt=0,'critical',true);
+  if v_cnt > 0 then v_crit := v_crit + 1; end if;
+
+  return jsonb_build_object('items', v_items, 'critical_count', v_crit, 'can_close', v_crit = 0,
+    'closed', public.pc_finance_closed(p_project));
+end $$;
+
+-- ═══ B5.7 الإغلاق المالي — Snapshot غير قابل للتعديل الصامت ═══
+create or replace function public.pc_finance_close(p_project uuid, p_override boolean default false, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare s record; v_check jsonb; v_snap jsonb;
+begin
+  if not public.pc_can_see_finance(p_project) then raise exception 'not authorized'; end if;
+  if not exists (select 1 from public.projects p where p.id = p_project and p.is_deleted = false) then raise exception 'not_found'; end if;
+  -- مشروع له تاريخ مالي بلا صف إعدادات: يُنشأ (trigger البذر يرث الميزانية القديمة).
+  insert into public.project_finance_settings(project_id) values (p_project) on conflict (project_id) do nothing;
+  select * into s from public.project_finance_settings where project_id = p_project for update;
+  if s.closed_snapshot is not null then raise exception 'already_closed'; end if;
+  v_check := public.pc_finance_closure_checklist(p_project);
+  if (v_check->>'critical_count')::int > 0 then
+    -- تجاوز الإغلاق: المالك فقط + سبب إلزامي.
+    if not (p_override and public.is_owner()) then raise exception 'closure_blocked'; end if;
+    if coalesce(btrim(p_reason),'') = '' then raise exception 'reason_required'; end if;
+  end if;
+  v_snap := jsonb_build_object(
+    'summary', public.pc_finance_summary(p_project),
+    'checklist', v_check,
+    'phase_budgets', coalesce((select jsonb_agg(jsonb_build_object('phase', b.phase, 'allocated', b.allocated)) from public.project_phase_budgets b where b.project_id = p_project), '[]'::jsonb),
+    'open_alerts', coalesce((select jsonb_agg(jsonb_build_object('level', a.level, 'kind', a.kind, 'message', a.message)) from public.project_financial_alerts a where a.project_id = p_project and a.resolved_at is null), '[]'::jsonb),
+    'closed_by', auth.uid(), 'closed_at', now(),
+    'override', case when (v_check->>'critical_count')::int > 0
+                     then jsonb_build_object('by', auth.uid(), 'reason', left(btrim(p_reason),500)) end);
+  update public.project_finance_settings set closed_snapshot = v_snap where project_id = p_project;
+  perform public.pc_log(p_project, 'finance_closed', 'project', p_project,
+    jsonb_build_object('override', (v_check->>'critical_count')::int > 0));
+  if s.accountant_id is not null and s.accountant_id <> auth.uid() then
+    perform public.pc_notify_user(s.accountant_id, 'project_status_changed', 'project', p_project,
+      'أُغلقت حسابات المشروع ماليًا', 'Project finances were closed');
+  end if;
+  return jsonb_build_object('ok', true, 'closed_at', v_snap->>'closed_at');
+end $$;
+
+-- ═══ B5.8 إعادة الفتح — المالك فقط، بسبب؛ الـSnapshot القديمة تُحفظ في closure_history ولا تُعدَّل ═══
+create or replace function public.pc_finance_reopen(p_project uuid, p_reason text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare s record;
+begin
+  if not public.is_owner() then raise exception 'not authorized'; end if;
+  if coalesce(btrim(p_reason),'') = '' then raise exception 'reason_required'; end if;
+  select * into s from public.project_finance_settings where project_id = p_project for update;
+  if s.project_id is null or s.closed_snapshot is null then raise exception 'not_closed'; end if;
+  update public.project_finance_settings set
+    closure_history = closure_history || jsonb_build_object(
+      'snapshot', s.closed_snapshot, 'reopened_by', auth.uid(), 'reopened_at', now(), 'reason', left(btrim(p_reason),500)),
+    closed_snapshot = null
+    where project_id = p_project;
+  perform public.pc_log(p_project, 'finance_reopened', 'project', p_project, jsonb_build_object('reason', left(btrim(p_reason),200)));
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- ═══ B5.9 التقرير المالي الشامل (عزل مالي كامل — finance فقط) ═══
+create or replace function public.pc_finance_report(p_project uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  if not public.pc_can_see_finance(p_project) then raise exception 'not authorized'; end if;
+  select jsonb_build_object(
+    'summary', public.pc_finance_summary(p_project),
+    'checklist', public.pc_finance_closure_checklist(p_project),
+    'by_category', coalesce((select jsonb_agg(x order by (x->>'cost')::numeric desc) from (
+        select jsonb_build_object('category', e.category,
+          'count', count(*),
+          'cost', sum(e.amount_excl_vat + case when e.recoverable_vat then 0 else e.vat_amount end) filter (where e.status = 'paid'),
+          'committed', sum(e.amount_excl_vat + case when e.recoverable_vat then 0 else e.vat_amount end) filter (where e.status in ('approved','scheduled_for_payment','partially_paid'))) x
+        from public.project_expenses e where e.project_id = p_project and e.is_deleted = false
+          and e.status in ('approved','scheduled_for_payment','partially_paid','paid')
+        group by e.category) q), '[]'::jsonb),
+    'by_supplier', coalesce((select jsonb_agg(x order by (x->>'cost')::numeric desc) from (
+        select jsonb_build_object('supplier', coalesce(e.supplier,'—'),
+          'count', count(*),
+          'cost', sum(e.amount_excl_vat + case when e.recoverable_vat then 0 else e.vat_amount end)) x
+        from public.project_expenses e where e.project_id = p_project and e.is_deleted = false
+          and e.status in ('approved','scheduled_for_payment','partially_paid','paid')
+        group by coalesce(e.supplier,'—')) q), '[]'::jsonb),
+    'by_phase', coalesce((select jsonb_agg(x) from (
+        select jsonb_build_object('phase', b.phase, 'allocated', b.allocated,
+          'spent', coalesce((select sum(e.amount_excl_vat + case when e.recoverable_vat then 0 else e.vat_amount end)
+            from public.project_expenses e where e.project_id = p_project and e.is_deleted = false and e.phase = b.phase
+              and e.status in ('approved','scheduled_for_payment','partially_paid','paid')), 0)) x
+        from public.project_phase_budgets b where b.project_id = p_project) q), '[]'::jsonb),
+    'revenue', coalesce((select jsonb_agg(jsonb_build_object(
+        'name', r.name, 'due_date', r.due_date, 'amount_incl_vat', r.amount_incl_vat,
+        'collected', r.collected_amount, 'outstanding', r.amount_incl_vat - r.collected_amount,
+        'status', r.status, 'overdue', r.due_date < current_date and r.status not in ('paid','cancelled','refunded'))
+        order by r.due_date nulls last)
+      from public.project_revenue_schedule r where r.project_id = p_project and r.is_deleted = false), '[]'::jsonb),
+    'cashflow_monthly', coalesce((select jsonb_agg(x order by (x->>'month')) from (
+        select jsonb_build_object('month', m, 'paid_out', sum(po), 'collected_in', sum(ci)) x from (
+          select to_char(e.paid_date, 'YYYY-MM') as m,
+                 (e.amount_excl_vat + case when e.recoverable_vat then 0 else e.vat_amount end) as po, 0::numeric as ci
+            from public.project_expenses e
+            where e.project_id = p_project and e.is_deleted = false and e.status = 'paid' and e.paid_date is not null
+          union all
+          select to_char(r.collected_date, 'YYYY-MM'), 0, r.collected_amount
+            from public.project_revenue_schedule r
+            where r.project_id = p_project and r.is_deleted = false and r.collected_date is not null and r.collected_amount > 0
+        ) raw where m is not null group by m) q), '[]'::jsonb),
+    'closed_snapshot', (select s.closed_snapshot from public.project_finance_settings s where s.project_id = p_project),
+    'generated_at', now()
+  ) into v;
+  return v;
+end $$;
+
+-- ═══ B5.10 Grants (دوال Batch 5) ═══
+do $g5$
+declare f text;
+begin
+  foreach f in array array[
+    'public.pc_finance_closure_checklist(uuid)',
+    'public.pc_finance_close(uuid,boolean,text)',
+    'public.pc_finance_reopen(uuid,text)',
+    'public.pc_finance_report(uuid)',
+    'public.pc_expense_refund(uuid,text)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+  -- دوال الـTrigger والمساعدات داخلية بالكامل (لا probing لحالة الإغلاق من العملاء).
+  execute 'revoke all on function public.pc_budget_mirror() from public, anon, authenticated';
+  execute 'revoke all on function public.pc_budget_seed() from public, anon, authenticated';
+  execute 'revoke all on function public.pc_budget_guard() from public, anon, authenticated';
+  execute 'revoke all on function public.pc_finance_closed_guard() from public, anon, authenticated';
+  execute 'revoke all on function public.pc_settings_closed_guard() from public, anon, authenticated';
+  execute 'revoke all on function public.pc_finance_closed(uuid) from public, anon, authenticated';
+end $g5$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -1242,6 +1637,15 @@ begin
      (select count(*) from information_schema.columns where table_schema='public'
         and table_name='custody_inventory_reservations' and column_name='shoot_session_id') = 0
     then miss := miss || ' col(custody_inventory_reservations.shoot_session_id)'; end if;
+  -- Batch 5
+  if to_regprocedure('public.pc_finance_close(uuid,boolean,text)')      is null then miss := miss || ' pc_finance_close'; end if;
+  if to_regprocedure('public.pc_finance_reopen(uuid,text)')             is null then miss := miss || ' pc_finance_reopen'; end if;
+  if to_regprocedure('public.pc_finance_report(uuid)')                  is null then miss := miss || ' pc_finance_report'; end if;
+  if to_regprocedure('public.pc_finance_closure_checklist(uuid)')       is null then miss := miss || ' pc_finance_closure_checklist'; end if;
+  if not exists (select 1 from pg_trigger where tgname = 'trg_pexp_closed')      then miss := miss || ' trg_pexp_closed'; end if;
+  if not exists (select 1 from pg_trigger where tgname = 'trg_pfs_budget_mirror') then miss := miss || ' trg_pfs_budget_mirror'; end if;
+  if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_finance_settings' and column_name='closure_history') = 0
+    then miss := miss || ' col(project_finance_settings.closure_history)'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;

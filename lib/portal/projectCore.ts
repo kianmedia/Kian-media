@@ -365,12 +365,31 @@ export const pcListExpenses = (projectId: string) => pget<ProjectExpense[]>(`pro
 export const pcExpenseCreate = (projectId: string, data: Record<string, unknown>) => prpc<ProjectExpense>("pc_expense_create", { p_project: projectId, p_data: data });
 export const pcExpenseTransition = (expenseId: string, action: string, reason?: string, override = false) => prpc<ProjectExpense>("pc_expense_transition", { p_expense: expenseId, p_action: action, p_reason: reason ?? null, p_override: override });
 export const pcExpenseDelete = (expenseId: string, reason: string) => prpc<boolean>("pc_expense_delete", { p_expense: expenseId, p_reason: reason });
+export const pcExpenseRefund = (expenseId: string, reason: string) => prpc<ProjectExpense>("pc_expense_refund", { p_expense: expenseId, p_reason: reason });
 export const pcListPhaseBudgets = (projectId: string) => pget<PhaseBudget[]>(`project_phase_budgets?project_id=eq.${enc(projectId)}&select=*&order=created_at.asc`);
 export const pcPhaseBudgetUpsert = (projectId: string, phase: string, allocated: number, note?: string) => prpc<PhaseBudget>("pc_phase_budget_upsert", { p_project: projectId, p_phase: phase, p_allocated: allocated, p_note: note ?? null });
 export const pcListRevenue = (projectId: string) => pget<RevenueRow[]>(`project_revenue_schedule?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=due_date.asc.nullslast`);
 export const pcRevenueUpsert = (projectId: string, data: Record<string, unknown>) => prpc<RevenueRow>("pc_revenue_upsert", { p_project: projectId, p_data: data });
 export const pcListFinAlerts = (projectId: string) => pget<FinAlert[]>(`project_financial_alerts?project_id=eq.${enc(projectId)}&resolved_at=is.null&select=*&order=level.desc`);
 export const pcFinAlertsRecompute = (projectId: string) => prpc<number>("pc_finance_alerts_recompute", { p_project: projectId });
+
+// ─── Batch 5: الإغلاق المالي والتقارير (finance فقط) ───
+export interface ClosureItem { key: string; ar: string; ok: boolean; critical: boolean; count?: number; amount?: number }
+export interface ClosureChecklist { items: ClosureItem[]; critical_count: number; can_close: boolean; closed: boolean }
+export interface FinanceReport {
+  summary: FinanceSummary; checklist: ClosureChecklist;
+  by_category: { category: string; count: number; cost: number | null; committed: number | null }[];
+  by_supplier: { supplier: string; count: number; cost: number }[];
+  by_phase: { phase: string; allocated: number; spent: number }[];
+  revenue: { name: string; due_date: string | null; amount_incl_vat: number; collected: number; outstanding: number; status: string; overdue: boolean }[];
+  cashflow_monthly: { month: string; paid_out: number; collected_in: number }[];
+  closed_snapshot: Record<string, unknown> | null; generated_at: string;
+}
+export const pcFinanceClosureChecklist = (projectId: string) => prpc<ClosureChecklist>("pc_finance_closure_checklist", { p_project: projectId });
+export const pcFinanceClose = (projectId: string, override = false, reason?: string) =>
+  prpc<{ ok: boolean; closed_at: string }>("pc_finance_close", { p_project: projectId, p_override: override, p_reason: reason ?? null });
+export const pcFinanceReopen = (projectId: string, reason: string) => prpc<{ ok: boolean }>("pc_finance_reopen", { p_project: projectId, p_reason: reason });
+export const pcFinanceReport = (projectId: string) => prpc<FinanceReport>("pc_finance_report", { p_project: projectId });
 
 // ─── Batch 1: الخطة الزمنية الموحّدة (Schedule + Calendar + Gantt من مصدر واحد) ───
 export type ScheduleEventType =
@@ -554,6 +573,11 @@ export function pcErr(e: string): string {
   if (/bad_window/.test(e)) return "حدّد فترة حجز صحيحة (النهاية بعد البداية).";
   if (/bad_quantity/.test(e)) return "كمية غير صحيحة.";
   if (/custody_already_issued/.test(e)) return "صُرفت عهدة لهذا الحجز مسبقًا.";
+  if (/project_closed/.test(e)) return "حسابات المشروع مُغلقة — أي تعديل يتطلب استردادًا/إلغاءً أو إعادة فتح من المالك.";
+  if (/closure_blocked/.test(e)) return "لا يمكن الإغلاق مع بنود حرجة مفتوحة — عالجها أو استخدم تجاوز المالك بسبب.";
+  if (/already_closed/.test(e)) return "الحسابات مُغلقة بالفعل.";
+  if (/not_closed/.test(e)) return "الحسابات ليست مُغلقة.";
+  if (/budget_managed_by_finance/.test(e)) return "الميزانية تُدار من تبويب «حسابات المشروع» — عدّلها هناك.";
   if (/bad_link/.test(e)) return "العنصر المرتبط لا ينتمي لهذا المشروع.";
   if (/item_deleted/.test(e)) return "العنصر محذوف — استعده أولًا.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

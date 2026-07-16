@@ -11,7 +11,9 @@ import {
   pcFinanceSummary, pcFinanceSettings, pcFinanceSettingsSet, pcFinanceAssignAccountant, pcListFinanceStaff,
   pcListExpenses, pcExpenseCreate, pcExpenseTransition, pcExpenseDelete, pcListPhaseBudgets, pcPhaseBudgetUpsert,
   pcListRevenue, pcRevenueUpsert, pcListFinAlerts, pcFinAlertsRecompute, pcErr, EXPENSE_STATUS_LABELS,
+  pcFinanceReport, pcFinanceClosureChecklist, pcFinanceClose, pcFinanceReopen, pcExpenseRefund,
   type FinanceSummary, type FinanceSettings, type ProjectExpense, type PhaseBudget, type RevenueRow, type FinAlert, type StaffLite,
+  type FinanceReport, type ClosureChecklist,
 } from "@/lib/portal/projectCore";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
@@ -27,7 +29,7 @@ export function FinanceTab({ projectId, flash }: { projectId: string; flash: (m:
   const canAdmin = caps.isOwner || profile.staff_role === "finance";  // تعديل الإعدادات المالية العليا
   const [sum, setSum] = useState<FinanceSummary | null>(null);
   const [alerts, setAlerts] = useState<FinAlert[]>([]);
-  const [sub, setSub] = useState<"expenses" | "budgets" | "revenue" | "settings">("expenses");
+  const [sub, setSub] = useState<"expenses" | "budgets" | "revenue" | "report" | "closure" | "settings">("expenses");
   const [phase, setPhase] = useState<"loading" | "ready" | "denied">("loading");
 
   const loadTop = useCallback(async () => {
@@ -75,12 +77,14 @@ export function FinanceTab({ projectId, flash }: { projectId: string; flash: (m:
         {cards.map((c, i) => <div key={i} className={`${card} p-2.5`}><div className={`text-sm font-bold ${c.cls ?? "text-stone-200"}`} dir="ltr">{c.v}</div><div className="text-[10px] text-stone-500">{c.ar}</div></div>)}
       </div>
       <div className="flex items-center justify-between">
-        <div className="flex gap-1.5">{(["expenses", "budgets", "revenue", "settings"] as const).map((k) => <button key={k} onClick={() => setSub(k)} className={`px-2.5 py-1 rounded-lg text-[11px] ${sub === k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>{t(k === "expenses" ? { ar: "المصروفات", en: "Expenses" } : k === "budgets" ? { ar: "ميزانيات المراحل", en: "Phase Budgets" } : k === "revenue" ? { ar: "الإيرادات", en: "Revenue" } : { ar: "الإعدادات", en: "Settings" })}</button>)}</div>
+        <div className="flex gap-1.5 flex-wrap">{(["expenses", "budgets", "revenue", "report", "closure", "settings"] as const).map((k) => <button key={k} onClick={() => setSub(k)} className={`px-2.5 py-1 rounded-lg text-[11px] ${sub === k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>{t(k === "expenses" ? { ar: "المصروفات", en: "Expenses" } : k === "budgets" ? { ar: "ميزانيات المراحل", en: "Phase Budgets" } : k === "revenue" ? { ar: "الإيرادات", en: "Revenue" } : k === "report" ? { ar: "التقارير", en: "Reports" } : k === "closure" ? { ar: "الإغلاق المالي", en: "Closure" } : { ar: "الإعدادات", en: "Settings" })}</button>)}</div>
         <button onClick={() => void recompute()} className="text-[11px] text-stone-400 hover:text-white">↻ {t({ ar: "تحديث التنبيهات", en: "Refresh alerts" })}</button>
       </div>
       {sub === "expenses" && <ExpensesSection projectId={projectId} settings={sum} onChanged={loadTop} flash={flash} />}
       {sub === "budgets" && <BudgetsSection projectId={projectId} canEdit={canAdmin} onChanged={loadTop} flash={flash} />}
       {sub === "revenue" && <RevenueSection projectId={projectId} onChanged={loadTop} flash={flash} />}
+      {sub === "report" && <FinReportSection projectId={projectId} flash={flash} />}
+      {sub === "closure" && <FinClosureSection projectId={projectId} isOwner={caps.isOwner} onChanged={loadTop} flash={flash} />}
       {sub === "settings" && <SettingsSection projectId={projectId} canAdmin={canAdmin} isOwner={caps.isOwner} onChanged={loadTop} flash={flash} />}
     </div>
   );
@@ -115,6 +119,14 @@ function ExpensesSection({ projectId, settings, onChanged, flash }: { projectId:
     : st === "submitted" ? [{ a: "review", ar: "مراجعة", en: "Review" }, { a: "approve", ar: "اعتماد", en: "Approve" }, { a: "reject", ar: "رفض", en: "Reject" }]
     : st === "under_review" ? [{ a: "approve", ar: "اعتماد", en: "Approve" }, { a: "reject", ar: "رفض", en: "Reject" }]
     : st === "approved" || st === "scheduled_for_payment" ? [{ a: "pay", ar: "دفع", en: "Pay" }] : [];
+  // استرداد مصروف مدفوع (Reversal) — يبقى متاحًا حتى بعد الإغلاق المالي.
+  async function refund(x: ProjectExpense) {
+    const p = window.prompt(t({ ar: `استرداد «${x.description ?? x.category}» — السبب (إلزامي):`, en: "Refund reason:" }));
+    if (p === null) return; if (!p.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+    const r = await pcExpenseRefund(x.id, p.trim());
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "سُجّل الاسترداد.", en: "Refunded." })); await load(); await onChanged();
+  }
   return (
     <div className="space-y-3">
       <div className={`${card} p-3 space-y-2`}>
@@ -140,6 +152,7 @@ function ExpensesSection({ projectId, settings, onChanged, flash }: { projectId:
             <span className="text-[10px] text-stone-600" dir="ltr">{x.expense_date}{x.phase ? ` · ${x.phase}` : ""}</span>
             <div className="flex-1" />
             {actionsFor(x.status).map((ac) => <button key={ac.a} onClick={() => void tr(x, ac.a)} className={`${ac.a === "reject" ? "text-red-400" : ac.a === "approve" || ac.a === "pay" ? "text-emerald-400" : "text-sky-400"} text-[11px]`}>{t({ ar: ac.ar, en: ac.en })}</button>)}
+            {x.status === "paid" && <button onClick={() => void refund(x)} className="text-amber-400 text-[11px]">{t({ ar: "استرداد", en: "Refund" })}</button>}
             {x.status !== "paid" && <button onClick={() => void del(x)} className="text-stone-600 hover:text-red-400 text-[11px]">{t({ ar: "حذف", en: "Del" })}</button>}
           </div>
           {x.reject_reason && <div className="text-[10px] text-red-400 mt-0.5">{x.reject_reason}</div>}
@@ -239,6 +252,183 @@ function SettingsSection({ projectId, canAdmin, isOwner, onChanged, flash }: { p
         <FinRow f={f} setk={setk} k="approve_limit_admin" ar="حدّ اعتماد الأدمن" disabled={!isOwner} />
       </div>
       <button disabled={busy} onClick={() => void save()} className={`${btnRed} px-4 py-2`}>{t({ ar: "حفظ الإعدادات", en: "Save settings" })}</button>
+    </div>
+  );
+}
+
+// ─── التقارير المالية: ربحية/ميزانية/فئات/موردون/تحصيل/تدفق شهري + طباعة وCSV ───
+function csvDownload(name: string, rows: (string | number | null | undefined)[][]) {
+  const esc = (v: string | number | null | undefined) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = "﻿" + rows.map((r) => r.map(esc).join(",")).join("\n");   // BOM ليفتح عربيًا في Excel
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `${name}.csv`; a.click(); URL.revokeObjectURL(a.href);
+}
+const FIN_PRINT_CSS = `@page { size: A4; margin: 16mm 14mm 20mm 14mm; }
+@media print { body * { visibility: hidden !important; } #fin-report-print, #fin-report-print * { visibility: visible !important; } #fin-report-print { position: absolute; top: 0; left: 0; right: 0; background: #fff !important; color: #111 !important; padding: 16px; } #fin-report-print .no-print { display: none !important; }
+#fin-report-print table { width: 100%; border-collapse: collapse; font-size: 11px; } #fin-report-print th, #fin-report-print td { border: 1px solid #ddd; padding: 3px 6px; text-align: right; color: #111; } #fin-report-print h4 { color: #E31E24; margin: 10px 0 4px; } }`;
+
+function FinReportSection({ projectId, flash }: { projectId: string; flash: (m: string) => void }) {
+  const { t } = useI18n();
+  const { profile } = usePortal();
+  const [rep, setRep] = useState<FinanceReport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setBusy(true);
+    const r = await pcFinanceReport(projectId);
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    setRep(r.data);
+  }, [projectId, flash]);
+  useEffect(() => { void load(); }, [load]);
+  if (busy && !rep) return <p className="text-xs text-stone-500">{t({ ar: "جارٍ تجهيز التقرير…", en: "Loading…" })}</p>;
+  if (!rep) return <p className="text-xs text-stone-500">{t({ ar: "تعذّر تحميل التقرير.", en: "Failed." })}</p>;
+  const cur = rep.summary.currency;
+  const Th = ({ c }: { c: string[] }) => <thead><tr className="text-stone-500 border-b border-stone-800">{c.map((x) => <th key={x} className="p-1.5 text-right">{x}</th>)}</tr></thead>;
+  const exportAll = () => {
+    csvDownload(`finance-report`, [
+      ["التقرير المالي", "", ""], ["", "", ""],
+      ["الملخص", "", ""],
+      ["قيمة المشروع (صافي)", rep.summary.net_revenue, cur], ["الميزانية المعتمدة", rep.summary.approved_budget, cur],
+      ["التكلفة الفعلية", rep.summary.actual_cost, cur], ["الالتزامات", rep.summary.committed_cost, cur],
+      ["المحصّل", rep.summary.collected, cur], ["المستحق", rep.summary.receivable, cur],
+      ["الربح الفعلي", rep.summary.actual_profit, cur], ["الربح المتوقع", rep.summary.projected_profit, cur],
+      ["", "", ""], ["حسب الفئة", "التكلفة المدفوعة", "الالتزامات"],
+      ...rep.by_category.map((x) => [x.category, x.cost ?? 0, x.committed ?? 0]),
+      ["", "", ""], ["حسب المورد", "التكلفة", "عدد"],
+      ...rep.by_supplier.map((x) => [x.supplier, x.cost, x.count]),
+      ["", "", ""], ["المرحلة", "المخصص", "المصروف"],
+      ...rep.by_phase.map((x) => [x.phase, x.allocated, x.spent]),
+      ["", "", ""], ["الدفعة", "المبلغ", "المحصّل"],
+      ...rep.revenue.map((x) => [x.name, x.amount_incl_vat, x.collected]),
+      ["", "", ""], ["الشهر", "مدفوعات صادرة", "تحصيل وارد"],
+      ...rep.cashflow_monthly.map((x) => [x.month, x.paid_out, x.collected_in]),
+    ]);
+  };
+  return (
+    <div className="space-y-3" id="fin-report-print">
+      <style dangerouslySetInnerHTML={{ __html: FIN_PRINT_CSS }} />
+      <div className="flex gap-2 no-print">
+        <button onClick={() => window.print()} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "طباعة / PDF", en: "Print / PDF" })}</button>
+        <button onClick={exportAll} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "تصدير CSV (Excel)", en: "CSV" })}</button>
+        <button onClick={() => void load()} className={`${btnGhost} px-3 py-1.5 text-xs`}>↻</button>
+      </div>
+      <div className="hidden print:block" style={{ fontSize: 12 }}>
+        <b style={{ color: "#E31E24" }}>كيان ميديا · التقرير المالي للمشروع</b>
+        <div dir="ltr">Generated by {profile.full_name ?? "—"} · {new Date(rep.generated_at).toLocaleString("en-GB")}</div>
+      </div>
+      <div className="overflow-x-auto"><h4 className="text-xs text-stone-400 mb-1">{t({ ar: "الميزانية مقابل الفعلي حسب المرحلة", en: "Budget vs Actual by phase" })}</h4>
+        <table className="w-full text-xs"><Th c={["المرحلة", "المخصص", "المصروف", "الانحراف"]} /><tbody>
+          {rep.by_phase.map((x, i) => <tr key={i} className="border-b border-stone-800/40"><td className="p-1.5 text-stone-200">{x.phase}</td><td className="p-1.5" dir="ltr">{money(x.allocated, cur)}</td><td className="p-1.5" dir="ltr">{money(x.spent, cur)}</td><td className={`p-1.5 ${x.spent > x.allocated && x.allocated > 0 ? "text-red-400" : "text-emerald-400"}`} dir="ltr">{money(x.allocated - x.spent, cur)}</td></tr>)}
+          {rep.by_phase.length === 0 && <tr><td className="p-2 text-stone-600" colSpan={4}>{t({ ar: "لا ميزانيات مراحل.", en: "None." })}</td></tr>}
+        </tbody></table></div>
+      <div className="overflow-x-auto"><h4 className="text-xs text-stone-400 mb-1">{t({ ar: "المصروفات حسب الفئة", en: "By category" })}</h4>
+        <table className="w-full text-xs"><Th c={["الفئة", "عدد", "مدفوع", "التزامات"]} /><tbody>
+          {rep.by_category.map((x, i) => <tr key={i} className="border-b border-stone-800/40"><td className="p-1.5 text-stone-200">{x.category}</td><td className="p-1.5" dir="ltr">{x.count}</td><td className="p-1.5" dir="ltr">{money(x.cost, cur)}</td><td className="p-1.5" dir="ltr">{money(x.committed, cur)}</td></tr>)}
+        </tbody></table></div>
+      <div className="overflow-x-auto"><h4 className="text-xs text-stone-400 mb-1">{t({ ar: "المصروفات حسب المورد", en: "By supplier" })}</h4>
+        <table className="w-full text-xs"><Th c={["المورد", "عدد", "التكلفة"]} /><tbody>
+          {rep.by_supplier.map((x, i) => <tr key={i} className="border-b border-stone-800/40"><td className="p-1.5 text-stone-200">{x.supplier}</td><td className="p-1.5" dir="ltr">{x.count}</td><td className="p-1.5" dir="ltr">{money(x.cost, cur)}</td></tr>)}
+        </tbody></table></div>
+      <div className="overflow-x-auto"><h4 className="text-xs text-stone-400 mb-1">{t({ ar: "جدول دفعات العميل والتحصيل", en: "Client payments & receivables" })}</h4>
+        <table className="w-full text-xs"><Th c={["الدفعة", "الاستحقاق", "المبلغ", "المحصّل", "المتبقي", "الحالة"]} /><tbody>
+          {rep.revenue.map((x, i) => <tr key={i} className={`border-b border-stone-800/40 ${x.overdue ? "bg-red-950/20" : ""}`}><td className="p-1.5 text-stone-200">{x.name}</td><td className="p-1.5" dir="ltr">{x.due_date ?? "—"}{x.overdue ? " ⚠" : ""}</td><td className="p-1.5" dir="ltr">{money(x.amount_incl_vat, cur)}</td><td className="p-1.5 text-emerald-400" dir="ltr">{money(x.collected, cur)}</td><td className="p-1.5 text-sky-400" dir="ltr">{money(x.outstanding, cur)}</td><td className="p-1.5 text-stone-400">{x.status}</td></tr>)}
+        </tbody></table></div>
+      <div className="overflow-x-auto"><h4 className="text-xs text-stone-400 mb-1">{t({ ar: "التدفق النقدي الشهري", en: "Monthly cashflow" })}</h4>
+        <table className="w-full text-xs"><Th c={["الشهر", "مدفوعات صادرة", "تحصيل وارد", "الصافي"]} /><tbody>
+          {rep.cashflow_monthly.map((x, i) => <tr key={i} className="border-b border-stone-800/40"><td className="p-1.5" dir="ltr">{x.month}</td><td className="p-1.5 text-amber-400" dir="ltr">{money(x.paid_out, cur)}</td><td className="p-1.5 text-emerald-400" dir="ltr">{money(x.collected_in, cur)}</td><td className={`p-1.5 ${x.collected_in - x.paid_out < 0 ? "text-red-400" : "text-emerald-400"}`} dir="ltr">{money(x.collected_in - x.paid_out, cur)}</td></tr>)}
+          {rep.cashflow_monthly.length === 0 && <tr><td className="p-2 text-stone-600" colSpan={4}>{t({ ar: "لا حركة نقدية بعد.", en: "None yet." })}</td></tr>}
+        </tbody></table></div>
+    </div>
+  );
+}
+
+// ─── الإغلاق المالي: Checklist + إغلاق (تجاوز المالك بسبب) + Snapshot + إعادة فتح ───
+function FinClosureSection({ projectId, isOwner, onChanged, flash }: { projectId: string; isOwner: boolean; onChanged: () => Promise<void>; flash: (m: string) => void }) {
+  const { t } = useI18n();
+  const [chk, setChk] = useState<ClosureChecklist | null>(null);
+  const [snap, setSnap] = useState<Record<string, unknown> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    const [c, s] = await Promise.all([pcFinanceClosureChecklist(projectId), pcFinanceSettings(projectId)]);
+    if (c.ok) setChk(c.data); else flash(pcErr(c.error));
+    if (s.ok) setSnap((s.data as unknown as { closed_snapshot?: Record<string, unknown> | null })?.closed_snapshot ?? null);
+  }, [projectId, flash]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function close(withOverride: boolean) {
+    if (busy) return;
+    let reason: string | undefined;
+    if (withOverride) {
+      const rs = window.prompt(t({ ar: "تجاوز الإغلاق (المالك) — السبب الإلزامي:", en: "Owner override reason:" }));
+      if (rs === null) return; if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+      reason = rs.trim();
+    }
+    if (!window.confirm(t({ ar: "إغلاق حسابات المشروع نهائيًا؟ سيُمنع أي تعديل مالي (عدا استرداد/إلغاء) وسيُحفظ Snapshot.", en: "Close finances?" }))) return;
+    setBusy(true);
+    const r = await pcFinanceClose(projectId, withOverride, reason);
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "أُغلقت الحسابات وحُفظ الـSnapshot.", en: "Closed." }));
+    await load(); await onChanged();
+  }
+  async function reopen() {
+    const rs = window.prompt(t({ ar: "إعادة فتح الحسابات (المالك) — السبب الإلزامي:", en: "Reopen reason:" }));
+    if (rs === null) return; if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+    setBusy(true);
+    const r = await pcFinanceReopen(projectId, rs.trim());
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "أُعيد فتح الحسابات — الـSnapshot السابقة محفوظة في السجل.", en: "Reopened." }));
+    await load(); await onChanged();
+  }
+
+  if (!chk) return <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
+  const snapSum = snap ? (snap as { summary?: Record<string, number | string> }).summary : null;
+
+  return (
+    <div className="space-y-3">
+      {chk.closed && snap && (
+        <div className="bg-emerald-950/40 border border-emerald-900 rounded-xl p-3 text-xs space-y-1">
+          <div className="text-emerald-300 font-semibold">✓ {t({ ar: "الحسابات مُغلقة — Snapshot نهائية غير قابلة للتعديل الصامت", en: "Closed — immutable snapshot" })}</div>
+          <div className="text-stone-400" dir="ltr">{String((snap as { closed_at?: string }).closed_at ?? "")}</div>
+          {snapSum && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1">
+              {[["net_revenue", "صافي القيمة"], ["actual_cost", "التكلفة الفعلية"], ["collected", "المحصّل"], ["actual_profit", "الربح النهائي"], ["actual_margin_pct", "الهامش %"], ["approved_budget", "الميزانية"], ["receivable", "المتبقي على العميل"], ["committed_cost", "الالتزامات"]].map(([k, ar]) => (
+                <div key={k} className="bg-stone-950/60 rounded p-1.5"><div className="text-stone-200 font-bold" dir="ltr">{String(snapSum[k] ?? "—")}</div><div className="text-[10px] text-stone-500">{ar}</div></div>
+              ))}
+            </div>
+          )}
+          {(snap as { override?: { reason?: string } }).override?.reason && <div className="text-amber-400">{t({ ar: "أُغلق بتجاوز — السبب:", en: "Override:" })} {(snap as { override: { reason: string } }).override.reason}</div>}
+          {isOwner && <button disabled={busy} onClick={() => void reopen()} className={`${btnGhost} px-3 py-1.5 mt-1`}>{t({ ar: "إعادة فتح بسبب (المالك)", en: "Reopen" })}</button>}
+          <p className="text-[10px] text-stone-500">{t({ ar: "بعد الإغلاق: أي تعديل مالي مرفوض عدا استرداد/إلغاء مصروف. التعديلات تتطلب إعادة فتح موثقة.", en: "Post-closure edits require reopen." })}</p>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <div className="text-xs text-stone-400">{t({ ar: "قائمة تدقيق الإغلاق", en: "Closure checklist" })}</div>
+        {chk.items.map((it) => (
+          <div key={it.key} className={`${card} p-2.5 text-xs flex items-center gap-2 ${!it.ok && it.critical ? "border-red-900/60" : ""}`}>
+            <span className={it.ok ? "text-emerald-400" : it.critical ? "text-red-400" : "text-amber-400"}>{it.ok ? "✓" : "●"}</span>
+            <span className="text-stone-200 flex-1">{it.ar}</span>
+            {typeof it.count === "number" && it.count > 0 && <span className="text-stone-400" dir="ltr">{it.count}</span>}
+            {typeof it.amount === "number" && it.amount > 0 && <span className="text-stone-500" dir="ltr">{money(it.amount)}</span>}
+            {!it.ok && it.critical && <span className="text-[10px] text-red-400">{t({ ar: "حرج", en: "critical" })}</span>}
+          </div>
+        ))}
+      </div>
+      {!chk.closed && (
+        <div className="flex gap-2 flex-wrap">
+          <button disabled={busy || !chk.can_close} onClick={() => void close(false)} className={`${btnRed} px-4 py-2 text-xs`}>
+            {t({ ar: "إغلاق الحسابات وإنشاء Snapshot", en: "Close & snapshot" })}
+          </button>
+          {!chk.can_close && isOwner && (
+            <button disabled={busy} onClick={() => void close(true)} className={`${btnGhost} px-4 py-2 text-xs text-amber-300 border-amber-900/60`}>
+              {t({ ar: `تجاوز الإغلاق بسبب (${chk.critical_count} بند حرج)`, en: "Owner override" })}
+            </button>
+          )}
+          {!chk.can_close && !isOwner && <p className="text-[11px] text-amber-400 self-center">{t({ ar: "بنود حرجة مفتوحة — عالجها أو اطلب تجاوز المالك.", en: "Critical items open." })}</p>}
+        </div>
+      )}
     </div>
   );
 }
