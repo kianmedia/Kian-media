@@ -11,7 +11,7 @@ import { CallSheetManager } from "./CallSheet";
 import {
   pcListMembers, pcMemberAdd, pcMemberRemove, pcListStaff, pcListDeliverables,
   pcListCosts, pcCostAdd, pcListRisks, pcRiskUpsert, pcEntityDelete, type TrashEntity,
-  pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory,
+  pcListMeetings, pcMeetingUpsert, pcListShoots, pcShootUpsert, pcListStatusHistory, pcGetCallSheetMeta,
   pcListDeliverableVersions, pcDeliverableVersionAdd, pcMeetingToTask,
   PC_STAGE_LABELS, SEVERITY_LABELS, RISK_STATUS_LABELS, SHOOT_STATUS_LABELS, DLV_LABEL, pcErr, fmtDT,
   type ProjectMemberRow, type StaffLite, type Deliverable, type ProjectCost, type ProjectRisk,
@@ -132,7 +132,7 @@ function DeliverableVersions({ deliverableId, canManage, flash }: { deliverableI
 }
 
 // ─── التكاليف (مالية) ───
-export function CostsTab({ projectId, flash }: { projectId: string; flash: Flash }) {
+export function CostsTab({ projectId, canManage = true, flash }: { projectId: string; canManage?: boolean; flash: Flash }) {
   const { t } = useI18n();
   const { caps } = usePortal();
   const [rows, setRows] = useState<ProjectCost[]>([]);
@@ -148,16 +148,18 @@ export function CostsTab({ projectId, flash }: { projectId: string; flash: Flash
   return (
     <div className="space-y-3">
       <div className={`${card} p-3 flex items-center justify-between`}><span className="text-xs text-stone-400">{t({ ar: "إجمالي التكاليف", en: "Total costs" })}</span><span className="text-lg font-bold text-stone-200" dir="ltr">{money(total)} SAR</span></div>
-      <div className={`${card} p-3 flex flex-wrap gap-2 items-end`}>
-        <input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={t({ ar: "المبلغ", en: "Amount" })} className={`${inp} w-28`} />
-        <select value={cat} onChange={(e) => setCat(e.target.value)} className={inp} style={{ colorScheme: "dark" }}>{CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
-        <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={t({ ar: "الوصف", en: "Description" })} className={`${inp} flex-1 min-w-[120px]`} />
-        <button disabled={busy || !amount} onClick={() => void add()} className={`${btnRed} px-4 py-2`}>{t({ ar: "إضافة", en: "Add" })}</button>
-      </div>
+      {canManage && (
+        <div className={`${card} p-3 flex flex-wrap gap-2 items-end`}>
+          <input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={t({ ar: "المبلغ", en: "Amount" })} className={`${inp} w-28`} />
+          <select value={cat} onChange={(e) => setCat(e.target.value)} className={inp} style={{ colorScheme: "dark" }}>{CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={t({ ar: "الوصف", en: "Description" })} className={`${inp} flex-1 min-w-[120px]`} />
+          <button disabled={busy || !amount} onClick={() => void add()} className={`${btnRed} px-4 py-2`}>{t({ ar: "إضافة", en: "Add" })}</button>
+        </div>
+      )}
       {rows.map((c) => (
         <div key={c.id} className={`${card} p-2.5 flex items-center justify-between gap-2 text-xs`}>
           <div><span className="text-stone-200" dir="ltr">{money(Number(c.amount))} SAR</span><span className="mr-2 text-stone-500">· {c.category}{c.description ? ` · ${c.description}` : ""}</span></div>
-          <div className="flex items-center gap-2"><span className="text-stone-600" dir="ltr">{c.cost_date}</span><button onClick={() => void del(c)} className="text-stone-600 hover:text-red-400">✕</button></div>
+          <div className="flex items-center gap-2"><span className="text-stone-600" dir="ltr">{c.cost_date}</span>{canManage && <button onClick={() => void del(c)} className="text-stone-600 hover:text-red-400">✕</button>}</div>
         </div>
       ))}
     </div>
@@ -246,16 +248,116 @@ export function MeetingsTab({ projectId, canManage, flash }: { projectId: string
 }
 
 // ─── جلسات التصوير ───
+const shootLines = (arr: unknown[] | undefined) => (arr ?? []).map((x) => typeof x === "string" ? x : JSON.stringify(x)).join("\n");
+const shootArr = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+// timestamptz → قيمة datetime-local بالمنطقة المحلية (وليس UTC) — حتى يطابق ما يظهر في البطاقة.
+const timeLocal = (s: string | null | undefined) => {
+  if (!s) return "";
+  const d = new Date(s); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+// قيمة datetime-local (محلية) → ISO للتخزين.
+const timeIso = (s: string) => s ? new Date(s).toISOString() : null;
+
+// محرّر تفاصيل الجلسة (Module-scope — لا فقدان تركيز): أوقات + طاقم + معدات + لقطات + حضور + تقرير.
+function ShootDetail({ projectId, sh, onSaved, flash }: { projectId: string; sh: ShootSession; onSaved: () => void; flash: Flash }) {
+  const { t } = useI18n();
+  const [f, setF] = useState({
+    session_date: sh.session_date ?? "", call_time: timeLocal(sh.call_time), start_time: timeLocal(sh.start_time),
+    wrap_time: timeLocal(sh.wrap_time), location: sh.location ?? "", client_contact: sh.client_contact ?? "",
+    permits: sh.permits ?? "", safety_notes: sh.safety_notes ?? "", weather_note: sh.weather_note ?? "",
+    crew: shootLines(sh.crew), equipment: shootLines(sh.equipment), vehicles: shootLines(sh.vehicles),
+    shot_list: shootLines(sh.shot_list), attendance: shootLines(sh.attendance), completion_report: sh.completion_report ?? "",
+  });
+  const [busy, setBusy] = useState(false);
+  const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
+  async function save() {
+    if (busy) return; setBusy(true);
+    const r = await pcShootUpsert(projectId, {
+      id: sh.id, session_date: f.session_date || undefined,
+      call_time: timeIso(f.call_time), start_time: timeIso(f.start_time), wrap_time: timeIso(f.wrap_time),
+      location: f.location.trim() || undefined, client_contact: f.client_contact.trim() || undefined,
+      permits: f.permits.trim() || undefined, safety_notes: f.safety_notes.trim() || undefined,
+      weather_note: f.weather_note.trim() || undefined,
+      crew: shootArr(f.crew), equipment: shootArr(f.equipment), vehicles: shootArr(f.vehicles),
+      shot_list: shootArr(f.shot_list), attendance: shootArr(f.attendance),
+      completion_report: f.completion_report.trim() || undefined,
+    });
+    setBusy(false);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    flash(t({ ar: "حُفظت تفاصيل الجلسة.", en: "Session saved." })); onSaved();
+  }
+  const Fld = (k: string, ar: string, en: string, type = "text") => (
+    <label className="block"><span className="text-[10px] text-stone-500">{t({ ar, en })}</span>
+      <input type={type} value={(f as Record<string, string>)[k]} onChange={(e) => set(k, e.target.value)} className={`${inp} w-full mt-0.5`} style={type !== "text" ? { colorScheme: "dark" } : {}} /></label>
+  );
+  const Area = (k: string, ar: string, en: string) => (
+    <label className="block"><span className="text-[10px] text-stone-500">{t({ ar, en })} <span className="text-stone-600">({t({ ar: "سطر لكل عنصر", en: "one per line" })})</span></span>
+      <textarea value={(f as Record<string, string>)[k]} onChange={(e) => set(k, e.target.value)} className={`${inp} w-full mt-0.5 min-h-[48px]`} /></label>
+  );
+  return (
+    <div className="mt-2 pt-2 border-t border-stone-800 space-y-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {Fld("session_date", "التاريخ", "Date", "date")}
+        {Fld("call_time", "Call Time", "Call Time", "datetime-local")}
+        {Fld("start_time", "بداية التصوير", "Start", "datetime-local")}
+        {Fld("wrap_time", "Wrap", "Wrap", "datetime-local")}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {Fld("location", "الموقع", "Location")}
+        {Fld("client_contact", "مسؤول العميل", "Client contact")}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {Area("crew", "الفريق", "Crew")}{Area("equipment", "المعدات والتجهيزات", "Equipment")}
+        {Area("vehicles", "المركبات", "Vehicles")}{Area("shot_list", "قائمة اللقطات", "Shot list")}
+        {Area("attendance", "الحضور", "Attendance")}
+        <label className="block"><span className="text-[10px] text-stone-500">{t({ ar: "تقرير الإكمال", en: "Completion report" })}</span>
+          <textarea value={f.completion_report} onChange={(e) => set("completion_report", e.target.value)} className={`${inp} w-full mt-0.5 min-h-[48px]`} /></label>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {Fld("permits", "التصاريح", "Permits")}{Fld("safety_notes", "السلامة", "Safety")}{Fld("weather_note", "الطقس", "Weather")}
+      </div>
+      <button disabled={busy} onClick={() => void save()} className={`${btnRed} px-4 py-2`}>{busy ? "…" : t({ ar: "حفظ التفاصيل", en: "Save" })}</button>
+    </div>
+  );
+}
+
 export function ShootsTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: Flash }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<ShootSession[]>([]);
   const [title, setTitle] = useState(""); const [date, setDate] = useState(""); const [loc, setLoc] = useState(""); const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const [openCS, setOpenCS] = useState<string | null>(null);
+  const [deepCS, setDeepCS] = useState<string | null>(null);
   const load = useCallback(async () => { const r = await pcListShoots(projectId); if (r.ok) setRows(r.data); }, [projectId]);
   useEffect(() => { void load(); }, [load]);
+  // رابط عميق: ?tab=shoots&entity=call_sheet&id=… → افتح الجلسة الحاضنة ومعاينة النسخة.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const id = sp.get("entity") === "call_sheet" ? sp.get("id") : null;
+    if (!id) return;
+    void pcGetCallSheetMeta(id).then((r) => {
+      if (r.ok && r.data) { setOpenCS(r.data.shoot_session_id); setDeepCS(id); }
+    });
+  }, []);
   async function add() { if (busy || !title.trim()) return; setBusy(true); const r = await pcShootUpsert(projectId, { title: title.trim(), session_date: date || undefined, location: loc || undefined }); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setTitle(""); setDate(""); setLoc(""); await load(); }
-  async function setStatus(sh: ShootSession, status: string) { const r = await pcShootUpsert(projectId, { id: sh.id, status }); if (!r.ok) { flash(pcErr(r.error)); return; } await load(); }
-  const stCls: Record<string, string> = { planned: "text-stone-400", confirmed: "text-sky-400", in_progress: "text-amber-400", completed: "text-emerald-400", cancelled: "text-red-400" };
+  async function setStatus(sh: ShootSession, status: string) {
+    let reason: string | undefined;
+    if (status === "cancelled") {
+      const rs = window.prompt(t({ ar: "سبب إلغاء الجلسة (إلزامي):", en: "Cancel reason (required):" }));
+      if (rs === null) return;
+      if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+      reason = rs.trim();
+    }
+    const r = await pcShootUpsert(projectId, { id: sh.id, status, ...(reason ? { cancel_reason: reason } : {}) });
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    await load();
+  }
+  const stBadge: Record<string, string> = {
+    planned: "bg-stone-800 text-stone-300", confirmed: "bg-sky-900/40 text-sky-300", in_progress: "bg-amber-900/40 text-amber-300",
+    completed: "bg-emerald-900/40 text-emerald-300", cancelled: "bg-red-900/40 text-red-300",
+  };
+  const timeStr = (s: string | null | undefined) => s ? fmtDT(s).slice(11) || fmtDT(s) : "—";
   return (
     <div className="space-y-3">
       {canManage && (
@@ -264,24 +366,52 @@ export function ShootsTab({ projectId, canManage, flash }: { projectId: string; 
           <div className="flex flex-wrap gap-2 items-end">
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inp} style={{ colorScheme: "dark" }} />
             <input value={loc} onChange={(e) => setLoc(e.target.value)} placeholder={t({ ar: "الموقع", en: "Location" })} className={`${inp} flex-1 min-w-[120px]`} />
-            <button disabled={busy || !title.trim()} onClick={() => void add()} className={`${btnRed} px-4 py-2`}>{t({ ar: "إضافة", en: "Add" })}</button>
+            <button disabled={busy || !title.trim()} onClick={() => void add()} className={`${btnRed} px-4 py-2`}>{t({ ar: "إضافة جلسة", en: "Add session" })}</button>
           </div>
         </div>
       )}
       {rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد جلسات تصوير.", en: "No shoot sessions." })}</p>}
       {rows.map((sh) => (
         <div key={sh.id} className={`${card} p-3 text-xs`}>
-          <div className="flex items-center justify-between gap-2">
-            <button onClick={() => setOpen(open === sh.id ? null : sh.id)} className="min-w-0 text-right flex-1"><span className="text-stone-200">{sh.title}</span>{sh.location && <span className="mr-2 text-stone-500">· {sh.location}</span>}</button>
-            {canManage ? (
-              <select value={sh.status} onChange={(e) => void setStatus(sh, e.target.value)} className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <span className="text-sm text-stone-100 font-medium">{sh.title}</span>
+              <span className={`mr-2 px-1.5 py-0.5 rounded text-[10px] ${stBadge[sh.status] ?? "bg-stone-800 text-stone-300"}`}>{t(SHOOT_STATUS_LABELS[sh.status] ?? { ar: sh.status, en: sh.status })}</span>
+            </div>
+            {canManage && (
+              <select value={sh.status} onChange={(e) => void setStatus(sh, e.target.value)} className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }} title={t({ ar: "تغيير حالة الجلسة", en: "Change status" })}>
                 {Object.keys(SHOOT_STATUS_LABELS).map((s) => <option key={s} value={s}>{t(SHOOT_STATUS_LABELS[s])}</option>)}
               </select>
-            ) : <span className={stCls[sh.status]}>{t(SHOOT_STATUS_LABELS[sh.status])}</span>}
+            )}
           </div>
-          {sh.session_date && <div className="text-[11px] text-stone-600 mt-0.5" dir="ltr">{sh.session_date}</div>}
-          {canManage && <div className="mt-1 text-left"><button onClick={() => void delWithReason("shoot", sh.id, sh.title, t, flash, load)} className="text-[10px] text-stone-600 hover:text-red-400">{t({ ar: "حذف بسبب", en: "Delete" })}</button></div>}
-          {open === sh.id && <CallSheetManager shoot={sh} canManage={canManage} flash={flash} />}
+          <div className="mt-1.5 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1 text-[11px] text-stone-500">
+            <span>{t({ ar: "التاريخ", en: "Date" })}: <span dir="ltr" className="text-stone-300">{sh.session_date ? fmtDT(sh.session_date).slice(0, 10) : "—"}</span></span>
+            <span>Call: <span dir="ltr" className="text-stone-300">{timeStr(sh.call_time)}</span></span>
+            <span>{t({ ar: "البداية", en: "Start" })}: <span dir="ltr" className="text-stone-300">{timeStr(sh.start_time)}</span></span>
+            <span>Wrap: <span dir="ltr" className="text-stone-300">{timeStr(sh.wrap_time)}</span></span>
+            <span className="col-span-2">{t({ ar: "الموقع", en: "Location" })}: <span className="text-stone-300">{sh.location ?? "—"}</span></span>
+            <span>{t({ ar: "الفريق", en: "Crew" })}: <span className="text-stone-300" dir="ltr">{(sh.crew ?? []).length}</span></span>
+            <span>{t({ ar: "المعدات", en: "Equip." })}: <span className="text-stone-300" dir="ltr">{(sh.equipment ?? []).length}</span></span>
+          </div>
+          {sh.status === "cancelled" && sh.cancel_reason && <div className="mt-1 text-[10px] text-red-400">{t({ ar: "سبب الإلغاء", en: "Cancelled" })}: {sh.cancel_reason}</div>}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={() => setOpen(open === sh.id ? null : sh.id)} className={`${btnGhost} px-2.5 py-1 text-[11px]`}>
+              {open === sh.id ? t({ ar: "إغلاق التفاصيل", en: "Close" }) : t({ ar: "فتح / تعديل التفاصيل", en: "Open / edit" })}
+            </button>
+            <button onClick={() => setOpenCS(openCS === sh.id ? null : sh.id)} className={`${btnGhost} px-2.5 py-1 text-[11px] text-sky-300`}>
+              Call Sheet {openCS === sh.id ? "▴" : "▾"}
+            </button>
+            {canManage && <button onClick={() => void delWithReason("shoot", sh.id, sh.title, t, flash, load)} className={`${btnGhost} px-2.5 py-1 text-[11px] text-red-400 border-red-900/50`}>{t({ ar: "حذف بسبب", en: "Delete" })}</button>}
+          </div>
+          {open === sh.id && canManage && <ShootDetail projectId={projectId} sh={sh} onSaved={() => void load()} flash={flash} />}
+          {open === sh.id && !canManage && (
+            <div className="mt-2 pt-2 border-t border-stone-800 space-y-1 text-[11px] text-stone-400">
+              {(sh.crew ?? []).length > 0 && <div>{t({ ar: "الفريق", en: "Crew" })}: {shootLines(sh.crew).split("\n").join("، ")}</div>}
+              {(sh.equipment ?? []).length > 0 && <div>{t({ ar: "المعدات", en: "Equipment" })}: {shootLines(sh.equipment).split("\n").join("، ")}</div>}
+              {sh.completion_report && <div>{t({ ar: "تقرير الإكمال", en: "Report" })}: {sh.completion_report}</div>}
+            </div>
+          )}
+          {openCS === sh.id && <CallSheetManager shoot={sh} canManage={canManage} flash={flash} initialPreviewId={deepCS ?? undefined} />}
         </div>
       ))}
     </div>

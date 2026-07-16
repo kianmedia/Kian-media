@@ -21,6 +21,7 @@ import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, T
 import { LocationsTab, TagsTab, ApplyTemplateButton } from "./ProjectAdvanced";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import { TrashTab } from "./ProjectTrash";
+import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
 import { FinanceTab } from "./ProjectFinance";
 import { pcProgress, pcSetProgress, type ProgressInfo } from "@/lib/portal/projectCore";
@@ -49,11 +50,14 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   const { caps, profile } = usePortal();
   const canManage = caps.isAdminArea || caps.isEditor;
   const isFinance = caps.isOwner || profile.staff_role === "finance";   // عزل الحسابات
+  // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
+  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage));
   const [core, setCore] = useState<ProjectCore | null>(null);
-  const [tab, setTab] = useState<TabKey>((TABS.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
+  const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
+  const [printPack, setPrintPack] = useState(false);
   const [prog, setProg] = useState<ProgressInfo | null>(null);
   const loadProg = useCallback(async () => { const r = await pcProgress(projectId); if (r.ok) setProg(r.data); }, [projectId]);
   useEffect(() => { void loadProg(); }, [loadProg]);
@@ -125,7 +129,10 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       <section className={`${card} p-4`}>
         <div className="flex items-center justify-between mb-3 gap-2">
           <h3 className="text-sm font-semibold text-white shrink-0">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
-          {canManage && <ApplyTemplateButton projectId={projectId} flash={flash} onApplied={() => { flash(t({ ar: "طُبِّق القالب — راجع تبويب المهام.", en: "Template applied — see Tasks." })); void loadProg(); }} />}
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => setPrintPack(true)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "طباعة حزمة المشروع", en: "Print Pack" })}</button>
+            {canManage && <ApplyTemplateButton projectId={projectId} flash={flash} onApplied={() => { flash(t({ ar: "طُبِّق القالب — راجع تبويب المهام.", en: "Template applied — see Tasks." })); void loadProg(); }} />}
+          </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {PC_STAGES.map((s, i) => (
@@ -169,7 +176,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
 
       {/* تبويبات */}
       <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-        {TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage)).map((tb) => (
+        {visibleTabs.map((tb) => (
           <button key={tb.k} onClick={() => setTab(tb.k)} className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
             {t({ ar: tb.ar, en: tb.en })}
           </button>
@@ -186,7 +193,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "deliverables" && <DeliverablesTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
       {tab === "finance" && isFinance && <FinanceTab projectId={projectId} flash={flash} />}
-      {tab === "costs" && <CostsTab projectId={projectId} flash={flash} />}
+      {tab === "costs" && <CostsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "risks" && <RisksTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "meetings" && <MeetingsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "shoots" && <ShootsTab projectId={projectId} canManage={canManage} flash={flash} />}
@@ -209,6 +216,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           </div>
         </div>
       )}
+      {printPack && <ProjectPrintPack projectId={projectId} projectName={projectName} onClose={() => setPrintPack(false)} />}
       {toast && <div className="fixed bottom-4 inset-x-4 z-[80] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
     </div>
   );

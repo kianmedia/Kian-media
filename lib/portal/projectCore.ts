@@ -111,6 +111,7 @@ export interface ShootSession {
   id: string; project_id: string; title: string; session_date: string | null; call_time: string | null; location: string | null;
   client_contact: string | null; permits: string | null; safety_notes: string | null; weather_note: string | null;
   status: string; completion_report: string | null; created_at: string;
+  start_time?: string | null; wrap_time?: string | null; cancel_reason?: string | null;
   crew: unknown[]; equipment: unknown[]; vehicles: unknown[]; shot_list: unknown[]; attendance: unknown[];
 }
 export interface Deliverable { id: string; project_id: string; title: string; type: string; status: string; version: number; preview_url: string | null; created_at: string }
@@ -309,6 +310,13 @@ export const pcCallSheetSave = (shootId: string, data: Record<string, unknown>) 
   prpc<CallSheet>("project_core_call_sheet_save", { p_shoot: shootId, p_data: data });
 export const pcCallSheetSend = (callSheetId: string) =>
   prpc<{ ok: boolean; status: string; version: number }>("project_core_call_sheet_send", { p_call_sheet: callSheetId });
+// للرابط العميق ?entity=call_sheet&id= — يحدّد الجلسة الحاضنة.
+export const pcGetCallSheetMeta = async (id: string): Promise<Result<{ id: string; shoot_session_id: string } | null>> => {
+  const r = await pget<{ id: string; shoot_session_id: string }[]>(`project_call_sheets?id=eq.${enc(id)}&select=id,shoot_session_id`);
+  return r.ok ? { ok: true, data: r.data[0] ?? null } : r;
+};
+export const pcCallSheetSendTo = (callSheetId: string, users: string[]) =>
+  prpc<{ ok: boolean; sent_to: number; version: number }>("project_core_call_sheet_send_to", { p_call_sheet: callSheetId, p_users: users });
 
 // تحديث حقول إصدار المخرَج (رؤية العميل / اعتماد / نهائي) — عبر RLS.
 export const pcDeliverableVersionSet = (versionId: string, patch: Record<string, unknown>) =>
@@ -493,6 +501,7 @@ export function pcErr(e: string): string {
   if (/sent_locked/.test(e)) return "نسخة مُرسلة سجلّ تشغيلي — لا تُحذف.";
   if (/cannot_delete_collected/.test(e)) return "دفعة حُصِّل منها مبلغ — قيد مالي لا يُحذف.";
   if (/bad_entity_type/.test(e)) return "نوع عنصر غير مدعوم.";
+  if (/recipients_required/.test(e)) return "اختر مستلمًا موظفًا واحدًا على الأقل.";
   if (/bad_link/.test(e)) return "العنصر المرتبط لا ينتمي لهذا المشروع.";
   if (/item_deleted/.test(e)) return "العنصر محذوف — استعده أولًا.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

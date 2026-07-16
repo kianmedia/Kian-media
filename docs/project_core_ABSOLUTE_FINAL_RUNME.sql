@@ -23,6 +23,10 @@ begin
   if to_regclass('public.project_approvals')       is null then miss := miss || ' project_approvals'; end if;
   if to_regclass('public.task_dependencies')       is null then miss := miss || ' task_dependencies'; end if;
   if to_regclass('public.deliverables')            is null then miss := miss || ' deliverables'; end if;
+  if to_regclass('public.project_call_sheets')     is null then miss := miss || ' project_call_sheets (شغّل project_core_OPERATIONAL_CLOSURE_FINAL_RUNME.sql)'; end if;
+  if to_regclass('public.project_expenses')        is null then miss := miss || ' project_expenses (شغّل project_core_FINANCE_RUNME.sql)'; end if;
+  if to_regclass('public.project_revenue_schedule') is null then miss := miss || ' project_revenue_schedule (شغّل project_core_FINANCE_RUNME.sql)'; end if;
+  if to_regclass('public.project_members')         is null then miss := miss || ' project_members'; end if;
   if miss <> '' then
     raise exception 'نقص في الاعتمادات: الجداول التالية غير موجودة (%). شغّل project_core_FINAL_RUNME.sql وبقية ملفات Project Core أولًا.', miss;
   end if;
@@ -36,6 +40,8 @@ begin
   if to_regprocedure('public.pc_notify_user(uuid,text,text,uuid,text,text)')         is null then miss := miss || ' pc_notify_user'; end if;
   if to_regprocedure('public.pc_notify_team(uuid,text,text,uuid,text,text,uuid)')    is null then miss := miss || ' pc_notify_team'; end if;
   if to_regprocedure('public.pc_touch_updated_at()')                                 is null then miss := miss || ' pc_touch_updated_at()'; end if;
+  if to_regprocedure('public.pc_can_see_finance(uuid)')                              is null then miss := miss || ' pc_can_see_finance (شغّل project_core_FINANCE_RUNME.sql)'; end if;
+  if to_regprocedure('public.pc_expense_delete(uuid,text)')                          is null then miss := miss || ' pc_expense_delete (شغّل project_core_FINANCE_RUNME.sql)'; end if;
   if miss <> '' then
     raise exception 'نقص في الاعتمادات: الدوال التالية غير موجودة (%). شغّل ملفات Project Core السابقة بالترتيب أولًا.', miss;
   end if;
@@ -739,8 +745,19 @@ begin
         'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
       from public.project_revenue_schedule x
       where x.is_deleted = true and (p_project is null or x.project_id = p_project) and public.pc_can_see_finance(x.project_id)
+      union all
+      select jsonb_build_object('entity','comment','id',c.id,'title',left(c.body,80),'project_id',tk.project_id,
+        'deleted_at',c.deleted_at,'deleted_by',c.deleted_by,'reason',c.delete_reason)
+      from public.task_comments c join public.project_tasks tk on tk.id = c.task_id
+      where c.is_deleted = true and (p_project is null or tk.project_id = p_project)
+      union all
+      select jsonb_build_object('entity','member','id',x.id,
+        'title', coalesce((select pr.full_name from public.profiles pr where pr.id = x.user_id),'عضو فريق'),
+        'project_id',x.project_id,'deleted_at',x.deleted_at,'deleted_by',x.deleted_by,'reason',x.delete_reason)
+      from public.project_members x where x.is_deleted = true and (p_project is null or x.project_id = p_project)
     ) u
     where p_project is not null or public.pc_can_read_project((u.row->>'project_id')::uuid)
+    order by (u.row->>'deleted_at') desc nulls last
     limit 500
   ) rows(row);
   -- إثراء: اسم المشروع + اسم منفّذ الحذف.
@@ -817,6 +834,118 @@ begin
 end $g2$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- BATCH 3 — جلسات التصوير (أوقات/طاقم/معدات/حضور/إلغاء بسبب) + إرسال Call Sheet محدد
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ═══ B3.1 أعمدة إضافية لجلسة التصوير ═══
+alter table public.project_shoot_sessions add column if not exists start_time    timestamptz;
+alter table public.project_shoot_sessions add column if not exists wrap_time     timestamptz;
+alter table public.project_shoot_sessions add column if not exists cancel_reason text;
+
+-- ═══ B3.2 pc_shoot_upsert موسّع (نفس التوقيع — لا Overload):
+--     أوقات + مصفوفات (طاقم/معدات/مركبات/لقطات/حضور) + إلغاء بسبب إلزامي + إشعارات ═══
+create or replace function public.pc_shoot_upsert(p_project uuid, p_data jsonb)
+returns public.project_shoot_sessions language plpgsql security definer set search_path = public as $$
+declare r public.project_shoot_sessions; v_id uuid := nullif(p_data->>'id','')::uuid; v_old_status text;
+begin
+  if not public.can_manage_projects() and not public.can_edit_project(p_project) then raise exception 'not authorized'; end if;
+  if v_id is null then
+    insert into public.project_shoot_sessions(project_id, title, session_date, call_time, start_time, wrap_time,
+        location, client_contact, permits, safety_notes, weather_note, status, created_by,
+        crew, equipment, vehicles, shot_list, attendance)
+      values (p_project, btrim(coalesce(p_data->>'title','')), nullif(p_data->>'session_date','')::date,
+        nullif(p_data->>'call_time','')::timestamptz, nullif(p_data->>'start_time','')::timestamptz,
+        nullif(p_data->>'wrap_time','')::timestamptz,
+        nullif(btrim(p_data->>'location'),''), nullif(btrim(p_data->>'client_contact'),''),
+        nullif(btrim(p_data->>'permits'),''), nullif(btrim(p_data->>'safety_notes'),''), nullif(btrim(p_data->>'weather_note'),''),
+        coalesce(nullif(p_data->>'status',''),'planned'), auth.uid(),
+        case when jsonb_typeof(p_data->'crew')='array'       then p_data->'crew'       else '[]'::jsonb end,
+        case when jsonb_typeof(p_data->'equipment')='array'  then p_data->'equipment'  else '[]'::jsonb end,
+        case when jsonb_typeof(p_data->'vehicles')='array'   then p_data->'vehicles'   else '[]'::jsonb end,
+        case when jsonb_typeof(p_data->'shot_list')='array'  then p_data->'shot_list'  else '[]'::jsonb end,
+        case when jsonb_typeof(p_data->'attendance')='array' then p_data->'attendance' else '[]'::jsonb end)
+      returning * into r;
+    perform public.pc_log(p_project, 'shoot_added', 'shoot', r.id, '{}');
+    perform public.pc_notify_team(p_project, 'project_note_new', 'shoot', r.id,
+      'جلسة تصوير جديدة: '||coalesce(r.title,''), 'New shoot session', auth.uid());
+  else
+    select status into v_old_status from public.project_shoot_sessions
+      where id = v_id and project_id = p_project and is_deleted = false for update;
+    if v_old_status is null then raise exception 'not_found'; end if;
+    -- الإلغاء الرسمي يتطلّب سببًا إلزاميًا.
+    if nullif(p_data->>'status','') = 'cancelled' and v_old_status <> 'cancelled'
+       and coalesce(btrim(p_data->>'cancel_reason'),'') = '' then
+      raise exception 'reason_required';
+    end if;
+    update public.project_shoot_sessions set
+      title = coalesce(nullif(btrim(p_data->>'title'),''), title),
+      session_date = coalesce(nullif(p_data->>'session_date','')::date, session_date),
+      call_time  = case when p_data ? 'call_time'  then nullif(p_data->>'call_time','')::timestamptz  else call_time end,
+      start_time = case when p_data ? 'start_time' then nullif(p_data->>'start_time','')::timestamptz else start_time end,
+      wrap_time  = case when p_data ? 'wrap_time'  then nullif(p_data->>'wrap_time','')::timestamptz  else wrap_time end,
+      location = coalesce(nullif(btrim(p_data->>'location'),''), location),
+      client_contact = coalesce(nullif(btrim(p_data->>'client_contact'),''), client_contact),
+      permits = coalesce(nullif(btrim(p_data->>'permits'),''), permits),
+      safety_notes = coalesce(nullif(btrim(p_data->>'safety_notes'),''), safety_notes),
+      weather_note = coalesce(nullif(btrim(p_data->>'weather_note'),''), weather_note),
+      status = coalesce(nullif(p_data->>'status',''), status),
+      cancel_reason = case when nullif(p_data->>'status','') = 'cancelled'
+                           then coalesce(nullif(left(btrim(coalesce(p_data->>'cancel_reason','')),500),''), cancel_reason)
+                           else cancel_reason end,
+      completion_report = coalesce(nullif(btrim(p_data->>'completion_report'),''), completion_report),
+      crew       = case when jsonb_typeof(p_data->'crew')='array'       then p_data->'crew'       else crew end,
+      equipment  = case when jsonb_typeof(p_data->'equipment')='array'  then p_data->'equipment'  else equipment end,
+      vehicles   = case when jsonb_typeof(p_data->'vehicles')='array'   then p_data->'vehicles'   else vehicles end,
+      shot_list  = case when jsonb_typeof(p_data->'shot_list')='array'  then p_data->'shot_list'  else shot_list end,
+      attendance = case when jsonb_typeof(p_data->'attendance')='array' then p_data->'attendance' else attendance end,
+      updated_at = now()
+      where id = v_id and project_id = p_project returning * into r;
+    perform public.pc_log(p_project, 'shoot_updated', 'shoot', v_id,
+      jsonb_build_object('status', r.status, 'from', v_old_status,
+        'cancel_reason', case when r.status = 'cancelled' then r.cancel_reason end));
+    if r.status = 'cancelled' and v_old_status <> 'cancelled' then
+      perform public.pc_notify_team(p_project, 'project_note_new', 'shoot', v_id,
+        'أُلغيت جلسة تصوير: '||coalesce(r.title,''), 'Shoot session cancelled', auth.uid());
+    end if;
+  end if;
+  return r;
+end $$;
+
+-- ═══ B3.3 إرسال Call Sheet لموظفين محددين (يُصدرها إن كانت مسودّة) ═══
+create or replace function public.project_core_call_sheet_send_to(p_call_sheet uuid, p_users uuid[])
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r record; u uuid; v_n int := 0;
+begin
+  select * into r from public.project_call_sheets where id = p_call_sheet and is_deleted = false for update;
+  if r.id is null then raise exception 'not_found'; end if;
+  if not public.can_manage_projects() and not public.can_edit_project(r.project_id) then raise exception 'not authorized'; end if;
+  if p_users is null or array_length(p_users, 1) is null then raise exception 'recipients_required'; end if;
+  if r.status = 'draft' then
+    if r.shoot_date is null or coalesce(btrim(r.location_name),'') = '' then raise exception 'incomplete_call_sheet'; end if;
+    update public.project_call_sheets set status = 'sent', sent_at = now(), sent_by = auth.uid() where id = p_call_sheet;
+  end if;
+  foreach u in array p_users loop
+    -- المستلم يجب أن يكون موظفًا فعّالًا — لا عملاء.
+    if exists (select 1 from public.profiles pr where pr.id = u and pr.staff_role is not null) then
+      perform public.pc_notify_user(u, 'project_note_new', 'shoot', r.shoot_session_id,
+        'وصلتك Call Sheet (v'||r.version_number||') لجلسة تصوير', 'You received a Call Sheet (v'||r.version_number||')');
+      v_n := v_n + 1;
+    end if;
+  end loop;
+  if v_n = 0 then raise exception 'recipients_required'; end if;
+  perform public.pc_log(r.project_id, 'callsheet_sent_to', 'shoot', r.shoot_session_id,
+    jsonb_build_object('call_sheet', p_call_sheet, 'version', r.version_number, 'recipients', v_n));
+  return jsonb_build_object('ok', true, 'sent_to', v_n, 'version', r.version_number);
+end $$;
+
+-- ═══ B3.4 Grants (دوال Batch 3) ═══
+do $g3$
+begin
+  execute 'revoke all on function public.project_core_call_sheet_send_to(uuid,uuid[]) from public, anon';
+  execute 'grant execute on function public.project_core_call_sheet_send_to(uuid,uuid[]) to authenticated';
+end $g3$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- VALIDATION — فحص داخل المعاملة؛ أي نقص يُرجع كل شيء
 -- ════════════════════════════════════════════════════════════════════════════
 do $v$
@@ -839,6 +968,12 @@ begin
       where n.nspname = 'public' and p.proname = 'pc_task_update') <> 1 then miss := miss || ' overload(pc_task_update)'; end if;
   if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_tasks' and column_name='delete_reason') = 0
     then miss := miss || ' col(project_tasks.delete_reason)'; end if;
+  -- Batch 3
+  if to_regprocedure('public.project_core_call_sheet_send_to(uuid,uuid[])') is null then miss := miss || ' call_sheet_send_to'; end if;
+  if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'pc_shoot_upsert') <> 1 then miss := miss || ' overload(pc_shoot_upsert)'; end if;
+  if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_shoot_sessions' and column_name='wrap_time') = 0
+    then miss := miss || ' col(project_shoot_sessions.wrap_time)'; end if;
   if miss <> '' then
     raise exception 'فشل التحقق النهائي — عناصر ناقصة:%', miss;
   end if;
