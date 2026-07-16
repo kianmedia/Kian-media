@@ -215,8 +215,21 @@ export const pcListClients = () =>
 export interface StaffLite { id: string; full_name: string | null; staff_role: string | null }
 export const pcListStaff = () =>
   pget<StaffLite[]>(`profiles?staff_role=not.is.null&select=id,full_name,staff_role&order=full_name.asc`);
-// أرشفة المشروع (soft delete عام موجود مسبقًا).
-export const pcArchiveProject = (projectId: string) => prpc<boolean>("soft_delete", { p_table: "projects", p_id: projectId });
+// ─── تعديل/حذف/أرشفة/استعادة المشروع + متطلبات المرحلة (project_core_FINAL_COMPLETION_RUNME.sql) ───
+export const pcUpdateProject = (projectId: string, expectedUpdatedAt: string | null, patch: Record<string, unknown>, reason?: string) =>
+  prpc<ProjectCore>("project_core_update_project", { p_project_id: projectId, p_expected_updated_at: expectedUpdatedAt, p_patch: patch, p_reason: reason ?? null });
+export const pcSoftDeleteProject = (projectId: string, reason: string) =>
+  prpc<{ ok: boolean; status?: string }>("project_core_soft_delete_project", { p_project_id: projectId, p_reason: reason });
+export const pcArchiveProject = (projectId: string, reason: string) =>
+  prpc<{ ok: boolean; status?: string }>("project_core_archive_project", { p_project_id: projectId, p_reason: reason });
+export const pcRestoreProject = (projectId: string, reason?: string) =>
+  prpc<{ ok: boolean; status?: string }>("project_core_restore_project", { p_project_id: projectId, p_reason: reason ?? null });
+export interface DeletedProject { id: string; project_name: string | null; client_name: string | null; kind: "deleted" | "archived"; reason: string | null; at: string | null }
+export const pcDeletedList = () => prpc<DeletedProject[]>("project_core_deleted_list");
+export interface StageReqItem { key: string; ar: string; en: string }
+export interface StageRequirements { ok: boolean; missing: StageReqItem[] }
+export const pcStageRequirements = (projectId: string, target: string) =>
+  prpc<StageRequirements>("project_core_stage_requirements", { p_project_id: projectId, p_target: target });
 
 // خريطة رسائل الأخطاء الشائعة → عربي.
 export function pcErr(e: string): string {
@@ -233,6 +246,8 @@ export function pcErr(e: string): string {
   if (/need_due_date/.test(e)) return "يجب تحديد موعد نهائي قبل هذه المرحلة.";
   if (/name_required/.test(e)) return "اسم المشروع إلزامي.";
   if (/client_required|bad_client/.test(e)) return "اختر عميلًا صحيحًا للمشروع.";
+  if (/stale_update/.test(e)) return "عُدّل المشروع من مستخدم آخر — أعد التحميل ثم احفظ.";
+  if (/active_custody/.test(e)) return "لا يمكن الحذف: توجد عهدة/معدات نشطة مرتبطة بالمشروع.";
   if (/not_found/.test(e)) return "العنصر غير موجود.";
   if (/cross_project_dependency|self_dependency/.test(e)) return "اعتمادية غير صالحة.";
   return "تعذّر تنفيذ الإجراء. حاول مرة أخرى.";

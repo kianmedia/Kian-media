@@ -9,8 +9,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
-  pcDashboard, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
-  type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth,
+  pcDashboard, pcDeletedList, pcRestoreProject, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
+  type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth, type DeletedProject,
 } from "@/lib/portal/projectCore";
 import CreateProjectWizard from "./CreateProjectWizard";
 
@@ -28,6 +28,7 @@ export default function ProjectCoreDashboard() {
   const [filter, setFilter] = useState<DashFilter>("all");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
 
   const load = useCallback(async (f: DashFilter, s: string) => {
     setPhase("loading");
@@ -77,6 +78,7 @@ export default function ProjectCoreDashboard() {
         <h2 className="text-lg font-semibold text-white">{t({ ar: "منصّة إدارة المشاريع", en: "Project Core" })}</h2>
         <div className="flex items-center gap-2">
           <button onClick={() => void load(filter, search)} className="text-xs text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+          {caps.isAdminArea && <button onClick={() => setShowDeleted(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "المحذوفة/المؤرشفة", en: "Deleted/Archived" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowCreate(true)} className="rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2">+ {t({ ar: "إنشاء مشروع", en: "Create Project" })}</button>}
         </div>
       </div>
@@ -138,6 +140,50 @@ export default function ProjectCoreDashboard() {
       </div>
 
       {showCreate && <CreateProjectWizard onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(filter, search); }} />}
+      {showDeleted && <DeletedProjectsModal canRestore={caps.isOwner} onClose={() => setShowDeleted(false)} onRestored={() => void load(filter, search)} />}
+    </div>
+  );
+}
+
+function DeletedProjectsModal({ canRestore, onClose, onRestored }: { canRestore: boolean; onClose: () => void; onRestored: () => void }) {
+  const { t } = useI18n();
+  const [rows, setRows] = useState<DeletedProject[]>([]);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => { const r = await pcDeletedList(); if (r.ok) { setRows(r.data); setPhase("ready"); } else setPhase("error"); }, []);
+  useEffect(() => { void load(); }, [load]);
+  async function restore(p: DeletedProject) {
+    if (busy) return;
+    const reason = window.prompt(t({ ar: "سبب الاستعادة (اختياري):", en: "Restore reason (optional):" }));
+    if (reason === null) return;
+    setBusy(true); const r = await pcRestoreProject(p.id, reason.trim() || undefined); setBusy(false);
+    if (!r.ok) { window.alert(pcErr(r.error)); return; }
+    await load(); onRestored();
+  }
+  return (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/70 p-3 sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="w-full max-w-lg my-4 bg-stone-950 border border-stone-800 rounded-2xl shadow-2xl" dir="rtl" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-stone-800">
+          <h3 className="text-sm font-semibold text-white">{t({ ar: "المشاريع المحذوفة والمؤرشفة", en: "Deleted & Archived" })}</h3>
+          <button onClick={onClose} className="text-stone-400 hover:text-white text-sm">✕</button>
+        </div>
+        <div className="p-4 space-y-2">
+          {phase === "loading" && <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
+          {phase === "ready" && rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد مشاريع محذوفة أو مؤرشفة.", en: "None." })}</p>}
+          {rows.map((p) => (
+            <div key={p.id} className={`${card} p-3 flex items-center justify-between gap-2`}>
+              <div className="min-w-0">
+                <div className="text-sm text-stone-200 truncate" dir="auto">{p.project_name || p.id.slice(0, 8)}</div>
+                <div className="text-[11px] text-stone-500">
+                  <span className={p.kind === "archived" ? "text-amber-400" : "text-red-400"}>{p.kind === "archived" ? t({ ar: "مؤرشف", en: "Archived" }) : t({ ar: "محذوف", en: "Deleted" })}</span>
+                  {p.client_name ? ` · ${p.client_name}` : ""}{p.reason ? ` · ${p.reason}` : ""}
+                </div>
+              </div>
+              {canRestore && <button disabled={busy} onClick={() => void restore(p)} className="text-xs rounded-lg bg-stone-800 border border-stone-700 text-emerald-300 px-3 py-1.5 shrink-0 disabled:opacity-50">{t({ ar: "استعادة", en: "Restore" })}</button>}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

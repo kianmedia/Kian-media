@@ -10,7 +10,8 @@ import {
   PC_STAGES, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, TASK_STATUS_LABELS, APPROVAL_STATUS_LABELS,
   pcEnsure, pcGetProjectCore, pcSetStage, pcSetMeta, pcListTasks, pcTaskCreate, pcTaskUpdate, pcTaskDelete,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcListTaskComments, pcTaskComment,
-  pcListApprovals, pcApprovalRequest, pcApprovalDecide, pcListActivity, pcErr,
+  pcListApprovals, pcApprovalRequest, pcApprovalDecide, pcListActivity, pcStageRequirements, pcErr,
+  type StageReqItem,
   type ProjectCore, type PcTask, type PcStage, type PcPriority, type PcTaskStatus,
   type TaskChecklistItem, type TaskComment, type ProjectApproval, type ProjectActivity, type PcApprovalKind,
 } from "@/lib/portal/projectCore";
@@ -40,6 +41,7 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
   const [tab, setTab] = useState<TabKey>("tasks");
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
+  const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); };
 
@@ -52,17 +54,28 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
   }, [projectId]);
   useEffect(() => { void loadCore(); }, [loadCore]);
 
+  // انتقال للأمام: افحص المتطلبات أولًا وأظهر الناقص (مع خيار المتابعة). للخلف/الإغلاق: سبب إلزامي.
   async function setStage(stage: PcStage) {
     if (busy || !core) return;
     const curIdx = PC_STAGES.indexOf(core.core_stage), tgtIdx = PC_STAGES.indexOf(stage);
+    if (tgtIdx === curIdx) return;   // الضغط على المرحلة الحالية: لا شيء
+    if (tgtIdx > curIdx) {
+      setBusy(true);
+      const req = await pcStageRequirements(projectId, stage);
+      setBusy(false);
+      if (req.ok && !req.data.ok) { setReqPrompt({ stage, items: req.data.missing }); return; }
+    }
+    await proceedStage(stage, curIdx, tgtIdx);
+  }
+  async function proceedStage(stage: PcStage, curIdx: number, tgtIdx: number) {
     let note: string | undefined;
-    if (tgtIdx < curIdx || stage === "closed") {   // الرجوع للخلف أو الإغلاق: سبب إلزامي
+    if (tgtIdx < curIdx || stage === "closed") {
       const p = window.prompt(t({ ar: "سبب الرجوع/الإغلاق (إلزامي):", en: "Reason for going back / closing (required):" }));
       if (p === null) return;
       if (!p.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
       note = p.trim();
     }
-    setBusy(true);
+    setReqPrompt(null); setBusy(true);
     const r = await pcSetStage(projectId, stage, note);
     setBusy(false);
     if (!r.ok) { flash(pcErr(r.error)); return; }
@@ -140,7 +153,22 @@ export default function ProjectOps({ projectId, projectName, onChanged }: { proj
       {tab === "timeline" && <TimelineTab projectId={projectId} />}
       {tab === "activity" && <ActivityTab projectId={projectId} />}
 
-      {toast && <div className="fixed bottom-4 inset-x-4 z-[70] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
+      {reqPrompt && core && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onMouseDown={() => setReqPrompt(null)}>
+          <div className="w-full max-w-sm max-h-[85vh] overflow-y-auto bg-stone-950 border border-stone-800 rounded-2xl p-4" dir="rtl" onMouseDown={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white mb-1">{t({ ar: "متطلبات ناقصة للانتقال إلى", en: "Missing requirements for" })} «{t(PC_STAGE_LABELS[reqPrompt.stage])}»</h3>
+            <p className="text-[11px] text-stone-500 mb-3">{t({ ar: "أكمل ما يلي أو تابع مع العلم أن بعض القيود يفرضها النظام.", en: "Complete these, or continue (some rules are enforced by the system)." })}</p>
+            <ul className="space-y-1.5 mb-4">
+              {reqPrompt.items.map((it) => <li key={it.key} className="flex items-center gap-2 text-xs text-amber-300"><span className="text-amber-500">•</span>{t({ ar: it.ar, en: it.en })}</li>)}
+            </ul>
+            <div className="flex gap-2">
+              {canManage && <button disabled={busy} onClick={() => void proceedStage(reqPrompt.stage, PC_STAGES.indexOf(core.core_stage), PC_STAGES.indexOf(reqPrompt.stage))} className={`${btnRed} px-3 py-2 flex-1`}>{t({ ar: "متابعة رغم ذلك", en: "Continue anyway" })}</button>}
+              <button onClick={() => setReqPrompt(null)} className={`${btnGhost} px-3 py-2`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {toast && <div className="fixed bottom-4 inset-x-4 z-[80] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
     </div>
   );
 }
