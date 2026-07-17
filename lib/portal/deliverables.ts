@@ -102,9 +102,20 @@ export async function submitReview(
     : { ok: false, error: "insert returned no row" };
 }
 
-// ─── Gated final download (null until admin allows + status approved/final) ───
+// ─── Gated final download ───
+// The gate now requires status='final_delivered' AND the project's dues are
+// confirmed cleared by an admin (project_delivery_release). getDownloadUrl is a
+// read-only check (does the button show?); downloadDeliverable LOGS the fetch and
+// is what the actual Download click calls. Both return null while the gate is shut.
 export function getDownloadUrl(deliverableId: string): Promise<Result<string | null>> {
   return prpc<string | null>("get_deliverable_download", { p_deliverable: deliverableId });
+}
+export function downloadDeliverable(deliverableId: string): Promise<Result<string | null>> {
+  return prpc<string | null>("client_download_deliverable", { p_deliverable: deliverableId });
+}
+/** True once an admin confirmed all client dues for the project were received. */
+export function paymentCleared(projectId: string): Promise<Result<boolean>> {
+  return prpc<boolean>("project_payment_cleared", { p_project: projectId });
 }
 
 // ─── Soft delete (the ONLY deletion path in the portal) ───

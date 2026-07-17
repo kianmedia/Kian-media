@@ -141,6 +141,20 @@ export function adminAddDeliverable(input: {
   });
 }
 
+// ─── Final-delivery payment gate (admin only, audited) ───
+// Confirms "all client dues received" for a project → unlocks client final
+// downloads (with deliverable status=final_delivered). Revoke relocks. Independent
+// of Zoho/finance by design.
+export function adminConfirmProjectPayment(projectId: string, note?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_confirm_project_payment", { p_project: projectId, p_note: note ?? null });
+}
+export function adminRevokeProjectPayment(projectId: string, reason?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_revoke_project_payment", { p_project: projectId, p_reason: reason ?? null });
+}
+export function projectPaymentCleared(projectId: string): Promise<Result<boolean>> {
+  return prpc<boolean>("project_payment_cleared", { p_project: projectId });
+}
+
 export function adminSetDeliverable(input: {
   deliverableId: string; status?: DeliverableStatus;
   allowDownload?: boolean; previewUrl?: string; vimeoUrl?: string;
