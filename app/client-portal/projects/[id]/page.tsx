@@ -23,6 +23,7 @@ import { PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
 import TimelineView from "@/components/portal/TimelineView";
+import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import EditorDeliverables from "@/components/portal/EditorDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
 import AdminProjectStage from "@/components/portal/AdminProjectStage";
@@ -169,6 +170,11 @@ export default function ProjectDetailPage() {
           <AssignedStaff projectId={id} />
         </Section>
       )}
+
+      {/* §4 Pre-production center — staff manage; client sees only shared items */}
+      <Section title={t({ ar: "مركز ما قبل الإنتاج", en: "Pre-Production" })}>
+        <PreProductionCenter projectId={id} canManage={isAdmin || canEditDlv} />
+      </Section>
 
       {/* Details grid — computed from live deliverable/review data */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">
