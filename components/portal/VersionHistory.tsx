@@ -160,6 +160,7 @@ export default function VersionHistory({
         <AnnotationViewer
           deliverableId={deliverable.id} version={viewing} deliverableType={deliverable.type}
           canComment={mode === "client" && !!owner && (deliverable.status === "client_review" || deliverable.status === "revision_requested")}
+          canResolve={mode === "admin"}
           onClose={() => { setViewing(null); void load(); }} />
       )}
     </div>
