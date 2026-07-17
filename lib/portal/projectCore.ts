@@ -123,7 +123,8 @@ export interface Deliverable {
 // project_core non-financial columns. The money columns (budget_amount /
 // estimated_cost / actual_cost) are REVOKEd from the client role and served only
 // through pc_project_financials(), so they are never in a plain project_core
-// select — see docs/project_core_financial_lockdown_RUNME.sql.
+// select — see docs/project_core_financials_phaseA_RUNME.sql (RPC, pre-deploy)
+// and docs/project_core_financials_phaseB_lockdown_RUNME.sql (revoke, post-deploy).
 const PC_CORE_COLS =
   "project_id,core_stage,priority,health,start_date,due_date,delivery_date,currency,progress_pct,project_type,created_at,updated_at,updated_by";
 
