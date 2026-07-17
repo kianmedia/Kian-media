@@ -237,11 +237,12 @@ function CommentBox({ deliverable, owner, t }: { deliverable: Deliverable; owner
       secs = s;
     }
     setBusy(true);
-    const r = await addComment(deliverable.id, body.trim(), secs);
+    const r = await addComment(deliverable.id, body.trim(), { timecodeSeconds: secs });
     setBusy(false);
     if (!r.ok) return;
     setBody(""); setTc(""); void load();
   }
+  const statusLabel = (s?: string) => s === "resolved" ? t({ ar: "محلول", en: "Resolved" }) : s === "in_progress" ? t({ ar: "قيد المعالجة", en: "In progress" }) : t({ ar: "مفتوح", en: "Open" });
   return (
     <div style={{ marginTop: "10px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "10px" }}>
       <button onClick={() => setOpen((v) => !v)} className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", color: "rgba(255,255,255,0.6)", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
@@ -252,8 +253,18 @@ function CommentBox({ deliverable, owner, t }: { deliverable: Deliverable; owner
           {rows.map((c) => (
             <div key={c.id} className="f-sans" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.8)", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "8px 10px", lineHeight: 1.6 }}>
               {c.timecode_seconds != null && <span style={{ color: "#E31E24", marginInlineEnd: "6px" }} dir="ltr">[{secondsToTimecode(c.timecode_seconds)}]</span>}
+              {c.page_number != null && <span style={{ color: "#E31E24", marginInlineEnd: "6px" }} dir="ltr">[{t({ ar: "صفحة", en: "p." })} {c.page_number}]</span>}
               <span dir="auto">{c.body}</span>
-              <span style={{ display: "block", fontSize: "10px", color: "rgba(255,255,255,0.35)", marginTop: "3px" }}>{c.author_role === "admin" ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "أنت", en: "You" })}</span>
+              <span style={{ display: "block", fontSize: "10px", color: "rgba(255,255,255,0.35)", marginTop: "3px" }}>
+                {c.author_role === "admin" ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "أنت", en: "You" })}
+                <span style={{ marginInlineStart: "8px", color: c.status === "resolved" ? "#7CFC9A" : c.status === "in_progress" ? "rgba(255,210,138,0.9)" : "rgba(255,255,255,0.4)" }}>· {statusLabel(c.status)}</span>
+              </span>
+              {c.resolution_note?.trim() && (
+                <div style={{ marginTop: "6px", borderInlineStart: "2px solid rgba(124,252,154,0.4)", paddingInlineStart: "8px", fontSize: "12px", color: "rgba(124,252,154,0.9)" }}>
+                  <span style={{ fontSize: "9px", letterSpacing: "0.5px", textTransform: "uppercase", opacity: 0.7 }}>{t({ ar: "ردّ كيان", en: "Kian's response" })}</span>
+                  <div dir="auto" style={{ color: "rgba(255,255,255,0.85)" }}>{c.resolution_note}</div>
+                </div>
+              )}
             </div>
           ))}
           {rows.length === 0 && <p className="f-sans" style={{ fontSize: "11.5px", color: "rgba(255,255,255,0.35)" }}>{t({ ar: "لا تعليقات بعد.", en: "No comments yet." })}</p>}

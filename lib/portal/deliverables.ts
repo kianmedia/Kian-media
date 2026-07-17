@@ -47,7 +47,8 @@ export function listComments(deliverableId: string): Promise<Result<ClientCommen
 }
 
 export async function addComment(
-  deliverableId: string, body: string, timecodeSeconds?: number
+  deliverableId: string, body: string,
+  opts?: { timecodeSeconds?: number; pageNumber?: number; posX?: number; posY?: number; kind?: "comment" | "annotation" }
 ): Promise<Result<ClientComment>> {
   const uid = currentUserId();
   if (!uid) return { ok: false, error: "not_authenticated", status: 401 };
@@ -56,12 +57,33 @@ export async function addComment(
     author_id: uid,
     author_role: "client",
     body,
-    timecode_seconds: timecodeSeconds ?? null,
+    timecode_seconds: opts?.timecodeSeconds ?? null,
+    page_number: opts?.pageNumber ?? null,
+    pos_x: opts?.posX ?? null,
+    pos_y: opts?.posY ?? null,
+    kind: opts?.kind ?? (opts?.timecodeSeconds != null || opts?.pageNumber != null || opts?.posX != null ? "annotation" : "comment"),
   });
   if (!r.ok) return r;
   return r.data[0]
     ? { ok: true, data: r.data[0] }
     : { ok: false, error: "insert returned no row" };
+}
+
+/** Batch: all client_comments across a set of deliverables (admin/staff view via
+ *  the "client_comments staff read" RLS). Newest-first per deliverable. */
+export function listCommentsForDeliverables(ids: string[]): Promise<Result<ClientComment[]>> {
+  if (ids.length === 0) return Promise.resolve({ ok: true, data: [] });
+  const inList = ids.map((id) => enc(id)).join(",");
+  return pget<ClientComment[]>(
+    `client_comments?deliverable_id=in.(${inList})&is_deleted=eq.false&select=*&order=created_at.asc`
+  );
+}
+
+/** Staff/admin: resolve a comment or a revision-request note + optional Kian response. */
+export function resolveNote(
+  kind: "comment" | "review", id: string, status: "open" | "in_progress" | "resolved", response?: string
+): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_resolve_note", { p_kind: kind, p_id: id, p_status: status, p_response: response ?? null });
 }
 
 // ─── Formal decisions (client_owner only, during client_review — RLS-enforced) ───

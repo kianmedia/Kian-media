@@ -237,6 +237,7 @@ export interface Deliverable extends SoftDeletable {
   created_at: string;
 }
 
+export type NoteStatus = "open" | "in_progress" | "resolved";
 export interface ClientComment extends SoftDeletable {
   id: string;
   deliverable_id: string;
@@ -246,6 +247,15 @@ export interface ClientComment extends SoftDeletable {
   timecode_seconds: number | null;
   resolved_at: string | null;
   created_at: string;
+  // §1 resolution workflow + §3 annotation position (added by
+  // deliverable_comments_resolution_RUNME.sql)
+  status?: NoteStatus;
+  resolved_by?: string | null;
+  resolution_note?: string | null;
+  kind?: "comment" | "revision" | "annotation";
+  page_number?: number | null;
+  pos_x?: number | null;
+  pos_y?: number | null;
 }
 
 export interface InternalComment extends SoftDeletable {
@@ -266,6 +276,10 @@ export interface DeliverableReview extends SoftDeletable {
   decision: ReviewDecision;
   comments: string | null;
   created_at: string;
+  status?: NoteStatus;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  resolution_note?: string | null;
 }
 
 export interface ProjectMessage extends SoftDeletable {
