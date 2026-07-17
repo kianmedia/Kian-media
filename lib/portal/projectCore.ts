@@ -120,10 +120,17 @@ export interface Deliverable {
   assignee_id?: string | null; due_date?: string | null; watermark_required?: boolean; allow_download?: boolean;
 }
 
+// project_core non-financial columns. The money columns (budget_amount /
+// estimated_cost / actual_cost) are REVOKEd from the client role and served only
+// through pc_project_financials(), so they are never in a plain project_core
+// select — see docs/project_core_financial_lockdown_RUNME.sql.
+const PC_CORE_COLS =
+  "project_id,core_stage,priority,health,start_date,due_date,delivery_date,currency,progress_pct,project_type,created_at,updated_at,updated_by";
+
 // ─── القراءات ───
 export async function pcListProjects(): Promise<Result<OperationalProject[]>> {
   const r = await pget<(Omit<OperationalProject, "project_core"> & { project_core: ProjectCore | ProjectCore[] | null })[]>(
-    `projects?select=id,project_name,status,client_id,notes,shooting_date,created_at,project_core(*)&is_deleted=eq.false&order=created_at.desc&limit=500`);
+    `projects?select=id,project_name,status,client_id,notes,shooting_date,created_at,project_core(${PC_CORE_COLS})&is_deleted=eq.false&order=created_at.desc&limit=500`);
   if (!r.ok) return r;
   // PostgREST قد يُعيد المورد المضمّن كمصفوفة (1:1) — نُطبّعه إلى كائن أو null.
   const data: OperationalProject[] = r.data.map((p) => ({
@@ -131,9 +138,17 @@ export async function pcListProjects(): Promise<Result<OperationalProject[]>> {
   }));
   return { ok: true, data };
 }
+// The financial columns come only from the finance-gated RPC (NULLs for anyone
+// without can_manage_projects()/can_see_financials()), merged onto the base row.
 export const pcGetProjectCore = async (projectId: string): Promise<Result<ProjectCore | null>> => {
-  const r = await pget<ProjectCore[]>(`project_core?project_id=eq.${enc(projectId)}&select=*`);
-  return r.ok ? { ok: true, data: r.data[0] ?? null } : r;
+  const r = await pget<ProjectCore[]>(`project_core?project_id=eq.${enc(projectId)}&select=${PC_CORE_COLS}`);
+  if (!r.ok) return r;
+  const base = r.data[0] ?? null;
+  if (!base) return { ok: true, data: null };
+  const f = await prpc<{ budget_amount: number | null; estimated_cost: number | null; actual_cost: number | null }[]>(
+    "pc_project_financials", { p_project: projectId });
+  const fin = f.ok ? f.data[0] : undefined;
+  return { ok: true, data: { ...base, budget_amount: fin?.budget_amount ?? null, estimated_cost: fin?.estimated_cost ?? null, actual_cost: fin?.actual_cost ?? null } };
 };
 export const pcListTasks = (projectId: string) =>
   pget<PcTask[]>(`project_tasks?project_id=eq.${enc(projectId)}&is_deleted=eq.false&select=*&order=sort_order.asc,created_at.asc`);
