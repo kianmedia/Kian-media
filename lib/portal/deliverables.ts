@@ -48,12 +48,13 @@ export function listComments(deliverableId: string): Promise<Result<ClientCommen
 
 export async function addComment(
   deliverableId: string, body: string,
-  opts?: { timecodeSeconds?: number; pageNumber?: number; posX?: number; posY?: number; kind?: "comment" | "annotation" }
+  opts?: { versionId?: string; timecodeSeconds?: number; pageNumber?: number; posX?: number; posY?: number; kind?: "comment" | "annotation" }
 ): Promise<Result<ClientComment>> {
   const uid = currentUserId();
   if (!uid) return { ok: false, error: "not_authenticated", status: 401 };
   const r = await ppost<ClientComment[]>(`client_comments`, {
     deliverable_id: deliverableId,
+    version_id: opts?.versionId ?? null,
     author_id: uid,
     author_role: "client",
     body,
@@ -149,6 +150,34 @@ export interface DownloadState {
 }
 export function downloadState(deliverableId: string): Promise<Result<DownloadState>> {
   return prpc<DownloadState>("deliverable_download_state", { p_deliverable: deliverableId });
+}
+
+// ─── §2 true versioning ───
+export interface VersionSummary {
+  id: string; version_no: number; label: string;
+  preview_url: string | null; vimeo_review_url: string | null; preview_type: "video" | "image" | "pdf" | "office" | "other";
+  note: string | null; decision: "pending" | "approved" | "revision_requested"; revision_reason: string | null;
+  uploaded_by: string | null; uploaded_by_name: string | null; uploaded_at: string;
+  is_current: boolean; is_final: boolean; addressed_comment_ids: string[];
+  open_comments: number; resolved_comments: number;
+}
+export function listVersionSummary(deliverableId: string): Promise<Result<VersionSummary[]>> {
+  return prpc<VersionSummary[]>("deliverable_version_summary", { p_deliverable: deliverableId });
+}
+export function addDeliverableVersion(deliverableId: string, data: Record<string, unknown>): Promise<Result<string>> {
+  return prpc<string>("admin_add_deliverable_version", { p_deliverable: deliverableId, p_data: data });
+}
+export function reviewVersion(versionId: string, decision: "approved" | "revision_requested", comments?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("client_review_version", { p_version: versionId, p_decision: decision, p_comments: comments ?? null });
+}
+export function setFinalVersion(deliverableId: string, versionId: string, finalUrl?: string): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_set_final_version", { p_deliverable: deliverableId, p_version: versionId, p_final_url: finalUrl ?? null });
+}
+/** Comments for a specific version (annotation-aware). Client & staff RLS-scoped. */
+export function listCommentsForVersion(versionId: string): Promise<Result<ClientComment[]>> {
+  return pget<ClientComment[]>(
+    `client_comments?version_id=eq.${enc(versionId)}&is_deleted=eq.false&select=*&order=created_at.asc`
+  );
 }
 
 // ─── Soft delete (the ONLY deletion path in the portal) ───

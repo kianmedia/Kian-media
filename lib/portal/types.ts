@@ -241,6 +241,7 @@ export type NoteStatus = "open" | "in_progress" | "resolved";
 export interface ClientComment extends SoftDeletable {
   id: string;
   deliverable_id: string;
+  version_id?: string | null;
   author_id: string;
   author_role: "client" | "admin";
   body: string;

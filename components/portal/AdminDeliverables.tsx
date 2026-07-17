@@ -18,6 +18,7 @@ import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmai
 import { listCommentsForDeliverables, resolveNote, secondsToTimecode } from "@/lib/portal/deliverables";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
+import VersionHistory from "@/components/portal/VersionHistory";
 import type { Deliverable, DeliverableReview, DeliverableType, DeliverableStatus, ClientComment, NoteStatus } from "@/lib/portal/types";
 
 const ADD_STATUSES = ["draft", "internal_review", "client_review"] as const;
@@ -154,6 +155,10 @@ export default function AdminDeliverables({
                     </div>
                   </div>
                 </div>
+
+                {/* §2 version lineage: add V2/V3, mark an approved version Final,
+                    preview + view/respond to per-version annotations. */}
+                <VersionHistory deliverable={d} mode="admin" onChanged={onChanged} />
 
                 {/* Full note thread under THIS deliverable: revision-request note(s)
                     + every client comment (general/timecode/page), each resolvable
