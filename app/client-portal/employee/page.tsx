@@ -1,21 +1,27 @@
 "use client";
 // /client-portal/employee — بوابة الموظف / الموارد البشرية (حسب الدور):
-//   owner/manager/hr (can_manage_hr) → لوحة HR + إمكانية التبديل لبوابته كموظف
-//   أي موظف (staff_role)             → بوابة الموظف
+//   owner/manager/hr (can_manage_hr) → لوحة HR + بوابته كموظف
+//   owner/manager                    → + إدارة المهن والصلاحيات (§5)
+//   أي موظف (staff_role)             → بوابته + لوحة مهامه في المشاريع (§5)
 //   عميل/زائر                        → ممنوع نهائياً (بطاقة رفض)
-// حماية الواجهة تجميلية — الفرض الحقيقي في RLS + الدوال المحمية.
+// حماية الواجهة تجميلية — الفرض الحقيقي في RLS + الدوال المحمية (SECURITY DEFINER).
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import EmployeeHome from "@/components/portal/hr/EmployeeHome";
 import HrAdminConsole from "@/components/portal/hr/HrAdminConsole";
+import EmployeeDashboard from "@/components/portal/EmployeeDashboard";
+import AdminProfessions from "@/components/portal/AdminProfessions";
+
+type Tab = "hr" | "me" | "work" | "professions";
 
 export default function EmployeePortalPage() {
   const { t } = useI18n();
   const { profile, caps } = usePortal();
   const isHrAdmin = caps.isOwner || caps.view === "manager" || caps.view === "hr";
+  const canManageProfessions = caps.isOwner || caps.view === "manager";
   const isEmployee = !!profile.staff_role || profile.account_type === "admin";
-  const [view, setView] = useState<"hr" | "me">("hr");
+  const [tab, setTab] = useState<Tab>(isHrAdmin ? "hr" : "me");
 
   if (!isEmployee && !isHrAdmin) {
     return (
@@ -27,6 +33,13 @@ export default function EmployeePortalPage() {
     );
   }
 
+  const tabs: { key: Tab; ar: string; en: string }[] = [
+    ...(isHrAdmin ? [{ key: "hr" as Tab, ar: "لوحة الموارد البشرية", en: "HR Console" }] : []),
+    { key: "me", ar: "بوابتي كموظف", en: "My employee view" },
+    { key: "work", ar: "مهامي في المشاريع", en: "My Project Work" },
+    ...(canManageProfessions ? [{ key: "professions" as Tab, ar: "المهن والصلاحيات", en: "Professions & Permissions" }] : []),
+  ];
+
   return (
     <div>
       <div className="mb-8">
@@ -37,28 +50,24 @@ export default function EmployeePortalPage() {
             : t({ ar: "بوابة الموظف", en: "Employee Portal" })}
         </h1>
         <p className="text-white/45" style={{ fontSize: "12.5px", marginTop: "8px", lineHeight: 1.7 }}>
-          {t({ ar: "الحضور والانصراف، المهام الميدانية، الإجازات، وملف الموظف — بموقع يُؤخذ عند الضغط فقط، بلا تتبع مستمر.",
-               en: "Attendance, field tasks, leaves, and the employee file — location captured only on explicit actions, never tracked continuously." })}
+          {t({ ar: "الحضور، المهام، جلسات التصوير، والعهد — منظّمة حسب مهنتك وصلاحياتك.",
+               en: "Attendance, tasks, shoots and custody — scoped to your profession and permissions." })}
         </p>
       </div>
 
-      {isHrAdmin ? (
-        <div className="space-y-4">
-          <div className="flex gap-1.5">
-            <button type="button" onClick={() => setView("hr")}
-              className={`rounded-lg px-4 py-2 text-xs font-medium border ${view === "hr" ? "bg-red-600 border-red-600 text-white" : "bg-stone-900 border-stone-700 text-stone-300"}`}>
-              {t({ ar: "لوحة الموارد البشرية", en: "HR Console" })}
-            </button>
-            <button type="button" onClick={() => setView("me")}
-              className={`rounded-lg px-4 py-2 text-xs font-medium border ${view === "me" ? "bg-red-600 border-red-600 text-white" : "bg-stone-900 border-stone-700 text-stone-300"}`}>
-              {t({ ar: "بوابتي كموظف", en: "My employee view" })}
-            </button>
-          </div>
-          {view === "hr" ? <HrAdminConsole /> : <EmployeeHome />}
-        </div>
-      ) : (
-        <EmployeeHome />
-      )}
+      <div className="flex gap-1.5 flex-wrap mb-5">
+        {tabs.map((tb) => (
+          <button key={tb.key} type="button" onClick={() => setTab(tb.key)}
+            className={`rounded-lg px-4 py-2 text-xs font-medium border ${tab === tb.key ? "bg-red-600 border-red-600 text-white" : "bg-stone-900 border-stone-700 text-stone-300"}`}>
+            {t(tb)}
+          </button>
+        ))}
+      </div>
+
+      {tab === "hr" && isHrAdmin && <HrAdminConsole />}
+      {tab === "me" && <EmployeeHome />}
+      {tab === "work" && <EmployeeDashboard />}
+      {tab === "professions" && canManageProfessions && <AdminProfessions />}
     </div>
   );
 }
