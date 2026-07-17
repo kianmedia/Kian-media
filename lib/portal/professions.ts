@@ -24,6 +24,8 @@ export interface EmployeeProfessions {
   staff_role: string | null;
   account_status: string | null;
   profession_ids: string[];
+  /** Set once employee_professions_primary_PATCH.sql is applied; undefined before. */
+  primary_profession_id?: string | null;
 }
 
 export const PERMISSION_KEYS = [

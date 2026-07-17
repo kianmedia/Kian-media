@@ -6,6 +6,7 @@
 // All writes go through is_admin()/is_owner()-guarded RPCs; no service-role key.
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
@@ -66,6 +67,12 @@ export default function AdminStaff() {
             {t({ ar: "تغيير الأدوار متاح لحساب المالك فقط.", en: "Changing roles is available to the owner account only." })}
           </p>
         )}
+        {/* staff_role sets the coarse tier; assign one or MORE professions
+            (photographer + videographer, editor + motion, …) here. */}
+        <Link href="/client-portal/employee?tab=professions" className="f-sans inline-flex items-center gap-2" style={{ marginTop: "14px", fontSize: "12px", color: "#fff", background: "rgba(227,30,36,0.14)", border: "1px solid rgba(227,30,36,0.45)", borderRadius: "4px", padding: "8px 14px", textDecoration: "none" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 7 9 18l-5-5" /></svg>
+          {t({ ar: "المهن والصلاحيات (تعيين مهن متعددة للموظف)", en: "Professions & Permissions (assign multiple professions)" })}
+        </Link>
       </div>
 
       {phase === "loading" && <p className="text-white/45" style={{ fontSize: "13.5px" }}>{t({ ar: "جارٍ التحميل...", en: "Loading..." })}</p>}

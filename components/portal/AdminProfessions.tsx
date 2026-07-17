@@ -104,42 +104,77 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
 
 function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession[]; emps: EmployeeProfessions[]; onChanged: () => void; setMsg: (s: string) => void; t: Tf; isAr: boolean }) {
   const [q, setQ] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
   const active = useMemo(() => profs.filter((p) => p.is_active), [profs]);
+  const byId = useMemo(() => new Map(profs.map((p) => [p.id, p])), [profs]);
   const filtered = useMemo(() => emps.filter((e) => !q.trim() || (e.full_name ?? "").toLowerCase().includes(q.toLowerCase()) || (e.staff_role ?? "").includes(q)), [emps, q]);
-  const label = (p: Profession) => isAr ? p.name_ar : p.name_en;
+  const label = (p?: Profession) => p ? (isAr ? p.name_ar : p.name_en) : "?";
 
-  async function toggle(emp: EmployeeProfessions, pid: string) {
-    const has = emp.profession_ids.includes(pid);
-    const next = has ? emp.profession_ids.filter((x) => x !== pid) : [...emp.profession_ids, pid];
-    const r = await setEmployeeProfessions(emp.id, next);
+  // One save call. The RPC marks the FIRST id in the array as primary, so we send
+  // the chosen primary first; the rest follow. Empty array clears all professions.
+  async function save(emp: EmployeeProfessions, ids: string[], primaryId: string | null) {
+    setBusy(emp.id);
+    const primary = primaryId && ids.includes(primaryId) ? primaryId : ids[0] ?? null;
+    const ordered = primary ? [primary, ...ids.filter((x) => x !== primary)] : ids;
+    const r = await setEmployeeProfessions(emp.id, ordered);
+    setBusy(null);
     if (r.ok) { setMsg(t({ ar: "حُدّثت المهن.", en: "Professions updated." })); onChanged(); }
     else setMsg(r.error);
   }
+  const addProf   = (emp: EmployeeProfessions, pid: string) => save(emp, [...emp.profession_ids, pid], emp.primary_profession_id ?? emp.profession_ids[0] ?? pid);
+  const removeProf = (emp: EmployeeProfessions, pid: string) => save(emp, emp.profession_ids.filter((x) => x !== pid), (emp.primary_profession_id === pid ? null : emp.primary_profession_id) ?? null);
+  const makePrimary = (emp: EmployeeProfessions, pid: string) => save(emp, emp.profession_ids, pid);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t({ ar: "بحث بالاسم أو الدور…", en: "Search by name or role…" })} style={inp} />
-      {filtered.map((emp) => (
-        <div key={emp.id} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "11px 13px" }}>
-          <div className="flex items-baseline justify-between gap-2 mb-2">
-            <span className="text-white" style={{ fontSize: "13px", fontWeight: 600 }}>{emp.full_name ?? emp.id.slice(0, 8)}</span>
-            <span className="f-sans" style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.4)" }} dir="ltr">{emp.staff_role}{emp.account_status && emp.account_status !== "active" ? ` · ${emp.account_status}` : ""}</span>
+      {filtered.map((emp) => {
+        const assigned = emp.profession_ids;
+        const primaryId = emp.primary_profession_id ?? (assigned.length === 1 ? assigned[0] : null);
+        const unassigned = active.filter((p) => !assigned.includes(p.id));
+        return (
+          <div key={emp.id} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "11px 13px", opacity: busy === emp.id ? 0.6 : 1 }}>
+            <div className="flex items-baseline justify-between gap-2 mb-2">
+              <span className="text-white" style={{ fontSize: "13px", fontWeight: 600 }}>{emp.full_name ?? emp.id.slice(0, 8)}</span>
+              <span className="f-sans" style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.4)" }} dir="ltr">{emp.staff_role}{emp.account_status && emp.account_status !== "active" ? ` · ${emp.account_status}` : ""}</span>
+            </div>
+
+            {/* Currently assigned — badges with ★ primary + × remove. Multiple allowed. */}
+            <div className="f-sans" style={{ fontSize: "9.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "المهن المسندة", en: "Assigned professions" })}</div>
+            {assigned.length === 0 ? (
+              <p className="text-white/35" style={{ fontSize: "12px", marginBottom: "8px" }}>{t({ ar: "لا مهن مسندة.", en: "None assigned yet." })}</p>
+            ) : (
+              <div className="flex gap-1.5 flex-wrap" style={{ marginBottom: "8px" }}>
+                {assigned.map((pid) => {
+                  const isPrimary = pid === primaryId;
+                  return (
+                    <span key={pid} className="f-sans inline-flex items-center gap-1.5" style={{ fontSize: "11px", padding: "4px 8px", borderRadius: "3px", border: `1px solid ${isPrimary ? "rgba(124,252,154,0.5)" : "rgba(227,30,36,0.45)"}`, background: isPrimary ? "rgba(124,252,154,0.12)" : "rgba(227,30,36,0.12)", color: "#fff" }}>
+                      <button title={t({ ar: "تعيين كمهنة رئيسية", en: "Set primary" })} onClick={() => makePrimary(emp, pid)} disabled={busy === emp.id} style={{ background: "none", border: "none", cursor: "pointer", color: isPrimary ? "#7CFC9A" : "rgba(255,255,255,0.5)", padding: 0, fontSize: "12px" }}>{isPrimary ? "★" : "☆"}</button>
+                      {label(byId.get(pid))}
+                      <button title={t({ ar: "إزالة هذه المهنة", en: "Remove" })} onClick={() => removeProf(emp, pid)} disabled={busy === emp.id} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", padding: 0, fontSize: "13px", lineHeight: 1 }}>×</button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Add more — every profession not yet held (checkbox-style add). */}
+            {unassigned.length > 0 && (
+              <>
+                <div className="f-sans" style={{ fontSize: "9.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "أضف مهنة", en: "Add a profession" })}</div>
+                <div className="flex gap-1.5 flex-wrap">
+                  {unassigned.map((p) => (
+                    <button key={p.id} onClick={() => addProf(emp, p.id)} disabled={busy === emp.id}
+                      className="f-sans" style={{ fontSize: "11px", padding: "4px 10px", borderRadius: "3px", cursor: "pointer", border: "1px solid rgba(255,255,255,0.14)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
+                      + {label(p)}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
-          <div className="flex gap-1.5 flex-wrap">
-            {active.map((p) => {
-              const on = emp.profession_ids.includes(p.id);
-              return (
-                <button key={p.id} onClick={() => toggle(emp, p.id)}
-                  className="f-sans" style={{ fontSize: "11px", padding: "4px 10px", borderRadius: "3px", cursor: "pointer",
-                    border: `1px solid ${on ? "rgba(227,30,36,0.5)" : "rgba(255,255,255,0.14)"}`,
-                    background: on ? "rgba(227,30,36,0.14)" : "transparent",
-                    color: on ? "#fff" : "rgba(255,255,255,0.55)" }}>
-                  {on ? "✓ " : ""}{label(p)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+        );
+      })}
       {filtered.length === 0 && <p className="text-white/40" style={{ fontSize: "12.5px" }}>{t({ ar: "لا موظفين.", en: "No employees." })}</p>}
     </div>
   );

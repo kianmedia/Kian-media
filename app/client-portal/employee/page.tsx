@@ -5,7 +5,7 @@
 //   أي موظف (staff_role)             → بوابته + لوحة مهامه في المشاريع (§5)
 //   عميل/زائر                        → ممنوع نهائياً (بطاقة رفض)
 // حماية الواجهة تجميلية — الفرض الحقيقي في RLS + الدوال المحمية (SECURITY DEFINER).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import EmployeeHome from "@/components/portal/hr/EmployeeHome";
@@ -22,6 +22,15 @@ export default function EmployeePortalPage() {
   const canManageProfessions = caps.isOwner || caps.view === "manager";
   const isEmployee = !!profile.staff_role || profile.account_type === "admin";
   const [tab, setTab] = useState<Tab>(isHrAdmin ? "hr" : "me");
+
+  // Deep-link support: /client-portal/employee?tab=professions opens that tab
+  // (read client-side to avoid a useSearchParams build boundary). Only honored
+  // for tabs this user is allowed to see.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("tab") as Tab | null;
+    const allowed: Tab[] = [...(isHrAdmin ? ["hr" as Tab] : []), "me", "work", ...(canManageProfessions ? ["professions" as Tab] : [])];
+    if (q && allowed.includes(q)) setTab(q);
+  }, [isHrAdmin, canManageProfessions]);
 
   if (!isEmployee && !isHrAdmin) {
     return (
