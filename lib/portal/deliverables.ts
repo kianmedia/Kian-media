@@ -140,6 +140,17 @@ export function paymentCleared(projectId: string): Promise<Result<boolean>> {
   return prpc<boolean>("project_payment_cleared", { p_project: projectId });
 }
 
+// ─── §7 release policy (window/limit) + honest download state ───
+export interface DownloadState {
+  allowed: boolean;
+  reason: "ok" | "not_final" | "payment_pending" | "window_expired" | "limit_reached";
+  used: number; limit: number | null; remaining: number | null;
+  window: "none" | "24h" | "3d" | "7d" | "30d"; expires_at: string | null;
+}
+export function downloadState(deliverableId: string): Promise<Result<DownloadState>> {
+  return prpc<DownloadState>("deliverable_download_state", { p_deliverable: deliverableId });
+}
+
 // ─── Soft delete (the ONLY deletion path in the portal) ───
 export function softDelete(table: SoftDeletableTable, id: string): Promise<Result<boolean>> {
   return prpc<boolean>("soft_delete", { p_table: table, p_id: id });

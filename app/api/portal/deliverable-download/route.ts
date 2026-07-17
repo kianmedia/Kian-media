@@ -54,6 +54,30 @@ async function signStorage(bucket: string, path: string): Promise<string | null>
   } catch { return null; }
 }
 
+// Best-effort admin email after a permitted download starts. Honest wording:
+// "started downloading" (issuance is provable; completion is not). Never throws.
+async function notifyAdminsOfDownload(deliverableId: string): Promise<void> {
+  if (!SERVICE_KEY) return;
+  const svc = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
+  const dRes = await fetch(`${SUPABASE_URL}/rest/v1/deliverables?id=eq.${deliverableId}&select=title,version,project_id,projects(project_name)`, { headers: svc, cache: "no-store" });
+  if (!dRes.ok) return;
+  const d = ((await dRes.json()) as Array<{ title: string; version: number; project_id: string; projects?: { project_name?: string } | null }>)[0];
+  if (!d) return;
+  const cntRes = await fetch(`${SUPABASE_URL}/rest/v1/deliverable_downloads?deliverable_id=eq.${deliverableId}&select=id`, { headers: { ...svc, Prefer: "count=exact" }, cache: "no-store" });
+  const count = Number(cntRes.headers.get("content-range")?.split("/")[1] ?? "0");
+  const aRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=email&account_type=eq.admin&account_status=eq.active`, { headers: svc, cache: "no-store" });
+  const admins = aRes.ok ? ((await aRes.json()) as Array<{ email: string | null }>).map((p) => p.email).filter((e): e is string => !!e && e.includes("@")) : [];
+  if (admins.length === 0) return;
+  const { sendProjectEmail } = await import("@/lib/server/projectNotify");
+  await sendProjectEmail({
+    to: admins,
+    subject: `تنزيل نهائي — ${d.projects?.project_name ?? ""}`,
+    body: `بدأ العميل تنزيل الملف النهائي.\nالمشروع: ${d.projects?.project_name ?? ""}\nالمخرَج: ${d.title} (v${d.version})\nرقم التنزيل: ${count}\nالوقت: ${new Date().toLocaleString("en-GB")}`,
+    directUrl: `/client-portal/projects/${d.project_id}`,
+    eventType: "deliverable_download_started",
+  });
+}
+
 export async function POST(req: Request) {
   if (!SUPABASE_URL || !ANON_KEY) return NextResponse.json({ ok: false, error: "server_not_configured" }, { status: 500 });
   const auth = req.headers.get("authorization") ?? "";
@@ -82,6 +106,10 @@ export async function POST(req: Request) {
   try { assetUrl = raw ? (JSON.parse(raw) as string | null) : null; } catch { assetUrl = null; }
   // RPC returns null when the gate is shut (not final-delivered / dues not confirmed).
   if (!assetUrl) return NextResponse.json({ ok: false, error: "locked" }, { status: 403 });
+
+  // The RPC already logged the issuance + created the admin PORTAL notification.
+  // Fire the admin EMAIL best-effort (never blocks / breaks the download).
+  await notifyAdminsOfDownload(deliverableId).catch(() => {});
 
   const ref = toStorageRef(assetUrl);
   if (ref) {

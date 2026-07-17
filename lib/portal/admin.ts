@@ -154,6 +154,10 @@ export function adminRevokeProjectPayment(projectId: string, reason?: string): P
 export function projectPaymentCleared(projectId: string): Promise<Result<boolean>> {
   return prpc<boolean>("project_payment_cleared", { p_project: projectId });
 }
+export type ReleaseWindow = "none" | "24h" | "3d" | "7d" | "30d";
+export function adminSetReleasePolicy(projectId: string, window: ReleaseWindow, limit: number | null): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_set_release_policy", { p_project: projectId, p_window: window, p_limit: limit });
+}
 
 export function adminSetDeliverable(input: {
   deliverableId: string; status?: DeliverableStatus;

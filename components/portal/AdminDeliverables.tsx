@@ -13,7 +13,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable, adminConfirmProjectPayment, adminRevokeProjectPayment, projectPaymentCleared } from "@/lib/portal/admin";
+import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable, adminConfirmProjectPayment, adminRevokeProjectPayment, projectPaymentCleared, adminSetReleasePolicy, type ReleaseWindow } from "@/lib/portal/admin";
 import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmail";
 import { listCommentsForDeliverables, resolveNote, secondsToTimecode } from "@/lib/portal/deliverables";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
@@ -343,6 +343,14 @@ function PaymentGateCard({ projectId, t }: { projectId: string; t: (m: { ar: str
     if (!r.ok) { setMsg(t({ ar: "تعذّر السحب.", en: "Failed." })); return; }
     setNote(""); setMsg(t({ ar: "أُعيد قفل التنزيل النهائي.", en: "Final download re-locked." })); load();
   }
+  const [win, setWin] = useState<ReleaseWindow>("none");
+  const [lim, setLim] = useState<string>("");
+  async function savePolicy() {
+    if (busy) return; setBusy(true); setMsg(null);
+    const r = await adminSetReleasePolicy(projectId, win, lim.trim() ? Math.max(1, Number(lim)) : null);
+    setBusy(false);
+    setMsg(r.ok ? t({ ar: "حُفظت سياسة التحرير.", en: "Release policy saved." }) : t({ ar: "تعذّر الحفظ.", en: "Failed." }));
+  }
   const on = cleared === true;
   return (
     <div style={{ marginBottom: "16px", padding: "14px 16px", borderRadius: "4px",
@@ -376,6 +384,22 @@ function PaymentGateCard({ projectId, t }: { projectId: string; t: (m: { ar: str
           )}
         </div>
       </div>
+      {/* Release policy: window (expiry) + download limit — enforced server-side. */}
+      <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)" }}>{t({ ar: "سياسة التحرير", en: "Release policy" })}</span>
+        <select value={win} onChange={(e) => setWin(e.target.value as ReleaseWindow)} className="f-sans" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "7px 9px", fontSize: "11.5px", colorScheme: "dark", outline: "none" }}>
+          <option value="none">{t({ ar: "بلا انتهاء", en: "No expiry" })}</option>
+          <option value="24h">{t({ ar: "24 ساعة", en: "24 hours" })}</option>
+          <option value="3d">{t({ ar: "3 أيام", en: "3 days" })}</option>
+          <option value="7d">{t({ ar: "7 أيام", en: "7 days" })}</option>
+          <option value="30d">{t({ ar: "30 يومًا", en: "30 days" })}</option>
+        </select>
+        <input value={lim} onChange={(e) => setLim(e.target.value)} type="number" min={1} placeholder={t({ ar: "حدّ التنزيل (فارغ=غير محدود)", en: "Download limit (blank=unlimited)" })} className="f-sans"
+          style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "7px 9px", fontSize: "11.5px", width: "150px", outline: "none" }} dir="ltr" />
+        <button onClick={savePolicy} disabled={busy} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "3px", padding: "7px 12px", cursor: busy ? "wait" : "pointer" }}>{t({ ar: "حفظ السياسة", en: "Save policy" })}</button>
+        <span className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.35)" }}>{t({ ar: "«بلا انتهاء» = يبقى مفتوحًا، لكن كل رابط تنزيل يبقى قصير الأجل.", en: "\"No expiry\" keeps access open; each link is still short-lived." })}</span>
+      </div>
+
       {msg && <div className="f-sans" style={{ fontSize: "12px", marginTop: "10px", color: "rgba(255,255,255,0.7)" }}>{msg}</div>}
     </div>
   );

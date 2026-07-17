@@ -18,7 +18,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
-import { submitReview, paymentCleared, addComment, listComments, secondsToTimecode, timecodeToSeconds } from "@/lib/portal/deliverables";
+import { submitReview, paymentCleared, downloadState, addComment, listComments, secondsToTimecode, timecodeToSeconds, type DownloadState } from "@/lib/portal/deliverables";
 import { getValidSession } from "@/lib/portalAuth";
 import { canApprove } from "@/lib/portal/projects";
 import { notifyReviewUpdate } from "@/lib/portal/notifyEmail";
@@ -42,13 +42,22 @@ export default function DeliverableReview({
   const [refreshing, setRefreshing] = useState(false);
   const [paid, setPaid] = useState<boolean | null>(null);   // all-dues-received (project-level)
   const [dlBusy, setDlBusy] = useState<string | null>(null);
+  const [dlStates, setDlStates] = useState<Record<string, DownloadState>>({});
 
+  const finalIds = items.filter((d) => d.status === "final_delivered").map((d) => d.id).join(",");
   useEffect(() => {
     let alive = true;
     (async () => { const c = await canApprove(projectId); if (alive) setOwner(c); })();
     (async () => { const r = await paymentCleared(projectId); if (alive && r.ok) setPaid(r.data); })();
+    // Per-deliverable honest download state (remaining / expiry / reason).
+    (async () => {
+      for (const id of finalIds ? finalIds.split(",") : []) {
+        const r = await downloadState(id);
+        if (alive && r.ok) setDlStates((s) => ({ ...s, [id]: r.data }));
+      }
+    })();
     return () => { alive = false; };
-  }, [projectId]);
+  }, [projectId, finalIds]);
 
   // Route through the server endpoint: it enforces the gate + logs (via
   // client_download_deliverable as the user) and returns a SHORT-LIVED signed URL
@@ -184,20 +193,12 @@ export default function DeliverableReview({
                 </StateBox>
               )}
 
-              {/* final_delivered → download unlocked ONLY when dues are confirmed cleared */}
+              {/* final_delivered → download unlocked ONLY when the server gate is
+                  satisfied (dues cleared + release window not expired + under limit) */}
               {d.status === "final_delivered" && (
                 <StateBox tone="ok">
                   <div style={{ fontWeight: 600, marginBottom: "8px" }}>{t({ ar: "تم تسليم النسخة النهائية.", en: "Final version delivered." })}</div>
-                  {paid === true ? (
-                    <button onClick={() => download(d)} disabled={dlBusy === d.id} className="btn-red" style={{ justifyContent: "center", opacity: dlBusy === d.id ? 0.6 : 1 }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginInlineEnd: "6px" }}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
-                      <span>{dlBusy === d.id ? "..." : t({ ar: "تنزيل النسخة النهائية", en: "Download final file" })}</span>
-                    </button>
-                  ) : (
-                    <div className="f-sans" style={{ fontSize: "12px", color: "rgba(255,210,138,0.9)", lineHeight: 1.6 }}>
-                      {t({ ar: "سيتاح تنزيل الملفات النهائية بعد تأكيد استلام الدفعة.", en: "Final files will be available to download after payment is confirmed." })}
-                    </div>
-                  )}
+                  <FinalDownload d={d} dlState={dlStates[d.id]} busy={dlBusy === d.id} onDownload={() => download(d)} t={t} />
                 </StateBox>
               )}
 
@@ -282,6 +283,36 @@ function CommentBox({ deliverable, owner, t }: { deliverable: Deliverable; owner
               </button>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Final-download control with honest state: button only when allowed; otherwise
+// the exact reason (payment pending / window expired / limit reached). Shows
+// remaining count + expiry when limited. "Started downloading" wording is honest.
+function FinalDownload({ d, dlState, busy, onDownload, t }: {
+  d: Deliverable; dlState?: DownloadState; busy: boolean; onDownload: () => void; t: (m: { ar: string; en: string }) => string;
+}) {
+  const reasonMsg: Record<string, { ar: string; en: string }> = {
+    payment_pending: { ar: "سيتاح التنزيل بعد تأكيد استلام الدفعة.", en: "Available after payment is confirmed." },
+    window_expired: { ar: "انتهت مدة إتاحة التنزيل — تواصل مع كيان لإعادة الفتح.", en: "The download window has expired — contact Kian to reopen." },
+    limit_reached: { ar: "استنفدت عدد مرات التنزيل المسموح بها.", en: "You've reached the allowed number of downloads." },
+    not_final: { ar: "لم تُسلَّم النسخة النهائية بعد.", en: "Not final-delivered yet." },
+  };
+  if (!dlState) return <div className="f-sans" style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)" }}>{t({ ar: "…", en: "…" })}</div>;
+  if (!dlState.allowed) return <div className="f-sans" style={{ fontSize: "12px", color: "rgba(255,210,138,0.9)", lineHeight: 1.6 }}>{t(reasonMsg[dlState.reason] ?? reasonMsg.payment_pending)}</div>;
+  return (
+    <div>
+      <button onClick={onDownload} disabled={busy} className="btn-red" style={{ justifyContent: "center", opacity: busy ? 0.6 : 1 }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginInlineEnd: "6px" }}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
+        <span>{busy ? "..." : t({ ar: "تنزيل النسخة النهائية", en: "Download final file" })}</span>
+      </button>
+      {(dlState.remaining != null || dlState.expires_at) && (
+        <div className="f-sans" style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.45)", marginTop: "6px", lineHeight: 1.6 }}>
+          {dlState.remaining != null && <span dir="ltr">{t({ ar: "المتبقٍّ", en: "Remaining" })}: {dlState.remaining} </span>}
+          {dlState.expires_at && <span dir="ltr"> · {t({ ar: "ينتهي", en: "Expires" })}: {new Date(dlState.expires_at).toLocaleString("en-GB")}</span>}
         </div>
       )}
     </div>
