@@ -18,7 +18,8 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
-import { submitReview, downloadDeliverable, paymentCleared, addComment, listComments, secondsToTimecode, timecodeToSeconds } from "@/lib/portal/deliverables";
+import { submitReview, paymentCleared, addComment, listComments, secondsToTimecode, timecodeToSeconds } from "@/lib/portal/deliverables";
+import { getValidSession } from "@/lib/portalAuth";
 import { canApprove } from "@/lib/portal/projects";
 import { notifyReviewUpdate } from "@/lib/portal/notifyEmail";
 import { DLV_STATUS_LABELS } from "@/components/portal/projectMeta";
@@ -49,15 +50,25 @@ export default function DeliverableReview({
     return () => { alive = false; };
   }, [projectId]);
 
-  // Fetch the gated final URL (enforces final_delivered + dues cleared, logs the
-  // download) then hand it to the browser. Returns null → gate shut (no leak).
+  // Route through the server endpoint: it enforces the gate + logs (via
+  // client_download_deliverable as the user) and returns a SHORT-LIVED signed URL
+  // for storage-backed finals (never a permanent public URL). 403 → gate shut.
   async function download(d: Deliverable) {
     setDlBusy(d.id); setFlash(null);
-    const r = await downloadDeliverable(d.id);
-    setDlBusy(null);
-    if (!r.ok) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التنزيل: ", en: "Download failed: " }) + r.error }); return; }
-    if (!r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "التنزيل مقفول حتى تأكيد استلام الدفعة.", en: "Download is locked until payment is confirmed." }) }); return; }
-    window.open(r.data, "_blank", "noopener,noreferrer");
+    try {
+      const s = await getValidSession();
+      if (!s) { setFlash({ id: d.id, kind: "err", text: t({ ar: "انتهت الجلسة — أعد تسجيل الدخول.", en: "Session expired — sign in again." }) }); setDlBusy(null); return; }
+      const res = await fetch("/api/portal/deliverable-download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ deliverableId: d.id }),
+      });
+      setDlBusy(null);
+      if (res.status === 403) { setFlash({ id: d.id, kind: "err", text: t({ ar: "التنزيل مقفول حتى تأكيد استلام الدفعة.", en: "Download is locked until payment is confirmed." }) }); return; }
+      if (!res.ok) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التنزيل.", en: "Download failed." }) }); return; }
+      const j = (await res.json()) as { url?: string };
+      if (j.url) window.open(j.url, "_blank", "noopener,noreferrer");
+    } catch { setDlBusy(null); setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التنزيل.", en: "Download failed." }) }); }
   }
 
   // RLS already scopes a client to these states; filter defensively.
