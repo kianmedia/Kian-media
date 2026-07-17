@@ -22,6 +22,7 @@ import {
 import { PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
+import TimelineView from "@/components/portal/TimelineView";
 import EditorDeliverables from "@/components/portal/EditorDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
 import AdminProjectStage from "@/components/portal/AdminProjectStage";
@@ -198,6 +199,11 @@ export default function ProjectDetailPage() {
           <AdminClientNotes deliverables={dlvs} reviews={reviews} loading={dlvPhase === "loading"} />
         </Section>
       )}
+
+      {/* §6 Project timeline — role-scoped (client sees only client-visible events) */}
+      <Section title={t({ ar: "سجلّ المشروع الزمني", en: "Project Timeline" })}>
+        <TimelineView projectId={id} />
+      </Section>
 
       {/* Project messages (minimal list) */}
       <Section title={t({ ar: "محادثة المشروع", en: "Project Messages" })}>
