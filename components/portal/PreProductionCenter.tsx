@@ -24,12 +24,13 @@ export default function PreProductionCenter({ projectId, canManage }: { projectI
   const [openSection, setOpenSection] = useState<string | null>("client_brief");
   const [editing, setEditing] = useState<Partial<PreproItem> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     const r = await listPreproItems(projectId);
     setLoading(false);
-    if (r.ok) setItems(r.data);
+    if (r.ok) { setItems(r.data); setErr(null); } else { setErr(r.error); }
   }, [projectId]);
   useEffect(() => { void load(); if (canManage) void pcListStaff().then((r) => { if (r.ok) setStaff(r.data); }); }, [load, canManage]);
 
@@ -42,7 +43,15 @@ export default function PreProductionCenter({ projectId, canManage }: { projectI
 
   return (
     <div>
+      <div className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.55)", marginBottom: "10px" }}>
+        {t({ ar: "مركز ما قبل الإنتاج", en: "Pre-Production Center" })}
+      </div>
       {loading && <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
+      {err && !loading && (
+        <p className="f-sans" style={{ fontSize: "12.5px", color: "#ff8a8e", background: "rgba(227,30,36,0.08)", border: "1px solid rgba(227,30,36,0.3)", borderRadius: "3px", padding: "10px 12px", marginBottom: "8px" }}>
+          {t({ ar: "تعذّر تحميل عناصر ما قبل الإنتاج: ", en: "Couldn't load pre-production items: " })}{err}
+        </p>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
         {PREPRO_SECTIONS.map((sec) => {
           const list = bySection.get(sec.key) ?? [];

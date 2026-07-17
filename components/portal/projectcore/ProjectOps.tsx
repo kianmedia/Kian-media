@@ -21,6 +21,7 @@ import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, T
 import { LocationsTab, TagsTab } from "./ProjectAdvanced";
 import { TemplateManagerButton } from "./ProjectTemplates";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
+import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -186,7 +187,16 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
 
       {tab === "schedule" && <ScheduleTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
       {tab === "tasks" && <TasksTab projectId={projectId} canManage={canManage} flash={flash} />}
-      {tab === "gantt" && <UnifiedGanttTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
+      {tab === "gantt" && (
+        <div className="space-y-6">
+          {/* Structured pre-production center (§4) lives in the planning ("المخطّط")
+              tab; the legacy unified Gantt/plan stays below it. */}
+          <PreProductionCenter projectId={projectId} canManage={canManage} />
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "16px" }}>
+            <UnifiedGanttTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />
+          </div>
+        </div>
+      )}
       {tab === "calendar" && <UnifiedCalendarTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
       {tab === "locations" && <LocationsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "tags" && <TagsTab projectId={projectId} canManage={canManage} flash={flash} />}
