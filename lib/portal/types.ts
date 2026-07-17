@@ -277,6 +277,7 @@ export interface DeliverableReview extends SoftDeletable {
   decision: ReviewDecision;
   comments: string | null;
   created_at: string;
+  version_id?: string | null;
   status?: NoteStatus;
   resolved_by?: string | null;
   resolved_at?: string | null;

@@ -15,11 +15,11 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable, adminConfirmProjectPayment, adminRevokeProjectPayment, projectPaymentCleared, adminSetReleasePolicy, type ReleaseWindow } from "@/lib/portal/admin";
 import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmail";
-import { listCommentsForDeliverables, resolveNote, secondsToTimecode } from "@/lib/portal/deliverables";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
 import VersionHistory from "@/components/portal/VersionHistory";
-import type { Deliverable, DeliverableReview, DeliverableType, DeliverableStatus, ClientComment, NoteStatus } from "@/lib/portal/types";
+import DeliverableNotesPanel from "@/components/portal/DeliverableNotesPanel";
+import type { Deliverable, DeliverableReview, DeliverableType, DeliverableStatus } from "@/lib/portal/types";
 
 const ADD_STATUSES = ["draft", "internal_review", "client_review"] as const;
 const TYPES: { v: DeliverableType; ar: string; en: string }[] = [
@@ -51,14 +51,8 @@ export default function AdminDeliverables({
     if (!latestNote.has(r.deliverable_id) && r.comments?.trim()) latestNote.set(r.deliverable_id, r);
   }
 
-  // Fetch client_comments (general/timecode/page notes) — the piece no admin view
-  // showed before. Grouped by deliverable for the per-item NotesPanel.
-  const [comments, setComments] = useState<ClientComment[]>([]);
-  const ids = items.map((d) => d.id).join(",");
-  const reloadComments = () => { if (items.length) void listCommentsForDeliverables(items.map((d) => d.id)).then((r) => { if (r.ok) setComments(r.data); }); };
-  useEffect(reloadComments, [ids]); // eslint-disable-line react-hooks/exhaustive-deps
-  const commentsByDlv = new Map<string, ClientComment[]>();
-  for (const c of comments) { const a = commentsByDlv.get(c.deliverable_id) ?? []; a.push(c); commentsByDlv.set(c.deliverable_id, a); }
+  // Per-deliverable client comments + versions are fetched inside
+  // DeliverableNotesPanel (shared with the editor view), so no batch fetch here.
 
   async function setStatus(d: Deliverable, status: DeliverableStatus) {
     if (status === d.status) return;
@@ -161,9 +155,10 @@ export default function AdminDeliverables({
                 <VersionHistory deliverable={d} mode="admin" onChanged={onChanged} />
 
                 {/* Full note thread under THIS deliverable: revision-request note(s)
-                    + every client comment (general/timecode/page), each resolvable
-                    with a Kian response — this is the §1 fix. */}
-                <NotesPanel deliverable={d} reviews={reviews.filter((r) => r.deliverable_id === d.id)} comments={commentsByDlv.get(d.id) ?? []} onResolved={reloadComments} t={t} />
+                    + every client comment (general/timecode/page/pin), grouped by
+                    version, each resolvable with a Kian response — shared with the
+                    editor/manager view so ALL staff tiers see client comments. */}
+                <DeliverableNotesPanel deliverable={d} reviews={reviews} canResolve t={t} />
 
                 {flash && flash.id === d.id && <div className="f-sans" style={{ fontSize: "12px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
               </div>
@@ -406,85 +401,6 @@ function PaymentGateCard({ projectId, t }: { projectId: string; t: (m: { ar: str
       </div>
 
       {msg && <div className="f-sans" style={{ fontSize: "12px", marginTop: "10px", color: "rgba(255,255,255,0.7)" }}>{msg}</div>}
-    </div>
-  );
-}
-
-// ─── Full note thread under a deliverable (§1): revision requests + all client
-// comments (general / timecode / page / position), each resolvable with a Kian
-// response. Comments persist across versions (never deleted on new upload). ───
-type Tf = (m: { ar: string; en: string }) => string;
-function NotesPanel({ deliverable, reviews, comments, onResolved, t }: {
-  deliverable: Deliverable; reviews: DeliverableReview[]; comments: ClientComment[]; onResolved: () => void; t: Tf;
-}) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const revisionReviews = reviews.filter((r) => r.decision === "revision_requested" && (r.comments?.trim() || true));
-  const openCount = comments.filter((c) => c.status !== "resolved").length + revisionReviews.filter((r) => r.status !== "resolved").length;
-  const resolvedCount = comments.filter((c) => c.status === "resolved").length + revisionReviews.filter((r) => r.status === "resolved").length;
-  const total = comments.length + revisionReviews.length;
-  if (total === 0) return null;
-
-  async function resolve(kind: "comment" | "review", id: string, status: NoteStatus, respondEl?: HTMLTextAreaElement | null) {
-    setBusy(id);
-    const r = await resolveNote(kind, id, status, respondEl?.value.trim() || undefined);
-    setBusy(null);
-    if (r.ok) { if (respondEl) respondEl.value = ""; onResolved(); }
-  }
-  const stColor = (s?: string) => s === "resolved" ? "#7CFC9A" : s === "in_progress" ? "rgba(255,210,138,0.95)" : "#ff8a8e";
-  const stLabel = (s?: string) => s === "resolved" ? t({ ar: "محلول", en: "Resolved" }) : s === "in_progress" ? t({ ar: "قيد المعالجة", en: "In progress" }) : t({ ar: "مفتوح", en: "Open" });
-
-  const Row = ({ id, kind, badge, badgeColor, body, meta, status, resolution }: {
-    id: string; kind: "comment" | "review"; badge: string; badgeColor: string; body: string; meta: string; status?: string; resolution?: string | null;
-  }) => {
-    const ref = { el: null as HTMLTextAreaElement | null };
-    return (
-      <div style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "10px 12px" }}>
-        <div className="flex items-center justify-between gap-2 flex-wrap" style={{ marginBottom: "5px" }}>
-          <span className="f-sans" style={{ fontSize: "9px", letterSpacing: "0.5px", textTransform: "uppercase", color: badgeColor }}>{badge}</span>
-          <span className="f-sans" style={{ fontSize: "10px", color: stColor(status) }}>● {stLabel(status)}</span>
-        </div>
-        <p className="text-white/85" style={{ fontSize: "13px", lineHeight: 1.6, whiteSpace: "pre-wrap" }} dir="auto">{body || t({ ar: "(بدون نص)", en: "(no text)" })}</p>
-        <div className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.4)", marginTop: "4px" }}>{meta}</div>
-        {resolution?.trim() && (
-          <div style={{ marginTop: "6px", borderInlineStart: "2px solid rgba(124,252,154,0.4)", paddingInlineStart: "8px", fontSize: "12px", color: "rgba(255,255,255,0.8)" }}>
-            <span style={{ fontSize: "9px", textTransform: "uppercase", color: "#7CFC9A" }}>{t({ ar: "ردّ كيان", en: "Kian response" })}</span>
-            <div dir="auto">{resolution}</div>
-          </div>
-        )}
-        {status !== "resolved" && (
-          <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
-            <textarea ref={(e) => { ref.el = e; }} rows={2} placeholder={t({ ar: "ردّ/حلّ كيان (اختياري)…", en: "Kian response/resolution (optional)…" })} className="f-sans"
-              style={{ width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "8px 10px", color: "#fff", fontSize: "12.5px", outline: "none", resize: "vertical", colorScheme: "dark" }} />
-            <div className="flex gap-2 flex-wrap">
-              {status !== "in_progress" && <button disabled={busy === id} onClick={() => resolve(kind, id, "in_progress", ref.el)} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,210,138,0.95)", background: "none", border: "1px solid rgba(255,210,138,0.35)", borderRadius: "3px", padding: "7px 12px", cursor: "pointer" }}>{t({ ar: "قيد المعالجة", en: "In progress" })}</button>}
-              <button disabled={busy === id} onClick={() => resolve(kind, id, "resolved", ref.el)} className="f-sans" style={{ fontSize: "11px", color: "#7CFC9A", background: "none", border: "1px solid rgba(124,252,154,0.35)", borderRadius: "3px", padding: "7px 12px", cursor: "pointer" }}>{busy === id ? "…" : t({ ar: "وضع كمحلول + إرسال الرد", en: "Resolve + send response" })}</button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  return (
-    <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "10px" }}>
-      <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)", marginBottom: "8px" }}>
-        {t({ ar: "ملاحظات العميل وحلّها", en: "Client notes & resolution" })} —
-        <span style={{ color: "#ff8a8e" }}> {openCount} {t({ ar: "مفتوح", en: "open" })}</span> ·
-        <span style={{ color: "#7CFC9A" }}> {resolvedCount} {t({ ar: "محلول", en: "resolved" })}</span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        {revisionReviews.map((r) => (
-          <Row key={r.id} id={r.id} kind="review" badge={t({ ar: "طلب تعديل", en: "Revision request" })} badgeColor="#ff8a8e"
-            body={r.comments ?? ""} status={r.status}
-            meta={`${t({ ar: "قرار", en: "decision" })} · ${new Date(r.created_at).toLocaleString("en-GB")}`} resolution={r.resolution_note} />
-        ))}
-        {comments.map((c) => (
-          <Row key={c.id} id={c.id} kind="comment"
-            badge={c.timecode_seconds != null ? `${t({ ar: "تعليق", en: "Comment" })} · ${secondsToTimecode(c.timecode_seconds)}` : c.page_number != null ? `${t({ ar: "تعليق · صفحة", en: "Comment · p." })} ${c.page_number}` : t({ ar: "تعليق", en: "Comment" })}
-            badgeColor="rgba(255,255,255,0.6)" body={c.body} status={c.status}
-            meta={`${c.author_role === "admin" ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "العميل", en: "Client" })} · ${new Date(c.created_at).toLocaleString("en-GB")}`} resolution={c.resolution_note} />
-        ))}
-      </div>
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { useI18n } from "@/lib/i18n";
 import { staffAddDeliverable, staffSetDeliverable } from "@/lib/portal/admin";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
+import DeliverableNotesPanel from "@/components/portal/DeliverableNotesPanel";
 import type { Deliverable, DeliverableReview as Review, DeliverableType } from "@/lib/portal/types";
 
 // Statuses an editor may set (NO final_delivered / archived).
@@ -31,8 +32,6 @@ export default function EditorDeliverables({
   const [showAdd, setShowAdd] = useState(false);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
 
-  const latestNote = new Map<string, Review>();
-  for (const r of reviews) if (!latestNote.has(r.deliverable_id) && r.comments?.trim()) latestNote.set(r.deliverable_id, r);
   const setOpts = DELIVERABLE_STATUSES.filter((s) => EDITOR_SET.includes(s.key));
 
   async function setStatus(d: Deliverable, status: string) {
@@ -65,7 +64,6 @@ export default function EditorDeliverables({
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           {items.map((d) => {
             const url = d.vimeo_review_url || d.preview_url;
-            const note = latestNote.get(d.id);
             return (
               <div key={d.id} style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "14px 16px" }}>
                 <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -91,12 +89,9 @@ export default function EditorDeliverables({
                     </div>
                   </div>
                 </div>
-                {note && (
-                  <div style={{ marginTop: "10px", borderInlineStart: `2px solid ${note.decision === "revision_requested" ? "rgba(227,30,36,0.5)" : "rgba(124,252,154,0.4)"}`, paddingInlineStart: "10px" }}>
-                    <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: note.decision === "revision_requested" ? "#ff8a8e" : "#7CFC9A", marginBottom: "3px" }}>{t({ ar: "آخر ملاحظة من العميل:", en: "Latest client note:" })}</div>
-                    <p className="text-white/80" style={{ fontSize: "12.5px", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{note.comments}</p>
-                  </div>
-                )}
+                {/* Every client comment (revision requests + timecode/page/pin
+                    annotations) grouped by version, resolvable by staff. */}
+                <DeliverableNotesPanel deliverable={d} reviews={reviews} canResolve t={t} />
                 {flash && flash.id === d.id && <div className="f-sans" style={{ fontSize: "12px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
               </div>
             );
