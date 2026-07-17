@@ -11,7 +11,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useI18n } from "@/lib/i18n";
 
-type Kind = "youtube" | "vimeo" | "image" | "video" | "external";
+type Kind = "youtube" | "vimeo" | "image" | "video" | "pdf" | "office" | "external";
 
 function classify(raw: string | null): { kind: Kind; src: string | null } {
   if (!raw) return { kind: "external", src: null };
@@ -26,6 +26,12 @@ function classify(raw: string | null): { kind: Kind; src: string | null } {
     if (host === "player.vimeo.com") return { kind: "vimeo", src: raw };
     if (/\.(jpe?g|png|gif|webp|avif)$/.test(path)) return { kind: "image", src: raw };
     if (/\.(mp4|webm|mov|ogg)$/.test(path)) return { kind: "video", src: raw };
+    // PDF: embed inline with the viewer toolbar hidden (#toolbar=0) so there's no
+    // in-viewer download/print button; the watermark overlay sits on top.
+    if (/\.pdf$/.test(path)) return { kind: "pdf", src: `${raw}${raw.includes("#") ? "&" : "#"}toolbar=0&navpanes=0` };
+    // Office docs (proposals/financials in Word/Excel/PPT): browsers can't render
+    // them and the raw private URL must NOT be handed to the client → safe notice.
+    if (/\.(docx?|xlsx?|pptx?)$/.test(path)) return { kind: "office", src: null };
     return { kind: "external", src: raw };
   } catch { return { kind: "external", src: raw }; }
 }
@@ -73,6 +79,21 @@ export default function PreviewModal({ title, url, onClose }: { title: string; u
           ) : kind === "video" ? (
             <div style={{ position: "relative" }}>
               <video src={src!} controls controlsList="nodownload noplaybackrate" disablePictureInPicture onContextMenu={(e) => e.preventDefault()} style={{ display: "block", width: "100%", maxHeight: "75vh", background: "#000" }} />
+              <Watermark />
+            </div>
+          ) : kind === "pdf" ? (
+            <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
+              <iframe src={src!} title={title} style={{ display: "block", width: "100%", height: "75vh", border: 0, background: "#fff" }} />
+              <Watermark />
+            </div>
+          ) : kind === "office" ? (
+            <div className="text-center" style={{ position: "relative", padding: "50px 24px" }}>
+              <p className="text-white/70" style={{ fontSize: "14px", lineHeight: 1.7 }}>
+                {t({ ar: "مستند مكتبي (Word/Excel/PowerPoint) لا يُعرض داخل المتصفّح.", en: "Office document (Word/Excel/PowerPoint) can't render in-browser." })}
+              </p>
+              <p className="text-white/45" style={{ fontSize: "12.5px", lineHeight: 1.7, marginTop: "10px" }}>
+                {t({ ar: "راجع المقترح بناءً على الوصف المرفق. تُتاح النسخة النهائية للتنزيل بعد الاعتماد وتأكيد الدفعة.", en: "Review based on the summary provided; the final file is available to download after approval + payment confirmation." })}
+              </p>
               <Watermark />
             </div>
           ) : (

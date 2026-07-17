@@ -18,12 +18,12 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
-import { submitReview } from "@/lib/portal/deliverables";
+import { submitReview, downloadDeliverable, paymentCleared, addComment, listComments, secondsToTimecode, timecodeToSeconds } from "@/lib/portal/deliverables";
 import { canApprove } from "@/lib/portal/projects";
 import { notifyReviewUpdate } from "@/lib/portal/notifyEmail";
 import { DLV_STATUS_LABELS } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
-import type { Deliverable, DeliverableReview as Review } from "@/lib/portal/types";
+import type { Deliverable, DeliverableReview as Review, ClientComment } from "@/lib/portal/types";
 
 const CLIENT_VISIBLE = ["client_review", "revision_requested", "approved", "final_delivered"];
 
@@ -39,12 +39,26 @@ export default function DeliverableReview({
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [paid, setPaid] = useState<boolean | null>(null);   // all-dues-received (project-level)
+  const [dlBusy, setDlBusy] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => { const c = await canApprove(projectId); if (alive) setOwner(c); })();
+    (async () => { const r = await paymentCleared(projectId); if (alive && r.ok) setPaid(r.data); })();
     return () => { alive = false; };
   }, [projectId]);
+
+  // Fetch the gated final URL (enforces final_delivered + dues cleared, logs the
+  // download) then hand it to the browser. Returns null → gate shut (no leak).
+  async function download(d: Deliverable) {
+    setDlBusy(d.id); setFlash(null);
+    const r = await downloadDeliverable(d.id);
+    setDlBusy(null);
+    if (!r.ok) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التنزيل: ", en: "Download failed: " }) + r.error }); return; }
+    if (!r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "التنزيل مقفول حتى تأكيد استلام الدفعة.", en: "Download is locked until payment is confirmed." }) }); return; }
+    window.open(r.data, "_blank", "noopener,noreferrer");
+  }
 
   // RLS already scopes a client to these states; filter defensively.
   const visible = items.filter((d) => CLIENT_VISIBLE.includes(d.status));
@@ -159,12 +173,25 @@ export default function DeliverableReview({
                 </StateBox>
               )}
 
-              {/* final_delivered → no actions; final state */}
+              {/* final_delivered → download unlocked ONLY when dues are confirmed cleared */}
               {d.status === "final_delivered" && (
                 <StateBox tone="ok">
-                  <div style={{ fontWeight: 600 }}>{t({ ar: "تم تسليم النسخة النهائية.", en: "Final version delivered." })}</div>
+                  <div style={{ fontWeight: 600, marginBottom: "8px" }}>{t({ ar: "تم تسليم النسخة النهائية.", en: "Final version delivered." })}</div>
+                  {paid === true ? (
+                    <button onClick={() => download(d)} disabled={dlBusy === d.id} className="btn-red" style={{ justifyContent: "center", opacity: dlBusy === d.id ? 0.6 : 1 }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginInlineEnd: "6px" }}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
+                      <span>{dlBusy === d.id ? "..." : t({ ar: "تنزيل النسخة النهائية", en: "Download final file" })}</span>
+                    </button>
+                  ) : (
+                    <div className="f-sans" style={{ fontSize: "12px", color: "rgba(255,210,138,0.9)", lineHeight: 1.6 }}>
+                      {t({ ar: "سيتاح تنزيل الملفات النهائية بعد تأكيد استلام الدفعة.", en: "Final files will be available to download after payment is confirmed." })}
+                    </div>
+                  )}
                 </StateBox>
               )}
+
+              {/* Comments — general + per-timecode (video). Available while the item is client-visible. */}
+              <CommentBox deliverable={d} owner={owner} t={t} />
 
               {flash && flash.id === d.id && <div className="f-sans" style={{ fontSize: "12px", marginTop: "10px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
             </div>
@@ -173,6 +200,68 @@ export default function DeliverableReview({
       </div>
 
       {preview && <PreviewModal title={preview.title} url={preview.url} onClose={() => setPreview(null)} />}
+    </div>
+  );
+}
+
+// ─── Per-deliverable comments (general + optional video timecode) ───
+// Uses client_comments; RLS lets the client insert only while the deliverable is
+// in client_review / revision_requested. Each image/document is its own
+// deliverable, so this doubles as per-image / per-document commenting.
+function CommentBox({ deliverable, owner, t }: { deliverable: Deliverable; owner: boolean; t: (m: { ar: string; en: string }) => string }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<ClientComment[]>([]);
+  const [body, setBody] = useState("");
+  const [tc, setTc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canComment = owner && (deliverable.status === "client_review" || deliverable.status === "revision_requested");
+  async function load() { const r = await listComments(deliverable.id); if (r.ok) setRows(r.data); }
+  useEffect(() => { if (open) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, deliverable.id]);
+  async function add() {
+    if (busy || !body.trim()) return;
+    let secs: number | undefined;
+    if (deliverable.type === "video" && tc.trim()) {
+      const s = timecodeToSeconds(tc.trim());
+      if (s === null) { return; }
+      secs = s;
+    }
+    setBusy(true);
+    const r = await addComment(deliverable.id, body.trim(), secs);
+    setBusy(false);
+    if (!r.ok) return;
+    setBody(""); setTc(""); void load();
+  }
+  return (
+    <div style={{ marginTop: "10px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "10px" }}>
+      <button onClick={() => setOpen((v) => !v)} className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", color: "rgba(255,255,255,0.6)", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+        {open ? "▾" : "▸"} {t({ ar: "الملاحظات والتعليقات", en: "Comments" })}{rows.length ? ` (${rows.length})` : ""}
+      </button>
+      {open && (
+        <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+          {rows.map((c) => (
+            <div key={c.id} className="f-sans" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.8)", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "8px 10px", lineHeight: 1.6 }}>
+              {c.timecode_seconds != null && <span style={{ color: "#E31E24", marginInlineEnd: "6px" }} dir="ltr">[{secondsToTimecode(c.timecode_seconds)}]</span>}
+              <span dir="auto">{c.body}</span>
+              <span style={{ display: "block", fontSize: "10px", color: "rgba(255,255,255,0.35)", marginTop: "3px" }}>{c.author_role === "admin" ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "أنت", en: "You" })}</span>
+            </div>
+          ))}
+          {rows.length === 0 && <p className="f-sans" style={{ fontSize: "11.5px", color: "rgba(255,255,255,0.35)" }}>{t({ ar: "لا تعليقات بعد.", en: "No comments yet." })}</p>}
+          {canComment && (
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              {deliverable.type === "video" && (
+                <input value={tc} onChange={(e) => setTc(e.target.value)} placeholder="mm:ss" dir="ltr" className="f-sans"
+                  style={{ width: "72px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "8px", color: "#fff", fontSize: "12px", outline: "none" }} />
+              )}
+              <input value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000} onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
+                placeholder={t({ ar: "أضف تعليقًا…", en: "Add a comment…" })} className="f-sans"
+                style={{ flex: 1, minWidth: "140px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "8px 10px", color: "#fff", fontSize: "12.5px", outline: "none" }} />
+              <button onClick={() => void add()} disabled={busy || !body.trim()} className="btn-ghost" style={{ justifyContent: "center", opacity: busy || !body.trim() ? 0.5 : 1 }}>
+                <span>{t({ ar: "إرسال", en: "Send" })}</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

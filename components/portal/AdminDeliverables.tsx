@@ -11,9 +11,9 @@
 // summary cards and the client-notes section share one source); mutations call
 // onChanged() to trigger a parent refetch.
 // ════════════════════════════════════════════════════════════════════════
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable } from "@/lib/portal/admin";
+import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable, adminConfirmProjectPayment, adminRevokeProjectPayment, projectPaymentCleared } from "@/lib/portal/admin";
 import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
@@ -80,6 +80,10 @@ export default function AdminDeliverables({
 
   return (
     <div>
+      {/* Payment-release gate: final downloads stay locked for the client until an
+          admin confirms all dues received (independent of Zoho/finance). */}
+      <PaymentGateCard projectId={projectId} t={t} />
+
       {/* Prominent header + add button */}
       <div className="flex items-center justify-between gap-3 mb-4">
         <div className="f-sans" style={{ fontSize: "12.5px", color: "rgba(255,255,255,0.55)" }}>
@@ -304,6 +308,70 @@ function EditModal({ deliverable, onClose, onSaved }: { deliverable: Deliverable
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Project payment-release control (admin only) ───
+// Confirms "all client dues received" → unlocks client final downloads for any
+// deliverable already at final_delivered. Revoke relocks. Fully audited server-side.
+function PaymentGateCard({ projectId, t }: { projectId: string; t: (m: { ar: string; en: string }) => string }) {
+  const [cleared, setCleared] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const load = () => { void projectPaymentCleared(projectId).then((r) => { if (r.ok) setCleared(r.data); }); };
+  useEffect(load, [projectId]);
+  async function confirm() {
+    if (busy) return; setBusy(true); setMsg(null);
+    const r = await adminConfirmProjectPayment(projectId, note.trim() || undefined);
+    setBusy(false);
+    if (!r.ok) { setMsg(t({ ar: "تعذّر التأكيد.", en: "Failed." })); return; }
+    setNote(""); setMsg(t({ ar: "تم تأكيد استلام كامل الدفعة — التنزيل النهائي مُتاح للعميل.", en: "Payment confirmed — client final download unlocked." })); load();
+  }
+  async function revoke() {
+    if (busy) return;
+    if (!window.confirm(t({ ar: "سحب تأكيد الدفعة سيُعيد قفل التنزيل النهائي للعميل. متابعة؟", en: "Revoke will re-lock the client's final download. Continue?" }))) return;
+    setBusy(true); setMsg(null);
+    const r = await adminRevokeProjectPayment(projectId, note.trim() || undefined);
+    setBusy(false);
+    if (!r.ok) { setMsg(t({ ar: "تعذّر السحب.", en: "Failed." })); return; }
+    setNote(""); setMsg(t({ ar: "أُعيد قفل التنزيل النهائي.", en: "Final download re-locked." })); load();
+  }
+  const on = cleared === true;
+  return (
+    <div style={{ marginBottom: "16px", padding: "14px 16px", borderRadius: "4px",
+      background: on ? "rgba(124,252,154,0.05)" : "rgba(255,210,138,0.05)",
+      border: `1px solid ${on ? "rgba(124,252,154,0.28)" : "rgba(255,210,138,0.3)"}` }}>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", marginBottom: "4px" }}>
+            {t({ ar: "بوابة تحرير التسليم النهائي", en: "Final-delivery release gate" })}
+          </div>
+          <div className="f-sans" style={{ fontSize: "13.5px", fontWeight: 600, color: on ? "#7CFC9A" : "rgba(255,210,138,0.95)" }}>
+            {cleared === null ? t({ ar: "…", en: "…" }) : on
+              ? t({ ar: "✓ كامل الدفعة مُستلَم — التنزيل النهائي متاح للعميل", en: "✓ Payment received — client final download unlocked" })
+              : t({ ar: "الدفعة غير مؤكَّدة — التنزيل النهائي مقفول للعميل", en: "Payment not confirmed — client final download locked" })}
+          </div>
+          <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", marginTop: "4px", lineHeight: 1.6 }}>
+            {t({ ar: "التنزيل النهائي يتطلب: حالة المخرَج «تم التسليم» + تأكيدك لاستلام كامل مستحقات العميل. مستقل عن Zoho.", en: "Final download requires deliverable status = final_delivered AND this confirmation. Independent of Zoho." })}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap" style={{ maxWidth: "100%" }}>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t({ ar: "ملاحظة الدفعة (اختياري)", en: "Payment note (optional)" })}
+            className="f-sans" style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "8px 11px", fontSize: "12px", outline: "none", minWidth: "160px" }} />
+          {on ? (
+            <button onClick={revoke} disabled={busy} className="f-sans" style={{ fontSize: "12px", color: "#ff9ea1", background: "none", border: "1px solid rgba(227,30,36,0.45)", borderRadius: "3px", padding: "9px 14px", cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+              {t({ ar: "سحب التأكيد (إعادة القفل)", en: "Revoke (re-lock)" })}
+            </button>
+          ) : (
+            <button onClick={confirm} disabled={busy} className="btn-red" style={{ whiteSpace: "nowrap" }}>
+              <span>{busy ? "…" : t({ ar: "تأكيد استلام كامل الدفعة", en: "Full payment received" })}</span>
+            </button>
+          )}
+        </div>
+      </div>
+      {msg && <div className="f-sans" style={{ fontSize: "12px", marginTop: "10px", color: "rgba(255,255,255,0.7)" }}>{msg}</div>}
     </div>
   );
 }
