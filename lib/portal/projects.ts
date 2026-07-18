@@ -20,6 +20,13 @@ export function syncProjectsForCurrentUser(): Promise<Result<{ linked_clients: n
   return prpc<{ linked_clients: number; linked_members: number }>("sync_projects_for_current_user", {});
 }
 
+export interface ProjectProgressPhase { key: string; ar: string; en: string; weight: number; pct: number; earned: number }
+export interface ProjectProgress { pct: number; delivered: boolean; phases: ProjectProgressPhase[] }
+/** Authoritative weighted progress — identical for admin and client (P0-9). */
+export function projectProgress(projectId: string): Promise<Result<ProjectProgress>> {
+  return prpc<ProjectProgress>("project_progress", { p_project: projectId });
+}
+
 export async function getProject(id: string): Promise<Result<Project | null>> {
   const r = await pget<Project[]>(`projects?id=eq.${enc(id)}&select=*`);
   if (!r.ok) return r;

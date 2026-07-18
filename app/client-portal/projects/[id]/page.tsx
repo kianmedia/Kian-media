@@ -24,6 +24,7 @@ import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
 import TimelineView from "@/components/portal/TimelineView";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
+import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
 import EditorDeliverables from "@/components/portal/EditorDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
 import AdminProjectStage from "@/components/portal/AdminProjectStage";
@@ -132,6 +133,11 @@ export default function ProjectDetailPage() {
         <span className="f-sans" style={{ fontSize: "11px", letterSpacing: "1.5px", textTransform: "uppercase", color: "#E31E24", background: "rgba(227,30,36,0.1)", border: "1px solid rgba(227,30,36,0.3)", padding: "8px 15px", borderRadius: "2px", whiteSpace: "nowrap" }}>
           {t(statusLabel)}
         </span>
+      </div>
+
+      {/* Authoritative overall progress (P0-9) — same value admin & client see */}
+      <div style={{ maxWidth: "560px", marginBottom: "28px" }}>
+        <ProjectProgressBar projectId={id} />
       </div>
 
       {/* Timeline — 10 visual steps; scrolls horizontally on narrow screens */}
