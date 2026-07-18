@@ -49,25 +49,45 @@ export default function AdminProfessions() {
 
 type Tf = (m: { ar: string; en: string }) => string;
 
+const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+
 function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; onChanged: () => void; setMsg: (s: string) => void; t: Tf; isAr: boolean }) {
-  const [newKey, setNewKey] = useState("");
+  const [nameAr, setNameAr] = useState("");
+  const [nameEn, setNameEn] = useState("");
+  const [key, setKey] = useState("");
+  const [keyEdited, setKeyEdited] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Auto-derive the slug from the English (or Arabic) name until the admin edits it.
+  const effectiveKey = keyEdited ? key : slugify(nameEn || nameAr);
   async function add() {
-    const k = newKey.trim(); if (!k || busy) return; setBusy(true);
-    const r = await upsertProfession({ key: k, name_ar: k, name_en: k });
+    const k = effectiveKey.trim();
+    const ar = nameAr.trim(); const en = nameEn.trim();
+    if (busy) return;
+    if (!ar && !en) { setMsg(t({ ar: "أدخل اسم المهنة (عربي أو إنجليزي).", en: "Enter a profession name (Arabic or English)." })); return; }
+    if (!k) { setMsg(t({ ar: "المفتاح مطلوب (أحرف إنجليزية/أرقام).", en: "Key required (latin letters/digits)." })); return; }
+    if (profs.some((p) => p.key === k)) { setMsg(t({ ar: `المفتاح "${k}" مستخدم بالفعل.`, en: `Key "${k}" already exists.` })); return; }
+    setBusy(true);
+    const r = await upsertProfession({ key: k, name_ar: ar || en, name_en: en || ar, is_active: true });
     setBusy(false);
-    if (r.ok) { setNewKey(""); setMsg(t({ ar: "أُضيفت المهنة.", en: "Profession added." })); onChanged(); }
-    else setMsg(r.error);
+    if (r.ok) { setNameAr(""); setNameEn(""); setKey(""); setKeyEdited(false); setMsg(t({ ar: "✓ أُضيفت المهنة وظهرت في القائمة.", en: "✓ Profession added and now listed." })); onChanged(); }
+    else setMsg(t({ ar: "تعذّرت الإضافة: ", en: "Add failed: " }) + r.error);
   }
   async function save(p: Profession, patch: Partial<Profession>) {
     const r = await upsertProfession({ id: p.id, ...patch });
-    if (r.ok) onChanged(); else setMsg(r.error);
+    if (r.ok) onChanged(); else setMsg(t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + r.error);
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-      <div className="flex gap-2">
-        <input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder={t({ ar: "مفتاح مهنة جديدة (مثل colorist)", en: "New profession key (e.g. colorist)" })} style={{ ...inp, flex: 1 }} />
-        <button onClick={add} disabled={busy || !newKey.trim()} className="btn-red" style={{ opacity: busy || !newKey.trim() ? 0.5 : 1, padding: "0 16px" }}><span>+ {t({ ar: "إضافة", en: "Add" })}</span></button>
+      {/* Add a PROFESSION (craft) — separate from the system/access role. */}
+      <div style={{ border: "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", padding: "10px 12px" }}>
+        <div className="f-sans" style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.5px", color: "rgba(255,255,255,0.5)", marginBottom: "8px" }}>{t({ ar: "إضافة مهنة جديدة", en: "Add a new profession" })}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+          <input value={nameAr} onChange={(e) => setNameAr(e.target.value)} placeholder={t({ ar: "الاسم بالعربية (مثل: مصوّر)", en: "Arabic name (e.g. مصوّر)" })} style={inp} />
+          <input value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder={t({ ar: "الاسم بالإنجليزية (Photographer)", en: "English name (Photographer)" })} style={inp} dir="ltr" />
+          <input value={effectiveKey} onChange={(e) => { setKey(slugify(e.target.value)); setKeyEdited(true); }} placeholder="slug (photographer)" style={{ ...inp, direction: "ltr" }} dir="ltr" />
+          <button onClick={add} disabled={busy} className="btn-red" style={{ opacity: busy ? 0.5 : 1 }}><span>{busy ? "…" : `+ ${t({ ar: "إضافة المهنة", en: "Add profession" })}`}</span></button>
+        </div>
+        <div className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.4)", marginTop: "6px" }}>{t({ ar: "المهنة ليست دور النظام — دور الوصول يُضبط من صفحة الموظفين.", en: "A profession is not the system role — access role is set on the Staff page." })}</div>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", minWidth: "760px", borderCollapse: "collapse", fontSize: "12px" }}>
