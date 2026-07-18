@@ -6,10 +6,10 @@
 // assignments but existing ones still show.
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { setEmployeeProfessions, type Profession } from "@/lib/portal/professions";
+import { setEmployeeProfessions, PERMISSION_KEYS, type Profession } from "@/lib/portal/professions";
 
-export default function ProfessionPicker({ profileId, assignedIds, primaryId, professions, onChanged }: {
-  profileId: string; assignedIds: string[]; primaryId?: string | null; professions: Profession[]; onChanged: () => void;
+export default function ProfessionPicker({ profileId, assignedIds, primaryId, professions, systemRole, onChanged }: {
+  profileId: string; assignedIds: string[]; primaryId?: string | null; professions: Profession[]; systemRole?: string | null; onChanged: () => void;
 }) {
   const { t, isAr } = useI18n();
   const [busy, setBusy] = useState(false);
@@ -19,6 +19,15 @@ export default function ProfessionPicker({ profileId, assignedIds, primaryId, pr
   const active = professions.filter((p) => p.is_active);
   const primary = primaryId ?? (assignedIds.length === 1 ? assignedIds[0] : null);
   const unassigned = active.filter((p) => !assignedIds.includes(p.id));
+
+  // Effective access = UNION of capability flags across every assigned ACTIVE
+  // profession (mirrors emp_can, which never filters to the primary). For each
+  // capability, list the professions that grant it.
+  const assignedActive = assignedIds.map((id) => byId.get(id)).filter((p): p is Profession => !!p && p.is_active);
+  const effective = PERMISSION_KEYS.map((pk) => {
+    const grantors = assignedActive.filter((p) => (p as unknown as Record<string, boolean>)[pk.key]);
+    return { pk, grantors };
+  }).filter((x) => x.grantors.length > 0);
 
   async function save(ids: string[], primaryPick: string | null) {
     setBusy(true); setErr(null);
@@ -57,6 +66,28 @@ export default function ProfessionPicker({ profileId, assignedIds, primaryId, pr
           ))}
         </div>
       )}
+      {/* Effective access — system role + the UNION of all professions' capabilities. */}
+      <div style={{ marginTop: "10px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "4px", padding: "8px 10px" }}>
+        <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "الوصول الفعّال", en: "Effective access" })}</div>
+        <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "صلاحية النظام:", en: "System role:" })}</span> <span dir="ltr">{systemRole ?? "—"}</span>
+          {" · "}
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "المهنة الرئيسية:", en: "Primary:" })}</span> {primary ? label(primary) : "—"}
+        </div>
+        {effective.length === 0
+          ? <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", marginTop: "4px" }}>{t({ ar: "لا صلاحيات مهنية إضافية (رؤية المهام حسب المهنة فقط).", en: "No extra profession capabilities (profession-scoped task visibility only)." })}</div>
+          : (
+            <div style={{ marginTop: "5px", display: "flex", flexDirection: "column", gap: "3px" }}>
+              {effective.map(({ pk, grantors }) => (
+                <div key={pk.key} className="f-sans" style={{ fontSize: "11px" }}>
+                  <span style={{ color: "#7CFC9A" }}>✓ {t(pk)}</span>
+                  <span style={{ color: "rgba(255,255,255,0.4)" }}> — {grantors.map((g) => (isAr ? g.name_ar : g.name_en)).join(", ")}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        <div className="f-sans" style={{ fontSize: "9.5px", color: "rgba(255,255,255,0.35)", marginTop: "5px" }}>{t({ ar: "الصلاحيات = اتحاد كل المهن المُسندة؛ المهنة الرئيسية للعرض فقط. لا تمنح أي مهنة صلاحيات المالك/الأدمن.", en: "Capabilities = union of ALL assigned professions; primary is display-only. No profession grants Owner/Admin access." })}</div>
+      </div>
       {err && <p className="f-sans" style={{ fontSize: "11px", color: "#ff8a8e", marginTop: "4px" }}>{err}</p>}
     </div>
   );
