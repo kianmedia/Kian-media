@@ -84,9 +84,10 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
   // Upload is authorized for anyone civ_can_manage() allows — now including a
   // Custody-Manager PROFESSION (emp_effective_access.manage_custody), not staff_role
   // only. The server (civ_can_manage) is the real gate; this just shows the control.
-  const canManagePhotos = caps.isAdminArea || profile.staff_role === "custody_officer" || !!eff?.capabilities?.manage_custody;
-  // Image delete/restore = Admin/Owner/Super-Admin (civ_can_admin / civ_can_delete_asset).
-  const canDeleteImg = canEdit || canDelete || !!eff?.custody?.can_delete_asset;
+  const canManagePhotos = caps.isAdminArea || profile.staff_role === "custody_officer" || !!eff?.capabilities?.manage_custody || !!eff?.effective_permissions?.includes("custody.upload_asset_images");
+  // Image delete/restore = Admin/Owner/Super-Admin OR the explicit sensitive grant
+  // custody.delete_asset_images (server-enforced in the archive/restore RPCs + Storage).
+  const canDeleteImg = canEdit || canDelete || !!eff?.custody?.can_delete_asset || !!eff?.effective_permissions?.includes("custody.delete_asset_images");
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/70 p-3 sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
