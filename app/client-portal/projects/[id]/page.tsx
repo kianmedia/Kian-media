@@ -179,7 +179,7 @@ export default function ProjectDetailPage() {
 
       {/* §4 Pre-production center — staff manage; client sees only shared items */}
       <Section title={t({ ar: "مركز ما قبل الإنتاج", en: "Pre-Production" })}>
-        <PreProductionCenter projectId={id} canManage={isAdmin || canEditDlv} />
+        <PreProductionCenter projectId={id} canManage={isAdmin || canEditDlv} projectName={p.project_name} />
       </Section>
 
       {/* Details grid — computed from live deliverable/review data */}

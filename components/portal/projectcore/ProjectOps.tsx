@@ -191,7 +191,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
         <div className="space-y-6">
           {/* Structured pre-production center (§4) lives in the planning ("المخطّط")
               tab; the legacy unified Gantt/plan stays below it. */}
-          <PreProductionCenter projectId={projectId} canManage={canManage} />
+          <PreProductionCenter projectId={projectId} canManage={canManage} projectName={projectName} />
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "16px" }}>
             <UnifiedGanttTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />
           </div>

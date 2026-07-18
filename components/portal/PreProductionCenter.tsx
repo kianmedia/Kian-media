@@ -18,14 +18,47 @@ const inp: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border:
 const ST = { todo: { ar: "قائمة", en: "To do" }, in_progress: { ar: "قيد التنفيذ", en: "In progress" }, blocked: { ar: "معطّل", en: "Blocked" }, done: { ar: "منجز", en: "Done" } } as const;
 const PRIO = { low: { ar: "منخفضة", en: "Low" }, normal: { ar: "عادية", en: "Normal" }, high: { ar: "عالية", en: "High" }, urgent: { ar: "عاجلة", en: "Urgent" } } as const;
 
-export default function PreProductionCenter({ projectId, canManage }: { projectId: string; canManage: boolean }) {
-  const { t } = useI18n();
+export default function PreProductionCenter({ projectId, canManage, projectName }: { projectId: string; canManage: boolean; projectName?: string }) {
+  const { t, isAr } = useI18n();
   const [items, setItems] = useState<PreproItem[]>([]);
   const [staff, setStaff] = useState<StaffLite[]>([]);
   const [openSection, setOpenSection] = useState<string | null>("client_brief");
   const [editing, setEditing] = useState<Partial<PreproItem> | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+
+  // P0-6: browser-print report. scope='internal' prints everything; 'client' prints
+  // only active + client-visible items (confidentiality-respecting).
+  function printReport(scope: "internal" | "client", onlySection?: string) {
+    const rows = items.filter((it) => (scope === "internal" ? true : it.client_visible && (it.is_active ?? true)) && (!onlySection || it.section === onlySection));
+    const secName = (k: string) => { const s = PREPRO_SECTIONS.find((x) => x.key === k); return s ? (isAr ? s.ar : s.en) : k; };
+    const esc = (v: unknown) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
+    const bySec = new Map<string, PreproItem[]>();
+    for (const it of rows) { const a = bySec.get(it.section) ?? []; a.push(it); bySec.set(it.section, a); }
+    const secHtml = PREPRO_SECTIONS.filter((s) => bySec.has(s.key)).map((s) => {
+      const its = (bySec.get(s.key) ?? []).map((it) => {
+        const det = it.detail as Record<string, string>;
+        const detStr = Object.keys(det || {}).filter((k) => det[k]).map((k) => `${esc(k)}: ${esc(det[k])}`).join(" · ");
+        const meta = [staffName(it.owner_id), it.profession, it.contact_name, it.contact_mobile, it.due_date].filter(Boolean).map(esc).join(" · ");
+        return `<div class="it"><div class="ith"><b>${esc(it.title)}</b> <span class="st">${esc(it.status)}${it.approved_at ? " ✓" : ""}</span></div>${meta ? `<div class="mt">${meta}</div>` : ""}${it.body ? `<div class="bd">${esc(it.body)}</div>` : ""}${detStr ? `<div class="dt">${detStr}</div>` : ""}${it.notes ? `<div class="nt">${esc(it.notes)}</div>` : ""}</div>`;
+      }).join("");
+      return `<h2>${esc(secName(s.key))}</h2>${its}`;
+    }).join("");
+    const title = onlySection ? secName(onlySection) : t({ ar: "تقرير ما قبل الإنتاج", en: "Pre-Production Report" });
+    const conf = scope === "internal" ? t({ ar: "سري — داخلي", en: "CONFIDENTIAL — INTERNAL" }) : t({ ar: "مخصص للعميل", en: "CLIENT COPY" });
+    const html = `<!doctype html><html dir="${isAr ? "rtl" : "ltr"}" lang="${isAr ? "ar" : "en"}"><head><meta charset="utf-8"><title>${esc(title)} — ${esc(projectName ?? "")}</title>
+<style>@page{margin:16mm}body{font-family:${isAr ? "'Segoe UI',Tahoma,sans-serif" : "Georgia,serif"};color:#111;font-size:12px;line-height:1.55}
+.hd{display:flex;justify-content:space-between;border-bottom:2px solid #E31E24;padding-bottom:8px;margin-bottom:14px}
+.hd .b{font-weight:800;letter-spacing:2px;color:#E31E24;font-size:16px}.hd .c{font-size:10px;color:#666;text-align:${isAr ? "left" : "right"}}
+h1{font-size:18px;margin:0 0 2px}h2{font-size:13px;background:#f3f3f3;padding:5px 8px;margin:16px 0 6px;border-inline-start:3px solid #E31E24}
+.it{padding:6px 0;border-bottom:1px solid #eee}.ith .st{font-size:10px;color:#666;text-transform:uppercase}.mt{color:#555;font-size:11px}.bd{margin-top:3px;white-space:pre-wrap}.dt{color:#333;font-size:11px;margin-top:2px}.nt{color:#888;font-size:10px;margin-top:2px}
+.cf{margin-top:24px;font-size:10px;color:#999;text-align:center;border-top:1px solid #ddd;padding-top:8px}</style></head>
+<body><div class="hd"><div class="b">KIAN MEDIA</div><div class="c">${esc(projectName ?? "")}<br>${new Date().toLocaleDateString(isAr ? "ar" : "en-GB")} · ${esc(conf)}</div></div>
+<h1>${esc(title)}</h1>${secHtml || `<p>${t({ ar: "لا عناصر للطباعة.", en: "No items to print." })}</p>`}<div class="cf">KIAN MEDIA · ${esc(conf)}</div>
+<script>window.onload=function(){window.print()}</script></body></html>`;
+    const w = window.open("", "_blank", "width=900,height=1000");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,8 +77,16 @@ export default function PreProductionCenter({ projectId, canManage }: { projectI
 
   return (
     <div>
-      <div className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.55)", marginBottom: "10px" }}>
-        {t({ ar: "مركز ما قبل الإنتاج", en: "Pre-Production Center" })}
+      <div className="flex items-center justify-between gap-2 flex-wrap" style={{ marginBottom: "10px" }}>
+        <div className="f-sans" style={{ fontSize: "11px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>
+          {t({ ar: "مركز ما قبل الإنتاج", en: "Pre-Production Center" })}
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          <button onClick={() => printReport(canManage ? "internal" : "client")} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.8)", background: "none", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>🖨 {t({ ar: "طباعة التقرير", en: "Print report" })}</button>
+          {canManage && <button onClick={() => printReport("client")} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)", background: "none", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>🖨 {t({ ar: "نسخة العميل", en: "Client copy" })}</button>}
+          {canManage && <button onClick={() => printReport("internal", "storyboard")} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)", background: "none", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>🖨 Storyboard</button>}
+          {canManage && <button onClick={() => printReport("internal", "shot_list")} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)", background: "none", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>🖨 Shot List</button>}
+        </div>
       </div>
       {loading && <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
       {err && !loading && (
