@@ -25,8 +25,9 @@ export default function AdminProfessions() {
   const load = useCallback(async () => {
     const [p, e] = await Promise.all([listProfessions(), listEmployeesProfessions()]);
     if (p.ok) setProfs(p.data);
+    else setMsg("⚠ " + (t({ ar: "تعذّرت قراءة قائمة المهن (تحقق من صلاحية SELECT/RLS): ", en: "Couldn't read professions (check SELECT grant / RLS): " })) + p.error);
     if (e.ok) setEmps(e.data);
-  }, []);
+  }, [t]);
   useEffect(() => { void load(); }, [load]);
 
   return (
@@ -68,9 +69,20 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
     if (profs.some((p) => p.key === k)) { setMsg(t({ ar: `المفتاح "${k}" مستخدم بالفعل.`, en: `Key "${k}" already exists.` })); return; }
     setBusy(true);
     const r = await upsertProfession({ key: k, name_ar: ar || en, name_en: en || ar, is_active: true });
+    if (!r.ok) { setBusy(false); setMsg(t({ ar: "تعذّرت الإضافة: ", en: "Add failed: " }) + r.error); return; }
+    // READ-BACK: do not claim success until the row is actually readable (guards
+    // against the missing-grant/RLS false-success). If the insert committed but the
+    // row can't be read, surface that instead of a green lie.
+    const check = await listProfessions();
     setBusy(false);
-    if (r.ok) { setNameAr(""); setNameEn(""); setKey(""); setKeyEdited(false); setMsg(t({ ar: "✓ أُضيفت المهنة وظهرت في القائمة.", en: "✓ Profession added and now listed." })); onChanged(); }
-    else setMsg(t({ ar: "تعذّرت الإضافة: ", en: "Add failed: " }) + r.error);
+    if (check.ok && check.data.some((p) => p.key === k)) {
+      setNameAr(""); setNameEn(""); setKey(""); setKeyEdited(false);
+      setMsg(t({ ar: "✓ أُضيفت المهنة وظهرت في القائمة.", en: "✓ Profession added and now listed." }));
+      onChanged();
+    } else {
+      setMsg(t({ ar: "⚠ حُفظت المهنة لكن تعذّر قراءتها — راجع صلاحية SELECT/RLS على professions. ", en: "⚠ Saved but not readable — check the SELECT grant/RLS on professions. " }) + (check.ok ? "" : check.error));
+      onChanged();
+    }
   }
   async function save(p: Profession, patch: Partial<Profession>) {
     const r = await upsertProfession({ id: p.id, ...patch });

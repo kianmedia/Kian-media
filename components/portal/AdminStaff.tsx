@@ -94,7 +94,7 @@ export default function AdminStaff() {
                   </div>
                   <div className="flex items-end gap-3 flex-wrap">
                     <div>
-                      <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "الدور الوظيفي", en: "Staff Role" })}</div>
+                      <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "صلاحية النظام (الوصول)", en: "System role (access)" })}</div>
                       <select
                         value={p.staff_role ?? ""}
                         disabled={savingId === p.id || protectedRow || !caps.canManageStaff}
