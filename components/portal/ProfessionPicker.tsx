@@ -7,13 +7,15 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { setEmployeeProfessions, PERMISSION_KEYS, type Profession } from "@/lib/portal/professions";
+import EmployeeAccessModal from "@/components/portal/EmployeeAccessModal";
 
-export default function ProfessionPicker({ profileId, assignedIds, primaryId, professions, systemRole, onChanged }: {
-  profileId: string; assignedIds: string[]; primaryId?: string | null; professions: Profession[]; systemRole?: string | null; onChanged: () => void;
+export default function ProfessionPicker({ profileId, employeeName, assignedIds, primaryId, professions, systemRole, onChanged }: {
+  profileId: string; employeeName?: string; assignedIds: string[]; primaryId?: string | null; professions: Profession[]; systemRole?: string | null; onChanged: () => void;
 }) {
   const { t, isAr } = useI18n();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [showAccess, setShowAccess] = useState(false);
   const byId = new Map(professions.map((p) => [p.id, p]));
   const label = (id: string) => { const p = byId.get(id); return p ? (isAr ? p.name_ar : p.name_en) : id.slice(0, 6); };
   const active = professions.filter((p) => p.is_active);
@@ -68,7 +70,11 @@ export default function ProfessionPicker({ profileId, assignedIds, primaryId, pr
       )}
       {/* Effective access — system role + the UNION of all professions' capabilities. */}
       <div style={{ marginTop: "10px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "4px", padding: "8px 10px" }}>
-        <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "الوصول الفعّال", en: "Effective access" })}</div>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)" }}>{t({ ar: "الوصول الفعّال", en: "Effective access" })}</div>
+          <button onClick={() => setShowAccess(true)} className="f-sans" style={{ fontSize: "10px", color: "#E31E24", background: "none", border: "1px solid rgba(227,30,36,0.4)", borderRadius: "3px", padding: "2px 8px", cursor: "pointer" }}>{t({ ar: "التفاصيل والتجاوزات", en: "Details & overrides" })}</button>
+        </div>
+        {showAccess && <EmployeeAccessModal userId={profileId} name={employeeName ?? profileId.slice(0, 8)} onClose={() => { setShowAccess(false); onChanged(); }} />}
         <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)" }}>
           <span style={{ color: "rgba(255,255,255,0.5)" }}>{t({ ar: "صلاحية النظام:", en: "System role:" })}</span> <span dir="ltr">{systemRole ?? "—"}</span>
           {" · "}

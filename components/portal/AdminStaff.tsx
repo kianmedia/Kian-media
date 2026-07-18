@@ -126,7 +126,7 @@ export default function AdminStaff() {
                       Multiple allowed; new professions appear here live. */}
                   {caps.canWriteAdmin && p.staff_role && (
                     <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "10px" }}>
-                      <ProfessionPicker profileId={p.id} assignedIds={empProfs.get(p.id)?.ids ?? []} primaryId={empProfs.get(p.id)?.primary} professions={professions} systemRole={p.staff_role} onChanged={loadProfessions} />
+                      <ProfessionPicker profileId={p.id} employeeName={p.full_name ?? undefined} assignedIds={empProfs.get(p.id)?.ids ?? []} primaryId={empProfs.get(p.id)?.primary} professions={professions} systemRole={p.staff_role} onChanged={loadProfessions} />
                     </div>
                   )}
                 </div>

@@ -12,6 +12,7 @@ import {
   listProfessions, upsertProfession, listEmployeesProfessions, setEmployeeProfessions, deleteProfession,
   PERMISSION_KEYS, type Profession, type EmployeeProfessions,
 } from "@/lib/portal/professions";
+import ProfessionPermissionsEditor from "@/components/portal/ProfessionPermissionsEditor";
 
 const inp: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "3px", padding: "7px 9px", color: "#fff", fontSize: "12.5px", outline: "none", colorScheme: "dark" };
 
@@ -53,6 +54,7 @@ type Tf = (m: { ar: string; en: string }) => string;
 const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
 
 function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; onChanged: () => void; setMsg: (s: string) => void; t: Tf; isAr: boolean }) {
+  const [editorFor, setEditorFor] = useState<Profession | null>(null);
   const [nameAr, setNameAr] = useState("");
   const [nameEn, setNameEn] = useState("");
   const [key, setKey] = useState("");
@@ -127,7 +129,10 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
               <tr key={p.id} style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
                 <td style={td}>
                   <input defaultValue={isAr ? p.name_ar : p.name_en} onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== (isAr ? p.name_ar : p.name_en)) save(p, isAr ? { name_ar: v } : { name_en: v }); }} style={{ ...inp, width: "150px", padding: "5px 7px" }} />
-                  <div className="f-sans" style={{ fontSize: "9.5px", color: "rgba(255,255,255,0.35)", marginTop: "3px" }} dir="ltr">{p.key}</div>
+                  <div className="flex items-center gap-2" style={{ marginTop: "3px" }}>
+                    <span className="f-sans" style={{ fontSize: "9.5px", color: "rgba(255,255,255,0.35)" }} dir="ltr">{p.key}</span>
+                    <button onClick={() => setEditorFor(p)} className="f-sans" style={{ fontSize: "10px", color: "#E31E24", background: "none", border: "1px solid rgba(227,30,36,0.4)", borderRadius: "3px", padding: "2px 7px", cursor: "pointer", whiteSpace: "nowrap" }}>⚙ {t({ ar: "الصلاحيات", en: "Permissions" })}</button>
+                  </div>
                 </td>
                 {PERMISSION_KEYS.map((pk) => (
                   <td key={pk.key} style={{ ...td, textAlign: "center" }}>
@@ -145,6 +150,7 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
           </tbody>
         </table>
       </div>
+      {editorFor && <ProfessionPermissionsEditor profession={editorFor} allProfessions={profs} onClose={() => { setEditorFor(null); onChanged(); }} />}
     </div>
   );
 }
