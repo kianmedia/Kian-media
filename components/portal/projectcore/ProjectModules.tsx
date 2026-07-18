@@ -8,6 +8,8 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import { PROJECT_STAFF_ROLES, STAFF_ROLE_LABELS } from "@/lib/portal/roles";
 import { CallSheetManager } from "./CallSheet";
+import VersionHistory from "@/components/portal/VersionHistory";
+import DeliverableNotesPanel from "@/components/portal/DeliverableNotesPanel";
 import {
   pcListMembers, pcMemberAdd, pcMemberRemove, pcListStaff, pcListDeliverables,
   pcListCosts, pcCostAdd, pcListRisks, pcRiskUpsert, pcEntityDelete, type TrashEntity,
@@ -136,7 +138,17 @@ export function DeliverablesTab({ projectId, canManage, flash }: { projectId: st
             </button>
             <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${d.status === "approved" ? "bg-emerald-900/40 text-emerald-300" : d.status === "final_delivered" ? "bg-emerald-800/60 text-emerald-200" : d.status === "revision_requested" ? "bg-amber-900/40 text-amber-300" : d.status === "client_review" ? "bg-sky-900/40 text-sky-300" : "bg-stone-800 text-stone-300"}`}>{t(DLV_LABEL[d.status] ?? { ar: d.status, en: d.status })}</span>
           </div>
-          {open === d.id && <DeliverableVersions d={d} canManage={canManage} flash={flash} onChanged={load} />}
+          {open === d.id && (
+            <div className="mt-2 space-y-3">
+              {/* Client review thread — the SAME shared components used in the client
+                  portal / admin deliverables, so المخرجات shows the full versioned
+                  conversation (V1/V2/…/Final) with every client comment + Kian reply. */}
+              <VersionHistory deliverable={d} mode="admin" onChanged={load} />
+              <DeliverableNotesPanel deliverable={d} canResolve t={t} />
+              {/* internal staff working versions (separate from the client thread) */}
+              <DeliverableVersions d={d} canManage={canManage} flash={flash} onChanged={load} />
+            </div>
+          )}
         </div>
       ))}
     </div>

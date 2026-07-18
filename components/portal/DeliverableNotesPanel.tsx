@@ -9,16 +9,17 @@
 // is not UI-only enforcement. The client sees the Kian response in the viewer.
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
-import { listCommentsForDeliverables, listVersionSummary, resolveNote, secondsToTimecode, type VersionSummary } from "@/lib/portal/deliverables";
-import type { Deliverable, DeliverableReview, ClientComment, NoteStatus } from "@/lib/portal/types";
+import { listCommentsForDeliverables, listReviewsForDeliverables, listVersionSummary, resolveNote, secondsToTimecode, type VersionSummary } from "@/lib/portal/deliverables";
+import type { DeliverableReview, ClientComment, NoteStatus } from "@/lib/portal/types";
 
 type Tf = (m: { ar: string; en: string }) => string;
 
-export default function DeliverableNotesPanel({ deliverable, reviews, canResolve, t }: {
-  deliverable: Deliverable; reviews: DeliverableReview[]; canResolve: boolean; t: Tf;
+export default function DeliverableNotesPanel({ deliverable, reviews: reviewsProp, canResolve, t }: {
+  deliverable: { id: string }; reviews?: DeliverableReview[]; canResolve: boolean; t: Tf;
 }) {
   const [comments, setComments] = useState<ClientComment[]>([]);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
+  const [fetchedReviews, setFetchedReviews] = useState<DeliverableReview[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "open" | "in_progress" | "resolved">("all");
@@ -27,14 +28,22 @@ export default function DeliverableNotesPanel({ deliverable, reviews, canResolve
       : filter === "in_progress" ? s === "in_progress"
       : s !== "resolved" && s !== "in_progress"); // "open" (default/open)
 
+  // Self-contained: fetches comments + versions, and reviews too when a parent
+  // didn't pass them (so it can drop into any surface — incl. the المخرجات tab).
   const load = useCallback(async () => {
-    const [c, v] = await Promise.all([listCommentsForDeliverables([deliverable.id]), listVersionSummary(deliverable.id)]);
+    const [c, v, rv] = await Promise.all([
+      listCommentsForDeliverables([deliverable.id]),
+      listVersionSummary(deliverable.id),
+      reviewsProp ? Promise.resolve(null) : listReviewsForDeliverables([deliverable.id]),
+    ]);
     if (c.ok) setComments(c.data);
     if (v.ok) setVersions(v.data);
+    if (rv && rv.ok) setFetchedReviews(rv.data);
     setLoaded(true);
-  }, [deliverable.id]);
+  }, [deliverable.id, reviewsProp]);
   useEffect(() => { void load(); }, [load]);
 
+  const reviews = reviewsProp ?? fetchedReviews;
   const revisionReviews = reviews.filter((r) => r.deliverable_id === deliverable.id && r.decision === "revision_requested");
   const total = comments.length + revisionReviews.length;
   const openCount = comments.filter((c) => c.status !== "resolved").length + revisionReviews.filter((r) => r.status !== "resolved").length;

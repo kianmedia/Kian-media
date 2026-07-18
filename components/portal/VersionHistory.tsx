@@ -14,7 +14,6 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { listVersionSummary, addDeliverableVersion, reviewVersion, setFinalVersion, type VersionSummary } from "@/lib/portal/deliverables";
 import AnnotationViewer from "@/components/portal/AnnotationViewer";
-import type { Deliverable } from "@/lib/portal/types";
 
 const DECISION = {
   pending: { ar: "بانتظار المراجعة", en: "Pending", c: "rgba(255,255,255,0.5)" },
@@ -25,7 +24,7 @@ const DECISION = {
 export default function VersionHistory({
   deliverable, mode, owner, canReview, onChanged,
 }: {
-  deliverable: Deliverable; mode: "client" | "admin"; owner?: boolean; canReview?: boolean; onChanged?: () => void;
+  deliverable: { id: string; type: string; status: string; preview_url: string | null; vimeo_review_url?: string | null }; mode: "client" | "admin"; owner?: boolean; canReview?: boolean; onChanged?: () => void;
 }) {
   const { t } = useI18n();
   const [versions, setVersions] = useState<VersionSummary[]>([]);
