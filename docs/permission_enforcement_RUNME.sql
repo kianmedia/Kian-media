@@ -8,10 +8,24 @@
 -- Finance stays role-based (can_see_financials / pc_can_see_finance) and system_only
 -- keys are never resolvable through professions (emp_has_permission returns false).
 --
--- Backfill-safety: keys enforced here are the ones the catalog backfill already
--- granted (preproduction.* from perm_manage_preproduction; custody.* normal from
--- perm_manage_custody), so existing profession staff keep working; only the SENSITIVE
--- custody delete/restore is newly split out. Run AFTER permission_catalog_RUNME.sql.
+-- Migration compatibility (READ BEFORE APPLYING — this is an INTENTIONAL tightening):
+--   • Owner / Admin / Manager are never denied by any gate below (short-circuit true).
+--   • Professions that already carried perm_manage_preproduction / perm_manage_custody
+--     keep working: the catalog backfill mapped those flags to preproduction.* and to
+--     custody.* NORMAL keys, so pp_can()/custody_authz() still pass for them.
+--   • BEHAVIOR CHANGE — pre-production is NARROWED. The OLD gate pp_can_manage(project)
+--     was pure PROJECT MEMBERSHIP: ANY project member could create/edit/delete pre-
+--     production. pp_can(project,key) now requires the SPECIFIC granular key. A project
+--     member whose profession does NOT grant preproduction.create/edit/delete (and who
+--     is not owner/admin/manager) LOSES pre-production mutation. This is the requested
+--     enforcement (a Photographer must not get general Pre-Production admin unless
+--     granted) — NOT a bug. ROLLOUT: before/with applying this, grant the needed
+--     preproduction.* keys (Admin ▸ Professions ▸ ⚙ الصلاحيات, or the Project-Manager
+--     template) to every profession that legitimately manages pre-production.
+--   • SENSITIVE custody image delete/restore is newly split out behind its own key
+--     (custody.delete_asset_images / restore) — excluded from the normal backfill, so a
+--     Custody Manager can issue/return but CANNOT delete evidence unless explicitly
+--     granted. Run AFTER permission_catalog_RUNME.sql.
 -- ════════════════════════════════════════════════════════════════════════════
 
 do $pf$
