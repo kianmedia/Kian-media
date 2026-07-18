@@ -50,6 +50,10 @@ export const listEmployeesProfessions = () =>
 export const setEmployeeProfessions = (userId: string, professionIds: string[]) =>
   prpc<null>("admin_set_employee_professions", { p_user: userId, p_profession_ids: professionIds });
 
+export interface DeleteProfessionResult { deleted: boolean; requires_confirm?: boolean; hard?: boolean; archived?: boolean; employees?: number; tasks?: number }
+export const deleteProfession = (id: string, confirm = false) =>
+  prpc<DeleteProfessionResult>("admin_delete_profession", { p_id: id, p_confirm: confirm });
+
 export const updateTaskStatus = (taskId: string, status: string, progress?: number) =>
   prpc<null>("emp_update_task_status", { p_task: taskId, p_status: status, p_progress: progress ?? null });
 

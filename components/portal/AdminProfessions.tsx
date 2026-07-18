@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  listProfessions, upsertProfession, listEmployeesProfessions, setEmployeeProfessions,
+  listProfessions, upsertProfession, listEmployeesProfessions, setEmployeeProfessions, deleteProfession,
   PERMISSION_KEYS, type Profession, type EmployeeProfessions,
 } from "@/lib/portal/professions";
 
@@ -88,6 +88,17 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
     const r = await upsertProfession({ id: p.id, ...patch });
     if (r.ok) onChanged(); else setMsg(t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + r.error);
   }
+  async function del(p: Profession) {
+    const r1 = await deleteProfession(p.id, false);
+    if (!r1.ok) { setMsg(t({ ar: "تعذّر الحذف: ", en: "Delete failed: " }) + r1.error); return; }
+    if (r1.data.requires_confirm) {
+      const ok = window.confirm(t({ ar: `هذه المهنة مسندة إلى ${r1.data.employees} موظف و${r1.data.tasks} مهمة. سيتم أرشفتها (إخفاؤها من الإسنادات الجديدة) مع الحفاظ على السجل. متابعة؟`, en: `Assigned to ${r1.data.employees} employees and ${r1.data.tasks} tasks. It will be archived (hidden from new assignments) with history kept. Continue?` }));
+      if (!ok) return;
+      const r2 = await deleteProfession(p.id, true);
+      if (r2.ok) { setMsg(r2.data.archived ? t({ ar: "أُرشفت المهنة.", en: "Profession archived." }) : t({ ar: "حُذفت المهنة.", en: "Profession deleted." })); onChanged(); }
+      else setMsg(r2.error);
+    } else if (r1.data.deleted) { setMsg(t({ ar: "حُذفت المهنة.", en: "Profession deleted." })); onChanged(); }
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
       {/* Add a PROFESSION (craft) — separate from the system/access role. */}
@@ -108,6 +119,7 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
               <th style={th}>{t({ ar: "الاسم", en: "Name" })}</th>
               {PERMISSION_KEYS.map((pk) => <th key={pk.key} style={{ ...th, textAlign: "center" }}>{t(pk)}</th>)}
               <th style={{ ...th, textAlign: "center" }}>{t({ ar: "مفعّلة", en: "Active" })}</th>
+              <th style={{ ...th, textAlign: "center" }}>{t({ ar: "حذف", en: "Delete" })}</th>
             </tr>
           </thead>
           <tbody>
@@ -124,6 +136,9 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
                 ))}
                 <td style={{ ...td, textAlign: "center" }}>
                   <input type="checkbox" checked={p.is_active} onChange={(e) => save(p, { is_active: e.target.checked })} />
+                </td>
+                <td style={{ ...td, textAlign: "center" }}>
+                  <button onClick={() => del(p)} title={t({ ar: "حذف/أرشفة", en: "Delete/archive" })} style={{ background: "none", border: "none", color: "#ff9ea1", cursor: "pointer", fontSize: "13px" }}>🗑</button>
                 </td>
               </tr>
             ))}

@@ -5,9 +5,11 @@
 // projects with kian_* roles (admin_add/remove_project_member — account_type=admin).
 // All writes go through is_admin()/is_owner()-guarded RPCs; no service-role key.
 // ════════════════════════════════════════════════════════════════════════
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
+import { listProfessions, listEmployeesProfessions, type Profession } from "@/lib/portal/professions";
+import ProfessionPicker from "@/components/portal/ProfessionPicker";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
   adminListProfiles, adminListProjects, adminSetStaffRole,
@@ -30,6 +32,9 @@ export default function AdminStaff() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [assignFor, setAssignFor] = useState<string | null>(null);
+  // Professions (P0-1) — live catalog + each employee's assignment, shown per row.
+  const [professions, setProfessions] = useState<Profession[]>([]);
+  const [empProfs, setEmpProfs] = useState<Map<string, { ids: string[]; primary: string | null }>>(new Map());
 
   async function load() {
     const r = await adminListProfiles();
@@ -38,7 +43,12 @@ export default function AdminStaff() {
     setPhase("ready");
   }
   async function loadProjects() { const r = await adminListProjects(); if (r.ok) setProjects(r.data); }
-  useEffect(() => { void load(); void loadProjects(); }, []);
+  const loadProfessions = useCallback(async () => {
+    const [p, e] = await Promise.all([listProfessions(), listEmployeesProfessions()]);
+    if (p.ok) setProfessions(p.data);
+    if (e.ok) setEmpProfs(new Map(e.data.map((x) => [x.id, { ids: x.profession_ids ?? [], primary: x.primary_profession_id ?? null }])));
+  }, []);
+  useEffect(() => { void load(); void loadProjects(); void loadProfessions(); }, [loadProfessions]);
 
   async function setRole(p: Profile, role: StaffRole | null) {
     setSavingId(p.id); setFlash(null);
@@ -94,7 +104,7 @@ export default function AdminStaff() {
                   </div>
                   <div className="flex items-end gap-3 flex-wrap">
                     <div>
-                      <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "صلاحية النظام (الوصول)", en: "System role (access)" })}</div>
+                      <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "صلاحية النظام", en: "System Access Role" })}</div>
                       <select
                         value={p.staff_role ?? ""}
                         disabled={savingId === p.id || protectedRow || !caps.canManageStaff}
@@ -112,6 +122,13 @@ export default function AdminStaff() {
                       </button>
                     )}
                   </div>
+                  {/* Professions (P0-1) — separate from the system access role above.
+                      Multiple allowed; new professions appear here live. */}
+                  {caps.canWriteAdmin && p.staff_role && (
+                    <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "10px" }}>
+                      <ProfessionPicker profileId={p.id} assignedIds={empProfs.get(p.id)?.ids ?? []} primaryId={empProfs.get(p.id)?.primary} professions={professions} onChanged={loadProfessions} />
+                    </div>
+                  )}
                 </div>
                 {protectedRow && <div className="f-sans" style={{ fontSize: "11px", color: "rgba(255,210,138,0.8)", marginTop: "8px" }}>{t({ ar: "حساب مالك محمي — لا يمكن تغيير دوره.", en: "Protected owner account — role can't be changed." })}</div>}
                 {flash && flash.id === p.id && <div className="f-sans" style={{ fontSize: "12px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
