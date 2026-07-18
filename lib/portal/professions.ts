@@ -54,6 +54,16 @@ export interface DeleteProfessionResult { deleted: boolean; requires_confirm?: b
 export const deleteProfession = (id: string, confirm = false) =>
   prpc<DeleteProfessionResult>("admin_delete_profession", { p_id: id, p_confirm: confirm });
 
+export interface EffectiveAccess {
+  user_id: string; system_role: string | null; account_type: string | null;
+  active_profession_ids: string[]; active_profession_keys: string[];
+  capabilities: { view_all_tasks: boolean; manage_preproduction: boolean; manage_shoots: boolean; manage_custody: boolean };
+  custody: { can_manage: boolean; can_delete_asset: boolean } | null;
+}
+/** Server-side proof of effective access (UNION of all professions). Self, or any user for admin/manager. */
+export const empEffectiveAccess = (userId?: string) =>
+  prpc<EffectiveAccess>("emp_effective_access", userId ? { p_user: userId } : {});
+
 export const updateTaskStatus = (taskId: string, status: string, progress?: number) =>
   prpc<null>("emp_update_task_status", { p_task: taskId, p_status: status, p_progress: progress ?? null });
 
