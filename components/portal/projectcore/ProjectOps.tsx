@@ -22,6 +22,7 @@ import { LocationsTab, TagsTab } from "./ProjectAdvanced";
 import { TemplateManagerButton } from "./ProjectTemplates";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
+import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -61,6 +62,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
   const [printPack, setPrintPack] = useState(false);
   const [prog, setProg] = useState<ProgressInfo | null>(null);
+  const [progRefresh, setProgRefresh] = useState(0);   // bump to refetch the unified ProjectProgressBar
   const loadProg = useCallback(async () => { const r = await pcProgress(projectId); if (r.ok) setProg(r.data); }, [projectId]);
   useEffect(() => { void loadProg(); }, [loadProg]);
   async function overrideProgress() {
@@ -72,7 +74,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     if (val !== null) { const rs = window.prompt(t({ ar: "سبب التجاوز (إلزامي):", en: "Override reason (required):" })); if (rs === null) return; if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; } reason = rs.trim(); }
     const r = await pcSetProgress(projectId, val, reason);
     if (!r.ok) { flash(pcErr(r.error)); return; }
-    setProg(r.data); void loadCore(); flash(t({ ar: "تم تحديث التقدّم.", en: "Progress updated." }));
+    setProg(r.data); setProgRefresh((x) => x + 1); void loadCore(); flash(t({ ar: "تم تحديث التقدّم.", en: "Progress updated." }));
   }
   const [toast, setToast] = useState<string | null>(null);
   // هوية ثابتة — flash داخل deps للـload في التبويبات؛ هوية متغيّرة تسبّب حلقة إعادة جلب.
@@ -165,15 +167,17 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           {caps.canSeeFinancials && <label className="space-y-1"><span className="text-stone-500">{t({ ar: "الميزانية", en: "Budget" })}</span>
             <input type="number" min={0} disabled={!canManage} defaultValue={core?.budget_amount ?? ""} onBlur={(e) => Number(e.target.value || 0) !== (core?.budget_amount ?? 0) && void saveMeta({ budget_amount: e.target.value })} className={`${inp} w-full`} placeholder="SAR" /></label>}
         </div>
-        {prog && (
-          <div className="mt-3 border-t border-stone-800 pt-3">
-            <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
-              <span className="text-[11px] text-stone-500">{t({ ar: "التقدّم", en: "Progress" })}: <span className="text-stone-200 font-semibold" dir="ltr">{prog.final}%</span>{prog.manual != null && <span className="text-amber-400"> ({t({ ar: "يدوي", en: "manual" })})</span>} · {t({ ar: "تلقائي", en: "auto" })} <span dir="ltr">{prog.auto}%</span></span>
-              {canManage && <button onClick={() => void overrideProgress()} className="text-[11px] text-sky-400 hover:text-sky-300">{prog.manual != null ? t({ ar: "تعديل/إلغاء التجاوز", en: "Edit/clear override" }) : t({ ar: "تجاوز يدوي", en: "Override" })}</button>}
-            </div>
-            <div className="h-2 bg-stone-800 rounded overflow-hidden"><div className="h-full bg-red-600" style={{ width: `${prog.final}%` }} /></div>
-          </div>
-        )}
+        {/* ONE authoritative progress value (P0-3) — project_progress(), identical
+            to what the client sees; the admin override (project_core.progress_manual)
+            is honored inside that same function, so both surfaces always agree. */}
+        <div className="mt-3 border-t border-stone-800 pt-3">
+          <ProjectProgressBar projectId={projectId} refreshSignal={progRefresh} />
+          {canManage && (
+            <button onClick={() => void overrideProgress()} className="text-[11px] text-sky-400 hover:text-sky-300 mt-2">
+              {prog?.manual != null ? t({ ar: "تعديل/إلغاء التجاوز اليدوي", en: "Edit/clear manual override" }) : t({ ar: "تجاوز يدوي (مدير)", en: "Manual override" })}
+            </button>
+          )}
+        </div>
       </section>
 
       {/* تبويبات */}

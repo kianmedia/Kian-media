@@ -31,6 +31,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare
   f_pre numeric := 0; f_sch numeric := 0; f_prod numeric := 0; f_post numeric := 0; f_rev numeric := 0; f_del numeric := 0;
   n int; d int; v_delivered boolean := false; v_dues boolean := false; v_status text; total numeric;
+  v_manual int := null; v_final int;
 begin
   -- Access: admin, staff on the project, or the project's client — all get the SAME value.
   if not (public.is_admin()
@@ -92,8 +93,18 @@ begin
   elsif not (v_delivered and v_dues) then total := least(total, 95);
   end if;
 
+  -- Single authoritative headline: an admin manual override (project_core.progress_manual)
+  -- wins for BOTH staff and client; otherwise the weighted auto value. Phases always
+  -- show the auto breakdown for transparency.
+  if to_regclass('public.project_core') is not null then
+    select progress_manual into v_manual from public.project_core where project_id = p_project;
+  end if;
+  v_final := coalesce(v_manual, round(least(greatest(total,0),100))::int);
+
   return jsonb_build_object(
-    'pct', round(least(greatest(total,0),100)),
+    'pct', v_final,
+    'overridden', (v_manual is not null),
+    'auto_pct', round(least(greatest(total,0),100)),
     'delivered', (v_delivered and v_dues),
     'phases', jsonb_build_array(
       jsonb_build_object('key','initiation','ar','بدء المشروع','en','Initiation','weight',5,'pct',100,'earned',5),

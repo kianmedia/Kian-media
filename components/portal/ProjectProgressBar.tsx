@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { projectProgress, type ProjectProgress } from "@/lib/portal/projects";
 
-export default function ProjectProgressBar({ projectId, compact }: { projectId: string; compact?: boolean }) {
+export default function ProjectProgressBar({ projectId, compact, refreshSignal }: { projectId: string; compact?: boolean; refreshSignal?: number }) {
   const { t } = useI18n();
   const [p, setP] = useState<ProjectProgress | null>(null);
   const [err, setErr] = useState(false);
@@ -13,14 +13,14 @@ export default function ProjectProgressBar({ projectId, compact }: { projectId: 
     let alive = true;
     void projectProgress(projectId).then((r) => { if (!alive) return; if (r.ok) setP(r.data); else setErr(true); });
     return () => { alive = false; };
-  }, [projectId]);
+  }, [projectId, refreshSignal]);
 
   if (err) return null;                // non-fatal: header still renders without it
   const pct = p?.pct ?? 0;
   return (
     <div>
       <div className="flex items-center justify-between gap-2" style={{ marginBottom: "5px" }}>
-        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>{t({ ar: "نسبة الإنجاز", en: "Overall progress" })}</span>
+        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>{t({ ar: "نسبة الإنجاز", en: "Overall progress" })}{p?.overridden && <span style={{ color: "rgba(255,210,138,0.9)" }}> · {t({ ar: "يدوي", en: "manual" })}</span>}</span>
         <span className="f-sans" style={{ fontSize: "13px", fontWeight: 700, color: p?.delivered ? "#7CFC9A" : "#fff" }} dir="ltr">{pct}%</span>
       </div>
       <div style={{ height: "8px", background: "rgba(255,255,255,0.08)", borderRadius: "999px", overflow: "hidden" }}>
