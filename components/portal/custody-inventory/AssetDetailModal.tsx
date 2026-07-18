@@ -10,9 +10,10 @@ import { usePortal } from "@/components/portal/PortalShell";
 import {
   civGetAssetDetails, civGetAssetChanges, civUpdateAsset, civCorrectStock, civGetAssetTimeline,
   civGetAssetCatalogPhotos, civSignFiles, civSaveAssetPhoto,
-  civArchiveAssetFile, civSetPrimaryPhoto, civCanDelete, civDeleteAsset, civRestoreAsset, CIV_ASSETS_BUCKET,
+  civArchiveAssetFile, civRestoreAssetFile, civListArchivedPhotos, civSetPrimaryPhoto, civCanDelete, civDeleteAsset, civRestoreAsset, CIV_ASSETS_BUCKET,
   type CivAssetDetails, type CivAssetChange, type CivCatalogPhoto, type CivCategory, type CivLocation, type CivMovement,
 } from "@/lib/portal/custodyInventory";
+import { empEffectiveAccess, type EffectiveAccess } from "@/lib/portal/professions";
 
 type T = (m: { ar: string; en: string }) => string;
 const card = "bg-stone-900 border border-stone-800 rounded-xl p-4";
@@ -36,6 +37,7 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
   const [tab, setTab] = useState<MTab>("details");
   const [busy, setBusy] = useState(false);
   const [canDelete, setCanDelete] = useState(false);   // دور admin الحقيقي فقط (من القاعدة)
+  const [eff, setEff] = useState<EffectiveAccess | null>(null);   // caller's effective access (professions)
   const [showDelete, setShowDelete] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(null), 3600); };
@@ -58,6 +60,7 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
   useEffect(() => { void reload(); }, [reload]);
   // صلاحية الحذف تُقرأ من القاعدة (admin فقط) — لا نعتمد على الواجهة.
   useEffect(() => { void civCanDelete().then((r) => setCanDelete(r.ok && r.data === true)); }, [assetId]);
+  useEffect(() => { void empEffectiveAccess().then((r) => { if (r.ok) setEff(r.data); }); }, []);
 
   // إغلاق بـ Escape.
   useEffect(() => {
@@ -76,10 +79,14 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
     { k: "images", ar: "الصور", en: "Images" },
     { k: "changes", ar: "سجل التغييرات", en: "Changes" },
   ];
-  const canEdit = !!det?.can_edit;   // تعديل/مخزون/تمييز-أرشفة الصور — مالك فقط (civ_can_admin)
-  // إضافة/استكمال صور الأصل: أمين العهدة/المدير/المالك (civ_can_manage) — الخلفية تسمح بذلك أصلًا.
+  const canEdit = !!det?.can_edit;   // تعديل/مخزون/تمييز-أرشفة الصور — admin/owner (civ_can_admin)
   const { caps, profile } = usePortal();
-  const canManagePhotos = caps.isAdminArea || profile.staff_role === "custody_officer";
+  // Upload is authorized for anyone civ_can_manage() allows — now including a
+  // Custody-Manager PROFESSION (emp_effective_access.manage_custody), not staff_role
+  // only. The server (civ_can_manage) is the real gate; this just shows the control.
+  const canManagePhotos = caps.isAdminArea || profile.staff_role === "custody_officer" || !!eff?.capabilities?.manage_custody;
+  // Image delete/restore = Admin/Owner/Super-Admin (civ_can_admin / civ_can_delete_asset).
+  const canDeleteImg = canEdit || canDelete || !!eff?.custody?.can_delete_asset;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/70 p-3 sm:p-6" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -129,7 +136,7 @@ export default function AssetDetailModal({ assetId, cats, locs, onClose, onChang
             {tab === "details" && <DetailsTab det={det} catName={catName} locName={locName} t={t} />}
             {tab === "edit" && canEdit && <EditTab det={det} cats={cats} locs={locs} busy={busy} setBusy={setBusy} flash={flash} onSaved={afterChange} t={t} />}
             {tab === "stock" && canEdit && <StockTab det={det} busy={busy} setBusy={setBusy} flash={flash} onDone={afterChange} t={t} />}
-            {tab === "images" && <ImagesTab assetId={assetId} canEdit={canEdit} canManagePhotos={canManagePhotos} busy={busy} setBusy={setBusy} flash={flash} onChanged={onChanged} t={t} />}
+            {tab === "images" && <ImagesTab assetId={assetId} canDeleteImg={canDeleteImg} canManagePhotos={canManagePhotos} busy={busy} setBusy={setBusy} flash={flash} onChanged={onChanged} t={t} />}
             {tab === "changes" && <ChangesTab assetId={assetId} t={t} />}
           </div>
         )}
@@ -487,14 +494,16 @@ function StockTab({ det, busy, setBusy, flash, onDone, t }: {
 const PHOTO_LOADER_BUILD = "336afe8+";
 type ImgState = "loading" | "ready" | "forbidden" | "not_prepared" | "error";
 const baseName = (p: string) => p.split("/").pop() ?? p;
-function ImagesTab({ assetId, canEdit, canManagePhotos, busy, setBusy, flash, onChanged, t }: {
-  assetId: string; canEdit: boolean; canManagePhotos: boolean; busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onChanged: () => void | Promise<unknown>; t: T;
+function ImagesTab({ assetId, canDeleteImg, canManagePhotos, busy, setBusy, flash, onChanged, t }: {
+  assetId: string; canDeleteImg: boolean; canManagePhotos: boolean; busy: boolean; setBusy: (b: boolean) => void; flash: (m: string) => void; onChanged: () => void | Promise<unknown>; t: T;
 }) {
   const [photos, setPhotos] = useState<CivCatalogPhoto[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [state, setState] = useState<ImgState>("loading");
   const [errMsg, setErrMsg] = useState("");
   const [signFailed, setSignFailed] = useState(false);
+  const [archived, setArchived] = useState<{ file_id: string; storage_path: string; file_name: string | null; created_at: string }[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
 
   const reload = useCallback(async () => {
     setState("loading");
@@ -537,11 +546,24 @@ function ImagesTab({ assetId, canEdit, canManagePhotos, busy, setBusy, flash, on
     flash(t({ ar: "أُضيفت الصورة.", en: "Image added." })); await reload(); await onChanged();
   }
   async function archive(fileId: string) {
-    if (!window.confirm(t({ ar: "أرشفة هذه الصورة؟ (لا تُحذف نهائيًا — تبقى في السجل).", en: "Archive this image? (kept in the log)" }))) return;
-    setBusy(true); const r = await civArchiveAssetFile(fileId, "archived from asset details");
-    if (!r.ok) { setBusy(false); flash(t({ ar: "تعذّر: ", en: "Failed: " }) + r.error); return; }
+    const reason = window.prompt(t({ ar: "سبب حذف الصورة (يُسجَّل في التدقيق):", en: "Reason for deleting this image (audited):" }));
+    if (reason === null) return;
+    if (!reason.trim()) { flash(t({ ar: "السبب مطلوب.", en: "Reason required." })); return; }
+    setBusy(true); const r = await civArchiveAssetFile(fileId, reason.trim());
+    if (!r.ok) { setBusy(false); flash(t({ ar: "تعذّر الحذف: ", en: "Delete failed: " }) + r.error); return; }
     await ensurePrimary(); setBusy(false);
-    flash(t({ ar: "أُرشفت الصورة.", en: "Archived." })); await reload(); await onChanged();
+    flash(t({ ar: "حُذفت الصورة (قابلة للاستعادة).", en: "Image deleted (restorable)." })); await reload(); await onChanged();
+  }
+  async function loadArchived() {
+    const r = await civListArchivedPhotos(assetId);
+    if (r.ok) { setArchived(r.data); if (r.data.length) { const m = await civSignFiles(CIV_ASSETS_BUCKET, r.data.map((p) => p.storage_path)); setUrls((u) => ({ ...u, ...m })); } }
+    else flash(t({ ar: "تعذّر تحميل المحذوفة: ", en: "Couldn't load archived: " }) + r.error);
+  }
+  async function restore(fileId: string) {
+    setBusy(true); const r = await civRestoreAssetFile(fileId);
+    setBusy(false);
+    if (!r.ok) { flash(t({ ar: "تعذّرت الاستعادة: ", en: "Restore failed: " }) + r.error); return; }
+    flash(t({ ar: "استُعيدت الصورة.", en: "Image restored." })); await loadArchived(); await reload(); await onChanged();
   }
   async function primary(fileId: string) {
     setBusy(true); const r = await civSetPrimaryPhoto(fileId); setBusy(false);
@@ -558,7 +580,28 @@ function ImagesTab({ assetId, canEdit, canManagePhotos, busy, setBusy, flash, on
         {canManagePhotos && <label className={`${btnGhost} px-3 py-2 text-xs cursor-pointer inline-block`}>📷 {t({ ar: "إضافة صورة", en: "Add image" })}
           <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void add(file); e.target.value = ""; }} /></label>}
         <button disabled={busy || state === "loading"} onClick={() => void reload()} className={`${btnGhost} px-3 py-2 text-xs`}>↻ {t({ ar: "إعادة تحميل", en: "Reload" })}</button>
+        {canDeleteImg && <button disabled={busy} onClick={() => { const n = !showArchived; setShowArchived(n); if (n) void loadArchived(); }} className={`${btnGhost} px-3 py-2 text-xs ${showArchived ? "text-red-400" : "text-stone-400"}`}>{showArchived ? t({ ar: "إخفاء المحذوفة", en: "Hide deleted" }) : t({ ar: "عرض المحذوفة", en: "Show deleted" })}</button>}
       </div>
+
+      {/* Deleted (archived) images — Admin restore (P0-3) */}
+      {showArchived && canDeleteImg && (
+        <div className="space-y-2">
+          <div className="text-[11px] text-stone-500">{t({ ar: "الصور المحذوفة (قابلة للاستعادة):", en: "Deleted images (restorable):" })}</div>
+          {archived.length === 0
+            ? <div className="text-xs text-stone-500">{t({ ar: "لا صور محذوفة.", en: "No deleted images." })}</div>
+            : <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {archived.map((p) => (
+                  <div key={p.file_id} className={`${card} p-2 space-y-1.5 opacity-70`}>
+                    {urls[p.storage_path]
+                      ? <img loading="lazy" src={urls[p.storage_path]} className="w-full h-28 object-cover rounded bg-white/5 grayscale" alt={baseName(p.storage_path)} />
+                      : <div className="w-full h-28 rounded bg-stone-800 flex items-center justify-center text-[10px] text-stone-500">{t({ ar: "تعذّر الرابط", en: "No link" })}</div>}
+                    <div className="text-[10px] text-stone-400 truncate" dir="ltr">{baseName(p.storage_path)}</div>
+                    <button disabled={busy} onClick={() => void restore(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] text-emerald-400 w-full`}>↩ {t({ ar: "استعادة", en: "Restore" })}</button>
+                  </div>
+                ))}
+              </div>}
+        </div>
+      )}
 
       {state === "loading" && <p className="text-xs text-stone-500">{t({ ar: "جارٍ تحميل الصور…", en: "Loading images…" })}</p>}
       {state === "forbidden" && <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-3 text-sm text-amber-300">{t({ ar: "لا تملك صلاحية عرض صور هذا الأصل.", en: "Not authorized to view this asset's images." })}</div>}
@@ -582,9 +625,9 @@ function ImagesTab({ assetId, canEdit, canManagePhotos, busy, setBusy, flash, on
               {p.is_primary && <span className="text-red-400">★ {t({ ar: "أساسية", en: "primary" })}</span>}
               {p.created_at && <span dir="ltr">{new Date(p.created_at).toLocaleDateString("ar")}</span>}
             </div>
-            {canEdit && <div className="flex gap-1">
-              {!p.is_primary && <button disabled={busy} onClick={() => p.file_id && void primary(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] flex-1`}>{t({ ar: "أساسية", en: "Primary" })}</button>}
-              <button disabled={busy} onClick={() => p.file_id && void archive(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] text-red-400`}>{t({ ar: "أرشفة", en: "Archive" })}</button>
+            {(canManagePhotos || canDeleteImg) && <div className="flex gap-1">
+              {canManagePhotos && !p.is_primary && <button disabled={busy} onClick={() => p.file_id && void primary(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] flex-1`}>{t({ ar: "أساسية", en: "Primary" })}</button>}
+              {canDeleteImg && <button disabled={busy} onClick={() => p.file_id && void archive(p.file_id)} className={`${btnGhost} px-2 py-1 text-[10px] text-red-400`}>🗑 {t({ ar: "حذف", en: "Delete" })}</button>}
             </div>}
           </div>
         ))}

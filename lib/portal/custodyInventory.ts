@@ -217,6 +217,9 @@ export const civCorrectStock = (assetId: string, mode: "delta" | "set_total", va
 export const civGetAssetDetails = (assetId: string) => prpc<CivAssetDetails>("custody_inv_get_asset_details", { p_asset: assetId });
 export const civGetAssetChanges = (assetId: string) => prpc<CivAssetChange[]>("custody_inv_get_asset_changes", { p_asset: assetId });
 export const civArchiveAssetFile = (fileId: string, reason: string) => prpc<boolean>("custody_inv_admin_archive_asset_file", { p_file: fileId, p_reason: reason });
+export const civRestoreAssetFile = (fileId: string) => prpc<boolean>("custody_inv_admin_restore_asset_file", { p_file: fileId });
+export const civListArchivedPhotos = (assetId: string) =>
+  prpc<{ file_id: string; storage_path: string; file_name: string | null; created_at: string }[]>("custody_inv_admin_list_archived_photos", { p_asset: assetId });
 export const civSetPrimaryPhoto = (fileId: string) => prpc<boolean>("custody_inv_admin_set_primary_photo", { p_file: fileId });
 
 // ─── حذف/استعادة الأصل (Soft delete) — admin فقط (مُنفَّذ بالقاعدة) ───
