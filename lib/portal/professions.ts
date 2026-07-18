@@ -58,11 +58,52 @@ export interface EffectiveAccess {
   user_id: string; system_role: string | null; account_type: string | null;
   active_profession_ids: string[]; active_profession_keys: string[];
   capabilities: { view_all_tasks: boolean; manage_preproduction: boolean; manage_shoots: boolean; manage_custody: boolean };
+  // Granular (permission catalog v2) — present once permission_catalog_RUNME.sql is applied:
+  profession_permissions?: Record<string, string[]>;
+  allows?: string[]; denies?: string[]; effective_permissions?: string[];
   custody: { can_manage: boolean; can_delete_asset: boolean } | null;
 }
 /** Server-side proof of effective access (UNION of all professions). Self, or any user for admin/manager. */
 export const empEffectiveAccess = (userId?: string) =>
   prpc<EffectiveAccess>("emp_effective_access", userId ? { p_user: userId } : {});
+
+// ── Granular permission catalog (v2) ──
+export interface Permission { id: string; key: string; label_ar: string; label_en: string; category: string; sensitivity: "normal" | "sensitive" | "system_only"; enabled: boolean; sort_order: number }
+export const listPermissions = () => prpc<Permission[]>("admin_list_permissions", {});
+export const listProfessionPermissionKeys = (professionId: string) => prpc<string[]>("admin_list_profession_permission_keys", { p_profession: professionId });
+export const setProfessionPermission = (professionId: string, key: string, granted: boolean) =>
+  prpc<null>("admin_set_profession_permission", { p_profession: professionId, p_key: key, p_granted: granted });
+export const bulkSetProfessionPermissions = (professionId: string, keys: string[], granted: boolean) =>
+  prpc<null>("admin_bulk_set_profession_permissions", { p_profession: professionId, p_keys: keys, p_granted: granted });
+export const copyProfessionPermissions = (from: string, to: string) =>
+  prpc<null>("admin_copy_profession_permissions", { p_from: from, p_to: to });
+export const applyProfessionTemplate = (professionId: string, template: string) =>
+  prpc<null>("admin_apply_profession_template", { p_profession: professionId, p_template: template });
+export const setEmployeeOverride = (userId: string, key: string, effect: "allow" | "deny" | null, reason?: string) =>
+  prpc<null>("admin_set_employee_override", { p_user: userId, p_key: key, p_effect: effect, p_reason: reason ?? null });
+
+export const PERMISSION_CATEGORIES: { key: string; ar: string; en: string }[] = [
+  { key: "projects_tasks", ar: "المشاريع والمهام", en: "Projects & Tasks" },
+  { key: "preproduction", ar: "ما قبل الإنتاج", en: "Pre-Production" },
+  { key: "production", ar: "الإنتاج والتصوير", en: "Production & Shooting" },
+  { key: "deliverables", ar: "المخرجات والمونتاج", en: "Deliverables & Editing" },
+  { key: "custody", ar: "العهدة والأصول", en: "Custody & Assets" },
+  { key: "clients", ar: "التواصل مع العميل", en: "Client Communication" },
+  { key: "files", ar: "الملفات", en: "Files" },
+  { key: "notifications", ar: "الإشعارات", en: "Notifications" },
+  { key: "finance", ar: "المالية (حسّاسة)", en: "Finance (sensitive)" },
+  { key: "system", ar: "صلاحيات النظام (غير قابلة للمنح)", en: "System-only (not grantable)" },
+];
+export const PROFESSION_TEMPLATES: { key: string; ar: string; en: string }[] = [
+  { key: "photographer", ar: "مصوّر فوتوغرافي", en: "Photographer" },
+  { key: "videographer", ar: "مصوّر فيديو", en: "Videographer" },
+  { key: "editor", ar: "مونتير", en: "Editor" },
+  { key: "motion_graphics", ar: "موشن جرافيكس", en: "Motion Graphics" },
+  { key: "custody_manager", ar: "أمين عهدة", en: "Custody Manager" },
+  { key: "project_manager", ar: "مدير مشروع", en: "Project Manager" },
+  { key: "finance", ar: "مالية", en: "Finance" },
+  { key: "logistics", ar: "لوجستيات", en: "Logistics" },
+];
 
 export const updateTaskStatus = (taskId: string, status: string, progress?: number) =>
   prpc<null>("emp_update_task_status", { p_task: taskId, p_status: status, p_progress: progress ?? null });
