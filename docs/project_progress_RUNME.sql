@@ -31,7 +31,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare
   f_pre numeric := 0; f_sch numeric := 0; f_prod numeric := 0; f_post numeric := 0; f_rev numeric := 0; f_del numeric := 0;
   n int; d int; v_delivered boolean := false; v_dues boolean := false; v_status text; total numeric;
-  v_manual int := null; v_final int;
+  v_manual int := null; v_final int; v_stage text; v_floor int := 0; v_state text := 'active';
 begin
   -- Access: admin, staff on the project, or the project's client — all get the SAME value.
   if not (public.is_admin()
@@ -87,22 +87,52 @@ begin
   end if;
   f_del := case when v_delivered and v_dues then 1 when v_delivered then 0.6 else 0 end;
 
-  total := 5*1 + 20*f_pre + 10*f_sch + 25*f_prod + 20*f_post + 10*f_rev + 10*f_del;  -- initiation always earned
-  -- Never 100% until truly delivered + released; archived/cancelled clamp low.
-  if v_status in ('archived','cancelled') then total := least(total, 100);
-  elsif not (v_delivered and v_dues) then total := least(total, 95);
+  total := 5*1 + 20*f_pre + 10*f_sch + 25*f_prod + 20*f_post + 10*f_rev + 10*f_del;  -- initiation always earned (data-weighted)
+
+  -- LIFECYCLE FLOOR — progress must never fall below the minimum implied by the
+  -- operational stage, so "Approved" can never read 10%. project_core.core_stage
+  -- (the 13-stage lifecycle) is authoritative; fall back to projects.status.
+  if to_regclass('public.project_core') is not null then
+    select core_stage, progress_manual into v_stage, v_manual from public.project_core where project_id = p_project;
+  end if;
+  v_floor := case coalesce(v_stage,'')
+    when 'lead_approved' then 5 when 'project_created' then 5
+    when 'planning' then 10
+    when 'ready' then 25 when 'scheduled' then 25
+    when 'in_production' then 35
+    when 'post_production' then 60
+    when 'internal_review' then 70
+    when 'client_review' then 80
+    when 'revision' then 80
+    when 'approved' then 95
+    when 'delivered' then 95
+    when 'closed' then 100
+    else case coalesce(v_status,'')                      -- fallback to the flat status
+      when 'request_received' then 5 when 'pre_production' then 10
+      when 'shooting_scheduled' then 25 when 'shooting_completed' then 35
+      when 'editing' then 60 when 'ready_for_review' then 80
+      when 'delivered' then 95 else 5 end
+    end;
+
+  total := greatest(total, v_floor);                     -- data can raise, never lower below the floor
+
+  -- Delivery cap: 100 only when truly delivered + released, or the stage is closed;
+  -- never before. Cancelled/archived is a neutral non-progress state (not a fake 100).
+  if v_status in ('archived','cancelled') then
+    v_state := v_status; total := least(total, 100);
+  elsif (v_delivered and v_dues) or coalesce(v_stage,'') = 'closed' then
+    total := 100;
+  elsif coalesce(v_stage,'') = 'revision' then
+    total := least(total, 89);                           -- revision stays below approval
+  else
+    total := least(total, 95);                           -- never 100 until delivered+released
   end if;
 
-  -- Single authoritative headline: an admin manual override (project_core.progress_manual)
-  -- wins for BOTH staff and client; otherwise the weighted auto value. Phases always
-  -- show the auto breakdown for transparency.
-  if to_regclass('public.project_core') is not null then
-    select progress_manual into v_manual from public.project_core where project_id = p_project;
-  end if;
   v_final := coalesce(v_manual, round(least(greatest(total,0),100))::int);
 
   return jsonb_build_object(
     'pct', v_final,
+    'state', v_state, 'stage', v_stage, 'floor', v_floor,
     'overridden', (v_manual is not null),
     'auto_pct', round(least(greatest(total,0),100)),
     'delivered', (v_delivered and v_dues),
