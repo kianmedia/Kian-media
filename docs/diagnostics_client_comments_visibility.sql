@@ -1,0 +1,51 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- DIAGNOSTIC (READ-ONLY, NOT a migration) — prove client_comments reach Admin/Owner
+-- through the exact same path the frontend uses. Run in the Supabase SQL editor.
+-- Nothing here writes; safe to run on Production.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ── 1) SERVICE-ROLE ground truth: the comment rows that exist for a project ──
+-- (SQL editor runs as a superuser and BYPASSES RLS, so this shows what truly exists.)
+-- Replace :proj with the project id.
+--
+--   select c.id, c.deliverable_id, c.version_id, dv.version_no,
+--          c.author_role, c.timecode_seconds, c.page_number, c.pos_x, c.pos_y,
+--          c.status, left(c.body,80) as body, c.created_at
+--   from public.client_comments c
+--   join public.deliverables d on d.id = c.deliverable_id and d.project_id = :proj
+--   left join public.deliverable_versions dv on dv.id = c.version_id
+--   where c.is_deleted = false
+--   order by c.deliverable_id, dv.version_no nulls first, c.created_at;
+--
+-- Any row with version_id IS NULL means it was never anchored — after
+-- deliverable_versions_autocreate_RUNME.sql runs, the re-backfill anchors all of
+-- these to V1, so they group correctly under the version in the admin UI.
+
+-- ── 2) Prove RLS GRANTS the Admin/Owner these rows (the exact frontend predicate) ──
+-- The frontend calls (lib/portal/deliverables.ts → listCommentsForDeliverables):
+--   GET /rest/v1/client_comments?deliverable_id=in.(<ids>)&is_deleted=eq.false&select=*
+-- gated by the "client_comments staff read" policy:
+--   staff_reads_all_projects() OR project_role(deliverable.project_id) IS NOT NULL
+-- For an Owner (account_type='admin') and a Super-Admin (staff_role='super_admin'):
+--   staff_reads_all_projects() = is_owner() OR staff_role() in ('manager','support','readonly')
+--   is_owner() = is_admin() OR staff_role()='super_admin'  → TRUE  → policy passes.
+--
+-- Confirm helper truth for a given user id (:uid = the admin/owner auth.users id):
+--
+--   select
+--     (select account_type from public.profiles where id = :uid) as account_type,
+--     (select staff_role   from public.profiles where id = :uid) as staff_role;
+--
+-- account_type='admin'  → is_admin() true  → reads every project's comments.
+-- staff_role in ('super_admin','manager','support','readonly') → staff_reads_all → reads all.
+-- Any other staff_role → must be a project member (project_members row) to read that
+-- project's comments (project_role IS NOT NULL) — which assigned editors have.
+
+-- ── 3) TRUE RLS PROOF (run as the actual signed-in user, not the SQL editor) ──
+-- The only way to prove RLS end-to-end is with the user's own JWT. From a shell:
+--
+--   curl -s "$SUPABASE_URL/rest/v1/client_comments?deliverable_id=in.(<ids>)&is_deleted=eq.false&select=id,version_id,timecode_seconds,status,body" \
+--     -H "apikey: $ANON_KEY" -H "Authorization: Bearer <ADMIN_OR_OWNER_ACCESS_TOKEN>"
+--
+-- If this returns the same rows as step (1), Admin/Owner visibility is proven through
+-- the identical query the UI issues — no UI-only filtering involved.

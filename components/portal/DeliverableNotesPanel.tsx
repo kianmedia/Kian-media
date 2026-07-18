@@ -21,6 +21,11 @@ export default function DeliverableNotesPanel({ deliverable, reviews, canResolve
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"all" | "open" | "in_progress" | "resolved">("all");
+  const matchF = (s?: string) => filter === "all"
+    || (filter === "resolved" ? s === "resolved"
+      : filter === "in_progress" ? s === "in_progress"
+      : s !== "resolved" && s !== "in_progress"); // "open" (default/open)
 
   const load = useCallback(async () => {
     const [c, v] = await Promise.all([listCommentsForDeliverables([deliverable.id]), listVersionSummary(deliverable.id)]);
@@ -100,32 +105,51 @@ export default function DeliverableNotesPanel({ deliverable, reviews, canResolve
 
   return (
     <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "10px" }}>
-      <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)", marginBottom: "8px" }}>
-        {t({ ar: "ملاحظات العميل وحلّها", en: "Client notes & resolution" })} —
-        <span style={{ color: "#ff8a8e" }}> {openCount} {t({ ar: "مفتوح", en: "open" })}</span> ·
-        <span style={{ color: "#7CFC9A" }}> {resolvedCount} {t({ ar: "محلول", en: "resolved" })}</span>
+      <div className="flex items-center justify-between gap-2 flex-wrap" style={{ marginBottom: "8px" }}>
+        <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "0.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>
+          {t({ ar: "ملاحظات العميل وحلّها", en: "Client notes & resolution" })} —
+          <span style={{ color: "#ff8a8e" }}> {openCount} {t({ ar: "مفتوح", en: "open" })}</span> ·
+          <span style={{ color: "#7CFC9A" }}> {resolvedCount} {t({ ar: "محلول", en: "resolved" })}</span>
+        </div>
+        <div className="flex gap-1 flex-wrap">
+          {([["all", { ar: "الكل", en: "All" }], ["open", { ar: "مفتوح", en: "Open" }], ["in_progress", { ar: "قيد المعالجة", en: "In progress" }], ["resolved", { ar: "محلول", en: "Resolved" }]] as const).map(([k, lbl]) => (
+            <button key={k} onClick={() => setFilter(k)} className="f-sans" style={{ fontSize: "10px", padding: "3px 8px", borderRadius: "3px", cursor: "pointer", border: `1px solid ${filter === k ? "rgba(227,30,36,0.5)" : "rgba(255,255,255,0.14)"}`, background: filter === k ? "rgba(227,30,36,0.14)" : "transparent", color: filter === k ? "#fff" : "rgba(255,255,255,0.55)" }}>{t(lbl)}</button>
+          ))}
+        </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-        {groups.map((g) => (
-          <div key={g.key}>
-            <div className="f-sans" style={{ fontSize: "10.5px", fontWeight: 700, color: g.isFinal ? "#7CFC9A" : "rgba(255,255,255,0.7)", marginBottom: "6px", letterSpacing: "0.3px" }}>
-              {g.label}{g.isFinal ? ` · ${t({ ar: "نهائية", en: "Final" })}` : ""}
+        {groups.map((g) => {
+          const rs = g.reviews.filter((r) => matchF(r.status));
+          const cs = g.comments.filter((c) => matchF(c.status));
+          if (rs.length === 0 && cs.length === 0) return null;   // hidden by filter
+          const gOpen = g.comments.filter((c) => c.status !== "resolved").length + g.reviews.filter((r) => r.status !== "resolved").length;
+          const gResolved = (g.comments.length + g.reviews.length) - gOpen;
+          return (
+            <div key={g.key}>
+              <div className="flex items-baseline gap-2 flex-wrap" style={{ marginBottom: "6px" }}>
+                <span className="f-sans" style={{ fontSize: "10.5px", fontWeight: 700, color: g.isFinal ? "#7CFC9A" : "rgba(255,255,255,0.7)", letterSpacing: "0.3px" }}>
+                  {g.label}{g.isFinal ? ` · ${t({ ar: "نهائية", en: "Final" })}` : ""}
+                </span>
+                <span className="f-sans" style={{ fontSize: "9px", color: "rgba(255,255,255,0.4)" }}>
+                  <span style={{ color: "#ff8a8e" }}>{gOpen} {t({ ar: "مفتوح", en: "open" })}</span> · <span style={{ color: "#7CFC9A" }}>{gResolved} {t({ ar: "محلول", en: "resolved" })}</span>
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {rs.map((r) => (
+                  <Row key={r.id} id={r.id} kind="review" badge={t({ ar: "طلب تعديل", en: "Revision request" })} badgeColor="#ff8a8e"
+                    body={r.comments ?? ""} status={r.status}
+                    meta={`${t({ ar: "قرار العميل", en: "client decision" })} · ${new Date(r.created_at).toLocaleString("en-GB")}`} resolution={r.resolution_note} />
+                ))}
+                {cs.map((c) => (
+                  <Row key={c.id} id={c.id} kind="comment" badge={commentBadge(c)} badgeColor="rgba(255,255,255,0.6)"
+                    body={c.body} status={c.status}
+                    meta={`${c.author_role === "admin" ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "العميل", en: "Client" })} · ${new Date(c.created_at).toLocaleString("en-GB")}`}
+                    resolution={c.resolution_note} />
+                ))}
+              </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {g.reviews.map((r) => (
-                <Row key={r.id} id={r.id} kind="review" badge={t({ ar: "طلب تعديل", en: "Revision request" })} badgeColor="#ff8a8e"
-                  body={r.comments ?? ""} status={r.status}
-                  meta={`${t({ ar: "قرار العميل", en: "client decision" })} · ${new Date(r.created_at).toLocaleString("en-GB")}`} resolution={r.resolution_note} />
-              ))}
-              {g.comments.map((c) => (
-                <Row key={c.id} id={c.id} kind="comment" badge={commentBadge(c)} badgeColor="rgba(255,255,255,0.6)"
-                  body={c.body} status={c.status}
-                  meta={`${c.author_role === "admin" ? t({ ar: "كيان", en: "Kian" }) : t({ ar: "العميل", en: "Client" })} · ${new Date(c.created_at).toLocaleString("en-GB")}`}
-                  resolution={c.resolution_note} />
-              ))}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
