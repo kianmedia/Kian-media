@@ -20,6 +20,21 @@ export function syncProjectsForCurrentUser(): Promise<Result<{ linked_clients: n
   return prpc<{ linked_clients: number; linked_members: number }>("sync_projects_for_current_user", {});
 }
 
+export type LifecycleStepState = "completed" | "current" | "upcoming" | "blocked" | "not_applicable";
+export interface LifecycleStep { key: string; label_ar: string; label_en: string; state: LifecycleStepState; completed_at?: string | null }
+export interface OperationalSnapshot {
+  overall_progress: number; current_phase: string | null; lifecycle_status: string;
+  shooting_status: "not_required" | "not_started" | "scheduled" | "in_progress" | "completed";
+  review_status: "not_started" | "internal_review" | "awaiting_client_review" | "revision_requested" | "approved";
+  delivery_status: "not_ready" | "ready_for_delivery" | "payment_pending" | "released" | "delivered" | "revoked";
+  payment_release_status: string; current_version: number; unresolved_comments: number;
+  overridden?: boolean; progress_breakdown: ProjectProgressPhase[]; lifecycle_steps: LifecycleStep[];
+}
+/** The single authoritative operational snapshot (P0-1) — same for admin & client. */
+export function projectSnapshot(projectId: string): Promise<Result<OperationalSnapshot>> {
+  return prpc<OperationalSnapshot>("project_operational_snapshot", { p_project: projectId });
+}
+
 export interface ProjectProgressPhase { key: string; ar: string; en: string; weight: number; pct: number; earned: number }
 export interface ProjectProgress { pct: number; overridden?: boolean; auto_pct?: number; delivered: boolean; state?: string; stage?: string | null; floor?: number; phases: ProjectProgressPhase[] }
 /** Authoritative weighted progress — identical for admin and client (P0-9). */

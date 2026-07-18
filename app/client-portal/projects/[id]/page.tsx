@@ -15,10 +15,8 @@ import { usePortal } from "@/components/portal/PortalShell";
 import { getProject, listChat } from "@/lib/portal/projects";
 import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
 import { adminListClientsByIds, adminListProjectMembers, adminListSenders, type SenderProfile } from "@/lib/portal/admin";
-import {
-  TIMELINE_STEPS,
-  computeShootingStatus, computeDeliveryStatus, computeReviewStatus, computeTimelineIndex,
-} from "@/components/portal/projectMeta";
+import { TIMELINE_STEPS, computeTimelineIndex } from "@/components/portal/projectMeta";
+import ProjectSnapshot from "@/components/portal/ProjectSnapshot";
 import { PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import DeliverableReview from "@/components/portal/DeliverableReview";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
@@ -116,10 +114,6 @@ export default function ProjectDetailPage() {
   const stepIndex = computeTimelineIndex(dlvs, p.status);
   const currentStep = TIMELINE_STEPS[stepIndex] ?? TIMELINE_STEPS[0];
   const statusLabel = { ar: currentStep.ar, en: currentStep.en };
-  const dlvReady = dlvPhase === "ready";
-  const shooting = computeShootingStatus(p.shooting_date, p.status);
-  const delivery = computeDeliveryStatus(dlvs, p.status);
-  const review = computeReviewStatus(dlvs, reviews);
 
   return (
     <div>
@@ -140,27 +134,10 @@ export default function ProjectDetailPage() {
         <ProjectProgressBar projectId={id} />
       </div>
 
-      {/* Timeline — 10 visual steps; scrolls horizontally on narrow screens */}
+      {/* Authoritative lifecycle timeline (states) + shooting/review/delivery cards,
+          all from project_operational_snapshot — no card can contradict the progress. */}
       <Section title={t({ ar: "مرحلة المشروع", en: "Project Stage" })}>
-        <div style={{ overflowX: "auto", paddingBottom: "4px" }}>
-          <div className="flex items-start" dir="ltr" style={{ minWidth: "720px", gap: 0 }}>
-            {TIMELINE_STEPS.map((s, i) => {
-              const done = i <= stepIndex;
-              const isLast = i === TIMELINE_STEPS.length - 1;
-              return (
-                <div key={s.key} style={{ flex: isLast ? "0 0 72px" : "1 1 0%", minWidth: "72px" }}>
-                  <div className="flex items-center">
-                    <div style={{ width: "14px", height: "14px", borderRadius: "50%", flexShrink: 0, background: done ? "#E31E24" : "rgba(255,255,255,0.08)", border: `2px solid ${done ? "#E31E24" : "rgba(255,255,255,0.2)"}`, boxShadow: done ? "0 0 10px rgba(227,30,36,0.5)" : "none" }} />
-                    {!isLast && <div style={{ height: "2px", flex: 1, background: i < stepIndex ? "#E31E24" : "rgba(255,255,255,0.1)" }} />}
-                  </div>
-                  <div className="f-sans" style={{ marginTop: "8px", paddingInlineEnd: "8px", fontSize: "9.5px", lineHeight: 1.4, letterSpacing: "0.2px", color: i <= stepIndex ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.3)" }}>
-                    {t({ ar: s.ar, en: s.en })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <ProjectSnapshot projectId={id} />
       </Section>
 
       {/* Admin-only: set the project stage (drives the timeline) */}
@@ -181,13 +158,6 @@ export default function ProjectDetailPage() {
       <Section title={t({ ar: "مركز ما قبل الإنتاج", en: "Pre-Production" })}>
         <PreProductionCenter projectId={id} canManage={isAdmin || canEditDlv} projectName={p.project_name} />
       </Section>
-
-      {/* Details grid — computed from live deliverable/review data */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-9">
-        <Detail label={t({ ar: "حالة التصوير", en: "Shooting Status" })} value={t(shooting)} />
-        <Detail label={t({ ar: "حالة التسليم", en: "Delivery Status" })} value={dlvReady ? t(delivery) : "…"} />
-        <Detail label={t({ ar: "حالة المراجعات", en: "Revision Status" })} value={dlvReady ? t(review) : "…"} />
-      </div>
 
       {/* Deliverables — owner manages (full); editor/manager manage via staff RPCs
           (no final delivery); everyone else reviews (preview modal + approve/revise). */}
