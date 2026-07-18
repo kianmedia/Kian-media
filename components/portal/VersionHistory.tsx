@@ -44,6 +44,15 @@ export default function VersionHistory({
   useEffect(() => { void load(); }, [load]);
 
   const current = versions.find((v) => v.is_current);
+  // A version is previewable if it carries a URL, or (for the current version) the
+  // deliverable itself does — so a freshly-added or edited-preview deliverable always
+  // shows a working "Preview" instead of a silent empty state (P0-1).
+  const fallbackType: VersionSummary["preview_type"] = deliverable.type === "photo" ? "image" : deliverable.type === "video" ? "video" : "other";
+  const hasPreview = (v: VersionSummary) => !!(v.preview_url || v.vimeo_review_url || (v.is_current && (deliverable.preview_url || deliverable.vimeo_review_url)));
+  const openViewer = (v: VersionSummary) => {
+    if (v.preview_url || v.vimeo_review_url) { setViewing(v); return; }
+    setViewing({ ...v, preview_url: deliverable.preview_url ?? null, vimeo_review_url: deliverable.vimeo_review_url ?? null, preview_type: v.preview_type || fallbackType });
+  };
   async function decide(v: VersionSummary, decision: "approved" | "revision_requested", note?: string) {
     setBusy(true); setMsg(null);
     const r = await reviewVersion(v.id, decision, note);
@@ -117,8 +126,8 @@ export default function VersionHistory({
                     {v.open_comments > 0 && <span style={{ color: "#ff8a8e" }}>{v.open_comments} {t({ ar: "مفتوح", en: "open" })} </span>}
                     <span style={{ color: "#7CFC9A" }}>{v.resolved_comments} {t({ ar: "محلول", en: "resolved" })}</span>
                   </span>
-                  {(v.preview_url || v.vimeo_review_url) && (
-                    <button onClick={() => setViewing(v)} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>{t({ ar: "معاينة", en: "Preview" })}</button>
+                  {hasPreview(v) && (
+                    <button onClick={() => openViewer(v)} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>{t({ ar: "معاينة", en: "Preview" })}</button>
                   )}
                   {mode === "admin" && v.decision === "approved" && !v.is_final && deliverable.status !== "final_delivered" && (
                     <button onClick={() => markFinal(v)} disabled={busy} className="f-sans" style={{ fontSize: "11px", color: "#7CFC9A", background: "none", border: "1px solid rgba(124,252,154,0.35)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>{t({ ar: "تعيين كنهائية", en: "Set Final" })}</button>

@@ -15,21 +15,22 @@ import { useI18n } from "@/lib/i18n";
 import { listCommentsForVersion, addComment, resolveNote, secondsToTimecode, type VersionSummary } from "@/lib/portal/deliverables";
 import type { ClientComment } from "@/lib/portal/types";
 
-type Kind = "youtube" | "vimeo" | "image" | "video" | "pdf" | "office" | "external";
+type Kind = "youtube" | "vimeo" | "image" | "video" | "pdf" | "office" | "external" | "invalid";
 function classify(raw: string | null, hint?: string): { kind: Kind; src: string | null } {
-  if (!raw) return { kind: hint === "office" ? "office" : "external", src: null };
+  if (!raw || !raw.trim()) return { kind: hint === "office" ? "office" : "invalid", src: null };
   try {
     const u = new URL(raw); const host = u.hostname.replace(/^www\./, ""); const path = u.pathname.toLowerCase();
+    if (u.protocol !== "http:" && u.protocol !== "https:") return { kind: "invalid", src: null };
     if (host === "youtube.com" && u.searchParams.get("v")) return { kind: "youtube", src: `https://www.youtube.com/embed/${u.searchParams.get("v")}?rel=0&modestbranding=1` };
     if (host === "youtu.be") return { kind: "youtube", src: `https://www.youtube.com/embed/${u.pathname.slice(1)}?rel=0` };
     if (host === "vimeo.com") { const id = u.pathname.split("/").filter(Boolean)[0]; if (/^\d+$/.test(id)) return { kind: "vimeo", src: `https://player.vimeo.com/video/${id}` }; }
     if (host === "player.vimeo.com") return { kind: "vimeo", src: raw };
     if (/\.(jpe?g|png|gif|webp|avif)$/.test(path) || hint === "image") return { kind: "image", src: raw };
-    if (/\.(mp4|webm|mov|ogg)$/.test(path)) return { kind: "video", src: raw };
+    if (/\.(mp4|webm|mov|ogg)$/.test(path) || hint === "video") return { kind: "video", src: raw };
     if (/\.pdf$/.test(path) || hint === "pdf") return { kind: "pdf", src: `${raw}${raw.includes("#") ? "&" : "#"}toolbar=0&navpanes=0` };
     if (/\.(docx?|xlsx?|pptx?)$/.test(path) || hint === "office") return { kind: "office", src: null };
     return { kind: "external", src: raw };
-  } catch { return { kind: "external", src: raw }; }
+  } catch { return { kind: "invalid", src: null }; }
 }
 
 function Watermark() {
@@ -131,9 +132,18 @@ export default function AnnotationViewer({
                 <iframe src={page ? `${src}&page=${page}` : src!} title={version.label} style={{ display: "block", width: "100%", height: "70vh", border: 0, background: "#fff" }} />
                 <Watermark />
               </div>
+            ) : kind === "invalid" ? (
+              <div className="text-center" style={{ position: "relative", padding: "48px 24px" }}>
+                <div style={{ fontSize: 30, marginBottom: 8 }}>⚠️</div>
+                <p style={{ fontSize: "14px", fontWeight: 700, color: "#ff8a8e" }}>{t({ ar: "رابط المعاينة غير صالح", en: "Preview link is invalid" })}</p>
+                <p className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.7, marginTop: 6 }}>{t({ ar: "لا يوجد رابط معاينة صالح لهذه النسخة. يرجى من فريق كيان إضافة رابط معاينة صحيح.", en: "This version has no valid preview link. Kian staff should attach a correct preview URL." })}</p>
+                <Watermark />
+              </div>
             ) : (
               <div className="text-center" style={{ position: "relative", padding: "48px 24px" }}>
-                <p className="text-white/70" style={{ fontSize: "13.5px", lineHeight: 1.7 }}>{t({ ar: "مستند مكتبي — يُعرض بمعاينة آمنة، ولا يُكشف الرابط الأصلي.", en: "Office document — safe preview only; the original URL is never exposed." })}</p>
+                <div style={{ fontSize: 30, marginBottom: 8 }}>📄</div>
+                <p style={{ fontSize: "14px", fontWeight: 700, color: "rgba(255,210,138,0.95)" }}>{t({ ar: "هذا الملف يحتاج معاينة مُولّدة", en: "This file requires a generated preview" })}</p>
+                <p className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.7, marginTop: 6 }}>{t({ ar: "ملفات Office/الملفات غير القابلة للعرض المباشر تُعرض عبر نسخة PDF محمية — ولا يُكشف الرابط الأصلي. يمكن للفريق رفع نسخة معاينة (PDF/صورة/فيديو).", en: "Office and non-embeddable files display via a protected PDF derivative — the original URL is never exposed. Staff can upload a preview (PDF/image/video)." })}</p>
                 <Watermark />
               </div>
             )}
