@@ -3,7 +3,6 @@
 // مواقع، صرف، عهد وإرجاع، صيانة، جرد، تقارير، إعدادات. كل الكتابة عبر RPCs محمية.
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { pget } from "@/lib/portal/client";
 import CustodyEnterpriseSettings from "@/components/portal/custody-inventory/CustodyEnterpriseSettings";
 import CustodyQrLabels from "@/components/portal/custody-inventory/CustodyQrLabels";
 import AssetDetailModal from "@/components/portal/custody-inventory/AssetDetailModal";
@@ -13,7 +12,7 @@ import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
   civSaveAssetPhoto,
   civSignFiles, civUpsertCategory, civArchiveCategory, civUpsertLocation,
-  civArchiveLocation, civCreateAssignment, civListAssignments, civListAssignmentItems, civListEvidence,
+  civArchiveLocation, civCreateAssignment, civListEligibleEmployees, civListAssignments, civListAssignmentItems, civListEvidence,
   civEvidencePath, civUploadEvidence, civAttachEvidence, civInspectReturn, civOpenMaintenance, civCloseMaintenance,
   civListMaintenance, civStartAudit, civListAudits, civListAuditItems, civCountAuditItem, civApproveAudit,
   civGetReport, civGetSettings, civUpdateSettings, civEmitEvent, DEFAULT_CIV_SETTINGS,
@@ -76,7 +75,9 @@ export default function CustodyInventoryConsole() {
     if (c.ok) setCats(c.data); if (l.ok) setLocs(l.data);
   }, []);
   const loadStaff = useCallback(async () => {
-    const r = await pget<Staff[]>(`profiles?account_status=eq.active&or=(account_type.eq.admin,staff_role.not.is.null)&select=id,full_name,email,staff_role&order=full_name.asc`);
+    // P0-2: served by civ_can_manage()-gated RPC (the direct profiles read is RLS-limited
+    // to admin/self, which left the recipient picker empty for non-admin custody managers).
+    const r = await civListEligibleEmployees();
     if (r.ok) setStaff(r.data);
   }, []);
 

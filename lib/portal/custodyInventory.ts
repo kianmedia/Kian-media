@@ -97,6 +97,14 @@ export function civListLocations(): Promise<Result<CivLocation[]>> {
 export function civListAssetFiles(assetId: string): Promise<Result<CivAssetFile[]>> {
   return pget<CivAssetFile[]>(`custody_inventory_asset_files?asset_id=eq.${enc(assetId)}&is_deleted=eq.false&file_type=eq.asset_photo&select=id,asset_id,file_type,file_path,file_name,mime_type,size_bytes,uploaded_by,description,created_at,is_primary&order=is_primary.desc,created_at.desc`);
 }
+// P0-2: eligible-employee picker for issuance. Served by a civ_can_manage()-gated
+// SECURITY DEFINER RPC so authorized non-admin custody managers can populate the
+// recipient list (the direct profiles read is RLS-limited to admin/self).
+export interface CivEligibleEmployee { id: string; full_name: string | null; email: string; staff_role: string | null; account_type: string }
+export function civListEligibleEmployees(): Promise<Result<CivEligibleEmployee[]>> {
+  return prpc<CivEligibleEmployee[]>("civ_list_eligible_employees", {});
+}
+
 export function civListAssignments(filter?: { status?: string; employee_user_id?: string }): Promise<Result<CivAssignment[]>> {
   let q = `custody_inventory_assignments?is_deleted=eq.false&select=id,assignment_number,employee_user_id,employee_id,assignment_type,purpose,expected_return_at,issued_at,employee_confirmed_at,status,employee_note,custodian_note,ack_snapshot,ack_name&order=issued_at.desc&limit=500`;
   if (filter?.status) q += `&status=eq.${enc(filter.status)}`;
