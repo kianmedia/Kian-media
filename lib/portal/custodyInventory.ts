@@ -132,7 +132,8 @@ export const civLiabilityAddEmployeeEvidence = (id: string, path: string, note?:
 
 // ─── P0 custody return-inspection evidence bundle (4 groups per asset) ───
 export interface CivEvidenceImage {
-  id?: string; stage?: string; scope?: "per_asset" | "overall"; bucket: string; path: string;
+  id?: string; evidence_id?: string; stage?: string; group?: string; scope?: "per_asset" | "overall"; bucket: string; path: string;
+  assignment_id?: string | null; assignment_item_id?: string | null; asset_id?: string | null; reason?: string;
   name: string | null; mime: string | null; size: number | null; note?: string | null; description?: string | null;
   is_primary?: boolean; uploaded_at: string | null; uploaded_by_name: string | null; uploaded_by_role: "employee" | "staff" | null;
 }
@@ -150,10 +151,13 @@ export interface CivEvidenceBundle {
   };
   items: CivEvidenceItem[];
   overall: { issue: CivEvidenceImage[]; return: CivEvidenceImage[]; inspection: CivEvidenceImage[] };
+  unlinked?: CivEvidenceImage[];
   is_manager: boolean;
 }
 export const civEvidenceBundle = (assignmentId: string) => prpc<CivEvidenceBundle>("custody_inv_evidence_bundle", { p_assignment: assignmentId });
 export const civRequestMoreEvidence = (assignmentId: string, note: string) => prpc<boolean>("custody_inv_request_more_evidence", { p_assignment: assignmentId, p_note: note });
+export interface CivEvidenceDiag { evidence_id: string; raw_stage: string; norm_group: string; norm_scope: string; assignment_id: string; assignment_item_id: string | null; asset_id: string | null; path: string; file_name: string | null; uploaded_by: string | null; created_at: string; is_deleted: boolean; items_with_asset: number; candidate_item: string | null; match_state: string }
+export const civEvidenceDiagnostics = (assignmentId: string) => prpc<CivEvidenceDiag[]>("custody_inv_evidence_diagnostics", { p_assignment: assignmentId });
 
 // ─── P0-4 dashboard buckets + unified case timeline ───
 export interface CivDashboardBuckets {
@@ -260,8 +264,9 @@ export interface CivReturnItem { assignment_item_id: string; quantity?: number; 
 export const civRequestReturn = (assignmentId: string, items: CivReturnItem[], note?: string) =>
   prpc<boolean>("custody_inv_employee_request_return", { p_assignment: assignmentId, p_items: items, p_note: note ?? null });
 export interface CivInspectItem { assignment_item_id: string; result: CivInspectResult; quantity?: number; note?: string; to_location_id?: string; damage_value?: number }
-export const civInspectReturn = (assignmentId: string, items: CivInspectItem[]) =>
-  prpc<{ ok: boolean; status: string; accepted: number; resolved: number; rejected: number; closed: boolean }>("custody_inv_admin_inspect_return", { p_assignment: assignmentId, p_items: items });
+// P0-6/P0-7: reason enables the admin/owner photo bypass (audited); managers ignore it (photos still required).
+export const civInspectReturn = (assignmentId: string, items: CivInspectItem[], reason?: string) =>
+  prpc<{ ok: boolean; status: string; accepted: number; resolved: number; rejected: number; closed: boolean; photo_bypassed?: boolean }>("custody_inv_admin_inspect_return", { p_assignment: assignmentId, p_items: items, p_reason: reason ?? null });
 // بدء فحص الإرجاع (return_requested → under_inspection) — عبر custody_return_inspection_FINAL_FIX_RUNME.sql.
 export const civAdminStartInspection = (assignmentId: string, note?: string) =>
   prpc<{ ok: boolean; status: string; noop?: boolean }>("custody_inv_admin_start_inspection", { p_assignment: assignmentId, p_note: note ?? null });

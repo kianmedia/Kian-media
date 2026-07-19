@@ -42,6 +42,7 @@ export default function CustodyEvidenceComparison({ assignmentId }: { assignment
     const collect = (imgs?: CivEvidenceImage[]) => (imgs ?? []).forEach((im) => { (byBucket[im.bucket] ??= []).push(im.path); });
     r.data.items.forEach((it) => { collect(it.registered_images); collect(it.issue_images); collect(it.return_images); collect(it.inspection_images); });
     collect(r.data.overall.issue); collect(r.data.overall.return); collect(r.data.overall.inspection);
+    collect(r.data.unlinked);
     const merged: Record<string, string> = {};
     for (const bucket of Object.keys(byBucket)) Object.assign(merged, await civSignFiles(bucket, byBucket[bucket]));
     setUrls(merged); setLoading(false);
@@ -76,6 +77,21 @@ export default function CustodyEvidenceComparison({ assignmentId }: { assignment
 
       {/* Overall (assignment-level) photos — kept SEPARATE from per-asset. */}
       <OverallSection overall={b.overall} urls={urls} onOpen={(imgs, i) => setBox({ imgs, i })} />
+
+      {/* Unlinked evidence (admin) — asset-tagged rows that don't map to one item; never dropped. */}
+      {b.is_manager && (b.unlinked?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-700/50 bg-amber-900/10 p-3">
+          <div className="text-xs font-medium text-amber-300 mb-2">⚠ أدلة غير مربوطة ({b.unlinked!.length}) — تحتاج مراجعة (ربط يدوي/غامض)</div>
+          <div className="flex flex-wrap gap-1.5">
+            {b.unlinked!.map((im, i) => urls[im.path] ? (
+              <button key={im.path + i} onClick={() => setBox({ imgs: b.unlinked!, i })} className="relative">
+                <img src={urls[im.path]} alt="" className="w-14 h-14 object-cover rounded border border-amber-700/60" />
+                <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-[7px] text-amber-200 text-center">{im.group ?? im.stage}</span>
+              </button>
+            ) : null)}
+          </div>
+        </div>
+      )}
 
       {box && <Lightbox imgs={box.imgs} i={box.i} urls={urls} onClose={() => setBox(null)} onNav={(i) => setBox({ ...box, i })} />}
     </div>
