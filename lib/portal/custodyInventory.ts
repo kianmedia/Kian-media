@@ -105,6 +105,42 @@ export function civListEligibleEmployees(): Promise<Result<CivEligibleEmployee[]
   return prpc<CivEligibleEmployee[]>("civ_list_eligible_employees", {});
 }
 
+// ─── P0-2 custody liability / repair / compensation ───
+export type CivLiabilityType = "repair" | "missing_accessory" | "asset_damage" | "missing_asset" | "replacement" | "other";
+export type CivLiabilityStatus = "draft" | "pending_admin_approval" | "approved" | "disputed" | "waived" | "paid" | "deducted" | "closed";
+export interface CivLiability {
+  id: string; assignment_id: string | null; asset_id: string | null; asset_name?: string | null; employee_user_id: string; employee_name?: string | null;
+  liability_type: CivLiabilityType; amount: number | null; currency: string | null; calculation_basis: string | null;
+  description: string | null; internal_note?: string | null; show_to_employee: boolean; due_date: string | null;
+  status: CivLiabilityStatus; employee_evidence: { path: string; note?: string | null; at: string }[];
+  created_at: string; updated_at: string; approved_by?: string | null; approved_at?: string | null;
+}
+export interface CivLiabilityEvent { id: string; event_type: string; previous_status: string | null; new_status: string | null; actor_name: string | null; metadata: Record<string, unknown>; created_at: string }
+export const civLiabilityCreate = (data: Record<string, unknown>) => prpc<string>("custody_liability_create", { p_data: data });
+export const civLiabilityAmend = (id: string, data: Record<string, unknown>) => prpc<boolean>("custody_liability_amend", { p_id: id, p_data: data });
+export const civLiabilitySetVisibility = (id: string, show: boolean) => prpc<boolean>("custody_liability_set_visibility", { p_id: id, p_show: show });
+export const civLiabilitySetInternalNote = (id: string, note: string) => prpc<boolean>("custody_liability_set_internal_note", { p_id: id, p_note: note });
+export const civLiabilitySetStatus = (id: string, status: CivLiabilityStatus, note?: string) => prpc<boolean>("custody_liability_set_status", { p_id: id, p_status: status, p_note: note ?? null });
+export const civLiabilityAdminList = (f?: { status?: string; employee?: string; assignment?: string }) =>
+  prpc<CivLiability[]>("custody_liability_admin_list", { p_status: f?.status ?? null, p_employee: f?.employee ?? null, p_assignment: f?.assignment ?? null });
+export const civLiabilityMine = () => prpc<CivLiability[]>("custody_liability_my", {});
+export const civLiabilityEvents = (id: string) => prpc<CivLiabilityEvent[]>("custody_liability_events_list", { p_liab: id });
+export const civLiabilityEmployeeRespond = (id: string, action: "dispute" | "accept" | "comment", comment?: string) =>
+  prpc<boolean>("custody_liability_employee_respond", { p_id: id, p_action: action, p_comment: comment ?? null });
+export const civLiabilityAddEmployeeEvidence = (id: string, path: string, note?: string) =>
+  prpc<boolean>("custody_liability_add_employee_evidence", { p_id: id, p_path: path, p_note: note ?? null });
+
+// ─── P0-4 dashboard buckets + unified case timeline ───
+export interface CivDashboardBuckets {
+  pending_acceptance: number; active_issued: number; due_soon: number; overdue: number; return_requested: number;
+  under_inspection: number; rejected_return: number; disputed: number; recently_closed: number;
+  maintenance_required: number; damaged: number; missing: number;
+  liability_pending: number; liability_hidden: number; liability_visible: number; liability_disputed: number;
+}
+export const civDashboardBuckets = () => prpc<CivDashboardBuckets>("custody_dashboard_buckets", {});
+export interface CivTimelineEvent { ts: string; kind: string; event_type: string; detail: string | null; extra: string | null; actor_name: string | null }
+export const civCaseTimeline = (assignmentId: string) => prpc<CivTimelineEvent[]>("custody_case_timeline", { p_assignment: assignmentId });
+
 export function civListAssignments(filter?: { status?: string; employee_user_id?: string }): Promise<Result<CivAssignment[]>> {
   let q = `custody_inventory_assignments?is_deleted=eq.false&select=id,assignment_number,employee_user_id,employee_id,assignment_type,purpose,expected_return_at,issued_at,employee_confirmed_at,status,employee_note,custodian_note,ack_snapshot,ack_name&order=issued_at.desc&limit=500`;
   if (filter?.status) q += `&status=eq.${enc(filter.status)}`;

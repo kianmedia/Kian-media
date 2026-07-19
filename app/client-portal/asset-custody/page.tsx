@@ -8,6 +8,7 @@ import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import CustodyInventoryConsole from "@/components/portal/custody-inventory/CustodyInventoryConsole";
 import EmployeeSelfServiceCustody from "@/components/portal/custody-inventory/EmployeeSelfServiceCustody";
+import CustodyLiabilityEmployee from "@/components/portal/custody-inventory/CustodyLiabilityEmployee";
 
 export default function AssetCustodyPage() {
   const { t } = useI18n();
@@ -35,9 +36,13 @@ export default function AssetCustodyPage() {
             <h2 className="text-sm font-medium text-stone-400 mb-4">{t({ ar: "عهدتي (صرف/إرجاع)", en: "My custody (issue/return)" })}</h2>
             <EmployeeSelfServiceCustody />
           </div>
+          <CustodyLiabilityEmployee />
         </div>
       ) : isEmployee ? (
-        <EmployeeSelfServiceCustody />
+        <div className="space-y-6">
+          <EmployeeSelfServiceCustody />
+          <CustodyLiabilityEmployee />
+        </div>
       ) : (
         <div className="bg-stone-900 border border-stone-800 rounded-xl p-6 text-center">
           <p className="text-stone-300 text-sm">{t({ ar: "هذا النظام متاح لموظفي كيان فقط.", en: "This system is for Kian staff only." })}</p>

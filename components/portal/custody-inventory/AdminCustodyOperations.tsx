@@ -12,8 +12,10 @@ import {
   civAdminCustodyDashboard, civInspectReturn, civSignFiles, CIV_ASSETS_BUCKET,
   civAdminConfirmAssignment, civAdminStartReturn, civAdminResendConfirmation, civAdminCancelAssignment,
   civAdminStartInspection, civUploadEvidence, civAttachEvidence, civEvidencePath,
+  civCaseTimeline, type CivTimelineEvent,
   type CustodyDashboard, type CustodyDashRow, type CustodyDashItem, type CivInspectResult,
 } from "@/lib/portal/custodyInventory";
+import CustodyLiabilityAdmin from "@/components/portal/custody-inventory/CustodyLiabilityAdmin";
 
 // الحالة → عربي + لون
 const STATUS: Record<string, { ar: string; cls: string }> = {
@@ -451,9 +453,57 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
                   </>}
             </section>
           )}
+          {/* P0-2/P0-3: liability / repair / compensation for this case */}
+          <section>
+            <h3 className="text-xs font-medium text-stone-400 mb-2">الالتزامات والتعويضات</h3>
+            <CustodyLiabilityAdmin assignmentId={r.custody_id} employeeUserId={r.employee_user_id} />
+          </section>
+
+          {/* P0-4: unified case timeline */}
+          <CaseTimeline assignmentId={r.custody_id} />
+
           <p className="text-[10px] text-stone-600">الإجراءات المالية واعتماد المسؤولية لا يعتمدها أمين العهدة منفردًا — تُنفَّذ عبر الإدارة/المالية.</p>
         </div>
       </div>
     </div>
+  );
+}
+
+// P0-4: unified case timeline (movements + liability events), chronological.
+const TL_AR: Record<string, string> = {
+  issue_to_employee: "صرف للموظف", employee_confirmed: "تأكيد الموظف", return_requested: "طلب إرجاع",
+  return_to_stock: "إرجاع للمخزون", partial_return: "إرجاع جزئي", transfer_to_maintenance: "تحويل للصيانة",
+  lost: "مفقود", created: "إنشاء التزام", status_changed: "تغيير حالة الالتزام", amended: "تعديل الالتزام",
+  shown_to_employee: "إظهار للموظف", hidden_from_employee: "إخفاء عن الموظف", employee_disputed: "اعتراض الموظف",
+  employee_evidence_added: "دليل من الموظف",
+};
+function CaseTimeline({ assignmentId }: { assignmentId: string }) {
+  const [tl, setTl] = useState<CivTimelineEvent[] | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (open && tl === null) void civCaseTimeline(assignmentId).then((r) => setTl(r.ok ? r.data : [])); }, [open, tl, assignmentId]);
+  return (
+    <section>
+      <button onClick={() => setOpen((v) => !v)} className="text-xs font-medium text-stone-400 mb-2 flex items-center gap-1">
+        {open ? "▾" : "▸"} الجدول الزمني للحالة
+      </button>
+      {open && (
+        <div className="space-y-1.5">
+          {tl === null ? <div className="text-[11px] text-stone-500">جارٍ التحميل…</div>
+            : tl.length === 0 ? <div className="text-[11px] text-stone-500">لا أحداث.</div>
+            : tl.map((e, i) => (
+              <div key={i} className="flex items-start gap-2 text-[11px]">
+                <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${e.kind === "liability" ? "bg-amber-400" : "bg-sky-400"}`} />
+                <div className="min-w-0">
+                  <span className="text-stone-200">{TL_AR[e.event_type] ?? e.event_type}</span>
+                  {e.extra && <span className="text-stone-500"> · {e.extra}</span>}
+                  {e.detail && <span className="text-stone-400"> — {e.detail}</span>}
+                  <span className="text-stone-600" dir="ltr"> · {formatRiyadh(e.ts)}</span>
+                  {e.actor_name && <span className="text-stone-600"> · {e.actor_name}</span>}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+    </section>
   );
 }

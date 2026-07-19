@@ -8,11 +8,13 @@ import CustodyQrLabels from "@/components/portal/custody-inventory/CustodyQrLabe
 import AssetDetailModal from "@/components/portal/custody-inventory/AssetDetailModal";
 import CustodyPhotoCompletion from "@/components/portal/custody-inventory/CustodyPhotoCompletion";
 import AdminCustodyOperations from "@/components/portal/custody-inventory/AdminCustodyOperations";
+import CustodyLiabilityAdmin from "@/components/portal/custody-inventory/CustodyLiabilityAdmin";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
   civSaveAssetPhoto,
   civSignFiles, civUpsertCategory, civArchiveCategory, civUpsertLocation,
   civArchiveLocation, civCreateAssignment, civListEligibleEmployees, civListAssignments, civListAssignmentItems, civListEvidence,
+  civDashboardBuckets, type CivDashboardBuckets,
   civEvidencePath, civUploadEvidence, civAttachEvidence, civInspectReturn, civOpenMaintenance, civCloseMaintenance,
   civListMaintenance, civStartAudit, civListAudits, civListAuditItems, civCountAuditItem, civApproveAudit,
   civGetReport, civGetSettings, civUpdateSettings, civEmitEvent, DEFAULT_CIV_SETTINGS,
@@ -29,11 +31,12 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const th = "text-right text-[11px] text-stone-500 font-medium px-2 py-1.5";
 const td = "text-right text-xs text-stone-300 px-2 py-1.5 border-t border-stone-800";
 
-type Tab = "dashboard" | "assets" | "photos" | "qr" | "categories" | "locations" | "issue" | "custody" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
+type Tab = "dashboard" | "assets" | "photos" | "qr" | "categories" | "locations" | "issue" | "custody" | "liability" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
 const TABS: { k: Tab; ar: string; adminOnly?: boolean }[] = [
   { k: "dashboard", ar: "لوحة" }, { k: "assets", ar: "الأصول" }, { k: "photos", ar: "استكمال الصور", adminOnly: true },
   { k: "qr", ar: "QR والملصقات" }, { k: "categories", ar: "التصنيفات" },
   { k: "locations", ar: "المواقع" }, { k: "issue", ar: "صرف عهدة" }, { k: "custody", ar: "العهد والإرجاع" },
+  { k: "liability", ar: "الالتزامات" },
   { k: "maintenance", ar: "الصيانة" }, { k: "audits", ar: "الجرد" }, { k: "reports", ar: "التقارير" },
   { k: "enterprise", ar: "مزايا المنصّة" }, { k: "settings", ar: "الإعدادات" },
 ];
@@ -113,6 +116,7 @@ export default function CustodyInventoryConsole() {
       {tab === "locations" && <LocationsTab {...{ locs, busy, setBusy, flash, err, t, reload: loadRefs }} />}
       {tab === "issue" && <IssueTab {...{ assets, staff, busy, setBusy, flash, err, t, onDone: () => setTab("custody") }} />}
       {tab === "custody" && <AdminCustodyOperations />}
+      {tab === "liability" && <CustodyLiabilityAdmin />}
       {tab === "maintenance" && <MaintenanceTab {...{ assets, busy, setBusy, flash, err, t }} />}
       {tab === "audits" && <AuditsTab {...{ locs, busy, setBusy, flash, err, t }} />}
       {tab === "reports" && <ReportsTab {...{ busy, setBusy, flash, err, t }} />}
@@ -150,13 +154,53 @@ function DashboardTab({ dash, onGo, t }: { dash: CivDashboard | null; onGo: (k: 
   ] : [];
   if (!dash) return <div className={card}><p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p></div>;
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {cards.map((c) => (
-        <button key={c.label} onClick={() => c.go && onGo(c.go)} className={`${card} text-right ${c.go ? "hover:border-red-700" : ""}`}>
-          <div className="text-2xl font-semibold text-white">{c.value}</div>
-          <div className="text-[11px] text-stone-400 mt-1">{c.label}</div>
-        </button>
-      ))}
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {cards.map((c) => (
+          <button key={c.label} onClick={() => c.go && onGo(c.go)} className={`${card} text-right ${c.go ? "hover:border-red-700" : ""}`}>
+            <div className="text-2xl font-semibold text-white">{c.value}</div>
+            <div className="text-[11px] text-stone-400 mt-1">{c.label}</div>
+          </button>
+        ))}
+      </div>
+      <CustodyBuckets onGo={onGo} />
+    </div>
+  );
+}
+
+// P0-4: custody-operations status buckets (incl. liability) from custody_dashboard_buckets.
+function CustodyBuckets({ onGo }: { onGo: (k: Tab) => void }) {
+  const [b, setB] = useState<CivDashboardBuckets | null>(null);
+  useEffect(() => { void civDashboardBuckets().then((r) => { if (r.ok) setB(r.data); }); }, []);
+  if (!b) return null;
+  const items: { label: string; value: number; go?: Tab; warn?: boolean }[] = [
+    { label: "بانتظار قبول الموظف", value: b.pending_acceptance, go: "custody" },
+    { label: "عهد نشطة", value: b.active_issued, go: "custody" },
+    { label: "يقترب موعدها", value: b.due_soon, go: "custody" },
+    { label: "متأخرة", value: b.overdue, go: "custody", warn: b.overdue > 0 },
+    { label: "طلبات إرجاع", value: b.return_requested, go: "custody" },
+    { label: "قيد الفحص", value: b.under_inspection, go: "custody" },
+    { label: "إرجاع مرفوض", value: b.rejected_return, go: "custody" },
+    { label: "صيانة مطلوبة", value: b.maintenance_required, go: "maintenance" },
+    { label: "تالف", value: b.damaged },
+    { label: "مفقود", value: b.missing, warn: b.missing > 0 },
+    { label: "التزامات معلّقة", value: b.liability_pending, go: "liability" },
+    { label: "التزامات مخفية عن الموظف", value: b.liability_hidden, go: "liability" },
+    { label: "التزامات مرئية للموظف", value: b.liability_visible, go: "liability" },
+    { label: "التزامات متنازع عليها", value: b.liability_disputed, go: "liability", warn: b.liability_disputed > 0 },
+    { label: "أُغلقت مؤخرًا", value: b.recently_closed, go: "custody" },
+  ];
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-stone-500 mb-2">حالة عمليات العهد</div>
+      <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+        {items.map((it) => (
+          <button key={it.label} onClick={() => it.go && onGo(it.go)} className={`rounded-lg border p-2.5 text-right ${it.warn ? "border-red-700/60 bg-red-900/10" : "border-stone-700 bg-stone-800/40"} ${it.go ? "hover:border-red-700" : ""}`}>
+            <div className={`text-lg font-semibold ${it.warn ? "text-red-300" : "text-white"}`}>{it.value}</div>
+            <div className="text-[10px] text-stone-400 mt-0.5">{it.label}</div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
