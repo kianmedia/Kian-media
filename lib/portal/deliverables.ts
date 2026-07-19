@@ -152,6 +152,15 @@ export function downloadState(deliverableId: string): Promise<Result<DownloadSta
   return prpc<DownloadState>("deliverable_download_state", { p_deliverable: deliverableId });
 }
 
+// ─── P0-1 client final-receipt confirmation ("تأكيد استلام الملفات النهائية") ───
+export interface ReceiptState { confirmed: boolean; received_at: string | null; received_by_name: string | null }
+export function confirmFinalReceipt(deliverableId: string, name?: string, note?: string): Promise<Result<{ ok: boolean; received_at: string }>> {
+  return prpc<{ ok: boolean; received_at: string }>("client_confirm_final_receipt", { p_deliverable: deliverableId, p_name: name ?? null, p_note: note ?? null });
+}
+export function deliverableReceipt(deliverableId: string): Promise<Result<ReceiptState>> {
+  return prpc<ReceiptState>("deliverable_receipt", { p_deliverable: deliverableId });
+}
+
 // ─── §2 true versioning ───
 export interface VersionSummary {
   id: string; version_no: number; label: string;

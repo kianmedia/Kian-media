@@ -17,7 +17,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { paymentCleared, downloadState, type DownloadState } from "@/lib/portal/deliverables";
+import { paymentCleared, downloadState, confirmFinalReceipt, deliverableReceipt, type DownloadState, type ReceiptState } from "@/lib/portal/deliverables";
 import { getValidSession } from "@/lib/portalAuth";
 import { canApprove } from "@/lib/portal/projects";
 import { DLV_STATUS_LABELS } from "@/components/portal/projectMeta";
@@ -117,7 +117,7 @@ export default function DeliverableReview({
 
               {/* §2/§3 — version lineage: preview each version (watermarked, no
                   download), review the CURRENT version, and comment/annotate. */}
-              <VersionHistory deliverable={d} mode="client" owner={owner} canReview={owner} onChanged={onChanged} />
+              <VersionHistory deliverable={d} mode="client" owner={owner} canReview={owner} onChanged={onChanged} stamp={{ projectName }} />
 
               {/* client_review + not owner → explain who can act */}
               {!owner && d.status === "client_review" && (
@@ -148,6 +148,7 @@ export default function DeliverableReview({
                 <StateBox tone="ok">
                   <div style={{ fontWeight: 600, marginBottom: "8px" }}>{t({ ar: "تم تسليم النسخة النهائية.", en: "Final version delivered." })}</div>
                   <FinalDownload d={d} dlState={dlStates[d.id]} busy={dlBusy === d.id} onDownload={() => download(d)} t={t} />
+                  {owner && <ReceiptConfirm deliverableId={d.id} t={t} />}
                 </StateBox>
               )}
 
@@ -157,6 +158,47 @@ export default function DeliverableReview({
         })}
       </div>
 
+    </div>
+  );
+}
+
+// P0-1: explicit client receipt confirmation of the final files. Shown to the
+// client account owner once the deliverable is final_delivered. Stores received_at
+// + client identity (server-side) and notifies Admin/Owner. Idempotent.
+function ReceiptConfirm({ deliverableId, t }: { deliverableId: string; t: (m: { ar: string; en: string }) => string }) {
+  const [state, setState] = useState<ReceiptState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [name, setName] = useState("");
+  useEffect(() => { let alive = true; void deliverableReceipt(deliverableId).then((r) => { if (alive && r.ok) setState(r.data); }); return () => { alive = false; }; }, [deliverableId]);
+  async function submit() {
+    if (busy) return; setBusy(true);
+    const r = await confirmFinalReceipt(deliverableId, name.trim() || undefined);
+    setBusy(false);
+    if (r.ok) { setConfirming(false); const s = await deliverableReceipt(deliverableId); if (s.ok) setState(s.data); }
+  }
+  if (state?.confirmed) {
+    return (
+      <div className="f-sans" style={{ fontSize: "11.5px", color: "#7CFC9A", marginTop: "10px", lineHeight: 1.6 }}>
+        ✓ {t({ ar: "تم تأكيد استلام الملفات النهائية", en: "Final files receipt confirmed" })}
+        {state.received_at && <span dir="ltr" style={{ color: "rgba(255,255,255,0.5)" }}> · {new Date(state.received_at).toLocaleString("en-GB")}</span>}
+      </div>
+    );
+  }
+  if (!confirming) {
+    return (
+      <button onClick={() => setConfirming(true)} className="f-sans" style={{ marginTop: "10px", fontSize: "12px", color: "#fff", background: "rgba(124,252,154,0.14)", border: "1px solid rgba(124,252,154,0.4)", borderRadius: "4px", padding: "8px 12px", cursor: "pointer" }}>
+        {t({ ar: "تأكيد استلام الملفات النهائية", en: "Confirm receipt of final files" })}
+      </button>
+    );
+  }
+  return (
+    <div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t({ ar: "اسمك (اختياري)", en: "Your name (optional)" })} className="f-sans" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: "3px", padding: "8px 10px", color: "#fff", fontSize: "12.5px", outline: "none" }} />
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={busy} className="btn-red" style={{ opacity: busy ? 0.6 : 1 }}>{busy ? "..." : t({ ar: "أؤكّد الاستلام", en: "I confirm receipt" })}</button>
+        <button onClick={() => setConfirming(false)} disabled={busy} className="f-sans" style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)", background: "none", border: "1px solid rgba(255,255,255,0.16)", borderRadius: "4px", padding: "0 12px", cursor: "pointer" }}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+      </div>
     </div>
   );
 }

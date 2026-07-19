@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { listVersionSummary, addDeliverableVersion, reviewVersion, setFinalVersion, type VersionSummary } from "@/lib/portal/deliverables";
 import AnnotationViewer from "@/components/portal/AnnotationViewer";
+import { type WatermarkStamp } from "@/components/portal/PreviewWatermark";
 
 const DECISION = {
   pending: { ar: "بانتظار المراجعة", en: "Pending", c: "rgba(255,255,255,0.5)" },
@@ -22,9 +23,9 @@ const DECISION = {
 };
 
 export default function VersionHistory({
-  deliverable, mode, owner, canReview, onChanged,
+  deliverable, mode, owner, canReview, onChanged, stamp,
 }: {
-  deliverable: { id: string; type: string; status: string; preview_url: string | null; vimeo_review_url?: string | null }; mode: "client" | "admin"; owner?: boolean; canReview?: boolean; onChanged?: () => void;
+  deliverable: { id: string; type: string; status: string; preview_url: string | null; vimeo_review_url?: string | null }; mode: "client" | "admin"; owner?: boolean; canReview?: boolean; onChanged?: () => void; stamp?: WatermarkStamp;
 }) {
   const { t } = useI18n();
   const [versions, setVersions] = useState<VersionSummary[]>([]);
@@ -169,6 +170,7 @@ export default function VersionHistory({
           deliverableId={deliverable.id} version={viewing} deliverableType={deliverable.type}
           canComment={mode === "client" && !!owner && (deliverable.status === "client_review" || deliverable.status === "revision_requested")}
           canResolve={mode === "admin"}
+          stamp={stamp}
           onClose={() => { setViewing(null); void load(); }} />
       )}
     </div>

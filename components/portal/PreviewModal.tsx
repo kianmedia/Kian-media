@@ -10,6 +10,7 @@
 // cannot prevent screen recording or technical capture. No download control.
 // ════════════════════════════════════════════════════════════════════════
 import { useI18n } from "@/lib/i18n";
+import PreviewWatermark from "@/components/portal/PreviewWatermark";
 
 type Kind = "youtube" | "vimeo" | "image" | "video" | "pdf" | "office" | "external";
 
@@ -36,22 +37,7 @@ function classify(raw: string | null): { kind: Kind; src: string | null } {
   } catch { return { kind: "external", src: raw }; }
 }
 
-function Watermark() {
-  return (
-    <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 5, overflow: "hidden" }}>
-      {/* corner logo + label */}
-      <div style={{ position: "absolute", top: "10px", insetInlineStart: "12px", display: "flex", alignItems: "center", gap: "8px", opacity: 0.5 }}>
-        <img src="/logo.png" alt="" style={{ width: "26px", height: "26px", objectFit: "contain" }} />
-        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "2px", color: "rgba(255,255,255,0.75)", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>KIAN MEDIA PRODUCTION</span>
-      </div>
-      {/* center diagonal watermark (kept above the bottom control bar) */}
-      <div style={{ position: "absolute", top: "42%", left: 0, right: 0, textAlign: "center", transform: "rotate(-18deg)", opacity: 0.16 }}>
-        <div className="f-display" style={{ fontSize: "clamp(22px,5vw,46px)", letterSpacing: "6px", color: "#fff", lineHeight: 1.1 }}>KIAN MEDIA</div>
-        <div className="f-sans" style={{ fontSize: "clamp(13px,3vw,24px)", letterSpacing: "4px", color: "#fff" }}>كيان · نسخة معاينة</div>
-      </div>
-    </div>
-  );
-}
+const Watermark = PreviewWatermark;   // P0-1: full-coverage repeated diagonal watermark (shared)
 
 export default function PreviewModal({ title, url, onClose }: { title: string; url: string | null; onClose: () => void }) {
   const { t } = useI18n();

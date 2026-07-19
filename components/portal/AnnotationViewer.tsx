@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { listCommentsForVersion, addComment, resolveNote, secondsToTimecode, type VersionSummary } from "@/lib/portal/deliverables";
 import type { ClientComment } from "@/lib/portal/types";
+import PreviewWatermark, { type WatermarkStamp } from "@/components/portal/PreviewWatermark";
 
 type Kind = "youtube" | "vimeo" | "image" | "video" | "pdf" | "office" | "external" | "invalid";
 function classify(raw: string | null, hint?: string): { kind: Kind; src: string | null } {
@@ -33,26 +34,16 @@ function classify(raw: string | null, hint?: string): { kind: Kind; src: string 
   } catch { return { kind: "invalid", src: null }; }
 }
 
-function Watermark() {
-  return (
-    <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 5, overflow: "hidden" }}>
-      <div style={{ position: "absolute", top: 10, insetInlineStart: 12, display: "flex", alignItems: "center", gap: 8, opacity: 0.5 }}>
-        <img src="/logo.png" alt="" style={{ width: 24, height: 24, objectFit: "contain" }} />
-        <span className="f-sans" style={{ fontSize: 10, letterSpacing: 2, color: "rgba(255,255,255,0.75)", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>KIAN MEDIA</span>
-      </div>
-      <div style={{ position: "absolute", top: "44%", left: 0, right: 0, textAlign: "center", transform: "rotate(-18deg)", opacity: 0.14 }}>
-        <div className="f-display" style={{ fontSize: "clamp(20px,5vw,42px)", letterSpacing: 6, color: "#fff" }}>KIAN · نسخة معاينة</div>
-      </div>
-    </div>
-  );
-}
-
 export default function AnnotationViewer({
-  deliverableId, version, deliverableType, canComment, canResolve = false, onClose,
+  deliverableId, version, deliverableType, canComment, canResolve = false, onClose, stamp,
 }: {
   deliverableId: string; version: VersionSummary; deliverableType: string; canComment: boolean; canResolve?: boolean; onClose: () => void;
+  stamp?: WatermarkStamp;
 }) {
   const { t } = useI18n();
+  // P0-1: full-coverage repeated diagonal watermark, stamped with client/project
+  // identity where the caller supplies it (makes a captured frame traceable).
+  const wm = <PreviewWatermark {...(stamp ?? {})} />;
   const raw = version.vimeo_review_url || version.preview_url;
   const { kind, src } = classify(raw, version.preview_type);
   const [comments, setComments] = useState<ClientComment[]>([]);
@@ -111,12 +102,12 @@ export default function AnnotationViewer({
             {kind === "youtube" || kind === "vimeo" ? (
               <div style={{ position: "relative", paddingBottom: "56.25%", height: 0 }}>
                 <iframe src={src!} title={version.label} allow="encrypted-media; picture-in-picture; fullscreen" allowFullScreen style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0 }} />
-                <Watermark />
+                {wm}
               </div>
             ) : kind === "video" ? (
               <div style={{ position: "relative" }}>
                 <video ref={videoRef} src={src!} controls controlsList="nodownload noplaybackrate" disablePictureInPicture onContextMenu={(e) => e.preventDefault()} style={{ display: "block", width: "100%", maxHeight: "70vh", background: "#000" }} />
-                <Watermark />
+                {wm}
               </div>
             ) : kind === "image" ? (
               <div ref={imgWrapRef} onClick={onImageClick} style={{ position: "relative", cursor: canComment ? "crosshair" : "default" }}>
@@ -125,26 +116,26 @@ export default function AnnotationViewer({
                   <span key={c.id} title={c.body} style={{ position: "absolute", left: `${(c.pos_x ?? 0) * 100}%`, top: `${(c.pos_y ?? 0) * 100}%`, transform: "translate(-50%,-50%)", width: 22, height: 22, borderRadius: "50%", background: activeMarker === c.id ? "#fff" : "#E31E24", color: activeMarker === c.id ? "#E31E24" : "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff", zIndex: 6, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>{i + 1}</span>
                 ))}
                 {pin && <span style={{ position: "absolute", left: `${pin.x * 100}%`, top: `${pin.y * 100}%`, transform: "translate(-50%,-50%)", width: 22, height: 22, borderRadius: "50%", background: "rgba(255,210,138,0.9)", border: "2px dashed #fff", zIndex: 7 }} />}
-                <Watermark />
+                {wm}
               </div>
             ) : kind === "pdf" ? (
               <div style={{ position: "relative" }} onContextMenu={(e) => e.preventDefault()}>
                 <iframe src={page ? `${src}&page=${page}` : src!} title={version.label} style={{ display: "block", width: "100%", height: "70vh", border: 0, background: "#fff" }} />
-                <Watermark />
+                {wm}
               </div>
             ) : kind === "invalid" ? (
               <div className="text-center" style={{ position: "relative", padding: "48px 24px" }}>
                 <div style={{ fontSize: 30, marginBottom: 8 }}>⚠️</div>
                 <p style={{ fontSize: "14px", fontWeight: 700, color: "#ff8a8e" }}>{t({ ar: "رابط المعاينة غير صالح", en: "Preview link is invalid" })}</p>
                 <p className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.7, marginTop: 6 }}>{t({ ar: "لا يوجد رابط معاينة صالح لهذه النسخة. يرجى من فريق كيان إضافة رابط معاينة صحيح.", en: "This version has no valid preview link. Kian staff should attach a correct preview URL." })}</p>
-                <Watermark />
+                {wm}
               </div>
             ) : (
               <div className="text-center" style={{ position: "relative", padding: "48px 24px" }}>
                 <div style={{ fontSize: 30, marginBottom: 8 }}>📄</div>
                 <p style={{ fontSize: "14px", fontWeight: 700, color: "rgba(255,210,138,0.95)" }}>{t({ ar: "هذا الملف يحتاج معاينة مُولّدة", en: "This file requires a generated preview" })}</p>
                 <p className="text-white/55" style={{ fontSize: "12.5px", lineHeight: 1.7, marginTop: 6 }}>{t({ ar: "ملفات Office/الملفات غير القابلة للعرض المباشر تُعرض عبر نسخة PDF محمية — ولا يُكشف الرابط الأصلي. يمكن للفريق رفع نسخة معاينة (PDF/صورة/فيديو).", en: "Office and non-embeddable files display via a protected PDF derivative — the original URL is never exposed. Staff can upload a preview (PDF/image/video)." })}</p>
-                <Watermark />
+                {wm}
               </div>
             )}
           </div>
