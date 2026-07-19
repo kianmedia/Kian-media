@@ -18,8 +18,13 @@
 --   • The email block is nested-exception-isolated AND the whole function keeps its
 --     outer exception→return guard, so neither a missing outbox nor an email error
 --     can ever break the custody/inventory transaction.
---   • Only the operational bilingual message (assignment no. / status) is emailed —
---     never admin_note_internal or any financial/liability figure.
+--   • Financial safety: civ_notify is a SHARED helper — the RENTAL subsystem calls
+--     it with a monetary amount in the message (e.g. 'rental_charges_pending …
+--     بمبلغ <total>'). So this email path EXCLUDES every rental_% event (rental has
+--     its own notification channel), and the custody/asset messages it does email
+--     are status/assignment-number text with NO amounts (verified). admin_note_internal
+--     is never in these messages. Any FUTURE amount-bearing custody notification
+--     (e.g. the P0-4 liability module) must NOT put the figure in a civ_notify message.
 --   • Guarded by to_regprocedure: no-op (portal-only, as before) if the outbox
 --     helper isn't installed yet.
 --
@@ -49,8 +54,12 @@ begin
   if p_recipient is null then return; end if;
   perform public.notify(p_recipient, 'user', p_type, 'custody_inventory', p_entity, p_ar, p_en);
   -- P0-5: durable email via the existing outbox — fully isolated (best-effort).
+  -- EXCLUDE rental_% events: civ_notify is shared and rental messages embed a money
+  -- amount ('… بمبلغ <total>'), which must not leave the portal in plaintext email;
+  -- rental has its own channel. Remaining custody/asset messages carry no figure.
   begin
-    if to_regprocedure('public.nt_enqueue_email(text,text,text,text)') is not null then
+    if coalesce(left(p_type, 7), '') <> 'rental_'
+       and to_regprocedure('public.nt_enqueue_email(text,text,text,text)') is not null then
       select email into v_email from public.profiles
         where id = p_recipient and account_status <> 'blocked';
       if v_email is not null and position('@' in v_email) > 0 then
