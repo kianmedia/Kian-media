@@ -41,6 +41,57 @@ end $pf$;
 
 begin;
 
+-- ── §0 RETURN-TYPE COMPATIBILITY — diagnostic + guarded self-heal ────────────
+-- PostgreSQL forbids CREATE OR REPLACE FUNCTION when the RETURN TYPE differs from an
+-- existing same-signature function (SQLSTATE 42P13). This block runs BEFORE any of the
+-- CREATE OR REPLACE statements below and:
+--   (a) DIAGNOSTIC — RAISE NOTICE for every function this migration (re)creates,
+--       reporting existing return type vs intended (and whether it's absent).
+--   (b) SELF-HEAL — for a TRUE mismatch only, DROP that exact signature (never CASCADE)
+--       so the CREATE below can recreate it. On a correctly-migrated DB every type
+--       already matches → NOTHING is dropped, and rerunning is a no-op.
+-- Intended return types (verified against each function's shipped definition):
+--   pc_authz/custody_authz/pp_can = boolean (NEW here) · preproduction_upsert =
+--   preproduction_items · preproduction_delete = boolean · preproduction_restore /
+--   set_active / internal_approve = void · custody_inv_admin_archive/restore_asset_file
+--   = boolean.  Only preproduction_delete ever differed (a prior draft used void).
+do $rt$
+declare
+  sigs text[] := array[
+    'public.pc_authz(uuid,text)',
+    'public.custody_authz(text)',
+    'public.pp_can(uuid,text)',
+    'public.preproduction_upsert(uuid,jsonb)',
+    'public.preproduction_delete(uuid,text)',
+    'public.preproduction_restore(uuid)',
+    'public.preproduction_set_active(uuid,boolean)',
+    'public.preproduction_internal_approve(uuid)',
+    'public.custody_inv_admin_archive_asset_file(uuid,text)',
+    'public.custody_inv_admin_restore_asset_file(uuid)'
+  ];
+  wants text[] := array[
+    'boolean','boolean','boolean','preproduction_items','boolean',
+    'void','void','void','boolean','boolean'
+  ];
+  i int; oid_ regprocedure; cur text; want text;
+begin
+  for i in 1 .. array_length(sigs, 1) loop
+    oid_ := to_regprocedure(sigs[i]);
+    want := lower(wants[i]);
+    if oid_ is null then
+      raise notice 'ℹ %  → absent (will be created), intended=%', sigs[i], want;
+    else
+      cur := lower(regexp_replace(pg_get_function_result(oid_), '^public\.', ''));
+      if cur = want then
+        raise notice '✓ %  → return type OK (%)', sigs[i], cur;
+      else
+        raise notice '⚠ %  → INCOMPATIBLE return type existing=% intended=% → dropping (no CASCADE) to allow recreate', sigs[i], cur, want;
+        execute format('drop function if exists %s', sigs[i]);
+      end if;
+    end if;
+  end loop;
+end $rt$;
+
 -- ── Canonical authorization helpers ─────────────────────────────────────────
 -- Project modules: full-access OR (member holding the granular permission).
 create or replace function public.pc_authz(p_project uuid, p_key text)
@@ -131,15 +182,24 @@ end $$;
 
 -- delete/restore → preproduction.delete · duplicate → create · set_active → edit
 -- comment → comment · internal_approve → internal_approve
+-- NOTE: returns BOOLEAN (not void) — the shipped preproduction_center_RUNME.sql
+-- defined this as returns boolean, and the caller (lib/portal/preproduction.ts
+-- deletePreproItem → prpc<boolean>) is typed on it. Keeping boolean means this is a
+-- pure CREATE OR REPLACE with NO return-type change → no 42P13, no DROP on the normal
+-- path. (An earlier draft used void, which caused the production 42P13; the §0 block
+-- above self-heals any DB left in that void state.)
 create or replace function public.preproduction_delete(p_id uuid, p_reason text)
-returns void language plpgsql security definer set search_path = public as $$
+returns boolean language plpgsql security definer set search_path = public as $$
 declare v_proj uuid;
 begin
   select project_id into v_proj from public.preproduction_items where id = p_id and is_deleted = false;
   if v_proj is null then raise exception 'not_found'; end if;
   if not public.pp_can(v_proj, 'preproduction.delete') then raise exception 'not authorized'; end if;
-  update public.preproduction_items set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(), delete_reason = nullif(btrim(p_reason),''), updated_at = now() where id = p_id;
+  if coalesce(btrim(p_reason),'') = '' then raise exception 'reason_required'; end if;  -- restore shipped guard (was in preproduction_center); only the authz check is intentionally narrowed
+  update public.preproduction_items set is_deleted = true, deleted_at = now(), deleted_by = auth.uid(),
+    delete_reason = left(btrim(p_reason),500), updated_at = now() where id = p_id;
   perform public.log_activity(auth.uid(), 'admin', 'preproduction.deleted', 'project', v_proj, jsonb_build_object('id', p_id));
+  return true;
 end $$;
 
 create or replace function public.preproduction_restore(p_id uuid)
@@ -223,11 +283,38 @@ create policy "civ assets bucket delete" on storage.objects for delete to authen
   using (bucket_id = 'custody-inventory-assets'
          and (public.civ_can_admin() or public.emp_has_permission(auth.uid(), 'custody.delete_asset_images')));
 
+-- Re-assert EXECUTE grants on every function this migration (re)creates. Idempotent on
+-- the normal CREATE OR REPLACE path (grants were preserved there); REQUIRED on the §0
+-- self-heal path, where a dropped+recreated function would otherwise lose its grants.
+-- Matches each function's original grant (revoke public/anon; execute → authenticated —
+-- the SECURITY DEFINER bodies self-check authorization internally). The 3 NEW helpers
+-- (pc_authz/custody_authz/pp_can) are granted at their definitions above.
+do $g2$
+declare f text;
+begin
+  foreach f in array array[
+    'public.preproduction_upsert(uuid,jsonb)',
+    'public.preproduction_delete(uuid,text)',
+    'public.preproduction_restore(uuid)',
+    'public.preproduction_set_active(uuid,boolean)',
+    'public.preproduction_internal_approve(uuid)',
+    'public.custody_inv_admin_archive_asset_file(uuid,text)',
+    'public.custody_inv_admin_restore_asset_file(uuid)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $g2$;
+
 do $v$
 begin
   if to_regprocedure('public.pc_authz(uuid,text)') is null then raise exception 'فشل: pc_authz'; end if;
   if to_regprocedure('public.custody_authz(text)') is null then raise exception 'فشل: custody_authz'; end if;
   if to_regprocedure('public.pp_can(uuid,text)')   is null then raise exception 'فشل: pp_can'; end if;
+  -- Post-heal grant assertion: preproduction_delete must be callable by authenticated
+  -- (proves the §0 drop→recreate path, if it ran, restored EXECUTE).
+  if not has_function_privilege('authenticated', 'public.preproduction_delete(uuid,text)', 'execute')
+    then raise exception 'فشل: preproduction_delete غير ممنوح execute لـ authenticated'; end if;
 end $v$;
 
 notify pgrst, 'reload schema';
