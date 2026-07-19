@@ -16,6 +16,7 @@ import {
   type CustodyDashboard, type CustodyDashRow, type CustodyDashItem, type CivInspectResult,
 } from "@/lib/portal/custodyInventory";
 import CustodyLiabilityAdmin from "@/components/portal/custody-inventory/CustodyLiabilityAdmin";
+import CustodyEvidenceComparison from "@/components/portal/custody-inventory/CustodyEvidenceComparison";
 
 // الحالة → عربي + لون
 const STATUS: Record<string, { ar: string; cls: string }> = {
@@ -419,6 +420,14 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
               ))}
             </div>
           </section>
+
+          {/* P0: مقارنة الأدلة (مسجّلة/صرف/إرجاع/فحص) — أثناء طلب الإرجاع/الفحص */}
+          {["return_requested", "under_inspection", "partially_returned", "returned"].includes(r.status) && (
+            <section>
+              <h3 className="text-xs font-medium text-stone-400 mb-2">مقارنة الأدلة</h3>
+              <CustodyEvidenceComparison assignmentId={r.custody_id} />
+            </section>
+          )}
 
           {/* إجراءات إدارية حسب الحالة */}
           {(r.status === "pending_employee_confirmation" || r.status === "active") && (

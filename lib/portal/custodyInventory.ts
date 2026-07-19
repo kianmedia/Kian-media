@@ -130,6 +130,31 @@ export const civLiabilityEmployeeRespond = (id: string, action: "dispute" | "acc
 export const civLiabilityAddEmployeeEvidence = (id: string, path: string, note?: string) =>
   prpc<boolean>("custody_liability_add_employee_evidence", { p_id: id, p_path: path, p_note: note ?? null });
 
+// ─── P0 custody return-inspection evidence bundle (4 groups per asset) ───
+export interface CivEvidenceImage {
+  id?: string; stage?: string; scope?: "per_asset" | "overall"; bucket: string; path: string;
+  name: string | null; mime: string | null; size: number | null; note?: string | null; description?: string | null;
+  is_primary?: boolean; uploaded_at: string | null; uploaded_by_name: string | null; uploaded_by_role: "employee" | "staff" | null;
+}
+export interface CivEvidenceItem {
+  item_id: string; asset_id: string; asset_code: string; asset_name: string; serial_number: string | null; qr_code_value: string | null;
+  brand: string | null; model: string | null; registered_condition: string | null; category: string | null;
+  quantity: number; quantity_returned: number; item_status: string;
+  condition_at_issue: string | null; issue_notes: string | null; condition_at_return: string | null; return_notes: string | null; returned_at: string | null;
+  registered_images: CivEvidenceImage[]; issue_images: CivEvidenceImage[]; return_images: CivEvidenceImage[]; inspection_images: CivEvidenceImage[];
+}
+export interface CivEvidenceBundle {
+  assignment: {
+    id: string; number: string; status: string; assignment_type: string; employee_user_id: string; employee_name: string | null;
+    project_name: string | null; issued_at: string; issued_by_name: string | null; accepted_at: string | null; ack_name: string | null; expected_return_at: string | null;
+  };
+  items: CivEvidenceItem[];
+  overall: { issue: CivEvidenceImage[]; return: CivEvidenceImage[]; inspection: CivEvidenceImage[] };
+  is_manager: boolean;
+}
+export const civEvidenceBundle = (assignmentId: string) => prpc<CivEvidenceBundle>("custody_inv_evidence_bundle", { p_assignment: assignmentId });
+export const civRequestMoreEvidence = (assignmentId: string, note: string) => prpc<boolean>("custody_inv_request_more_evidence", { p_assignment: assignmentId, p_note: note });
+
 // ─── P0-4 dashboard buckets + unified case timeline ───
 export interface CivDashboardBuckets {
   pending_acceptance: number; active_issued: number; due_soon: number; overdue: number; return_requested: number;
