@@ -286,18 +286,23 @@ function CustodyDrawer({ r, onClose, onChanged, flash }: { r: CustodyDashRow; on
       note: notes[i.item_id]?.trim() || undefined,
     }));
     if (items.length === 0) { flash("لا توجد بنود بحالة «طلب إرجاع» لفحصها."); return; }
-    // تحقّق مسبق (رسالة أوضح قبل رحلة الخادم): صورة فحص واحدة على الأقل عند وجود قبول
-    // (تُطابق شرط الخادم: أي دليل return_inspection — إجمالي أو لقطعة — يفي)، + صورة لكل قطعة متضرّرة.
+    // P0-6/P0-7: inspection photo is MANDATORY for the Custody Manager. Admin/Owner may
+    // decide WITHOUT a new photo but only with a decision reason (audited server-side).
     const hasAccept = items.some((it) => it.result !== "rejected_return");
     const anyInspectionPhoto = overallCount > 0 || Object.values(itemPhotos).some((n) => n > 0);
-    if (hasAccept && !anyInspectionPhoto) { flash("صورة فحص إجمالية إلزامية قبل الاعتماد."); return; }
     const needItemPhoto = items.find((it) => PHOTO_RESULTS.includes(it.result) && (itemPhotos[it.assignment_item_id] ?? 0) < 1);
-    if (needItemPhoto) { flash("صورة فحص إلزامية لكل قطعة بها ضرر/صيانة/فقد/إرجاع جزئي."); return; }
+    let reason: string | undefined;
+    if ((hasAccept && !anyInspectionPhoto) || needItemPhoto) {
+      const pr = window.prompt("لم تُرفع صورة فحص جديدة.\nأمين العهدة: الصورة إلزامية — ارفعها ثم أعد المحاولة.\nالإدارة/المالك: أدخل سبب القرار للمتابعة بصلاحية الإدارة (يُوثَّق). اتركه فارغًا للإلغاء:");
+      if (!pr || !pr.trim()) { flash("صورة الفحص إلزامية — أو أكمل بصلاحية الإدارة مع إدخال السبب."); return; }
+      reason = pr.trim();
+    }
     setBusy(true);
-    const res = await civInspectReturn(r.custody_id, items);
+    const res = await civInspectReturn(r.custody_id, items, reason);
     setBusy(false);
     if (!res.ok) { flash(mapInspectErr(res.error)); return; }
-    flash(res.data.closed ? "تم الفحص واكتمل إرجاع العهدة." : res.data.status === "partially_returned" ? "تم الفحص — إرجاع جزئي، تبقّت بنود." : res.data.status === "rejected" ? "أُعيد الطلب للموظف للاستكمال." : "تم تسجيل الفحص.");
+    if (res.data.photo_bypassed) flash("لم تُرفع صورة فحص جديدة — تم اتخاذ القرار بصلاحية الإدارة.");
+    else flash(res.data.closed ? "تم الفحص واكتمل إرجاع العهدة." : res.data.status === "partially_returned" ? "تم الفحص — إرجاع جزئي، تبقّت بنود." : res.data.status === "rejected" ? "أُعيد الطلب للموظف للاستكمال." : "تم تسجيل الفحص.");
     setInspecting(false);
     await onChanged();
     onClose();
