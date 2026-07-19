@@ -4,6 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { pget, ppost, prpc, enc, currentUserId, type Result } from "@/lib/portal/client";
+import { getValidSession, SUPABASE_URL, SUPABASE_KEY } from "@/lib/portalAuth";
 import type {
   ClientComment, Deliverable, DeliverableReview, ReviewDecision, SoftDeletableTable,
 } from "@/lib/portal/types";
@@ -181,6 +182,37 @@ export function reviewVersion(versionId: string, decision: "approved" | "revisio
 }
 export function setFinalVersion(deliverableId: string, versionId: string, finalUrl?: string): Promise<Result<boolean>> {
   return prpc<boolean>("admin_set_final_version", { p_deliverable: deliverableId, p_version: versionId, p_final_url: finalUrl ?? null });
+}
+
+// ─── P0-1 clean-final master (private project-deliverables bucket) ───
+export interface FinalMasterState {
+  has_final: boolean; version_id?: string; version_no?: number;
+  status: "none" | "present" | "missing_or_unsafe"; safe: boolean;
+  name?: string | null; mime?: string | null; size?: number | null; uploaded_at?: string | null; uploaded_by?: string | null;
+}
+export function finalMasterState(deliverableId: string): Promise<Result<FinalMasterState>> {
+  return prpc<FinalMasterState>("deliverable_final_master_state", { p_deliverable: deliverableId });
+}
+export function setVersionFinalMaster(versionId: string, path: string, name?: string, mime?: string, size?: number): Promise<Result<boolean>> {
+  return prpc<boolean>("admin_set_version_final_master", { p_version: versionId, p_path: path, p_name: name ?? null, p_mime: mime ?? null, p_size: size ?? null });
+}
+// Upload a clean unwatermarked master to the PRIVATE project-deliverables bucket, then
+// record it on the version. The object path (never a public URL) is what the gated
+// server-side signer resolves at download time.
+export async function uploadFinalMaster(deliverableId: string, versionId: string, file: File): Promise<Result<boolean>> {
+  const s = await getValidSession();
+  if (!s) return { ok: false, error: "not_authenticated" };
+  const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120);
+  const path = `${deliverableId}/master/${versionId}/${Date.now()}_${safe}`;
+  try {
+    const up = await fetch(`${SUPABASE_URL}/storage/v1/object/project-deliverables/${path.split("/").map(encodeURIComponent).join("/")}`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${s.access_token}`, "x-upsert": "true", "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!up.ok) return { ok: false, error: `upload_failed_${up.status}` };
+  } catch (e) { return { ok: false, error: String(e) }; }
+  return setVersionFinalMaster(versionId, path, file.name, file.type || undefined, file.size);
 }
 /** Comments for a specific version (annotation-aware). Client & staff RLS-scoped. */
 export function listCommentsForVersion(versionId: string): Promise<Result<ClientComment[]>> {

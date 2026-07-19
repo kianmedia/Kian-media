@@ -12,7 +12,7 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { listVersionSummary, addDeliverableVersion, reviewVersion, setFinalVersion, type VersionSummary } from "@/lib/portal/deliverables";
+import { listVersionSummary, addDeliverableVersion, reviewVersion, setFinalVersion, uploadFinalMaster, type VersionSummary } from "@/lib/portal/deliverables";
 import AnnotationViewer from "@/components/portal/AnnotationViewer";
 import { type WatermarkStamp } from "@/components/portal/PreviewWatermark";
 
@@ -36,6 +36,8 @@ export default function VersionHistory({
   const [adding, setAdding] = useState(false);
   const [addForm, setAddForm] = useState({ preview_url: "", preview_type: "video", note: "" });
   const [msg, setMsg] = useState<string | null>(null);
+  const [masterReady, setMasterReady] = useState<Set<string>>(new Set());   // P0-1: versions with a clean master set this session
+  const [masterBusy, setMasterBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const r = await listVersionSummary(deliverable.id);
@@ -73,12 +75,26 @@ export default function VersionHistory({
     setAdding(false); setAddForm({ preview_url: "", preview_type: "video", note: "" });
     await load(); onChanged?.();
   }
+  async function uploadMaster(v: VersionSummary, file: File) {
+    setMasterBusy(v.id); setMsg(null);
+    const r = await uploadFinalMaster(deliverable.id, v.id, file);
+    setMasterBusy(null);
+    if (!r.ok) { setMsg(t({ ar: "تعذّر رفع النسخة النظيفة: ", en: "Clean master upload failed: " }) + r.error); return; }
+    setMasterReady((s) => new Set(s).add(v.id));
+    setMsg(t({ ar: "تم رفع النسخة النهائية النظيفة — يمكنك الآن التعيين كنهائية.", en: "Clean master uploaded — you can now Set Final." }));
+  }
   async function markFinal(v: VersionSummary) {
     if (!window.confirm(t({ ar: `تعيين ${v.label} كنسخة نهائية للتسليم؟`, en: "Set as Final delivery version?" }))) return;
     setBusy(true);
     const r = await setFinalVersion(deliverable.id, v.id);
     setBusy(false);
-    if (!r.ok) { setMsg(t({ ar: "تعذّر التعيين — يجب أن تكون النسخة معتمدة.", en: "Failed — version must be approved." })); return; }
+    if (!r.ok) {
+      const needMaster = /clean_final_master_required|master/i.test(r.error);
+      setMsg(needMaster
+        ? t({ ar: "مطلوب نسخة نهائية نظيفة (خاصة) قبل التعيين — ارفعها أولًا.", en: "A distinct clean final master is required before Set Final — upload it first." })
+        : t({ ar: "تعذّر التعيين — يجب أن تكون النسخة معتمدة.", en: "Failed — version must be approved." }));
+      return;
+    }
     await load(); onChanged?.();
   }
 
@@ -130,7 +146,13 @@ export default function VersionHistory({
                     <button onClick={() => openViewer(v)} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>{t({ ar: "معاينة", en: "Preview" })}</button>
                   )}
                   {mode === "admin" && v.decision === "approved" && !v.is_final && deliverable.status !== "final_delivered" && (
-                    <button onClick={() => markFinal(v)} disabled={busy} className="f-sans" style={{ fontSize: "11px", color: "#7CFC9A", background: "none", border: "1px solid rgba(124,252,154,0.35)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>{t({ ar: "تعيين كنهائية", en: "Set Final" })}</button>
+                    <>
+                      <label className="f-sans" style={{ fontSize: "10.5px", color: masterReady.has(v.id) ? "#7CFC9A" : "rgba(255,210,138,0.95)", border: `1px solid ${masterReady.has(v.id) ? "rgba(124,252,154,0.35)" : "rgba(255,210,138,0.4)"}`, borderRadius: "3px", padding: "5px 9px", cursor: masterBusy === v.id ? "wait" : "pointer" }}>
+                        {masterBusy === v.id ? "…" : masterReady.has(v.id) ? t({ ar: "✓ نسخة نظيفة", en: "✓ Clean master" }) : t({ ar: "🔒 رفع نسخة نهائية نظيفة", en: "🔒 Upload clean master" })}
+                        <input type="file" style={{ display: "none" }} disabled={masterBusy === v.id} onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadMaster(v, f); e.currentTarget.value = ""; }} />
+                      </label>
+                      <button onClick={() => markFinal(v)} disabled={busy} className="f-sans" style={{ fontSize: "11px", color: "#7CFC9A", background: "none", border: "1px solid rgba(124,252,154,0.35)", borderRadius: "3px", padding: "5px 10px", cursor: "pointer" }}>{t({ ar: "تعيين كنهائية", en: "Set Final" })}</button>
+                    </>
                   )}
                 </div>
               </div>
