@@ -96,6 +96,12 @@ begin
         or coalesce(pr.full_name,'') ilike '%'||p_search||'%'
         or coalesce(pr.mobile,'')    ilike '%'||p_search||'%'
         or coalesce(pr.email,'')     ilike '%'||p_search||'%'
+        -- P0-6 fix: the DISPLAYED name/mobile/email coalesce HR values, so search
+        -- must also match the hr lateral columns, else HR-sourced employees (no
+        -- profiles.full_name) return zero rows for a name/mobile search.
+        or coalesce(hr.full_name,'') ilike '%'||p_search||'%'
+        or coalesce(hr.phone,'')     ilike '%'||p_search||'%'
+        or coalesce(hr.email,'')     ilike '%'||p_search||'%'
         or coalesce(pj.project_name,'') ilike '%'||p_search||'%'
         or exists (select 1 from public.custody_inventory_assignment_items ai
                     join public.custody_inventory_assets ast on ast.id = ai.asset_id
