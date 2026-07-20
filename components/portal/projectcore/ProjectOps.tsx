@@ -114,7 +114,10 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     const r = await pcSetStage(projectId, stage, note);
     setBusy(false);
     if (!r.ok) { flash(pcErr(r.error)); return; }
-    setCore(r.data); flash(t({ ar: "تم تحديث المرحلة.", en: "Stage updated." })); onChanged?.();
+    // بعد تغيير المرحلة: أعد جلب الشريط الموثوق (project_progress المُعاد احتسابه Server-Side)
+    // وحالة التجاوز — لا تعتمد على التحديث المتفائل فقط، فالنسبة قد تنخفض فورًا مع الرجوع.
+    setCore(r.data); setProgRefresh((x) => x + 1); void loadProg();
+    flash(t({ ar: "تم تحديث المرحلة.", en: "Stage updated." })); onChanged?.();
   }
   async function saveMeta(patch: Record<string, unknown>) {
     if (busy) return; setBusy(true);

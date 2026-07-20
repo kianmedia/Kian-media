@@ -36,7 +36,7 @@ export function projectSnapshot(projectId: string): Promise<Result<OperationalSn
 }
 
 export interface ProjectProgressPhase { key: string; ar: string; en: string; weight: number; pct: number; earned: number }
-export interface ProjectProgress { pct: number; overridden?: boolean; auto_pct?: number; delivered: boolean; state?: string; stage?: string | null; floor?: number; phases: ProjectProgressPhase[] }
+export interface ProjectProgress { pct: number; overridden?: boolean; auto_pct?: number; override_above_auto?: boolean; ceiling?: number; delivered: boolean; state?: string; stage?: string | null; floor?: number; phases: ProjectProgressPhase[] }
 /** Authoritative weighted progress — identical for admin and client (P0-9). */
 export function projectProgress(projectId: string): Promise<Result<ProjectProgress>> {
   return prpc<ProjectProgress>("project_progress", { p_project: projectId });

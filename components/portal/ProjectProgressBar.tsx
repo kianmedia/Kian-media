@@ -20,7 +20,16 @@ export default function ProjectProgressBar({ projectId, compact, refreshSignal }
   return (
     <div>
       <div className="flex items-center justify-between gap-2" style={{ marginBottom: "5px" }}>
-        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>{t({ ar: "نسبة الإنجاز", en: "Overall progress" })}{p?.overridden && <span style={{ color: "rgba(255,210,138,0.9)" }}> · {t({ ar: "يدوي", en: "manual" })}</span>}</span>
+        <span className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>
+          {t({ ar: "نسبة الإنجاز", en: "Overall progress" })}
+          {p?.overridden && (
+            <span style={{ color: p.override_above_auto ? "#ff8a8e" : "rgba(255,210,138,0.9)" }}>
+              {" · "}{t({ ar: "يدوي", en: "manual" })}
+              {p.auto_pct != null && <span style={{ color: "rgba(255,255,255,0.45)" }}> ({t({ ar: "المحسوب", en: "auto" })} <span dir="ltr">{p.auto_pct}%</span>)</span>}
+              {p.override_above_auto && <span> ⚠ {t({ ar: "يتجاوز سقف المرحلة", en: "exceeds stage cap" })}</span>}
+            </span>
+          )}
+        </span>
         <span className="f-sans" style={{ fontSize: "13px", fontWeight: 700, color: p?.delivered ? "#7CFC9A" : "#fff" }} dir="ltr">{pct}%</span>
       </div>
       <div style={{ height: "8px", background: "rgba(255,255,255,0.08)", borderRadius: "999px", overflow: "hidden" }}>
