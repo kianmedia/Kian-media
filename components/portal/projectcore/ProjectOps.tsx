@@ -4,6 +4,7 @@
 // الاعتمادات + سجل النشاط. كل الكتابات عبر RPCs (projectCore.ts). staff فقط.
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import {
@@ -50,6 +51,7 @@ const TABS: { k: TabKey; ar: string; en: string }[] = [
 
 export default function ProjectOps({ projectId, projectName, onChanged, initialTab }: { projectId: string; projectName: string; onChanged?: () => void; initialTab?: string }) {
   const { t } = useI18n();
+  const router = useRouter();
   const { caps, profile } = usePortal();
   const canManage = caps.isAdminArea || caps.isEditor;
   const isFinance = caps.isOwner || profile.staff_role === "finance";   // عزل الحسابات
@@ -117,6 +119,11 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     // بعد تغيير المرحلة: أعد جلب الشريط الموثوق (project_progress المُعاد احتسابه Server-Side)
     // وحالة التجاوز — لا تعتمد على التحديث المتفائل فقط، فالنسبة قد تنخفض فورًا مع الرجوع.
     setCore(r.data); setProgRefresh((x) => x + 1); void loadProg();
+    // مزامنة القائمة: منصّة المشاريع (project_core_dashboard) تقرأ نفس core_stage، لكن Next
+    // App Router يخزّن مقطع مسار القائمة في Router Cache (staleTimes.dynamic)، فالرجوع إليها
+    // عبر <Link> يعيد استخدام النسخة المخزّنة دون إعادة الجلب. router.refresh() يُبطِل الكاش
+    // فورًا فتُظهر القائمة المرحلة (والنسبة) الجديدة مباشرة عند الرجوع — بلا تحديث يدوي.
+    router.refresh();
     flash(t({ ar: "تم تحديث المرحلة.", en: "Stage updated." })); onChanged?.();
   }
   async function saveMeta(patch: Record<string, unknown>) {
@@ -125,7 +132,9 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     setBusy(false);
     setRev((v) => v + 1);   // أرجِع الحقول غير المتحكَّم بها لقيمة core (نجاحًا أو فشلًا)
     if (!r.ok) { flash(pcErr(r.error)); return; }
-    setCore(r.data); flash(t({ ar: "تم الحفظ.", en: "Saved." })); onChanged?.();
+    setCore(r.data);
+    router.refresh();   // نفس سبب مزامنة القائمة: البطاقة تعرض الأولوية/الموعد/الصحّة أيضًا
+    flash(t({ ar: "تم الحفظ.", en: "Saved." })); onChanged?.();
   }
 
   const stageIdx = core ? PC_STAGES.indexOf(core.core_stage) : -1;
