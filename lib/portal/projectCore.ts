@@ -18,7 +18,13 @@ export const PC_STAGE_LABELS: Record<PcStage, { ar: string; en: string }> =
 
 export type PcPriority = "low" | "normal" | "high" | "urgent";
 export type PcHealth = "on_track" | "at_risk" | "off_track";
-export type PcTaskStatus = "todo" | "in_progress" | "blocked" | "in_review" | "done" | "cancelled";
+// دورة حالة المهمة (Batch 3A). 'done' = «مكتملة» (قيمة الإكمال المعتمدة). 'in_review'
+// مُرحَّلة تاريخيًا → 'internal_review' في القاعدة؛ تبقى في النوع كأمان عرض للصفوف القديمة.
+export type PcTaskStatus = "backlog" | "todo" | "in_progress" | "internal_review" | "client_review" | "blocked" | "done" | "cancelled" | "in_review";
+export const TASK_STATUSES: PcTaskStatus[] = ["backlog", "todo", "in_progress", "internal_review", "client_review", "blocked", "done", "cancelled"];
+export type TaskAssignmentRole = "owner" | "contributor" | "reviewer" | "watcher";
+export interface TaskAssignee { task_id: string; user_id: string; role: TaskAssignmentRole; name: string | null }
+export interface ProjectTaskProgress { total: number; active: number; done: number; overdue: number; pct: number }
 export type PcApprovalKind = "internal" | "manager" | "client";
 export type PcApprovalStatus = "pending" | "approved" | "rejected" | "revision_requested";
 
@@ -31,9 +37,16 @@ export const HEALTH_LABELS: Record<PcHealth, { ar: string; en: string }> = {
   off_track: { ar: "خارج المسار", en: "Off Track" },
 };
 export const TASK_STATUS_LABELS: Record<PcTaskStatus, { ar: string; en: string }> = {
-  todo: { ar: "قائمة", en: "To Do" }, in_progress: { ar: "قيد التنفيذ", en: "In Progress" },
-  blocked: { ar: "معطّلة", en: "Blocked" }, in_review: { ar: "قيد المراجعة", en: "In Review" },
-  done: { ar: "منجزة", en: "Done" }, cancelled: { ar: "ملغاة", en: "Cancelled" },
+  backlog: { ar: "قائمة الانتظار", en: "Backlog" }, todo: { ar: "للتنفيذ", en: "To Do" },
+  in_progress: { ar: "قيد التنفيذ", en: "In Progress" },
+  internal_review: { ar: "مراجعة داخلية", en: "Internal Review" },
+  client_review: { ar: "مراجعة العميل", en: "Client Review" },
+  blocked: { ar: "معطّلة", en: "Blocked" }, done: { ar: "مكتملة", en: "Completed" },
+  cancelled: { ar: "ملغاة", en: "Cancelled" }, in_review: { ar: "مراجعة داخلية", en: "Internal Review" },
+};
+export const TASK_ASSIGNMENT_ROLE_LABELS: Record<TaskAssignmentRole, { ar: string; en: string }> = {
+  owner: { ar: "المسؤول", en: "Owner" }, contributor: { ar: "مشارك", en: "Contributor" },
+  reviewer: { ar: "مراجِع", en: "Reviewer" }, watcher: { ar: "مراقب", en: "Watcher" },
 };
 export const APPROVAL_STATUS_LABELS: Record<PcApprovalStatus, { ar: string; en: string }> = {
   pending: { ar: "بانتظار القرار", en: "Pending" }, approved: { ar: "معتمد", en: "Approved" },
@@ -58,6 +71,8 @@ export interface PcTask {
   start_date: string | null; due_date: string | null; estimated_hours: number | null; actual_hours: number | null;
   progress_pct: number; labels: string[]; sort_order: number; recurring: string | null;
   created_by: string | null; completed_at: string | null; created_at: string; updated_at: string;
+  client_visible?: boolean; deliverable_id?: string | null; shoot_session_id?: string | null;
+  preproduction_item_id?: string | null; core_stage?: string | null;
 }
 export interface TaskChecklistItem { id: string; task_id: string; label: string; is_done: boolean; sort_order: number; done_at: string | null }
 export interface TaskComment { id: string; task_id: string; author_id: string | null; body: string; created_at: string }
@@ -169,6 +184,16 @@ export const pcChecklistToggle = (itemId: string, done: boolean) => prpc<boolean
 export const pcTaskFollow = (taskId: string, follow = true) => prpc<boolean>("pc_task_follow", { p_task: taskId, p_follow: follow });
 export const pcTaskSetDependency = (taskId: string, dependsOn: string, on = true) =>
   prpc<boolean>("pc_task_set_dependency", { p_task: taskId, p_depends_on: dependsOn, p_on: on });
+
+// ─── Batch 3A: assignees / subtasks / task-based progress ───
+export const pcTaskAssign = (taskId: string, userId: string, role: TaskAssignmentRole, on = true) =>
+  prpc<{ ok: boolean }>("pc_task_assign", { p_task: taskId, p_user: userId, p_role: role, p_on: on });
+export const pcTaskSetParent = (taskId: string, parentId: string | null) =>
+  prpc<PcTask>("pc_task_set_parent", { p_task: taskId, p_parent: parentId });
+export const pcProjectTaskAssignees = (projectId: string) =>
+  prpc<TaskAssignee[]>("pc_project_task_assignees", { p_project: projectId });
+export const projectTaskProgress = (projectId: string) =>
+  prpc<ProjectTaskProgress>("project_task_progress", { p_project: projectId });
 
 export const pcTimeLog = (projectId: string, taskId: string | null, minutes: number, forDate?: string, note?: string) =>
   prpc<unknown>("pc_time_log", { p_project: projectId, p_task: taskId, p_minutes: minutes, p_for_date: forDate ?? null, p_note: note ?? null });

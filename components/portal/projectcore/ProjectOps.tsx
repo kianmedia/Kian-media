@@ -24,6 +24,7 @@ import { TemplateManagerButton } from "./ProjectTemplates";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
+import ProjectTasks from "./ProjectTasks";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -202,7 +203,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       </div>
 
       {tab === "schedule" && <ScheduleTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
-      {tab === "tasks" && <TasksTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "tasks" && <ProjectTasks projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "gantt" && (
         <div className="space-y-6">
           {/* Structured pre-production center (§4) lives in the planning ("المخطّط")
@@ -245,169 +246,6 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       )}
       {printPack && <ProjectPrintPack projectId={projectId} projectName={projectName} onClose={() => setPrintPack(false)} />}
       {toast && <div className="fixed bottom-4 inset-x-4 z-[80] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
-    </div>
-  );
-}
-
-function TasksTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: (m: string) => void }) {
-  const { t } = useI18n();
-  const [tasks, setTasks] = useState<PcTask[]>([]);
-  const [title, setTitle] = useState("");
-  const [priority, setPriority] = useState<PcPriority>("normal");
-  const [due, setDue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState<string | null>(null);
-
-  const load = useCallback(async () => { const r = await pcListTasks(projectId); if (r.ok) setTasks(r.data); }, [projectId]);
-  useEffect(() => { void load(); }, [load]);
-
-  async function add() {
-    if (busy || !title.trim()) return; setBusy(true);
-    const r = await pcTaskCreate(projectId, { title: title.trim(), priority, due_date: due || undefined });
-    setBusy(false);
-    if (!r.ok) { flash(pcErr(r.error)); return; }
-    setTitle(""); setDue(""); setPriority("normal"); await load();
-  }
-  async function setStatus(task: PcTask, status: PcTaskStatus) {
-    const r = await pcTaskUpdate(task.id, { status });
-    if (!r.ok) { flash(pcErr(r.error)); return; }
-    await load();
-  }
-  async function del(task: PcTask) {
-    // حذف ناعم بسبب إلزامي + يشمل المهام الفرعية — قابل للاستعادة من «المحذوفات».
-    const rs = window.prompt(t({ ar: `حذف «${task.title}» ومهامها الفرعية — سبب الحذف (إلزامي):`, en: "Delete reason (required):" }));
-    if (rs === null) return;
-    if (!rs.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
-    const r = await pcEntityDelete("task", task.id, rs.trim());
-    if (!r.ok) { flash(pcErr(r.error)); return; }
-    flash(t({ ar: "حُذفت المهمة (استعادة من تبويب المحذوفات).", en: "Deleted (restorable from Trash)." }));
-    await load();
-  }
-
-  const groups: { k: PcTaskStatus; ar: string }[] = [
-    { k: "todo", ar: "قائمة" }, { k: "in_progress", ar: "قيد التنفيذ" }, { k: "blocked", ar: "معطّلة" },
-    { k: "in_review", ar: "قيد المراجعة" }, { k: "done", ar: "منجزة" }, { k: "cancelled", ar: "ملغاة" },
-  ];
-
-  return (
-    <div className="space-y-3">
-      {canManage && (
-        <div className={`${card} p-3 flex flex-wrap gap-2 items-end`}>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t({ ar: "مهمة جديدة…", en: "New task…" })} className={`${inp} flex-1 min-w-[160px]`} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
-          <select value={priority} onChange={(e) => setPriority(e.target.value as PcPriority)} className={inp} style={{ colorScheme: "dark" }}>
-            {PRIORITIES.map((p) => <option key={p} value={p}>{t(PRIORITY_LABELS[p])}</option>)}
-          </select>
-          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className={inp} style={{ colorScheme: "dark" }} />
-          <button disabled={busy || !title.trim()} onClick={() => void add()} className={`${btnRed} px-4 py-2`}>{t({ ar: "إضافة", en: "Add" })}</button>
-        </div>
-      )}
-      {tasks.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا توجد مهام بعد.", en: "No tasks yet." })}</p>}
-      {groups.map((g) => {
-        const list = tasks.filter((x) => x.status === g.k);
-        if (list.length === 0) return null;
-        return (
-          <div key={g.k}>
-            <div className="text-[11px] text-stone-500 mb-1">{t({ ar: g.ar, en: TASK_STATUS_LABELS[g.k].en })} ({list.length})</div>
-            <div className="space-y-1.5">
-              {list.map((task) => (
-                <div key={task.id} className={`${card} p-2.5`}>
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${PRIO_DOT[task.priority]}`} title={t(PRIORITY_LABELS[task.priority])} />
-                    <button onClick={() => setOpen(open === task.id ? null : task.id)} className="flex-1 min-w-0 text-right">
-                      <span className={`text-sm ${task.status === "done" ? "line-through text-stone-500" : "text-stone-200"}`}>{task.title}</span>
-                      {task.due_date && <span className="mr-2 text-[10px] text-stone-500" dir="ltr">⏱ {task.due_date}</span>}
-                    </button>
-                    {canManage ? (
-                      <select value={task.status} onChange={(e) => void setStatus(task, e.target.value as PcTaskStatus)} className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }}>
-                        {TASK_STATES.map((s) => <option key={s} value={s}>{t(TASK_STATUS_LABELS[s])}</option>)}
-                      </select>
-                    ) : <span className="text-[11px] text-stone-400">{t(TASK_STATUS_LABELS[task.status])}</span>}
-                    {canManage && <button onClick={() => void del(task)} className="text-stone-600 hover:text-red-400 text-xs px-1">✕</button>}
-                  </div>
-                  {open === task.id && <TaskDetail task={task} canManage={canManage} flash={flash} onChanged={load} />}
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function TaskDetail({ task, canManage, flash, onChanged }: { task: PcTask; canManage: boolean; flash: (m: string) => void; onChanged: () => Promise<void> }) {
-  const { t } = useI18n();
-  const [checklist, setChecklist] = useState<TaskChecklistItem[]>([]);
-  const [comments, setComments] = useState<TaskComment[]>([]);
-  const [deps, setDeps] = useState<string[]>([]);
-  const [siblings, setSiblings] = useState<PcTask[]>([]);
-  const [depPick, setDepPick] = useState("");
-  const [newItem, setNewItem] = useState("");
-  const [comment, setComment] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    const [c, m, d, s] = await Promise.all([pcListChecklist(task.id), pcListTaskComments(task.id), pcListTaskDeps(task.id), pcListTasks(task.project_id)]);
-    if (c.ok) setChecklist(c.data);
-    if (m.ok) setComments(m.data);
-    if (d.ok) setDeps(d.data.map((x) => x.depends_on_task_id));
-    if (s.ok) setSiblings(s.data.filter((x) => x.id !== task.id));
-  }, [task.id, task.project_id]);
-  async function toggleDep(depId: string, on: boolean) { const r = await pcTaskSetDependency(task.id, depId, on); if (!r.ok) { flash(pcErr(r.error)); return; } setDepPick(""); await load(); }
-  useEffect(() => { void load(); }, [load]);
-
-  async function addItem() { if (!newItem.trim()) return; setBusy(true); const r = await pcChecklistAdd(task.id, newItem.trim()); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setNewItem(""); await load(); }
-  async function toggle(it: TaskChecklistItem) { const r = await pcChecklistToggle(it.id, !it.is_done); if (!r.ok) { flash(pcErr(r.error)); return; } await load(); }
-  async function addComment() { if (!comment.trim()) return; setBusy(true); const r = await pcTaskComment(task.id, comment.trim()); setBusy(false); if (!r.ok) { flash(pcErr(r.error)); return; } setComment(""); await load(); void onChanged(); }
-
-  return (
-    <div className="mt-2 pt-2 border-t border-stone-800 space-y-3 text-xs">
-      {task.description && <p className="text-stone-400">{task.description}</p>}
-      <div>
-        <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "قائمة التحقّق", en: "Checklist" })}</div>
-        <div className="space-y-1">
-          {checklist.map((it) => (
-            <label key={it.id} className="flex items-center gap-2 text-stone-300">
-              <input type="checkbox" checked={it.is_done} disabled={!canManage} onChange={() => void toggle(it)} />
-              <span className={it.is_done ? "line-through text-stone-500" : ""}>{it.label}</span>
-            </label>
-          ))}
-          {canManage && (
-            <div className="flex gap-1.5 pt-1">
-              <input value={newItem} onChange={(e) => setNewItem(e.target.value)} placeholder={t({ ar: "عنصر…", en: "Item…" })} className={`${inp} flex-1 py-1`} onKeyDown={(e) => { if (e.key === "Enter") void addItem(); }} />
-              <button disabled={busy} onClick={() => void addItem()} className={`${btnGhost} px-2`}>+</button>
-            </div>
-          )}
-        </div>
-      </div>
-      <div>
-        <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "الاعتماديات (يعتمد على)", en: "Dependencies (depends on)" })}</div>
-        <div className="space-y-1">
-          {deps.map((id) => { const dt = siblings.find((s) => s.id === id); return (
-            <div key={id} className="flex items-center gap-2 text-stone-300"><span className="flex-1 truncate">{dt?.title ?? id.slice(0, 6)}{dt && dt.status !== "done" && dt.status !== "cancelled" && <span className="text-amber-400"> ⏳</span>}</span>{canManage && <button onClick={() => void toggleDep(id, false)} className="text-stone-600 hover:text-red-400">✕</button>}</div>
-          ); })}
-          {deps.length === 0 && <span className="text-stone-600">{t({ ar: "لا اعتماديات.", en: "None." })}</span>}
-          {canManage && siblings.length > 0 && (
-            <div className="flex gap-1.5 pt-1">
-              <select value={depPick} onChange={(e) => setDepPick(e.target.value)} className={`${inp} flex-1 py-1`} style={{ colorScheme: "dark" }}>
-                <option value="">{t({ ar: "— أضف اعتمادية —", en: "— add dependency —" })}</option>
-                {siblings.filter((s) => !deps.includes(s.id)).map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
-              </select>
-              <button disabled={!depPick} onClick={() => depPick && void toggleDep(depPick, true)} className={`${btnGhost} px-2`}>+</button>
-            </div>
-          )}
-        </div>
-      </div>
-      <div>
-        <div className="text-[11px] text-stone-500 mb-1">{t({ ar: "التعليقات", en: "Comments" })}</div>
-        <div className="space-y-1.5">
-          {comments.map((c) => <div key={c.id} className="bg-stone-950 border border-stone-800 rounded p-1.5 text-stone-300"><span dir="auto">{c.body}</span><span className="block text-[10px] text-stone-600" dir="ltr">{fmtDT(c.created_at)}</span></div>)}
-          <div className="flex gap-1.5">
-            <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder={t({ ar: "أضف تعليقًا…", en: "Add comment…" })} className={`${inp} flex-1 py-1`} onKeyDown={(e) => { if (e.key === "Enter") void addComment(); }} />
-            <button disabled={busy} onClick={() => void addComment()} className={`${btnGhost} px-2`}>↵</button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
