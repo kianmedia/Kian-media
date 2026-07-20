@@ -14,8 +14,7 @@ import {
   adminCreateProjectForClient, adminAddProjectMember, adminRemoveProjectMember,
   adminListMembershipsForUser,
 } from "@/lib/portal/admin";
-import { STATUS_STEPS } from "@/components/portal/projectMeta";
-import type { Profile, Project, ProjectMember, ProjectStatus } from "@/lib/portal/types";
+import type { Profile, Project, ProjectMember } from "@/lib/portal/types";
 
 export default function AccountLinking({
   account, projects, isClient, convertBusy, onConvert, onProjectsChanged,
@@ -156,7 +155,8 @@ function CreateProjectModal({
 }: { account: Profile; onClose: () => void; onCreated: (msg: string) => void; onError: (msg: string) => void }) {
   const { t, isAr } = useI18n();
   const [title, setTitle] = useState("");
-  const [status, setStatus] = useState<ProjectStatus>("request_received");
+  // لا حقل حالة مستقل: المرحلة مشتقّة من دورة الحياة (core_stage). المشروع الجديد يبدأ
+  // بالمرحلة الافتراضية (request_received ⇔ core_stage=project_created) وتُضبط من «منصّة المشاريع».
   const [notes, setNotes] = useState("");
   const [shooting, setShooting] = useState("");
   const [saving, setSaving] = useState(false);
@@ -171,7 +171,7 @@ function CreateProjectModal({
     // membership atomically. Fixes the client_id NOT-NULL create bug.
     const cr = await adminCreateProjectForClient({
       title: title.trim(), userId: account.id, clientEmail: account.email,
-      status, notes: notes.trim() || undefined, shootingDate: shooting || undefined,
+      notes: notes.trim() || undefined, shootingDate: shooting || undefined,
     });
     setSaving(false);
     if (!cr.ok) { setErr(t({ ar: "تعذّر إنشاء المشروع: ", en: "Create failed: " }) + cr.error); return; }
@@ -188,14 +188,8 @@ function CreateProjectModal({
         <p className="f-sans" style={{ fontSize: "12px", color: "rgba(255,255,255,0.45)", direction: "ltr", textAlign: isAr ? "right" : "left", marginBottom: "16px" }}>{account.email}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "13px" }}>
           <div><label style={lbl}>{t({ ar: "عنوان المشروع *", en: "Project Title *" })}</label><input value={title} onChange={(e) => setTitle(e.target.value)} style={input} /></div>
-          <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <div><label style={lbl}>{t({ ar: "المرحلة", en: "Stage" })}</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value as ProjectStatus)} style={input}>
-                {STATUS_STEPS.map((s) => <option key={s.key} value={s.key} style={{ background: "#0a0a0a" }}>{isAr ? s.ar : s.en}</option>)}
-              </select></div>
-            <div><label style={lbl}>{t({ ar: "تاريخ التصوير (اختياري)", en: "Shooting Date (optional)" })}</label>
-              <input type="date" value={shooting} onChange={(e) => setShooting(e.target.value)} dir="ltr" style={input} /></div>
-          </div>
+          <div><label style={lbl}>{t({ ar: "تاريخ التصوير (اختياري)", en: "Shooting Date (optional)" })}</label>
+            <input type="date" value={shooting} onChange={(e) => setShooting(e.target.value)} dir="ltr" style={input} /></div>
           <div><label style={lbl}>{t({ ar: "وصف / ملاحظات (اختياري)", en: "Description / Notes (optional)" })}</label>
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={4000} style={{ ...input, resize: "vertical", lineHeight: 1.6 }} /></div>
           {err && <div className="f-sans" style={{ fontSize: "13px", color: "#ff8a8e" }}>{err}</div>}

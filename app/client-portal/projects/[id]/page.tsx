@@ -140,10 +140,10 @@ export default function ProjectDetailPage() {
         <ProjectSnapshot projectId={id} />
       </Section>
 
-      {/* Admin-only: set the project stage (drives the timeline) */}
+      {/* Admin-only: read-only stage mirror (stage is set via the Project Core lifecycle) */}
       {isAdmin && (
-        <Section title={t({ ar: "تحديد مرحلة المشروع", en: "Set Project Stage" })}>
-          <AdminProjectStage projectId={id} current={p.status} onChanged={(next) => setProject((prev) => (prev ? { ...prev, status: next } : prev))} />
+        <Section title={t({ ar: "مرحلة المشروع (مشتقّة من دورة الحياة)", en: "Project Stage (derived from lifecycle)" })}>
+          <AdminProjectStage current={p.status} />
         </Section>
       )}
 

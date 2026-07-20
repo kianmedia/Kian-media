@@ -12,11 +12,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  adminListProjects, adminListClientsByIds, adminListProfiles, adminSetProjectStatus,
+  adminListProjects, adminListClientsByIds, adminListProfiles,
   adminCreateProjectForClient, adminUpdateProject, adminLinkProjectToUser, adminSoftDeleteProject,
 } from "@/lib/portal/admin";
-import { STATUS_STEPS, projectStatusLabel } from "@/components/portal/projectMeta";
-import type { Project, ClientRow, Profile, ProjectStatus } from "@/lib/portal/types";
+import { projectStatusLabel } from "@/components/portal/projectMeta";
+import type { Project, ClientRow, Profile } from "@/lib/portal/types";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -65,15 +65,8 @@ export default function AdminProjects() {
 
   const flashFor = (id: string, kind: "ok" | "err", text: string) => setFlash({ id, kind, text });
 
-  async function changeStatus(p: Project, status: ProjectStatus) {
-    if (status === p.status) return;
-    setSavingId(p.id); setFlash(null);
-    const r = await adminSetProjectStatus(p.id, status);
-    setSavingId(null);
-    if (!r.ok || !r.data) { flashFor(p.id, "err", t({ ar: "تعذّر التحديث.", en: "Update failed." })); return; }
-    setProjects((prev) => prev.map((x) => (x.id === p.id ? { ...x, status } : x)));
-    flashFor(p.id, "ok", t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }));
-  }
+  // مرحلة المشروع صارت مشتقّة من دورة الحياة (core_stage) وتُعرض للقراءة فقط هنا؛
+  // لا كتابة مستقلة على projects.status. تُغيَّر المرحلة من دورة الحياة في «منصّة المشاريع».
 
   async function doDelete(p: Project) {
     if (!window.confirm(t({ ar: `هل أنت متأكد من حذف المشروع «${p.project_name}»؟ سيُخفى من القوائم.`, en: `Delete project “${p.project_name}”? It will be hidden from lists.` }))) return;
@@ -147,12 +140,10 @@ export default function AdminProjects() {
                     <div className="f-sans" style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginTop: 3, direction: "ltr", textAlign: isAr ? "right" : "left" }}>{t({ ar: "أُنشئ: ", en: "Created: " })}{new Date(p.created_at).toLocaleDateString(isAr ? "ar-SA" : "en-GB")}</div>
                   </div>
                   <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
-                    <select value={STATUS_STEPS.some((s) => s.key === p.status) ? p.status : ""} disabled={savingId === p.id}
-                      onChange={(e) => changeStatus(p, e.target.value as ProjectStatus)} className="f-sans"
-                      style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(227,30,36,0.4)", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, cursor: savingId === p.id ? "wait" : "pointer", colorScheme: "dark", outline: "none" }}>
-                      {!STATUS_STEPS.some((s) => s.key === p.status) && <option value="" style={{ background: "#0a0a0a" }}>{t(label)}</option>}
-                      {STATUS_STEPS.map((s) => <option key={s.key} value={s.key} style={{ background: "#0a0a0a" }}>{isAr ? s.ar : s.en}</option>)}
-                    </select>
+                    <span className="f-sans" title={t({ ar: "المرحلة مشتقّة من دورة حياة المشروع", en: "Stage derived from the project lifecycle" })}
+                      style={{ color: "#fff", border: "1px solid rgba(227,30,36,0.4)", borderRadius: 6, padding: "7px 11px", fontSize: 12.5, whiteSpace: "nowrap" }}>
+                      {t(label)}
+                    </span>
                   </div>
                 </div>
 
@@ -247,7 +238,8 @@ function ProjectForm({ mode, project, client, onCancel, onDone }: {
   const [company, setCompany] = useState(client?.company ?? "");
   const [email, setEmail] = useState(realEmail(client) ?? "");
   const [phone, setPhone] = useState(client?.mobile ?? "");
-  const [status, setStatus] = useState<string>(project?.status && STATUS_STEPS.some((s) => s.key === project.status) ? project.status : "request_received");
+  // لا حقل حالة مستقل: المرحلة مشتقّة من دورة الحياة (core_stage). المشروع الجديد يبدأ
+  // بالمرحلة الافتراضية وتُضبط لاحقًا من «منصّة المشاريع»؛ التعديل لا يمسّ projects.status.
   const [shooting, setShooting] = useState(project?.shooting_date ?? "");
   const [notes, setNotes] = useState(project?.notes ?? "");
   const [saving, setSaving] = useState(false);
@@ -261,7 +253,7 @@ function ProjectForm({ mode, project, client, onCancel, onDone }: {
     const common = {
       title: title.trim(), clientName: clientName.trim() || null, clientCompany: company.trim() || null,
       clientEmail: email.trim() || null, clientPhone: phone.trim() || null,
-      status: status as ProjectStatus, shootingDate: shooting || null, notes: notes.trim() || null,
+      shootingDate: shooting || null, notes: notes.trim() || null,
     };
     const r = mode === "create"
       ? await adminCreateProjectForClient(common)
@@ -291,10 +283,6 @@ function ProjectForm({ mode, project, client, onCancel, onDone }: {
         <div><label style={lbl}>{t({ ar: "الشركة", en: "Company" })}</label><input value={company} onChange={(e) => setCompany(e.target.value)} style={inp} /></div>
         <div><label style={lbl}>{t({ ar: "بريد العميل (اختياري)", en: "Client email (optional)" })}</label><input value={email} onChange={(e) => setEmail(e.target.value)} dir="ltr" placeholder="client@example.com" style={inp} /></div>
         <div><label style={lbl}>{t({ ar: "جوال العميل (اختياري)", en: "Client phone (optional)" })}</label><input value={phone} onChange={(e) => setPhone(e.target.value)} dir="ltr" style={inp} /></div>
-        <div><label style={lbl}>{t({ ar: "الحالة", en: "Status" })}</label>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} style={inp}>
-            {STATUS_STEPS.map((s) => <option key={s.key} value={s.key} style={{ background: "#0a0a0a" }}>{isAr ? s.ar : s.en}</option>)}
-          </select></div>
         <div><label style={lbl}>{t({ ar: "تاريخ التصوير", en: "Shooting date" })}</label><input type="date" value={shooting || ""} onChange={(e) => setShooting(e.target.value)} dir="ltr" style={inp} /></div>
         <div style={{ gridColumn: "1 / -1" }}><label style={lbl}>{t({ ar: "ملاحظات / وصف", en: "Notes / description" })}</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ ...inp, resize: "vertical" }} /></div>
       </div>
