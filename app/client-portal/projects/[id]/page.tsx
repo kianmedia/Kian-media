@@ -15,7 +15,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import { getProject, listChat } from "@/lib/portal/projects";
 import { listDeliverables, listReviewsForDeliverables } from "@/lib/portal/deliverables";
 import { adminListClientsByIds, adminListProjectMembers, adminListSenders, type SenderProfile } from "@/lib/portal/admin";
-import { TIMELINE_STEPS, computeTimelineIndex } from "@/components/portal/projectMeta";
+import { lifecycleLabel } from "@/lib/project-core/lifecycle";
 import ProjectSnapshot from "@/components/portal/ProjectSnapshot";
 import { PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import DeliverableReview from "@/components/portal/DeliverableReview";
@@ -41,6 +41,9 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [messages, setMessages] = useState<ProjectMessage[]>([]);
   const [err, setErr] = useState("");
+  // Current lifecycle stage = project_core.core_stage, surfaced by ProjectSnapshot
+  // (its current_phase). Single source of truth for the header badge + timeline.
+  const [coreStage, setCoreStage] = useState<string | null>(null);
 
   // Shared deliverable/review data (powers the summary cards + both sub-views).
   const [dlvPhase, setDlvPhase] = useState<"loading" | "ready" | "error">("loading");
@@ -109,11 +112,9 @@ export default function ProjectDetailPage() {
   }
 
   const p = project!;
-  // Timeline + header badge reflect the real operational stage: admin-set project
-  // stage, overridden forward by live deliverable state (e.g. final_delivered → تم التسليم).
-  const stepIndex = computeTimelineIndex(dlvs, p.status);
-  const currentStep = TIMELINE_STEPS[stepIndex] ?? TIMELINE_STEPS[0];
-  const statusLabel = { ar: currentStep.ar, en: currentStep.en };
+  // Header badge = the current lifecycle stage from core_stage (single source of
+  // truth), surfaced by ProjectSnapshot — NOT the legacy computeTimelineIndex/status.
+  const statusLabel = lifecycleLabel(coreStage);
 
   return (
     <div>
@@ -124,9 +125,11 @@ export default function ProjectDetailPage() {
         <h1 className="text-white" style={{ fontSize: "clamp(24px,4vw,34px)", fontWeight: 700, fontFamily: isAr ? "var(--arabic-display)" : "var(--sans)", lineHeight: 1.25 }}>
           {p.project_name}
         </h1>
-        <span className="f-sans" style={{ fontSize: "11px", letterSpacing: "1.5px", textTransform: "uppercase", color: "#E31E24", background: "rgba(227,30,36,0.1)", border: "1px solid rgba(227,30,36,0.3)", padding: "8px 15px", borderRadius: "2px", whiteSpace: "nowrap" }}>
-          {t(statusLabel)}
-        </span>
+        {coreStage && (
+          <span className="f-sans" style={{ fontSize: "11px", letterSpacing: "1.5px", textTransform: "uppercase", color: "#E31E24", background: "rgba(227,30,36,0.1)", border: "1px solid rgba(227,30,36,0.3)", padding: "8px 15px", borderRadius: "2px", whiteSpace: "nowrap" }}>
+            {t(statusLabel)}
+          </span>
+        )}
       </div>
 
       {/* Authoritative overall progress (P0-9) — same value admin & client see */}
@@ -137,7 +140,7 @@ export default function ProjectDetailPage() {
       {/* Authoritative lifecycle timeline (states) + shooting/review/delivery cards,
           all from project_operational_snapshot — no card can contradict the progress. */}
       <Section title={t({ ar: "مرحلة المشروع", en: "Project Stage" })}>
-        <ProjectSnapshot projectId={id} />
+        <ProjectSnapshot projectId={id} onCurrentStage={setCoreStage} />
       </Section>
 
       {/* Admin-only: read-only stage mirror (stage is set via the Project Core lifecycle) */}

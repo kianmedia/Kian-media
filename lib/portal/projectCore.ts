@@ -5,29 +5,16 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { pget, prpc, ppost, ppatch, enc, currentUserId, type Result } from "@/lib/portal/client";
 import { SUPABASE_URL, SUPABASE_KEY, getValidSession } from "@/lib/portalAuth";
+import { LIFECYCLE_STAGES, LIFECYCLE_ORDER, type LifecycleStageKey } from "@/lib/project-core/lifecycle";
 
 // ─── الثوابت/الأنواع ───
-export const PC_STAGES = [
-  "lead_approved", "project_created", "planning", "ready", "scheduled", "in_production",
-  "post_production", "internal_review", "client_review", "revision", "approved", "delivered", "closed",
-] as const;
-export type PcStage = (typeof PC_STAGES)[number];
+// المصدر الوحيد لمراحل دورة الحياة وتسمياتها = lib/project-core/lifecycle.ts.
+// PC_STAGES/PC_STAGE_LABELS مجرّد إعادة اشتقاق منه (بلا تكرار للقائمة أو التسميات).
+export const PC_STAGES = LIFECYCLE_ORDER;
+export type PcStage = LifecycleStageKey;
 
-export const PC_STAGE_LABELS: Record<PcStage, { ar: string; en: string }> = {
-  lead_approved:   { ar: "اعتماد العميل المحتمل", en: "Lead Approved" },
-  project_created: { ar: "إنشاء المشروع",          en: "Project Created" },
-  planning:        { ar: "التخطيط",                en: "Planning" },
-  ready:           { ar: "جاهز",                   en: "Ready" },
-  scheduled:       { ar: "مجدول",                  en: "Scheduled" },
-  in_production:   { ar: "قيد الإنتاج",            en: "In Production" },
-  post_production: { ar: "ما بعد الإنتاج",         en: "Post Production" },
-  internal_review: { ar: "مراجعة داخلية",          en: "Internal Review" },
-  client_review:   { ar: "مراجعة العميل",          en: "Client Review" },
-  revision:        { ar: "تعديل",                  en: "Revision" },
-  approved:        { ar: "معتمد",                  en: "Approved" },
-  delivered:       { ar: "تم التسليم",             en: "Delivered" },
-  closed:          { ar: "مغلق",                   en: "Closed" },
-};
+export const PC_STAGE_LABELS: Record<PcStage, { ar: string; en: string }> =
+  Object.fromEntries(LIFECYCLE_STAGES.map((s) => [s.key, { ar: s.ar, en: s.en }])) as Record<PcStage, { ar: string; en: string }>;
 
 export type PcPriority = "low" | "normal" | "high" | "urgent";
 export type PcHealth = "on_track" | "at_risk" | "off_track";

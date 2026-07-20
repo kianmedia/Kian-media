@@ -4,7 +4,8 @@
 // derived server-side so no card can contradict the progress. Same for admin & client.
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { projectSnapshot, type OperationalSnapshot, type LifecycleStep } from "@/lib/portal/projects";
+import { projectSnapshot, type OperationalSnapshot } from "@/lib/portal/projects";
+import { lifecycleTimeline, type LifecycleStepState } from "@/lib/project-core/lifecycle";
 
 const SHOOTING: Record<string, { ar: string; en: string; c: string }> = {
   not_required: { ar: "غير مطلوب", en: "Not required", c: "rgba(255,255,255,0.5)" },
@@ -29,25 +30,28 @@ const DELIVERY: Record<string, { ar: string; en: string; c: string }> = {
   revoked: { ar: "الوصول موقوف", en: "Access revoked", c: "#ff8a8e" },
 };
 
-export default function ProjectSnapshot({ projectId, refreshSignal }: { projectId: string; refreshSignal?: number }) {
+export default function ProjectSnapshot({ projectId, refreshSignal, onCurrentStage }: { projectId: string; refreshSignal?: number; onCurrentStage?: (coreStage: string | null) => void }) {
   const { t, isAr } = useI18n();
   const [s, setS] = useState<OperationalSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(async () => {
     const r = await projectSnapshot(projectId);
-    if (r.ok) { setS(r.data); setErr(null); } else setErr(r.error);
-  }, [projectId]);
+    // current_phase = project_core.core_stage (the single source of truth) — lift it
+    // so the header badge shows the exact 13-stage lifecycle name, not a stale one.
+    if (r.ok) { setS(r.data); setErr(null); onCurrentStage?.(r.data.current_phase); } else setErr(r.error);
+  }, [projectId, onCurrentStage]);
   useEffect(() => { void load(); }, [load, refreshSignal]);
 
   if (err) return <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "تعذّر تحميل حالة المشروع.", en: "Couldn't load the project status." })}</p>;
   if (!s) return <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
 
-  const stepStyle = (st: LifecycleStep["state"]) => {
+  // Timeline is derived DIRECTLY from core_stage (current_phase) — never from
+  // projects.status, deliverables, or progress. Going back a stage lowers it at once.
+  const steps = lifecycleTimeline(s.current_phase);
+  const stepStyle = (st: LifecycleStepState) => {
     switch (st) {
       case "completed": return { dot: "#7CFC9A", ring: "#7CFC9A", line: "#7CFC9A", label: "rgba(255,255,255,0.85)", mark: "✓" };
       case "current": return { dot: "#E31E24", ring: "#E31E24", line: "rgba(255,255,255,0.12)", label: "#fff", mark: "●" };
-      case "blocked": return { dot: "#ff8a8e", ring: "#ff8a8e", line: "rgba(255,255,255,0.12)", label: "#ff8a8e", mark: "!" };
-      case "not_applicable": return { dot: "rgba(255,255,255,0.15)", ring: "rgba(255,255,255,0.15)", line: "rgba(255,255,255,0.08)", label: "rgba(255,255,255,0.3)", mark: "–" };
       default: return { dot: "rgba(255,255,255,0.18)", ring: "rgba(255,255,255,0.2)", line: "rgba(255,255,255,0.1)", label: "rgba(255,255,255,0.35)", mark: "" };
     }
   };
@@ -63,10 +67,10 @@ export default function ProjectSnapshot({ projectId, refreshSignal }: { projectI
     <div>
       {/* Lifecycle timeline — real states, scrolls on narrow screens */}
       <div style={{ overflowX: "auto", paddingBottom: "4px", marginBottom: "18px" }}>
-        <div className="flex items-start" dir="ltr" style={{ minWidth: `${s.lifecycle_steps.length * 82}px`, gap: 0 }}>
-          {s.lifecycle_steps.map((step, i) => {
+        <div className="flex items-start" dir="ltr" style={{ minWidth: `${steps.length * 82}px`, gap: 0 }}>
+          {steps.map((step, i) => {
             const st = stepStyle(step.state);
-            const isLast = i === s.lifecycle_steps.length - 1;
+            const isLast = i === steps.length - 1;
             return (
               <div key={step.key} className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
                 <div className="flex items-center" style={{ width: "100%" }}>
@@ -74,7 +78,7 @@ export default function ProjectSnapshot({ projectId, refreshSignal }: { projectI
                   {!isLast && <div style={{ height: 2, flex: 1, background: st.line }} />}
                 </div>
                 <div className="f-sans" style={{ marginTop: 8, paddingInlineEnd: 8, fontSize: 9.5, lineHeight: 1.4, color: st.label, direction: isAr ? "rtl" : "ltr", textAlign: isAr ? "right" : "left" }}>
-                  {isAr ? step.label_ar : step.label_en}
+                  {isAr ? step.ar : step.en}
                 </div>
               </div>
             );
