@@ -133,3 +133,33 @@ test("عقد TypeScript V2: GanttSnapshot يحوي الحقول الجديدة (
   assert.match(cp[1], /total_duration\b/, "CriticalPath ينقصه total_duration");
   assert.doesNotMatch(cp[1], /total_duration_working_days/, "CriticalPath ما زال يحوي الحقل القديم total_duration_working_days");
 });
+
+test("core لا يشير إلى أعمدة تواريخ غير موجودة على projects؛ يشتق من project_core ثم المهام", () => {
+  const body = funcBody(SQL, "project_gantt_snapshot_core");
+  // regression: projects لا تحوي start_date/due_date — يجب ألّا يشير إليها
+  assert.doesNotMatch(body, /\bp\.start_date\b/, "core يشير إلى p.start_date غير الموجود على public.projects");
+  assert.doesNotMatch(body, /\bp\.due_date\b/, "core يشير إلى p.due_date غير الموجود على public.projects");
+  // المصدر الصحيح: project_core ثم اشتقاق من المهام
+  assert.match(body, /left join public\.project_core pc/i, "core لا يربط project_core لمصدر التواريخ");
+  assert.match(body, /coalesce\(\s*pc\.start_date\s*,[\s\S]*?min\(\s*tt\.start_date\s*\)/i, "start_date لا يشتق (project_core ثم min مهام)");
+  assert.match(body, /coalesce\(\s*pc\.due_date\s*,[\s\S]*?max\(\s*tt\.due_date\s*\)/i, "due_date لا يشتق (project_core ثم max مهام)");
+  for (const k of ["'id'", "'name'", "'start_date'", "'due_date'", "'status'"]) {
+    assert.match(body, new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*,"), `عقد project ينقصه المفتاح ${k}`);
+  }
+});
+
+test("الاختبار الذاتي يغطي: مشروع غير موجود + مفاتيح project حاضرة + نجاح v2 + include_children", () => {
+  assert.match(SQL, /project_gantt_snapshot_core\s*\(\s*gen_random_uuid\(\)\s*,\s*false\s*\)/i, "لا اختبار ذاتي لمشروع غير موجود");
+  assert.match(SQL, /jsonb_exists\(v_proj,\s*'start_date'\)/i, "الاختبار الذاتي لا يفحص حضور مفتاح start_date");
+  assert.match(SQL, /jsonb_exists\(v_proj,\s*'due_date'\)/i, "الاختبار الذاتي لا يفحص حضور مفتاح due_date");
+  assert.match(SQL, /project_gantt_snapshot_v2\s*\(\s*v_id\s*,\s*false\s*\)/i, "الاختبار الذاتي لا يستدعي v2");
+  assert.match(SQL, /project_gantt_snapshot_core\s*\(\s*v_id\s*,\s*true\s*\)/i, "الاختبار الذاتي لا يغطّي include_children=true");
+});
+
+test("فرع الأبناء في core معزول ضد عمود parent_project_id غير المطبّق (undefined_column → [])", () => {
+  const body = funcBody(SQL, "project_gantt_snapshot_core");
+  // parent_project_id (هجرة hierarchy) قد يغيب على prod — يجب التقاط undefined_column وعدم إفشال اللقطة
+  assert.match(body, /parent_project_id/i, "فرع الأبناء لا يشير إلى parent_project_id (تحقّق من المرجع)");
+  assert.match(body, /exception\s+when\s+undefined_column\s+then[\s\S]*?v_children\s*:=\s*'\[\]'::jsonb/i,
+    "فرع الأبناء غير معزول ضد undefined_column — مسار V2 غير محصّن من عمود projects غير موجود");
+});

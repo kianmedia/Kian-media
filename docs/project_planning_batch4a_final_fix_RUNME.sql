@@ -330,10 +330,22 @@ begin
     into v_cal from public.planning_calendar_settings where id = 1;
   if v_cal is null then v_cal := '{}'::jsonb; end if;
 
-  -- المشروع (دائمًا Object)
-  select coalesce(jsonb_build_object('id', p.id, 'name', p.project_name,
-     'start_date', p.start_date, 'due_date', p.due_date, 'status', p.status), '{}'::jsonb)
-    into v_proj from public.projects p where p.id = p_project;
+  -- المشروع (دائمًا Object): id/name/status من public.projects (لا تحوي أعمدة تواريخ)؛ تواريخ المشروع
+  -- من public.project_core (المصدر المعتمد — كما يفعل project_core_gantt)، وإن غابت تُشتق من مهام
+  -- المشروع (أقل start / أعلى due)، وإلا تبقى null. المفاتيح start_date/due_date حاضرة دائمًا حتى إن null.
+  select coalesce(jsonb_build_object(
+      'id', p.id, 'name', p.project_name,
+      'start_date', coalesce(pc.start_date,
+        (select min(tt.start_date) from public.project_tasks tt
+          where tt.project_id = p.id and coalesce(tt.is_deleted,false)=false and tt.status <> 'cancelled')),
+      'due_date', coalesce(pc.due_date,
+        (select max(tt.due_date) from public.project_tasks tt
+          where tt.project_id = p.id and coalesce(tt.is_deleted,false)=false and tt.status <> 'cancelled')),
+      'status', p.status), '{}'::jsonb)
+    into v_proj
+    from public.projects p
+    left join public.project_core pc on pc.project_id = p.id
+    where p.id = p_project;
   if v_proj is null then v_proj := '{}'::jsonb; end if;
 
   -- تحذيرات المشروع: مهام بلا تواريخ (لا تمنع تحميل بقية المهام)
@@ -343,13 +355,19 @@ begin
     where t.project_id=p_project and coalesce(t.is_deleted,false)=false and t.status<>'cancelled'
       and (t.start_date is null or t.due_date is null);
 
-  -- الأبناء (اختياري)
+  -- الأبناء (اختياري) — معزول: عمود projects.parent_project_id تُضيفه هجرة hierarchy وقد لا يكون
+  -- مطبّقًا على Production؛ نلتقط undefined_column فنُرجع [] بدل إفشال اللقطة (تحصين مسار V2 من أي
+  -- عمود غير موجود على projects — نفس صنف خطأ العمود المفقود الذي عالجناه سابقًا).
   if coalesce(p_include_children,false) then
-    select coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'name', c.project_name,
-        'start', (select min(start_date) from public.project_tasks ct where ct.project_id=c.id and coalesce(ct.is_deleted,false)=false),
-        'end',   (select max(due_date)   from public.project_tasks ct where ct.project_id=c.id and coalesce(ct.is_deleted,false)=false))), '[]'::jsonb)
-      into v_children from public.projects c
-      where c.parent_project_id = p_project and coalesce(c.is_deleted,false)=false;
+    begin
+      select coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'name', c.project_name,
+          'start', (select min(start_date) from public.project_tasks ct where ct.project_id=c.id and coalesce(ct.is_deleted,false)=false),
+          'end',   (select max(due_date)   from public.project_tasks ct where ct.project_id=c.id and coalesce(ct.is_deleted,false)=false))), '[]'::jsonb)
+        into v_children from public.projects c
+        where c.parent_project_id = p_project and coalesce(c.is_deleted,false)=false;
+    exception when undefined_column then
+      v_children := '[]'::jsonb;   -- parent_project_id غير مطبّق بعد على Production
+    end;
   end if;
 
   return jsonb_build_object(
@@ -401,15 +419,24 @@ grant  execute on function public.project_gantt_snapshot(uuid, boolean)        t
 --     ويرفع Exception فيُلغى Transaction بأكمله (rollback) عند أي فشل.
 -- ════════════════════════════════════════════════════════════════════════════
 do $selftest$
-declare v_id uuid; v_res jsonb; v_cp jsonb;
+declare v_id uuid; v_res jsonb; v_cp jsonb; v_empty jsonb; v_v2 jsonb; v_proj jsonb;
 begin
+  -- (أ) مشروع غير موجود إطلاقًا (uuid عشوائي): يجب أن يُعيد عقدًا فارغًا صالحًا بلا Exception —
+  --     يغطّي «مشروع بلا مهام/بلا تواريخ» و project={} وكل الحاويات غير null.
+  v_empty := public.project_gantt_snapshot_core(gen_random_uuid(), false);
+  if v_empty is null or jsonb_typeof(v_empty) <> 'object'                            then raise exception 'final_fix FAIL: عقد مشروع غير موجود ليس object'; end if;
+  if jsonb_typeof(v_empty->'tasks') <> 'array' or jsonb_array_length(v_empty->'tasks') <> 0 then raise exception 'final_fix FAIL: مشروع بلا بيانات يجب tasks=[]'; end if;
+  if jsonb_typeof(v_empty->'dependencies') <> 'array'                                then raise exception 'final_fix FAIL: dependencies ليست array (فارغ)'; end if;
+  if jsonb_typeof(v_empty->'project') <> 'object'                                    then raise exception 'final_fix FAIL: project ليست object (فارغ)'; end if;
+  if jsonb_typeof(v_empty->'critical_path') <> 'object'                             then raise exception 'final_fix FAIL: critical_path ليست object (فارغ)'; end if;
+
+  -- (ب) مشروع حقيقي: «تست 01» أو أول مشروع غير محذوف
   select id into v_id from public.projects
     where coalesce(is_deleted,false)=false
     order by (project_name ilike '%تست 01%') desc, id
     limit 1;
-
   if v_id is null then
-    raise notice 'final_fix: لا مشروع غير محذوف للاختبار — تُخطّي الاختبار الذاتي (بلا فشل).';
+    raise notice 'final_fix ✅ اجتاز اختبار العقد الفارغ (لا مشروع غير محذوف لاختبار البيانات) — بلا فشل.';
     return;
   end if;
 
@@ -427,12 +454,43 @@ begin
   if (v_res->'critical_path'->>'computable') is null            then raise exception 'final_fix FAIL: computable مفقود'; end if;
   if (v_res->>'generated_at') is null                          then raise exception 'final_fix FAIL: generated_at مفقود'; end if;
 
+  -- (ج) عقد project ثابت: المفاتيح id/name/start_date/due_date/status حاضرة حتى إن كانت null.
+  --     تواريخ المشروع من project_core أو مشتقّة من المهام أو null — لا نوع آخر. (jsonb_exists بلا معامل ?)
+  v_proj := v_res->'project';
+  if not jsonb_exists(v_proj, 'id')         then raise exception 'final_fix FAIL: project ينقصه المفتاح id'; end if;
+  if not jsonb_exists(v_proj, 'name')       then raise exception 'final_fix FAIL: project ينقصه المفتاح name'; end if;
+  if not jsonb_exists(v_proj, 'start_date') then raise exception 'final_fix FAIL: project ينقصه المفتاح start_date'; end if;
+  if not jsonb_exists(v_proj, 'due_date')   then raise exception 'final_fix FAIL: project ينقصه المفتاح due_date'; end if;
+  if not jsonb_exists(v_proj, 'status')     then raise exception 'final_fix FAIL: project ينقصه المفتاح status'; end if;
+  if jsonb_typeof(v_proj->'start_date') not in ('null','string') then raise exception 'final_fix FAIL: start_date نوعها غير متوقّع (%)', jsonb_typeof(v_proj->'start_date'); end if;
+  if jsonb_typeof(v_proj->'due_date')   not in ('null','string') then raise exception 'final_fix FAIL: due_date نوعها غير متوقّع (%)', jsonb_typeof(v_proj->'due_date'); end if;
+
+  -- (د) critical_path_v2 مباشرة
   v_cp := public.project_critical_path_v2(v_id);
   if v_cp is null or jsonb_typeof(v_cp) <> 'object'            then raise exception 'final_fix FAIL: critical_path_v2 ليست object'; end if;
 
-  raise notice 'final_fix ✅ نجح الاختبار الذاتي — project=% tasks=% deps=% warnings=% computable=%',
+  -- (هـ) project_gantt_snapshot_v2: ينجح بسياق مستخدم، أو «not authorized» عند بوابة الصلاحية في
+  --      SQL Editor (بلا auth.uid()) — كلاهما مقبول؛ أي خطأ آخر = فشل حقيقي (rollback).
+  begin
+    v_v2 := public.project_gantt_snapshot_v2(v_id, false);
+    if v_v2 is null or jsonb_typeof(v_v2) <> 'object' then raise exception 'final_fix FAIL: v2 لم تُعِد object'; end if;
+    raise notice 'final_fix: v2 نجحت مباشرة (سياق مستخدم متاح).';
+  exception when others then
+    if sqlerrm = 'not authorized' then
+      raise notice 'final_fix: v2 بلغت بوابة الصلاحية ثم not authorized (متوقّع في SQL Editor بلا مستخدم) — بدنها مثبت عبر Core.';
+    else
+      raise exception 'final_fix FAIL: v2 خطأ غير متوقّع: % (SQLSTATE=%)', sqlerrm, sqlstate;
+    end if;
+  end;
+
+  -- (و) include_children=true لا يُفشل اللقطة (فرع الأبناء معزول ضد parent_project_id غير المطبّق)
+  if jsonb_typeof(public.project_gantt_snapshot_core(v_id, true) -> 'children') <> 'array'
+    then raise exception 'final_fix FAIL: children ليست array مع include_children=true'; end if;
+
+  raise notice 'final_fix ✅ نجح الاختبار الذاتي — project=% tasks=% deps=% warnings=% computable=% start=% due=%',
     v_id, jsonb_array_length(v_res->'tasks'), jsonb_array_length(v_res->'dependencies'),
-    jsonb_array_length(v_res->'warnings'), (v_res->'critical_path'->>'computable');
+    jsonb_array_length(v_res->'warnings'), (v_res->'critical_path'->>'computable'),
+    coalesce(v_proj->>'start_date','(null)'), coalesce(v_proj->>'due_date','(null)');
 end $selftest$;
 
 commit;
