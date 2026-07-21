@@ -25,6 +25,7 @@ import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSched
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
 import ProjectTasks from "./ProjectTasks";
+import ProjectExecution from "./ProjectExecution";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -38,8 +39,9 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+type TabKey = "execution" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
+  { k: "execution", ar: "التنفيذ", en: "Execution" },
   { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
   { k: "team", ar: "الفريق", en: "Team" }, { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
@@ -203,6 +205,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       </div>
 
       {tab === "schedule" && <ScheduleTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
+      {tab === "execution" && <ProjectExecution projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "tasks" && <ProjectTasks projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "gantt" && (
         <div className="space-y-6">

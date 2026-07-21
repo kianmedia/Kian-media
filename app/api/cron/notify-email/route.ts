@@ -88,9 +88,18 @@ async function run(req: Request) {
     else log("REMINDERS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
   } catch (e) { log("REMINDERS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
+  // Batch 3C: task/project operational alerts (blocked-too-long, review-stuck, project
+  // heavily overdue). Idempotent via reminder_tracking; reuses this same daily cron.
+  let taskAlerts = 0;
+  try {
+    const r = await rpcAsService<{ ok: boolean; emitted: number }>("pc_task_alerts_scan", {});
+    if (r.ok) taskAlerts = r.data?.emitted ?? 0;
+    else log("TASK_ALERTS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+  } catch (e) { log("TASK_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+
   const queue = await processQueue();
-  log("NOTIFY_EMAIL_RUN", { reminders, ...queue, email_enabled: projectEmailEnabled() });
-  return NextResponse.json({ ok: true, reminders, ...queue, email_enabled: projectEmailEnabled() });
+  log("NOTIFY_EMAIL_RUN", { reminders, taskAlerts, ...queue, email_enabled: projectEmailEnabled() });
+  return NextResponse.json({ ok: true, reminders, taskAlerts, ...queue, email_enabled: projectEmailEnabled() });
 }
 
 export async function GET(req: Request) { return run(req); }

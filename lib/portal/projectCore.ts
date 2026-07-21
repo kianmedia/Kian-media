@@ -210,6 +210,47 @@ export const pcTaskMove = (taskId: string, targetStatus: string, opts?: { before
 export const pcTaskReviewAction = (taskId: string, action: string, comment?: string | null, expectedVersion?: number | null) =>
   prpc<PcTask>("pc_task_review_action", { p_task: taskId, p_action: action, p_comment: comment ?? null, p_expected_version: expectedVersion ?? null });
 
+// ─── Batch 3C: execution progress / health / dashboard / alerts / mode ───
+export type ProgressMode = "lifecycle" | "tasks" | "hybrid" | "manual";
+export interface ProgressSnapshot {
+  progress_mode: ProgressMode; lifecycle_progress: number; task_progress: number; effective_progress: number;
+  auto_pct: number; core_stage: string | null; stage_floor: number; stage_ceiling: number;
+  calculation_method: string; overridden: boolean; eligible_tasks: number; completed_tasks: number;
+  overdue_tasks: number; blocked_tasks: number; total_tasks: number; task_method: string;
+}
+export type HealthStatus = "healthy" | "attention" | "at_risk" | "critical";
+export interface ExecutionHealth {
+  status: HealthStatus; health_score: number;
+  reasons: { key: string; severity: string; ar: string; en: string }[];
+  active_tasks: number; overdue_tasks: number; blocked_tasks: number; awaiting_review: number; hours_overrun: number; idle_days: number;
+}
+export interface ExecutionDashboard {
+  progress: ProgressSnapshot; health: ExecutionHealth;
+  counts: { total: number; todo: number; in_progress: number; review: number; blocked: number; done: number; overdue: number; due_this_week: number };
+  hours: { estimated: number; logged: number; actual_manual: number };
+  workload: { user_id: string; name: string | null; active: number; overdue: number }[];
+  last_activity_at: string | null;
+}
+export interface ProjectAlert { type: string; severity: string; task_id: string; title: string; assignee_id: string | null; due: string | null; ar: string; en: string }
+export interface StageReadiness { open_tasks: number; overdue_tasks: number; blocked_tasks: number; awaiting_review: number; ready: boolean; warning_ar: string | null; warning_en: string | null }
+
+export const projectProgressSnapshot = (projectId: string) => prpc<ProgressSnapshot>("project_progress_snapshot", { p_project: projectId });
+export const projectExecutionDashboard = (projectId: string) => prpc<ExecutionDashboard>("project_execution_dashboard", { p_project: projectId });
+export const projectAlerts = (projectId: string) => prpc<{ project_id: string; alerts: ProjectAlert[] }>("project_alerts", { p_project: projectId });
+export const projectStageReadiness = (projectId: string) => prpc<StageReadiness>("project_stage_readiness", { p_project: projectId });
+export const projectCoreSetProgressMode = (projectId: string, mode: ProgressMode, reason?: string) =>
+  prpc<ProjectCore>("project_core_set_progress_mode", { p_project: projectId, p_mode: mode, p_reason: reason ?? null });
+export const PROGRESS_MODE_LABELS: Record<ProgressMode, { ar: string; en: string; desc: { ar: string; en: string } }> = {
+  lifecycle: { ar: "دورة حياة المشروع", en: "Lifecycle", desc: { ar: "النسبة من مرحلة دورة الحياة (السلوك الحالي).", en: "From the lifecycle stage." } },
+  tasks: { ar: "تقدم المهام", en: "Tasks", desc: { ar: "النسبة من تقدم المهام المؤهّلة فقط.", en: "From eligible task progress only." } },
+  hybrid: { ar: "هجين", en: "Hybrid", desc: { ar: "المرحلة تحدد النطاق، والمهام تحدد التقدّم داخله.", en: "Stage sets the band; tasks fill it." } },
+  manual: { ar: "يدوي", en: "Manual", desc: { ar: "نسبة يدوية يضبطها المخوّل.", en: "Manually set." } },
+};
+export const HEALTH_STATUS_LABELS: Record<HealthStatus, { ar: string; en: string; cls: string }> = {
+  healthy: { ar: "سليم", en: "Healthy", cls: "text-emerald-400" }, attention: { ar: "يحتاج انتباهًا", en: "Attention", cls: "text-amber-400" },
+  at_risk: { ar: "معرّض للخطر", en: "At Risk", cls: "text-orange-400" }, critical: { ar: "حرج", en: "Critical", cls: "text-red-400" },
+};
+
 // ─── Batch 3A: assignees / subtasks / task-based progress ───
 export const pcTaskAssign = (taskId: string, userId: string, role: TaskAssignmentRole, on = true) =>
   prpc<{ ok: boolean }>("pc_task_assign", { p_task: taskId, p_user: userId, p_role: role, p_on: on });
