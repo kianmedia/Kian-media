@@ -182,8 +182,33 @@ export const pcTaskComment = (taskId: string, body: string) => prpc<TaskComment>
 export const pcChecklistAdd = (taskId: string, label: string) => prpc<TaskChecklistItem>("pc_task_checklist_add", { p_task: taskId, p_label: label });
 export const pcChecklistToggle = (itemId: string, done: boolean) => prpc<boolean>("pc_task_checklist_toggle", { p_item: itemId, p_done: done });
 export const pcTaskFollow = (taskId: string, follow = true) => prpc<boolean>("pc_task_follow", { p_task: taskId, p_follow: follow });
-export const pcTaskSetDependency = (taskId: string, dependsOn: string, on = true) =>
-  prpc<boolean>("pc_task_set_dependency", { p_task: taskId, p_depends_on: dependsOn, p_on: on });
+export const pcTaskSetDependency = (taskId: string, dependsOn: string, on = true, depType = "finish_to_start") =>
+  prpc<boolean>("pc_task_set_dependency", { p_task: taskId, p_depends_on: dependsOn, p_on: on, p_dep_type: depType });
+
+// ─── Batch 3B: Kanban board / move / review ───
+export interface TaskBoardRow {
+  id: string; title: string; status: PcTaskStatus; priority: PcPriority;
+  assignee_id: string | null; parent_task_id: string | null;
+  start_date: string | null; due_date: string | null; progress_pct: number;
+  estimated_hours: number | null; sort_order: number; version: number;
+  client_visible: boolean; core_stage: string | null;
+  deliverable_id: string | null; shoot_session_id: string | null; preproduction_item_id: string | null;
+  blocked_reason: string | null; overdue: boolean;
+  assignees: { user_id: string; role: TaskAssignmentRole; name: string | null }[];
+  comments: number; checklist_total: number; checklist_done: number;
+  subtasks_total: number; subtasks_done: number; deps_total: number; deps_blocking: number;
+}
+export interface TaskBoard { tasks: TaskBoardRow[]; progress: ProjectTaskProgress }
+export const pcProjectTasksBoard = (projectId: string) =>
+  prpc<TaskBoard>("pc_project_tasks_board", { p_project: projectId });
+export const pcTaskMove = (taskId: string, targetStatus: string, opts?: { before?: string | null; after?: string | null; expectedVersion?: number | null; reason?: string | null }) =>
+  prpc<PcTask>("pc_task_move", {
+    p_task: taskId, p_target_status: targetStatus,
+    p_before: opts?.before ?? null, p_after: opts?.after ?? null,
+    p_expected_version: opts?.expectedVersion ?? null, p_reason: opts?.reason ?? null,
+  });
+export const pcTaskReviewAction = (taskId: string, action: string, comment?: string | null, expectedVersion?: number | null) =>
+  prpc<PcTask>("pc_task_review_action", { p_task: taskId, p_action: action, p_comment: comment ?? null, p_expected_version: expectedVersion ?? null });
 
 // ─── Batch 3A: assignees / subtasks / task-based progress ───
 export const pcTaskAssign = (taskId: string, userId: string, role: TaskAssignmentRole, on = true) =>
@@ -673,7 +698,18 @@ export function pcErr(e: string): string {
   if (/need_due_date/.test(e)) return "يجب تحديد موعد نهائي قبل هذه المرحلة.";
   if (/name_required/.test(e)) return "اسم المشروع إلزامي.";
   if (/client_required|bad_client/.test(e)) return "اختر عميلًا صحيحًا للمشروع.";
-  if (/stale_update/.test(e)) return "عُدّل المشروع من مستخدم آخر — أعد التحميل ثم احفظ.";
+  if (/stale_update/.test(e)) return "عُدّلت المهمة من مستخدم آخر — أُعيد التحميل، حاول مجددًا.";
+  if (/transition_not_allowed/.test(e)) return "انتقال حالة غير مسموح وفق سير العمل.";
+  if (/subtasks_incomplete/.test(e)) return "لا يمكن الإكمال: توجد مهام فرعية غير مكتملة (يلزم صلاحية تجاوز).";
+  if (/dependencies_incomplete/.test(e)) return "لا يمكن البدء/الإكمال: توجد اعتماديات غير مكتملة.";
+  if (/block_reason_required/.test(e)) return "سبب التعطيل إلزامي.";
+  if (/dependency_cycle|cycle_detected/.test(e)) return "لا يمكن إنشاء حلقة اعتماديات/مهام فرعية.";
+  if (/cross_project_dependency/.test(e)) return "لا يمكن الربط بين مشروعين مختلفين.";
+  if (/self_dependency|self_parent/.test(e)) return "لا يمكن ربط المهمة بنفسها.";
+  if (/not_client_visible/.test(e)) return "المهمة ليست مرئية للعميل.";
+  if (/use_review_action/.test(e)) return "استخدم أزرار المراجعة لاعتماد المهمة.";
+  if (/bad_state|bad_action/.test(e)) return "الإجراء غير متاح لحالة المهمة الحالية.";
+  if (/bad_parent|bad_role|bad_dep_type/.test(e)) return "قيمة غير صالحة.";
   if (/active_custody/.test(e)) return "لا يمكن الحذف: توجد عهدة/معدات نشطة مرتبطة بالمشروع.";
   if (/already_applied/.test(e)) return "هذا القالب مطبَّق على المشروع مسبقًا.";
   if (/template_not_found/.test(e)) return "القالب غير موجود أو غير مفعّل.";
