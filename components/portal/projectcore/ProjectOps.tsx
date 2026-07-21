@@ -26,11 +26,12 @@ import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
 import ProjectTasks from "./ProjectTasks";
 import ProjectExecution from "./ProjectExecution";
+import ProjectReports from "./ProjectReports";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
 import { FinanceTab } from "./ProjectFinance";
-import { pcProgress, pcSetProgress, type ProgressInfo } from "@/lib/portal/projectCore";
+import { pcProgress, pcSetProgress, pcStageAdvance, projectStageReadiness, projectActivityFeed, type ProgressInfo, type StageReadiness, type ActivityEvent } from "@/lib/portal/projectCore";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const inp = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -39,9 +40,9 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "execution" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+type TabKey = "execution" | "reports" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
-  { k: "execution", ar: "التنفيذ", en: "Execution" },
+  { k: "execution", ar: "التنفيذ", en: "Execution" }, { k: "reports", ar: "التقارير", en: "Reports" },
   { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
   { k: "team", ar: "الفريق", en: "Team" }, { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
@@ -65,6 +66,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
+  const [readyPrompt, setReadyPrompt] = useState<{ stage: PcStage; note: string | null; readiness: StageReadiness } | null>(null);
   const [printPack, setPrintPack] = useState(false);
   const [prog, setProg] = useState<ProgressInfo | null>(null);
   const [progRefresh, setProgRefresh] = useState(0);   // bump to refetch the unified ProjectProgressBar
@@ -116,18 +118,34 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       note = p.trim();
     }
     setReqPrompt(null); setBusy(true);
-    const r = await pcSetStage(projectId, stage, note);
+    // جاهزية المرحلة (استرشادية): يمرّ الانتقال عبر project_stage_advance الذي يفحص الجاهزية
+    // ويفرض تجاوزها بصلاحية + سبب + Audit خادميًا — لا يعتمد على الواجهة وحدها.
+    const r = await pcStageAdvance(projectId, stage, note, null);
     setBusy(false);
-    if (!r.ok) { flash(pcErr(r.error)); return; }
-    // بعد تغيير المرحلة: أعد جلب الشريط الموثوق (project_progress المُعاد احتسابه Server-Side)
-    // وحالة التجاوز — لا تعتمد على التحديث المتفائل فقط، فالنسبة قد تنخفض فورًا مع الرجوع.
-    setCore(r.data); setProgRefresh((x) => x + 1); void loadProg();
-    // مزامنة القائمة: منصّة المشاريع (project_core_dashboard) تقرأ نفس core_stage، لكن Next
-    // App Router يخزّن مقطع مسار القائمة في Router Cache (staleTimes.dynamic)، فالرجوع إليها
-    // عبر <Link> يعيد استخدام النسخة المخزّنة دون إعادة الجلب. router.refresh() يُبطِل الكاش
-    // فورًا فتُظهر القائمة المرحلة (والنسبة) الجديدة مباشرة عند الرجوع — بلا تحديث يدوي.
-    router.refresh();
+    if (!r.ok) {
+      if (/stage_not_ready/.test(r.error)) {
+        const rd = await projectStageReadiness(projectId);
+        if (rd.ok) { setReadyPrompt({ stage, note: note ?? null, readiness: rd.data }); return; }
+      }
+      flash(pcErr(r.error)); return;
+    }
+    applyStageResult(r.data);
+  }
+  function applyStageResult(data: ProjectCore) {
+    setCore(data); setProgRefresh((x) => x + 1); void loadProg();
+    router.refresh();   // إبطال Router Cache فتظهر المرحلة/النسبة الجديدة في القائمة فورًا
     flash(t({ ar: "تم تحديث المرحلة.", en: "Stage updated." })); onChanged?.();
+  }
+  async function overrideStageReadiness() {
+    if (!readyPrompt) return;
+    const reason = window.prompt(t({ ar: "سبب تجاوز جاهزية المرحلة (إلزامي):", en: "Override reason (required):" }));
+    if (reason === null) return;
+    if (!reason.trim()) { flash(t({ ar: "السبب إلزامي.", en: "Reason required." })); return; }
+    setBusy(true);
+    const r = await pcStageAdvance(projectId, readyPrompt.stage, readyPrompt.note, reason.trim());
+    setBusy(false); setReadyPrompt(null);
+    if (!r.ok) { flash(pcErr(r.error)); return; }
+    applyStageResult(r.data);
   }
   async function saveMeta(patch: Record<string, unknown>) {
     if (busy) return; setBusy(true);
@@ -206,6 +224,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
 
       {tab === "schedule" && <ScheduleTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
       {tab === "execution" && <ProjectExecution projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "reports" && <ProjectReports projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "tasks" && <ProjectTasks projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "gantt" && (
         <div className="space-y-6">
@@ -243,6 +262,25 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
             <div className="flex gap-2">
               {canManage && <button disabled={busy} onClick={() => void proceedStage(reqPrompt.stage, PC_STAGES.indexOf(core.core_stage), PC_STAGES.indexOf(reqPrompt.stage))} className={`${btnRed} px-3 py-2 flex-1`}>{t({ ar: "متابعة رغم ذلك", en: "Continue anyway" })}</button>}
               <button onClick={() => setReqPrompt(null)} className={`${btnGhost} px-3 py-2`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {readyPrompt && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onMouseDown={() => setReadyPrompt(null)}>
+          <div className="w-full max-w-sm max-h-[85vh] overflow-y-auto bg-stone-950 border border-stone-800 rounded-2xl p-4" dir="rtl" onMouseDown={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white mb-1">{t({ ar: "المرحلة غير جاهزة", en: "Stage not ready" })} · «{t(PC_STAGE_LABELS[readyPrompt.stage])}»</h3>
+            <p className="text-[11px] text-amber-300 mb-3">{t({ ar: readyPrompt.readiness.warning_ar ?? "يوجد عمل غير مكتمل.", en: readyPrompt.readiness.warning_en ?? "There is unfinished work." })}</p>
+            <ul className="space-y-1 mb-4 text-[11px] text-stone-400">
+              <li>{t({ ar: "مهام مفتوحة", en: "Open" })}: {readyPrompt.readiness.open_tasks}</li>
+              <li className={readyPrompt.readiness.overdue_tasks > 0 ? "text-red-400" : ""}>{t({ ar: "متأخرة", en: "Overdue" })}: {readyPrompt.readiness.overdue_tasks}</li>
+              <li className={readyPrompt.readiness.blocked_tasks > 0 ? "text-amber-400" : ""}>{t({ ar: "متوقفة", en: "Blocked" })}: {readyPrompt.readiness.blocked_tasks}</li>
+              <li>{t({ ar: "بانتظار المراجعة", en: "Awaiting review" })}: {readyPrompt.readiness.awaiting_review}</li>
+            </ul>
+            <p className="text-[10px] text-stone-600 mb-3">{t({ ar: "المتابعة تتطلب صلاحية التجاوز وسببًا يُسجَّل في التدقيق.", en: "Override needs the capability + a logged reason." })}</p>
+            <div className="flex gap-2">
+              <button disabled={busy} onClick={() => void overrideStageReadiness()} className={`${btnRed} px-3 py-2 flex-1`}>{t({ ar: "تجاوز ومتابعة", en: "Override & continue" })}</button>
+              <button onClick={() => setReadyPrompt(null)} className={`${btnGhost} px-3 py-2`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
             </div>
           </div>
         </div>
@@ -305,24 +343,67 @@ function ApprovalsTab({ projectId, flash }: { projectId: string; flash: (m: stri
   );
 }
 
+const ACTIVITY_LABELS: Record<string, string> = {
+  stage_changed: "تغيير المرحلة", stage_readiness_override: "تجاوز جاهزية المرحلة", progress_mode_changed: "تغيير طريقة حساب الإنجاز",
+  meta_updated: "تحديث الملخّص", task_created: "إنشاء مهمة", task_updated: "تعديل مهمة", task_moved: "نقل مهمة (حالة/ترتيب)",
+  task_review: "مراجعة مهمة", task_assigned: "تعيين على مهمة", task_unassigned: "إزالة مشارك", task_deleted: "حذف مهمة",
+  task_comment: "تعليق", task_dep_added: "إضافة اعتمادية", task_dep_removed: "إزالة اعتمادية", time_logged: "تسجيل وقت",
+  approval_requested: "طلب اعتماد", approval_approved: "اعتماد", approval_rejected: "رفض اعتماد", approval_revision_requested: "طلب تعديل", project_created: "إنشاء المشروع",
+};
+function activityDesc(a: ActivityEvent): string {
+  const d = (a.detail ?? {}) as Record<string, unknown>;
+  const s = (v: unknown) => (v == null ? "" : String(v));
+  const base = ACTIVITY_LABELS[a.action] ?? a.action;
+  switch (a.action) {
+    case "stage_changed": return `تغيّرت المرحلة من «${s(d.from)}» إلى «${s(d.to)}»`;
+    case "stage_readiness_override": return `تجاوز جاهزية المرحلة إلى «${s(d.to)}»${d.reason ? ` — ${s(d.reason)}` : ""}`;
+    case "progress_mode_changed": return `تغيّرت طريقة حساب الإنجاز من «${s(d.from)}» إلى «${s(d.to)}»`;
+    case "task_created": return `أُنشئت مهمة${d.title ? `: ${s(d.title)}` : ""}`;
+    case "task_moved": return `نُقلت مهمة من «${s(d.from)}» إلى «${s(d.to)}»`;
+    case "task_review": return `مراجعة مهمة (${s(d.action)}): «${s(d.from)}» ← «${s(d.to)}»`;
+    case "task_dep_added": return `أُضيفت اعتمادية (${s(d.type) || "finish_to_start"})`;
+    case "task_dep_removed": return "أُزيلت اعتمادية";
+    default: return base;
+  }
+}
 function ActivityTab({ projectId }: { projectId: string }) {
   const { t } = useI18n();
-  const [rows, setRows] = useState<ProjectActivity[]>([]);
-  useEffect(() => { void pcListActivity(projectId).then((r) => { if (r.ok) setRows(r.data); }); }, [projectId]);
-  const ACTIONS: Record<string, string> = {
-    stage_changed: "تغيير المرحلة", meta_updated: "تحديث الملخّص", task_created: "إنشاء مهمة", task_updated: "تحديث مهمة",
-    task_deleted: "حذف مهمة", task_comment: "تعليق على مهمة", time_logged: "تسجيل وقت",
-    approval_requested: "طلب اعتماد", approval_approved: "اعتماد", approval_rejected: "رفض اعتماد", approval_revision_requested: "طلب تعديل",
-  };
-  if (rows.length === 0) return <p className="text-xs text-stone-500">{t({ ar: "لا يوجد نشاط بعد.", en: "No activity yet." })}</p>;
+  const [rows, setRows] = useState<ActivityEvent[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [fAction, setFAction] = useState("");
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async (before?: string | null, append = false) => {
+    setLoading(true);
+    const r = await projectActivityFeed(projectId, { before: before ?? null, action: fAction || null, limit: 30 });
+    setLoading(false);
+    if (!r.ok) return;
+    setRows((prev) => append ? [...prev, ...r.data.events] : r.data.events);
+    setHasMore(r.data.has_more);
+  }, [projectId, fAction]);
+  useEffect(() => { void load(null, false); }, [load]);
+  const actions = Object.keys(ACTIVITY_LABELS);
   return (
-    <div className="space-y-1.5">
-      {rows.map((a) => (
-        <div key={a.id} className={`${card} p-2 text-xs flex items-center justify-between gap-2`}>
-          <span className="text-stone-300">{ACTIONS[a.action] ?? a.action}</span>
-          <span className="text-[10px] text-stone-600" dir="ltr">{fmtDT(a.created_at)}</span>
-        </div>
-      ))}
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <select value={fAction} onChange={(e) => setFAction(e.target.value)} className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-[11px] text-stone-200" style={{ colorScheme: "dark" }}>
+          <option value="">{t({ ar: "كل الأحداث", en: "All events" })}</option>
+          {actions.map((a) => <option key={a} value={a}>{ACTIVITY_LABELS[a]}</option>)}
+        </select>
+      </div>
+      {loading && rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
+      {!loading && rows.length === 0 && <p className="text-xs text-stone-500">{t({ ar: "لا يوجد نشاط.", en: "No activity." })}</p>}
+      <div className="space-y-1.5">
+        {rows.map((a) => (
+          <div key={a.id} className={`${card} p-2 text-xs`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-stone-300" dir="auto">{activityDesc(a)}</span>
+              <span className="text-[10px] text-stone-600 shrink-0" dir="ltr">{fmtDT(a.created_at)}</span>
+            </div>
+            {a.actor && <div className="text-[10px] text-stone-500 mt-0.5">{t({ ar: "بواسطة", en: "by" })} {a.actor}</div>}
+          </div>
+        ))}
+      </div>
+      {hasMore && <button disabled={loading} onClick={() => void load(rows[rows.length - 1]?.created_at, true)} className="w-full text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg py-2">{t({ ar: "تحميل المزيد", en: "Load more" })}</button>}
     </div>
   );
 }

@@ -12,9 +12,9 @@ import {
   pcProjectTasksBoard, pcTaskMove, pcTaskCreate, pcTaskUpdate, pcEntityDelete, pcTaskAssign,
   pcTaskReviewAction, pcTaskSetParent, pcTaskSetDependency, pcListTaskDeps, pcListStaff, pcListShoots,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcTaskComment, pcListTaskComments, pcErr,
-  PRIORITY_LABELS, TASK_STATUS_LABELS, TASK_STATUSES, TASK_ASSIGNMENT_ROLE_LABELS,
+  PRIORITY_LABELS, TASK_STATUS_LABELS, TASK_STATUSES, TASK_ASSIGNMENT_ROLE_LABELS, DEP_TYPE_LABELS,
   type TaskBoardRow, type PcTask, type PcTaskStatus, type PcPriority, type StaffLite,
-  type TaskAssignmentRole, type ProjectTaskProgress, type TaskChecklistItem, type TaskComment,
+  type TaskAssignmentRole, type ProjectTaskProgress, type TaskChecklistItem, type TaskComment, type DependencyType,
 } from "@/lib/portal/projectCore";
 import { canTransition, KANBAN_STATUSES, type ReviewAction } from "@/lib/project-core/taskWorkflow";
 import ProjectTasksBoard, { type BoardHandlers } from "./ProjectTasksBoard";
@@ -260,7 +260,8 @@ function TaskDrawer({ row, projectId, canManage, staff, allTasks, me, nameOf, fl
   const [f, setF] = useState({ title: row.title, description: "", priority: row.priority as string, start_date: row.start_date ?? "", due_date: row.due_date ?? "", progress_pct: row.progress_pct, client_visible: row.client_visible, estimated_hours: "" as string });
   const [busy, setBusy] = useState(false);
   const [checklist, setChecklist] = useState<TaskChecklistItem[]>([]); const [comments, setComments] = useState<TaskComment[]>([]);
-  const [deps, setDeps] = useState<string[]>([]); const [revDeps, setRevDeps] = useState<string[]>([]);
+  const [deps, setDeps] = useState<{ id: string; type: string }[]>([]); const [revDeps, setRevDeps] = useState<string[]>([]);
+  const [depType, setDepType] = useState<DependencyType>("finish_to_start");
   const [newItem, setNewItem] = useState(""); const [comment, setComment] = useState(""); const [subTitle, setSubTitle] = useState("");
   const [addUser, setAddUser] = useState(""); const [addRole, setAddRole] = useState<TaskAssignmentRole>("contributor");
   const [depPick, setDepPick] = useState("");
@@ -274,7 +275,7 @@ function TaskDrawer({ row, projectId, canManage, staff, allTasks, me, nameOf, fl
     ]);
     if (fu.ok && fu.data[0]) { const x = fu.data[0]; setFull(x); setF((p) => ({ ...p, description: x.description ?? "", estimated_hours: x.estimated_hours != null ? String(x.estimated_hours) : "" })); }
     if (c.ok) setChecklist(c.data); if (m.ok) setComments(m.data);
-    if (d.ok) setDeps(d.data.map((x) => x.depends_on_task_id)); if (rd.ok) setRevDeps(rd.data.map((x) => x.task_id));
+    if (d.ok) setDeps(d.data.map((x) => ({ id: x.depends_on_task_id, type: x.dep_type }))); if (rd.ok) setRevDeps(rd.data.map((x) => x.task_id));
   }, [row.id]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void (async () => {
@@ -314,7 +315,7 @@ function TaskDrawer({ row, projectId, canManage, staff, allTasks, me, nameOf, fl
   }
   async function assign(u: string, role: TaskAssignmentRole, on: boolean) { const r = await pcTaskAssign(row.id, u, role, on); if (!r.ok) { flash(pcErr(r.error)); return; } setAddUser(""); await onChanged(); }
   async function addSub() { if (!subTitle.trim()) return; const r = await pcTaskCreate(projectId, { title: subTitle.trim(), parent_task_id: row.id }); if (!r.ok) { flash(pcErr(r.error)); return; } setSubTitle(""); await onChanged(); }
-  async function setDep(id: string, on: boolean) { const r = await pcTaskSetDependency(row.id, id, on); if (!r.ok) { flash(pcErr(r.error)); return; } setDepPick(""); await onChanged(); await load(); }
+  async function setDep(id: string, on: boolean, type: DependencyType = "finish_to_start") { const r = await pcTaskSetDependency(row.id, id, on, type); if (!r.ok) { flash(pcErr(r.error)); return; } setDepPick(""); await onChanged(); await load(); }
   async function setLink(field: "deliverable_id" | "shoot_session_id" | "preproduction_item_id" | "core_stage", value: string | null) {
     const r = await pcTaskUpdate(row.id, { [field]: value });
     if (!r.ok) { flash(pcErr(r.error)); return; } await onChanged(); await load();
@@ -388,16 +389,25 @@ function TaskDrawer({ row, projectId, canManage, staff, allTasks, me, nameOf, fl
           <div className="border-t border-stone-800 pt-3">
             <div className="text-[11px] text-stone-500 mb-1.5">{t({ ar: "تعتمد على", en: "Depends on" })}</div>
             <div className="space-y-1">
-              {deps.map((id) => { const d = allTasks.find((x) => x.id === id); return (
-                <div key={id} className="flex items-center gap-2 text-xs text-stone-300"><span className="flex-1 truncate">{d?.title ?? id.slice(0, 8)}</span>{d && <span className="text-[10px] text-stone-500">{t(statusLabel(d.status))}</span>}{canManage && <button onClick={() => void setDep(id, false)} className="text-stone-600 hover:text-red-400">✕</button>}</div>
+              {deps.map((dp) => { const d = allTasks.find((x) => x.id === dp.id); const met = d ? (dp.type.startsWith("finish") ? d.status === "done" : !["backlog", "todo"].includes(d.status)) : false; return (
+                <div key={dp.id} className="flex items-center gap-2 text-xs text-stone-300">
+                  <span className={met ? "text-emerald-400" : "text-amber-400"} title={met ? t({ ar: "الشرط مستوفى", en: "Condition met" }) : t({ ar: "الشرط غير مستوفى", en: "Not met" })}>{met ? "✓" : "⏳"}</span>
+                  <span className="flex-1 truncate">{d?.title ?? dp.id.slice(0, 8)}</span>
+                  <span className="text-[9px] px-1 rounded bg-stone-800 text-stone-500" title={t(DEP_TYPE_LABELS[dp.type as DependencyType] ?? { ar: dp.type, en: dp.type })}>{t(DEP_TYPE_LABELS[dp.type as DependencyType] ?? { ar: dp.type, en: dp.type })}</span>
+                  {d && <span className="text-[10px] text-stone-500">{t(statusLabel(d.status))}</span>}
+                  {canManage && <button onClick={() => void setDep(dp.id, false)} className="text-stone-600 hover:text-red-400">✕</button>}
+                </div>
               ); })}
               {deps.length === 0 && <span className="text-[11px] text-stone-600">{t({ ar: "لا شيء.", en: "None." })}</span>}
               {canManage && (
-                <div className="flex gap-1.5 pt-1">
-                  <select value={depPick} onChange={(e) => setDepPick(e.target.value)} className={`${inp} flex-1 py-1`} style={{ colorScheme: "dark" }}>
-                    <option value="">{t({ ar: "— أضف —", en: "— add —" })}</option>{siblings.filter((s) => !deps.includes(s.id)).map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+                <div className="flex gap-1.5 pt-1 flex-wrap">
+                  <select value={depPick} onChange={(e) => setDepPick(e.target.value)} className={`${inp} flex-1 min-w-[120px] py-1`} style={{ colorScheme: "dark" }}>
+                    <option value="">{t({ ar: "— أضف —", en: "— add —" })}</option>{siblings.filter((s) => !deps.some((dp) => dp.id === s.id)).map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
                   </select>
-                  <button disabled={!depPick} onClick={() => depPick && void setDep(depPick, true)} className={`${btnGhost} px-2`}>+</button>
+                  <select value={depType} onChange={(e) => setDepType(e.target.value as DependencyType)} className={`${inp} py-1`} style={{ colorScheme: "dark" }} title={t({ ar: "نوع الاعتمادية", en: "Dependency type" })}>
+                    {(["finish_to_start", "start_to_start", "finish_to_finish", "start_to_finish"] as DependencyType[]).map((dt) => <option key={dt} value={dt}>{t(DEP_TYPE_LABELS[dt])}</option>)}
+                  </select>
+                  <button disabled={!depPick} onClick={() => depPick && void setDep(depPick, true, depType)} className={`${btnGhost} px-2`}>+</button>
                 </div>
               )}
             </div>

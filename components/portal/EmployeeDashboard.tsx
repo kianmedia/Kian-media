@@ -12,6 +12,7 @@ import {
   getEmployeeDashboard, updateTaskStatus,
   type EmployeeDashboard as Dash, type DashTask,
 } from "@/lib/portal/professions";
+import { employeeExecutionDashboard, type EmployeeExec } from "@/lib/portal/projectCore";
 
 const STATUS = { todo: { ar: "قائمة", en: "To do" }, in_progress: { ar: "قيد التنفيذ", en: "In progress" }, blocked: { ar: "معطّلة", en: "Blocked" }, in_review: { ar: "قيد المراجعة", en: "In review" }, done: { ar: "منجزة", en: "Done" }, cancelled: { ar: "ملغاة", en: "Cancelled" } } as const;
 
@@ -21,11 +22,13 @@ export default function EmployeeDashboard() {
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [err, setErr] = useState("");
 
+  const [exec, setExec] = useState<EmployeeExec | null>(null);
   const load = useCallback(async () => {
     const r = await getEmployeeDashboard();
     if (r.ok) { setD(r.data); setPhase("ready"); } else { setErr(r.error); setPhase("error"); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void employeeExecutionDashboard().then((r) => { if (r.ok) setExec(r.data); }); }, []);
 
   if (phase === "loading") return <p className="text-white/45" style={{ fontSize: "13px" }}>{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
   if (phase === "error") return <p style={{ fontSize: "13px", color: "#ff8a8e" }}>{t({ ar: "تعذّر التحميل: ", en: "Couldn't load: " })}{err}</p>;
@@ -41,6 +44,18 @@ export default function EmployeeDashboard() {
         <Stat n={x.my_tasks.length} label={t({ ar: "مهامي المفتوحة", en: "My open tasks" })} c="#7CFC9A" />
         <Stat n={x.comments_requiring_action.length} label={t({ ar: "تعليقات تنتظرني", en: "Comments for me" })} c="rgba(255,255,255,0.75)" />
       </div>
+
+      {/* execution strip (Phase 3 closure — my work) */}
+      {exec && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: "8px" }}>
+          <Stat n={exec.due_24h} label={t({ ar: "خلال 24 ساعة", en: "Due 24h" })} c="rgba(255,210,138,0.9)" />
+          <Stat n={exec.due_3d} label={t({ ar: "خلال 3 أيام", en: "Due 3d" })} c="rgba(255,255,255,0.75)" />
+          <Stat n={exec.in_progress} label={t({ ar: "قيد التنفيذ", en: "In progress" })} c="rgba(140,190,255,0.9)" />
+          <Stat n={exec.blocked} label={t({ ar: "متوقفة", en: "Blocked" })} c="#ffb057" />
+          <Stat n={exec.needs_my_review} label={t({ ar: "تحتاج مراجعتي", en: "Needs my review" })} c="rgba(140,190,255,0.9)" />
+          <Stat n={`${exec.logged_hours_week}/${exec.est_hours_week}h`} label={t({ ar: "ساعات الأسبوع (مسجّل/مقدّر)", en: "Week hours (log/est)" })} c="rgba(255,255,255,0.75)" />
+        </div>
+      )}
 
       <Bucket title={t({ ar: "مهامي", en: "My Tasks" })}>
         {x.my_tasks.length === 0 ? empty : x.my_tasks.map((tk) => <TaskRow key={tk.id} tk={tk} editable onChanged={load} t={t} />)}
@@ -108,7 +123,7 @@ export default function EmployeeDashboard() {
 type Tf = (m: { ar: string; en: string }) => string;
 const rowS: React.CSSProperties = { background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "3px", padding: "9px 11px", textDecoration: "none", marginBottom: "6px" };
 
-function Stat({ n, label, c }: { n: number; label: string; c: string }) {
+function Stat({ n, label, c }: { n: number | string; label: string; c: string }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "12px 14px" }}>
       <div style={{ fontSize: "26px", fontWeight: 700, color: c, lineHeight: 1 }}>{n}</div>

@@ -246,6 +246,31 @@ export const PROGRESS_MODE_LABELS: Record<ProgressMode, { ar: string; en: string
   hybrid: { ar: "هجين", en: "Hybrid", desc: { ar: "المرحلة تحدد النطاق، والمهام تحدد التقدّم داخله.", en: "Stage sets the band; tasks fill it." } },
   manual: { ar: "يدوي", en: "Manual", desc: { ar: "نسبة يدوية يضبطها المخوّل.", en: "Manually set." } },
 };
+// ─── Phase 3 closure (3C.2) ───
+export type DependencyType = "finish_to_start" | "start_to_start" | "finish_to_finish" | "start_to_finish";
+export const DEP_TYPE_LABELS: Record<DependencyType, { ar: string; en: string }> = {
+  finish_to_start: { ar: "إنهاء → بدء", en: "Finish→Start" }, start_to_start: { ar: "بدء → بدء", en: "Start→Start" },
+  finish_to_finish: { ar: "إنهاء → إنهاء", en: "Finish→Finish" }, start_to_finish: { ar: "بدء → إنهاء", en: "Start→Finish" },
+};
+export const pcStageAdvance = (projectId: string, target: string, note?: string | null, overrideReason?: string | null) =>
+  prpc<ProjectCore>("project_stage_advance", { p_project: projectId, p_target: target, p_note: note ?? null, p_override_reason: overrideReason ?? null });
+export interface EmployeeExec {
+  due_today: number; overdue: number; due_24h: number; due_3d: number; in_progress: number; blocked: number;
+  needs_my_review: number; est_hours_week: number; logged_hours_week: number;
+  projects: { id: string; name: string | null }[];
+  tasks: { id: string; title: string; project_id: string; status: PcTaskStatus; priority: PcPriority; due_date: string | null; overdue: boolean }[];
+}
+export const employeeExecutionDashboard = () => prpc<EmployeeExec>("employee_execution_dashboard", {});
+export const projectExecutionReport = (projectId: string, from?: string, to?: string) =>
+  prpc<Record<string, unknown>>("project_execution_report", { p_project: projectId, p_from: from ?? null, p_to: to ?? null });
+export const teamExecutionReport = (projectId?: string) =>
+  prpc<{ members: { user_id: string; name: string | null; assigned: number; done: number; overdue: number; blocked: number; review: number; active_projects: number; est_hours: number; logged_hours: number }[] }>("team_execution_report", { p_project: projectId ?? null });
+export const companyExecutionReport = () => prpc<Record<string, unknown>>("company_execution_report", {});
+export interface ActivityEvent { id: string; action: string; entity_type: string | null; entity_id: string | null; detail: Record<string, unknown>; actor_id: string | null; actor: string | null; created_at: string }
+export const projectActivityFeed = (projectId: string, opts?: { before?: string | null; action?: string | null; actor?: string | null; limit?: number }) =>
+  prpc<{ events: ActivityEvent[]; has_more: boolean }>("project_activity_feed", {
+    p_project: projectId, p_before: opts?.before ?? null, p_action: opts?.action ?? null, p_actor: opts?.actor ?? null, p_limit: opts?.limit ?? 30 });
+
 export const HEALTH_STATUS_LABELS: Record<HealthStatus, { ar: string; en: string; cls: string }> = {
   healthy: { ar: "سليم", en: "Healthy", cls: "text-emerald-400" }, attention: { ar: "يحتاج انتباهًا", en: "Attention", cls: "text-amber-400" },
   at_risk: { ar: "معرّض للخطر", en: "At Risk", cls: "text-orange-400" }, critical: { ar: "حرج", en: "Critical", cls: "text-red-400" },
@@ -352,7 +377,7 @@ export interface GraphDep { task_id: string; depends_on: string }
 export interface TaskGraph { tasks: GraphTask[]; deps: GraphDep[] }
 export const pcTaskGraph = (projectId: string) => prpc<TaskGraph>("project_core_task_graph", { p_project: projectId });
 export const pcListTaskDeps = (taskId: string) =>
-  pget<{ task_id: string; depends_on_task_id: string }[]>(`task_dependencies?task_id=eq.${enc(taskId)}&select=task_id,depends_on_task_id`);
+  pget<{ task_id: string; depends_on_task_id: string; dep_type: string }[]>(`task_dependencies?task_id=eq.${enc(taskId)}&select=task_id,depends_on_task_id,dep_type`);
 
 // ─── القوالب ───
 export interface ProjectTemplate { id: string; name: string; description: string | null; spec: Record<string, unknown>; is_active: boolean; created_at: string }
@@ -742,7 +767,10 @@ export function pcErr(e: string): string {
   if (/stale_update/.test(e)) return "عُدّلت المهمة من مستخدم آخر — أُعيد التحميل، حاول مجددًا.";
   if (/transition_not_allowed/.test(e)) return "انتقال حالة غير مسموح وفق سير العمل.";
   if (/subtasks_incomplete/.test(e)) return "لا يمكن الإكمال: توجد مهام فرعية غير مكتملة (يلزم صلاحية تجاوز).";
-  if (/dependencies_incomplete/.test(e)) return "لا يمكن البدء/الإكمال: توجد اعتماديات غير مكتملة.";
+  if (/dependencies_incomplete/.test(e)) return "لا يمكن البدء/الإكمال: توجد اعتماديات غير مستوفاة (حسب نوع الاعتمادية).";
+  if (/stage_not_ready/.test(e)) return "المرحلة غير جاهزة — يوجد عمل غير مكتمل. أكّد التجاوز بصلاحية وسبب.";
+  if (/override_stage_readiness/.test(e)) return "تجاوز جاهزية المرحلة يتطلب صلاحية projects.override_stage_readiness.";
+  if (/bad_mode/.test(e)) return "وضع تقدّم غير صالح.";
   if (/block_reason_required/.test(e)) return "سبب التعطيل إلزامي.";
   if (/dependency_cycle|cycle_detected/.test(e)) return "لا يمكن إنشاء حلقة اعتماديات/مهام فرعية.";
   if (/cross_project_dependency/.test(e)) return "لا يمكن الربط بين مشروعين مختلفين.";
