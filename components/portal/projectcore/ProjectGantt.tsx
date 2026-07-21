@@ -42,7 +42,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
     try {
       const r = await projectGanttSnapshot(projectId, false);
       if (r.ok) { setG(r.data); setPhase("ready"); }
-      else { console.error("[gantt] project_gantt_snapshot فشل — النص الخام:", r.error); setErr(pcErr(r.error)); setPhase("error"); }
+      else { if (process.env.NODE_ENV !== "production") console.error("[gantt] project_gantt_snapshot فشل — النص الخام:", r.error); setErr(pcErr(r.error)); setPhase("error"); }
     } catch (e) { setErr(pcErr(String(e))); setPhase("error"); }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
