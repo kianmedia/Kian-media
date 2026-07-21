@@ -30,9 +30,21 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ id: string; mode: "move" | "resize"; startX: number; deltaD: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
+  const [err, setErr] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(async () => { const r = await projectGanttSnapshot(projectId, false); if (r.ok) setG(r.data); }, [projectId]);
+  // مسار تحميل صريح: loading → try → (ready|error). لا يبقى Spinner للأبد مهما كان الخطأ.
+  // silent=true لإعادة الجلب بعد عملية ناجحة دون وميض Spinner (لا نضع g في deps تفاديًا لحلقة).
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setPhase("loading");
+    setErr("");
+    try {
+      const r = await projectGanttSnapshot(projectId, false);
+      if (r.ok) { setG(r.data); setPhase("ready"); }
+      else { setErr(pcErr(r.error)); setPhase("error"); }
+    } catch (e) { setErr(pcErr(String(e))); setPhase("error"); }
+  }, [projectId]);
   useEffect(() => { void load(); }, [load]);
 
   const colW = ZOOM[zoom];
@@ -82,7 +94,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
       setG({ ...g, tasks: g.tasks.map((x) => x.id === d.id ? { ...x, start: ns ? iso(ns) : null, end: ne ? iso(ne) : null } : x) }); // optimistic
       const r = await pcTaskReschedule(d.id, ns ? iso(ns) : null, ne ? iso(ne) : null, false, tk.version);
       if (!r.ok) { setG(snapshot); flash(pcErr(r.error)); }
-      await load();
+      await load(true);
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
     return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -99,7 +111,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
     setBusy(true);
     const a = await projectScheduleApply(projectId); setBusy(false);
     if (!a.ok) { flash(pcErr(a.error)); return; }
-    flash(t({ ar: `أُعيدت جدولة ${a.data.rescheduled} مهمة.`, en: `Rescheduled ${a.data.rescheduled}.` })); await load();
+    flash(t({ ar: `أُعيدت جدولة ${a.data.rescheduled} مهمة.`, en: `Rescheduled ${a.data.rescheduled}.` })); await load(true);
   }
   async function setBaseline() {
     const hasBaseline = !!g?.tasks.some((x) => x.baseline_start);
@@ -108,10 +120,24 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
     if (!hasBaseline && !window.confirm(t({ ar: "حفظ خط الأساس للتواريخ الحالية؟", en: "Save baseline?" }))) return;
     const r = await projectBaselineSet(projectId, reason || undefined);
     if (!r.ok) { flash(pcErr(r.error)); return; }
-    flash(t({ ar: "تم حفظ خط الأساس.", en: "Baseline saved." })); await load();
+    flash(t({ ar: "تم حفظ خط الأساس.", en: "Baseline saved." })); await load(true);
   }
 
-  if (!g || !model) return <p className="text-xs text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
+  if (phase === "loading") return <p className="text-xs text-stone-500 py-6 text-center">{t({ ar: "جارٍ تحميل المخطط الزمني…", en: "Loading the schedule…" })}</p>;
+  if (phase === "error") return (
+    <div className="py-8 text-center space-y-3">
+      <p className="text-sm text-red-300">{t({ ar: "تعذّر تحميل المخطط الزمني.", en: "Couldn't load the schedule." })}</p>
+      {err && <p className="text-[11px] text-stone-500">{err}</p>}
+      <button onClick={() => void load()} className="text-xs text-stone-200 bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 hover:border-stone-500">{t({ ar: "إعادة المحاولة", en: "Retry" })}</button>
+    </div>
+  );
+  if (!g || !model) return <p className="text-xs text-stone-500 py-6 text-center">{t({ ar: "جارٍ تحميل المخطط الزمني…", en: "Loading…" })}</p>;
+  if (g.tasks.length === 0) return (
+    <div className="py-8 text-center space-y-2">
+      <p className="text-sm text-stone-400">{t({ ar: "لا توجد مهام مجدولة لعرضها.", en: "No scheduled tasks to display." })}</p>
+      <p className="text-[11px] text-stone-500">{t({ ar: "أضف مهامًا بتاريخ بداية واستحقاق من تبويب «المهام» لتظهر هنا.", en: "Add tasks with start/due dates from the Tasks tab." })}</p>
+    </div>
+  );
   const gridW = model.totalDays * colW, totalH = rows.length * ROW_H;
   const cp = g.critical_path;
 
