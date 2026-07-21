@@ -13,8 +13,10 @@ import {
   pcTaskReviewAction, pcTaskSetParent, pcTaskSetDependency, pcListTaskDeps, pcListStaff, pcListShoots,
   pcListChecklist, pcChecklistAdd, pcChecklistToggle, pcTaskComment, pcListTaskComments, pcErr,
   PRIORITY_LABELS, TASK_STATUS_LABELS, TASK_STATUSES, TASK_ASSIGNMENT_ROLE_LABELS, DEP_TYPE_LABELS,
+  CONSTRAINT_LABELS, pcTaskSetPlanning,
   type TaskBoardRow, type PcTask, type PcTaskStatus, type PcPriority, type StaffLite,
   type TaskAssignmentRole, type ProjectTaskProgress, type TaskChecklistItem, type TaskComment, type DependencyType,
+  type SchedulingMode, type ConstraintType,
 } from "@/lib/portal/projectCore";
 import { canTransition, KANBAN_STATUSES, type ReviewAction } from "@/lib/project-core/taskWorkflow";
 import ProjectTasksBoard, { type BoardHandlers } from "./ProjectTasksBoard";
@@ -320,6 +322,10 @@ function TaskDrawer({ row, projectId, canManage, staff, allTasks, me, nameOf, fl
     const r = await pcTaskUpdate(row.id, { [field]: value });
     if (!r.ok) { flash(pcErr(r.error)); return; } await onChanged(); await load();
   }
+  async function setPlan(data: Parameters<typeof pcTaskSetPlanning>[1]) {
+    const r = await pcTaskSetPlanning(row.id, data);
+    if (!r.ok) { flash(pcErr(r.error)); return; } await onChanged(); await load();
+  }
   async function addItem() { if (!newItem.trim()) return; const r = await pcChecklistAdd(row.id, newItem.trim()); if (!r.ok) { flash(pcErr(r.error)); return; } setNewItem(""); await load(); }
   async function toggle(it: TaskChecklistItem) { const r = await pcChecklistToggle(it.id, !it.is_done); if (!r.ok) { flash(pcErr(r.error)); return; } await load(); }
   async function addComment() { if (!comment.trim()) return; const r = await pcTaskComment(row.id, comment.trim()); if (!r.ok) { flash(pcErr(r.error)); return; } setComment(""); await load(); await onChanged(); }
@@ -382,6 +388,28 @@ function TaskDrawer({ row, projectId, canManage, staff, allTasks, me, nameOf, fl
               <LinkSelect label={{ ar: "جلسة تصوير", en: "Shoot" }} value={full?.shoot_session_id ?? null} options={shoots.map((x) => ({ id: x.id, label: x.title || x.id.slice(0, 8) }))} onChange={(v) => void setLink("shoot_session_id", v)} />
               <LinkSelect label={{ ar: "عنصر تحضير", en: "Pre-production" }} value={full?.preproduction_item_id ?? null} options={preprod.map((x) => ({ id: x.id, label: x.title }))} onChange={(v) => void setLink("preproduction_item_id", v)} />
               <LinkSelect label={{ ar: "وسم المرحلة (core_stage)", en: "Stage tag" }} value={full?.core_stage ?? null} options={TASK_STATUSES_MAP} onChange={(v) => void setLink("core_stage", v)} />
+            </div>
+          )}
+
+          {/* التخطيط الزمني (Gantt) */}
+          {canManage && (
+            <div className="border-t border-stone-800 pt-3 space-y-2">
+              <div className="text-[11px] text-stone-500">{t({ ar: "التخطيط الزمني", en: "Scheduling" })}</div>
+              <label className="flex items-center gap-2 text-xs text-stone-300"><input type="checkbox" checked={!!full?.is_milestone} onChange={(e) => void setPlan({ is_milestone: e.target.checked })} />{t({ ar: "معلَم (Milestone)", en: "Milestone" })}</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div><span className="text-[10px] text-stone-500">{t({ ar: "وضع الجدولة", en: "Mode" })}</span>
+                  <select value={full?.scheduling_mode ?? "manual"} onChange={(e) => void setPlan({ scheduling_mode: e.target.value as SchedulingMode })} className={`${inp} w-full py-1 mt-0.5`} style={{ colorScheme: "dark" }}>
+                    <option value="manual">{t({ ar: "يدوي", en: "Manual" })}</option><option value="auto">{t({ ar: "آلي", en: "Auto" })}</option>
+                  </select></div>
+                <div><span className="text-[10px] text-stone-500">{t({ ar: "المدة (أيام عمل)", en: "Duration (wd)" })}</span>
+                  <input type="number" min={0} defaultValue={full?.duration_days ?? ""} onBlur={(e) => void setPlan({ duration_days: e.target.value === "" ? null : e.target.value })} className={`${inp} w-full py-1 mt-0.5`} dir="ltr" /></div>
+                <div><span className="text-[10px] text-stone-500">{t({ ar: "القيد", en: "Constraint" })}</span>
+                  <select value={full?.constraint_type ?? "as_soon_as_possible"} onChange={(e) => void setPlan({ constraint_type: e.target.value as ConstraintType })} className={`${inp} w-full py-1 mt-0.5`} style={{ colorScheme: "dark" }}>
+                    {(Object.keys(CONSTRAINT_LABELS) as ConstraintType[]).map((c) => <option key={c} value={c}>{t(CONSTRAINT_LABELS[c])}</option>)}
+                  </select></div>
+                <div><span className="text-[10px] text-stone-500">{t({ ar: "تاريخ القيد", en: "Constraint date" })}</span>
+                  <input type="date" defaultValue={full?.constraint_date ?? ""} onBlur={(e) => void setPlan({ constraint_date: e.target.value || null })} className={`${inp} w-full py-1 mt-0.5`} style={{ colorScheme: "dark" }} /></div>
+              </div>
             </div>
           )}
 

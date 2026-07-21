@@ -73,6 +73,8 @@ export interface PcTask {
   created_by: string | null; completed_at: string | null; created_at: string; updated_at: string;
   client_visible?: boolean; deliverable_id?: string | null; shoot_session_id?: string | null;
   preproduction_item_id?: string | null; core_stage?: string | null;
+  is_milestone?: boolean; scheduling_mode?: "manual" | "auto"; constraint_type?: string | null;
+  constraint_date?: string | null; duration_days?: number | null;
 }
 export interface TaskChecklistItem { id: string; task_id: string; label: string; is_done: boolean; sort_order: number; done_at: string | null }
 export interface TaskComment { id: string; task_id: string; author_id: string | null; body: string; created_at: string }
@@ -182,8 +184,10 @@ export const pcTaskComment = (taskId: string, body: string) => prpc<TaskComment>
 export const pcChecklistAdd = (taskId: string, label: string) => prpc<TaskChecklistItem>("pc_task_checklist_add", { p_task: taskId, p_label: label });
 export const pcChecklistToggle = (itemId: string, done: boolean) => prpc<boolean>("pc_task_checklist_toggle", { p_item: itemId, p_done: done });
 export const pcTaskFollow = (taskId: string, follow = true) => prpc<boolean>("pc_task_follow", { p_task: taskId, p_follow: follow });
-export const pcTaskSetDependency = (taskId: string, dependsOn: string, on = true, depType = "finish_to_start") =>
-  prpc<boolean>("pc_task_set_dependency", { p_task: taskId, p_depends_on: dependsOn, p_on: on, p_dep_type: depType });
+// p_lag_days is ALWAYS sent so PostgREST resolves to the 5-arg (4A lag-aware) overload,
+// never the 3B 4-arg one — avoids an ambiguous-function error without dropping the old overload.
+export const pcTaskSetDependency = (taskId: string, dependsOn: string, on = true, depType = "finish_to_start", lagDays = 0) =>
+  prpc<boolean>("pc_task_set_dependency", { p_task: taskId, p_depends_on: dependsOn, p_on: on, p_dep_type: depType, p_lag_days: lagDays });
 
 // ─── Batch 3B: Kanban board / move / review ───
 export interface TaskBoardRow {
@@ -270,6 +274,43 @@ export interface ActivityEvent { id: string; action: string; entity_type: string
 export const projectActivityFeed = (projectId: string, opts?: { before?: string | null; action?: string | null; actor?: string | null; limit?: number }) =>
   prpc<{ events: ActivityEvent[]; has_more: boolean }>("project_activity_feed", {
     p_project: projectId, p_before: opts?.before ?? null, p_action: opts?.action ?? null, p_actor: opts?.actor ?? null, p_limit: opts?.limit ?? 30 });
+
+// ─── Phase 4 · Batch 4A: Gantt / scheduling ───
+export type SchedulingMode = "manual" | "auto";
+export type ConstraintType = "as_soon_as_possible" | "as_late_as_possible" | "must_start_on" | "must_finish_on" | "start_no_earlier_than" | "finish_no_later_than";
+export const CONSTRAINT_LABELS: Record<ConstraintType, { ar: string; en: string }> = {
+  as_soon_as_possible: { ar: "في أقرب وقت", en: "ASAP" }, as_late_as_possible: { ar: "في أقصى وقت", en: "ALAP" },
+  must_start_on: { ar: "يجب أن تبدأ في", en: "Must start on" }, must_finish_on: { ar: "يجب أن تنتهي في", en: "Must finish on" },
+  start_no_earlier_than: { ar: "لا تبدأ قبل", en: "Start no earlier than" }, finish_no_later_than: { ar: "لا تنتهي بعد", en: "Finish no later than" },
+};
+export interface GanttTask {
+  id: string; title: string; parent_task_id: string | null; status: PcTaskStatus; priority: PcPriority;
+  assignee_id: string | null; assignee: string | null; progress_pct: number;
+  start: string | null; end: string | null; is_milestone: boolean; scheduling_mode: SchedulingMode;
+  constraint_type: ConstraintType; constraint_date: string | null; duration_days: number | null; version: number;
+  baseline_start: string | null; baseline_end: string | null; baseline_variance_days: number | null;
+  overdue: boolean; critical: boolean; float: number | null;
+}
+export interface GanttDep { task_id: string; depends_on: string; type: string; lag_days: number }
+export interface CriticalPath { project_id: string; computable: boolean; critical_task_ids: string[]; total_duration_working_days: number; floats: Record<string, number>; warnings: { type: string; ar: string }[] }
+export interface GanttSnapshot {
+  project_id: string; tasks: GanttTask[]; dependencies: GanttDep[]; critical_path: CriticalPath;
+  children: { id: string; name: string | null; start: string | null; end: string | null }[];
+  calendar: { work_days: boolean[]; holidays: string[]; timezone: string } | null; today: string;
+}
+export interface SchedulePreview { project_id: string; tasks: { id: string; current_start: string | null; current_end: string | null; planned_start: string | null; planned_end: string | null; changed: boolean }[]; warnings: { task_id?: string; type: string; ar: string }[] }
+
+export const projectGanttSnapshot = (projectId: string, includeChildren = false) =>
+  prpc<GanttSnapshot>("project_gantt_snapshot", { p_project: projectId, p_include_children: includeChildren });
+export const projectSchedulePreview = (projectId: string) => prpc<SchedulePreview>("project_schedule_preview", { p_project: projectId });
+export const projectScheduleApply = (projectId: string, expectedUpdatedAt?: string | null) =>
+  prpc<{ ok: boolean; rescheduled: number; warnings: unknown[] }>("project_schedule_apply", { p_project: projectId, p_expected_updated_at: expectedUpdatedAt ?? null });
+export const pcTaskReschedule = (taskId: string, plannedStart: string | null, plannedEnd: string | null, cascade = false, expectedVersion?: number | null) =>
+  prpc<{ ok: boolean; task_id: string }>("pc_task_reschedule", { p_task: taskId, p_planned_start: plannedStart, p_planned_end: plannedEnd, p_cascade: cascade, p_expected_version: expectedVersion ?? null });
+export const projectCriticalPath = (projectId: string) => prpc<CriticalPath>("project_critical_path", { p_project: projectId });
+export const projectBaselineSet = (projectId: string, reason?: string) => prpc<{ ok: boolean; tasks: number; reset: boolean }>("project_baseline_set", { p_project: projectId, p_reason: reason ?? null });
+export const pcTaskSetPlanning = (taskId: string, data: { is_milestone?: boolean; scheduling_mode?: SchedulingMode; constraint_type?: ConstraintType; constraint_date?: string | null; duration_days?: string | null }) =>
+  prpc<PcTask>("pc_task_set_planning", { p_task: taskId, p_data: data });
 
 export const HEALTH_STATUS_LABELS: Record<HealthStatus, { ar: string; en: string; cls: string }> = {
   healthy: { ar: "سليم", en: "Healthy", cls: "text-emerald-400" }, attention: { ar: "يحتاج انتباهًا", en: "Attention", cls: "text-amber-400" },
