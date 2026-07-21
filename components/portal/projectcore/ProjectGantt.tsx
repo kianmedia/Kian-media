@@ -1,7 +1,8 @@
 "use client";
 // ════════════════════════════════════════════════════════════════════════════
 // Project Core — تبويب «المخطط الزمني» (Phase 4 · 4A). Gantt مخصّص CSS/SVG (بلا مكتبة
-// خارجية — أخفّ وأكثر تحكّمًا في RTL). مصدر بيانات واحد: project_gantt_snapshot.
+// خارجية — أخفّ وأكثر تحكّمًا في RTL). مصدر بيانات واحد: project_gantt_snapshot_v2
+// (مسار قراءة خالٍ من الجداول المؤقتة والـRPC المتداخل، يعمل داخل معاملة قراءة-فقط).
 // يعرض المهام/المعالم/الاعتماديات/المسار الحرج/خط الأساس + Today + تظليل العطلات + Zoom،
 // ويدعم سحب/تمديد المهمة لإعادة الجدولة (Optimistic + Rollback + قفل version).
 // الشريط الزمني LTR (الزمن يمضي يسارًا→يمينًا) وعمود المهام على اليسار؛ التسميات عربية.
@@ -33,17 +34,43 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [err, setErr] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const tRef = useRef(t); tRef.current = t;              // أحدث t بلا إدراجه في deps (تفاديًا لحلقة useEffect)
+  const reqSeq = useRef(0);                               // تسلسل الطلبات: الأحدث يفوز ويتجاهل نتائج الأقدم
+  const mountedRef = useRef(true);
+  const didInitialScroll = useRef(false);                 // القفز التلقائي لليوم مرّة واحدة فقط لكل مشروع (لا يعطّل الجلب الصامت/التكبير)
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // إعادة ضبط العرض فورًا عند تغيّر projectId (نمط React المعتمد لتعديل الحالة أثناء الـrender):
+  // يمنع وميض بيانات المشروع السابق لإطار واحد قبل أن يبدأ التحميل الجديد.
+  const [renderedPid, setRenderedPid] = useState(projectId);
+  if (renderedPid !== projectId) {
+    setRenderedPid(projectId); setG(null); setPhase("loading"); setErr(""); setCollapsed(new Set()); didInitialScroll.current = false;
+  }
 
   // مسار تحميل صريح: loading → try → (ready|error). لا يبقى Spinner للأبد مهما كان الخطأ.
-  // silent=true لإعادة الجلب بعد عملية ناجحة دون وميض Spinner (لا نضع g في deps تفاديًا لحلقة).
+  // مهلة ٢٠ث تمنع البقاء Pending للأبد؛ تسلسل الطلبات يمنع تعارض/تكرار النتائج؛ نتجاهل النتيجة
+  // بعد unmount أو تغيّر projectId. silent=true لإعادة الجلب بعد عملية ناجحة دون وميض Spinner.
   const load = useCallback(async (silent = false) => {
+    const myId = ++reqSeq.current;
     if (!silent) setPhase("loading");
     setErr("");
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const r = await projectGanttSnapshot(projectId, false);
+      const r = await Promise.race([
+        projectGanttSnapshot(projectId, false),
+        new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("gantt_timeout")), 20000); }),
+      ]);
+      if (!mountedRef.current || myId !== reqSeq.current) return;   // نتيجة قديمة/بعد unmount → تجاهل
       if (r.ok) { setG(r.data); setPhase("ready"); }
-      else { if (process.env.NODE_ENV !== "production") console.error("[gantt] project_gantt_snapshot فشل — النص الخام:", r.error); setErr(pcErr(r.error)); setPhase("error"); }
-    } catch (e) { setErr(pcErr(String(e))); setPhase("error"); }
+      else { if (process.env.NODE_ENV !== "production") console.error("[gantt] project_gantt_snapshot_v2 فشل — النص الخام:", r.error); setErr(pcErr(r.error)); setPhase("error"); }
+    } catch (e) {
+      if (!mountedRef.current || myId !== reqSeq.current) return;
+      const timedOut = e instanceof Error && e.message === "gantt_timeout";
+      setErr(timedOut ? tRef.current({ ar: "انتهت مهلة تحميل المخطط الزمني (٢٠ ثانية). حاول مجددًا.", en: "Loading timed out (20s). Retry." }) : pcErr(String(e)));
+      setPhase("error");
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
 
@@ -51,7 +78,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
   const model = useMemo(() => {
     if (!g) return null;
     const dates = g.tasks.flatMap((tk) => [parse(tk.start), parse(tk.end), parse(tk.baseline_start), parse(tk.baseline_end)]).filter(Boolean) as Date[];
-    const todayD = parse(g.today)!;
+    const todayD = parse(g.today) ?? new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
     let min = dates.length ? new Date(Math.min(...dates.map((d) => d.getTime()))) : todayD;
     let max = dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : addD(todayD, 30);
     min = addD(min, -3); max = addD(max, 7);
@@ -76,7 +103,9 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
   const xOf = useCallback((d: Date | null) => (d && model ? between(model.min, d) * colW : 0), [model, colW]);
 
   const jumpToday = useCallback(() => { if (scrollRef.current && model) scrollRef.current.scrollLeft = Math.max(0, xOf(model.todayD) - 200); }, [model, xOf]);
-  useEffect(() => { jumpToday(); }, [jumpToday]);
+  // قفزة أولى لليوم عند أول تحميل للمشروع فقط — لا تُعاد على الجلب الصامت (سحب/جدولة/خط أساس) ولا على التكبير،
+  // كي لا يُعاد ضبط التمرير ويفقد المستخدم موضعه. زر «اليوم» يبقى يدويًا دائمًا.
+  useEffect(() => { if (!didInitialScroll.current && model && scrollRef.current) { jumpToday(); didInitialScroll.current = true; } }, [jumpToday, model]);
 
   // ── سحب/تمديد ──
   useEffect(() => {
@@ -152,7 +181,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
         {canManage && <button disabled={busy} onClick={() => void autoSchedule()} className="text-[11px] text-sky-300 border border-sky-800 rounded px-2 py-1">{t({ ar: "جدولة آلية", en: "Auto-schedule" })}</button>}
         {canManage && <button onClick={() => void setBaseline()} className="text-[11px] text-amber-300 border border-amber-800 rounded px-2 py-1">{t({ ar: "خط الأساس", en: "Baseline" })}</button>}
         <span className="text-[10px] text-stone-500">
-          {cp.computable ? <><span className="text-red-400">■</span> {t({ ar: "المسار الحرج", en: "Critical" })} ({cp.critical_task_ids.length}) · {cp.total_duration_working_days} {t({ ar: "يوم عمل", en: "wd" })}</> : t({ ar: "المسار الحرج غير قابل للحساب (لا اعتماديات كافية)", en: "Critical path N/A" })}
+          {cp.computable ? <><span className="text-red-400">■</span> {t({ ar: "المسار الحرج", en: "Critical" })} ({cp.critical_task_ids.length}) · {cp.total_duration} {t({ ar: "يوم عمل", en: "wd" })}</> : t({ ar: "المسار الحرج غير قابل للحساب (لا اعتماديات كافية)", en: "Critical path N/A" })}
         </span>
       </div>
 
@@ -229,7 +258,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
           </div>
         </div>
       </div>
-      {cp.warnings.length > 0 && <p className="text-[10px] text-amber-400">{cp.warnings.map((w) => t({ ar: w.ar, en: w.type })).join(" · ")}</p>}
+      {(cp.warnings.length > 0 || g.warnings.length > 0) && <p className="text-[10px] text-amber-400">{[...g.warnings, ...cp.warnings].map((w) => t({ ar: w.ar, en: w.type })).join(" · ")}</p>}
       <p className="text-[10px] text-stone-600" dir="auto">{t({ ar: "اسحب المهمة لنقلها، أو حافتها اليمنى لتغيير المدة. الجدولة الآلية تُعيد جدولة مهام «auto» فقط. على الجوال استخدم تبويب المهام لتغيير التواريخ.", en: "Drag to move / right edge to resize. Auto-schedule affects auto tasks only." })}</p>
     </div>
   );

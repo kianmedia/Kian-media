@@ -292,22 +292,27 @@ export interface GanttTask {
   overdue: boolean; critical: boolean; float: number | null;
 }
 export interface GanttDep { task_id: string; depends_on: string; type: string; lag_days: number }
-export interface CriticalPath { project_id: string; computable: boolean; critical_task_ids: string[]; total_duration_working_days: number; floats: Record<string, number>; warnings: { type: string; ar: string }[] }
+// عقد V2: critical_path دائمًا Object (computable/critical_task_ids/task_floats/total_duration/warnings).
+export interface CriticalPath { computable: boolean; critical_task_ids: string[]; task_floats: { task_id: string; float: number }[]; total_duration: number; warnings: { type: string; ar: string }[] }
+export interface GanttWarning { type: string; ar: string; task_id?: string }
+// عقد V2 ثابت: كل الحاويات غير null — tasks/dependencies/warnings دائمًا Array؛ project/calendar/critical_path دائمًا Object.
 export interface GanttSnapshot {
-  project_id: string; tasks: GanttTask[]; dependencies: GanttDep[]; critical_path: CriticalPath;
+  project: { id?: string; name?: string | null; start_date?: string | null; due_date?: string | null; status?: string | null };
+  tasks: GanttTask[]; dependencies: GanttDep[]; critical_path: CriticalPath;
   children: { id: string; name: string | null; start: string | null; end: string | null }[];
-  calendar: { work_days: boolean[]; holidays: string[]; timezone: string } | null; today: string;
+  calendar: { work_days?: boolean[]; holidays?: string[]; timezone?: string };
+  warnings: GanttWarning[]; today: string; generated_at: string;
 }
 export interface SchedulePreview { project_id: string; tasks: { id: string; current_start: string | null; current_end: string | null; planned_start: string | null; planned_end: string | null; changed: boolean }[]; warnings: { task_id?: string; type: string; ar: string }[] }
 
+// V2: مسار قراءة خالٍ من الجداول المؤقتة والـRPC المتداخل — يعمل داخل معاملة قراءة-فقط.
 export const projectGanttSnapshot = (projectId: string, includeChildren = false) =>
-  prpc<GanttSnapshot>("project_gantt_snapshot", { p_project: projectId, p_include_children: includeChildren });
-export const projectSchedulePreview = (projectId: string) => prpc<SchedulePreview>("project_schedule_preview", { p_project: projectId });
+  prpc<GanttSnapshot>("project_gantt_snapshot_v2", { p_project: projectId, p_include_children: includeChildren });
+export const projectSchedulePreview = (projectId: string) => prpc<SchedulePreview>("project_schedule_preview_v2", { p_project: projectId });
 export const projectScheduleApply = (projectId: string, expectedUpdatedAt?: string | null) =>
   prpc<{ ok: boolean; rescheduled: number; warnings: unknown[] }>("project_schedule_apply", { p_project: projectId, p_expected_updated_at: expectedUpdatedAt ?? null });
 export const pcTaskReschedule = (taskId: string, plannedStart: string | null, plannedEnd: string | null, cascade = false, expectedVersion?: number | null) =>
   prpc<{ ok: boolean; task_id: string }>("pc_task_reschedule", { p_task: taskId, p_planned_start: plannedStart, p_planned_end: plannedEnd, p_cascade: cascade, p_expected_version: expectedVersion ?? null });
-export const projectCriticalPath = (projectId: string) => prpc<CriticalPath>("project_critical_path", { p_project: projectId });
 export const projectBaselineSet = (projectId: string, reason?: string) => prpc<{ ok: boolean; tasks: number; reset: boolean }>("project_baseline_set", { p_project: projectId, p_reason: reason ?? null });
 export const pcTaskSetPlanning = (taskId: string, data: { is_milestone?: boolean; scheduling_mode?: SchedulingMode; constraint_type?: ConstraintType; constraint_date?: string | null; duration_days?: string | null }) =>
   prpc<PcTask>("pc_task_set_planning", { p_task: taskId, p_data: data });
