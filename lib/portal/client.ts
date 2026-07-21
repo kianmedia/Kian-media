@@ -90,6 +90,14 @@ async function request<T>(path: string, opts: RequestOpts, allowRetry = true): P
 
   if (!res.ok) {
     const body = await parseBody(res);
+    // تشخيص (Dev/Server logs فقط): أظهر خطأ PostgREST الكامل — SQLSTATE/message/details/hint —
+    // بينما يبقى ما يراه المستخدم رسالةً عامة موجزة. لا نكشف تفاصيل PostgreSQL في الواجهة.
+    if (body && typeof body === "object") {
+      const b = body as Record<string, unknown>;
+      console.error(`[portal] ${opts.method} ${path} → HTTP ${res.status}`, {
+        code: b.code, message: b.message, details: b.details, hint: b.hint,
+      });
+    }
     return { ok: false, error: errMessage(body, `HTTP ${res.status}`), status: res.status };
   }
 
