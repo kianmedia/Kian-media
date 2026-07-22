@@ -85,6 +85,27 @@ test("الواجهة مربوطة: زر موازنة في Planner + Portfolio ف
   assert.match(SCHED, /gotoTab\("planning"\)/, "لا مؤشّر إهمال يوجّه لـPlanner");
 });
 
+test("Schema safety: 4C preflight يفحص أعمدة 4A صراحةً + portfolio لا يشير لعمود hierarchy غير المطبّق", () => {
+  // preflight يتحقق من أعمدة 4A على project_tasks (لا افتراض من هجرة غير مطبّقة)
+  assert.match(SQL, /information_schema\.columns[\s\S]*?table_name='project_tasks'[\s\S]*?is_milestone[\s\S]*?scheduling_mode[\s\S]*?duration_days[\s\S]*?baseline_end/i, "preflight لا يفحص أعمدة 4A صراحةً");
+  // portfolio لا يشير مباشرةً إلى parent_project_id (قد يغيب — هجرة hierarchy غير مطبّقة)؛ يستخدم helper معزول
+  assert.doesNotMatch(funcBody("portfolio_schedule_dashboard"), /parent_project_id/i, "portfolio يشير مباشرةً إلى parent_project_id (خطر 42703)");
+  assert.match(funcBody("portfolio_schedule_dashboard"), /public\.pc_is_subproject\(p\.id\)/i, "portfolio لا يستخدم helper الآمن");
+  // helper معزول ضد undefined_column
+  assert.match(funcBody("pc_is_subproject"), /exception when undefined_column then return false/i, "pc_is_subproject غير معزول ضد undefined_column");
+});
+
+test("إصلاحات البوابة النهائية 4C (المراجعة العدائية الكاملة)", () => {
+  // #1: leveling_apply مرساتها pc_can_read_project (عزل الكتابة عبر المشاريع)
+  assert.match(funcBody("project_resource_leveling_apply"), /pc_can_read_project\(p_project\)\s*\n?\s*and \(public\.can_manage_projects\(\)/i, "leveling_apply غير مرساة على pc_can_read_project");
+  // #7: موازنة بمرّتين (أرضية اعتماديات عبر-الموارد)
+  assert.match(funcBody("project_resource_leveling_core"), /for v_pass in 1\.\.2 loop/i, "الموازنة ليست بمرّتين (أرضية الاعتماديات ناقصة)");
+  // #8: PortfolioSchedule حارس تسلسل الطلبات
+  const pf = fs.readFileSync(path.join(ROOT, "components/portal/projectcore/PortfolioSchedule.tsx"), "utf8");
+  assert.match(pf, /reqSeq = useRef\(0\)/, "PortfolioSchedule بلا حارس تسلسل");
+  assert.match(pf, /my !== reqSeq\.current/, "PortfolioSchedule لا يتجاهل الردّ الأقدم");
+});
+
 test("مصدر الحقيقة موثّق (Single Source of Truth)", () => {
   const doc = fs.readFileSync(path.join(ROOT, "docs/PHASE4_PLANNING_SINGLE_SOURCE_OF_TRUTH.md"), "utf8");
   assert.match(doc, /project_tasks\.start_date/, "الوثيقة لا تحدّد مصدر تواريخ المهام");

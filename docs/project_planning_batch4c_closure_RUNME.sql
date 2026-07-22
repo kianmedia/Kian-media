@@ -22,6 +22,11 @@ begin
      or to_regprocedure('public.pc_can_read_project(uuid)') is null then
     raise exception '4C preflight: نقص الأساس (add_working_days/project_critical_path_v2/pc_can_read_project) — شغّل 4A + final_fix أولًا.';
   end if;
+  -- أعمدة تخطيط 4A التي تعتمدها دوال 4C (leveling/schedule_health) — تحقّق صريح لا افتراض
+  if (select count(*) from information_schema.columns where table_schema='public' and table_name='project_tasks'
+        and column_name in ('is_milestone','scheduling_mode','constraint_type','constraint_date','duration_days','baseline_end','version')) < 7 then
+    raise exception '4C preflight: أعمدة تخطيط 4A مفقودة على project_tasks — شغّل docs/project_planning_batch4a_RUNME.sql أولًا.';
+  end if;
 end $pf$;
 
 begin;
@@ -56,7 +61,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare
   v_ids uuid[]; v_assignee uuid[]; v_prio int[]; v_dur int[]; v_s0 date[]; v_e0 date[];
   v_s date[]; v_e date[]; v_ms boolean[]; v_ct text[]; v_cd date[];
-  v_n int; v_i int; v_j int; v_k int; v_cursor date; v_start date; v_end date; v_dur_i int; v_pred_fin date;
+  v_n int; v_i int; v_j int; v_k int; v_pass int; v_cursor date; v_start date; v_end date; v_dur_i int; v_pred_fin date;
   v_strategy text; v_changes jsonb := '[]'::jsonb; v_moved int := 0;
   v_fin0 date; v_fin1 date; v_emp uuid;
 begin
@@ -94,7 +99,10 @@ begin
       'warnings', jsonb_build_array(jsonb_build_object('type','no_auto_tasks','ar','لا مهام آلية قابلة للموازنة')), 'calculated_at', now());
   end if;
 
-  -- تسلسل لكل موظف: امرر بالترتيب، احفظ مؤشّر نهاية آخر مهمة لكل موظف عبر بحث خطي
+  -- تسلسل لكل موظف. مرّتان: المرّة الثانية تلتقط أرضية اعتماديات السابقين عبر-الموارد الذين
+  -- عُولجوا بعد التابع في المرّة الأولى (تُبنى v_changes/v_moved من المرّة الأخيرة).
+  for v_pass in 1..2 loop
+  v_changes := '[]'::jsonb; v_moved := 0;
   for v_i in 1..v_n loop
     v_dur_i := case when v_ms[v_i] then 0 else greatest(v_dur[v_i],1) end;
     v_emp := v_assignee[v_i];
@@ -132,6 +140,7 @@ begin
         'before_start', v_s0[v_i], 'before_end', v_e0[v_i], 'after_start', v_start, 'after_end', v_end, 'moved', true);
     end if;
   end loop;
+  end loop;  -- v_pass
 
   -- نهاية المشروع بعد = أقصى (due الحالي للمهام غير المتأثرة، النهايات المقترحة)
   select greatest(coalesce(max(after_e),'0001-01-01'::date), coalesce(v_fin0,'0001-01-01'::date))
@@ -159,7 +168,10 @@ create or replace function public.project_resource_leveling_apply(p_project uuid
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare v_prev jsonb; rec jsonb; v_n int := 0; v_pc timestamptz;
 begin
-  if not (public.can_manage_projects() or public.can_edit_project(p_project) or public.emp_has_permission('projects.auto_schedule'))
+  -- بوابة كتابة مقيّدة بالمشروع: projects.auto_schedule صلاحية عامة غير مقيّدة بمشروع، فنُرسّيها
+  -- على قابلية قراءة المشروع كي لا يعدّل موظفٌ مشروعًا لا ينتمي إليه (عزل عبر المشاريع).
+  if not (public.pc_can_read_project(p_project)
+          and (public.can_manage_projects() or public.can_edit_project(p_project) or public.emp_has_permission('projects.auto_schedule')))
     then raise exception 'not authorized'; end if;
   select updated_at into v_pc from public.project_core where project_id = p_project;
   if p_expected_updated_at is not null and date_trunc('milliseconds', v_pc) <> date_trunc('milliseconds', p_expected_updated_at) then
@@ -230,6 +242,16 @@ end $$;
 -- ════════════════════════════════════════════════════════════════════════════
 -- §4) لوحة محفظة المشاريع (شركة-واسعة، قراءة، بلا N+1)
 -- ════════════════════════════════════════════════════════════════════════════
+-- projects.parent_project_id تُضيفه هجرة hierarchy وقد لا تكون مطبّقة على Production؛
+-- helper معزول (undefined_column → false) كي لا تفشل لوحة المحفظة بخطأ 42703.
+create or replace function public.pc_is_subproject(p_project uuid)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+begin
+  return exists (select 1 from public.projects where id = p_project and parent_project_id is not null);
+exception when undefined_column then return false;
+end $$;
+revoke execute on function public.pc_is_subproject(uuid) from public, anon, authenticated;
+
 create or replace function public.portfolio_schedule_dashboard(p_filters jsonb default '{}'::jsonb)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v_rows jsonb; v_client uuid; v_health text; v_conflict_only boolean;
@@ -243,7 +265,7 @@ begin
   select coalesce(jsonb_agg(r order by (r->>'due_date') nulls last), '[]'::jsonb) into v_rows from (
     select jsonb_build_object(
       'project_id', p.id, 'name', p.project_name, 'status', p.status,
-      'is_subproject', (p.parent_project_id is not null),
+      'is_subproject', public.pc_is_subproject(p.id),
       'start_date', pc.start_date, 'due_date', pc.due_date, 'delivery_date', pc.delivery_date,
       'core_stage', pc.core_stage, 'health', pc.health, 'progress_pct', pc.progress_pct,
       'schedule', public.project_schedule_health(p.id),
@@ -281,7 +303,7 @@ grant  execute on function public.portfolio_schedule_dashboard(jsonb) to authent
 -- §6) اختبار ذاتي — يُلغي المعاملة عند فشل العقد
 -- ════════════════════════════════════════════════════════════════════════════
 do $selftest$
-declare v_id uuid; v_lvl jsonb; v_h jsonb; v_awd date;
+declare v_id uuid; v_lvl jsonb; v_awd date;
 begin
   -- (أ) add_working_days: السالب يخطو للخلف؛ n=0 لا يتراجع
   v_awd := public.add_working_days('2026-03-16'::date, -3);  -- الاثنين → للخلف 3 أيام عمل
@@ -289,21 +311,25 @@ begin
   if public.add_working_days('2026-03-16'::date, 0) < '2026-03-16'::date then raise exception '4C FAIL: add_working_days(0) تراجع خطأً'; end if;
   if public.add_working_days('2026-03-16'::date, 5) <= '2026-03-16'::date then raise exception '4C FAIL: add_working_days الموجب لم يتقدّم'; end if;
 
-  -- (ب) مشروع حقيقي: leveling preview + schedule health عقود صالحة بلا رمي
+  -- (ب) مشروع غير موجود: leveling core عقد فارغ صالح بلا رمي (مشروع بلا مهام/موارد)
+  v_lvl := public.project_resource_leveling_core(gen_random_uuid(), '{}'::jsonb);
+  if v_lvl is null or jsonb_typeof(v_lvl) <> 'object' or jsonb_typeof(v_lvl->'changes') <> 'array'
+     or jsonb_array_length(v_lvl->'changes') <> 0 or (v_lvl->>'moved_count')::int <> 0
+    then raise exception '4C FAIL: leveling لمشروع فارغ عقد غير صالح'; end if;
+  if not jsonb_exists(v_lvl, 'project_finish_before') or not jsonb_exists(v_lvl, 'project_finish_after')
+    then raise exception '4C FAIL: leveling ينقصه finish before/after'; end if;
+
+  -- (ج) مشروع حقيقي: leveling core عقد صالح (auto فقط؛ لا يمسّ manual/done — مضمون بجملة WHERE)
   select id into v_id from public.projects where coalesce(is_deleted,false)=false order by (project_name ilike '%تست 01%') desc, id limit 1;
   if v_id is not null then
-    v_lvl := public.project_resource_leveling_core(v_id, '{}'::jsonb);
-    if v_lvl is null or jsonb_typeof(v_lvl) <> 'object' or jsonb_typeof(v_lvl->'changes') <> 'array'
-      then raise exception '4C FAIL: leveling عقد غير صالح'; end if;
-    if jsonb_typeof(v_lvl->'project_finish_before') = 'null' and jsonb_typeof(v_lvl->'changes')<>'array'
-      then raise exception '4C FAIL: leveling ينقصه finish'; end if;
-    -- schedule_health عبر بوابة — نتجاوزها باستدعاء منطق القراءة المباشرة غير ممكن؛ نتحقق من portfolio core عبر project_schedule_health
-    -- (project_schedule_health مبوّب؛ نتحقق فقط أن leveling_core سليم هنا)
+    v_lvl := public.project_resource_leveling_core(v_id, jsonb_build_object('strategy','minimize_project_delay'));
+    if v_lvl is null or jsonb_typeof(v_lvl) <> 'object' or jsonb_typeof(v_lvl->'changes') <> 'array' or jsonb_typeof(v_lvl->'warnings') <> 'array'
+      then raise exception '4C FAIL: leveling عقد غير صالح على مشروع حقيقي'; end if;
   else
-    raise notice '4C: لا مشروع للاختبار — تم اختبار add_working_days فقط (بلا فشل).';
+    raise notice '4C: لا مشروع للاختبار — تم اختبار add_working_days + leveling الفارغ (بلا فشل).';
   end if;
 
-  raise notice '4C ✅ نجح الاختبار الذاتي — add_working_days±، leveling core، عقود سليمة.';
+  raise notice '4C ✅ نجح الاختبار الذاتي — add_working_days±، leveling core (فارغ+حقيقي)، عقود سليمة.';
 end $selftest$;
 
 commit;

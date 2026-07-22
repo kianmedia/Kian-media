@@ -21,12 +21,14 @@ export default function PortfolioSchedule({ onClose }: { onClose: () => void }) 
   const [conflictOnly, setConflictOnly] = useState(false);
   const [health, setHealth] = useState<string>("");
   const mountedRef = useRef(true);
+  const reqSeq = useRef(0);                                // الأحدث يفوز: تجاهل ردّ أبطأ أقدم
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const load = useCallback(async () => {
+    const my = ++reqSeq.current;
     setPhase("loading"); setErr("");
     const r = await portfolioScheduleDashboard({ conflict_only: conflictOnly, health: health || undefined });
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || my !== reqSeq.current) return;
     if (!r.ok) { if (process.env.NODE_ENV !== "production") console.error("[portfolio]", r.error); setErr(r.error.includes("not authorized") ? t({ ar: "لا تملك صلاحية عرض جدولة المشاريع.", en: "Not authorized." }) : t({ ar: "تعذّر تحميل جدولة المشاريع.", en: "Couldn't load." })); setPhase("error"); return; }
     setRows(r.data.projects); setSummary(r.data.summary); setPhase("ready");
   }, [conflictOnly, health, t]);
