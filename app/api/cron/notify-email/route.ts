@@ -111,9 +111,18 @@ async function run(req: Request) {
   try { await rpcAsService<{ ok: boolean }>("executive_snapshot_capture", { p_period: "weekly" }); }
   catch (e) { log("EXEC_SNAPSHOT_ERROR", { error: String(e).slice(0, 200) }); }
 
+  // Batch 5C: closure alerts (closure review overdue) — idempotent via reminder_tracking.
+  // Reuses this same cron; guarded so it no-ops if 5C not applied.
+  let closureAlerts = 0;
+  try {
+    const r = await rpcAsService<{ ok: boolean; emitted: number }>("closure_alerts_scan", {});
+    if (r.ok) closureAlerts = r.data?.emitted ?? 0;
+    else log("CLOSURE_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+  } catch (e) { log("CLOSURE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+
   const queue = await processQueue();
-  log("NOTIFY_EMAIL_RUN", { reminders, taskAlerts, execAlerts, ...queue, email_enabled: projectEmailEnabled() });
-  return NextResponse.json({ ok: true, reminders, taskAlerts, execAlerts, ...queue, email_enabled: projectEmailEnabled() });
+  log("NOTIFY_EMAIL_RUN", { reminders, taskAlerts, execAlerts, closureAlerts, ...queue, email_enabled: projectEmailEnabled() });
+  return NextResponse.json({ ok: true, reminders, taskAlerts, execAlerts, closureAlerts, ...queue, email_enabled: projectEmailEnabled() });
 }
 
 export async function GET(req: Request) { return run(req); }
