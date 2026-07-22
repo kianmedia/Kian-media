@@ -122,15 +122,15 @@ insert into public.executive_kpi_catalog (key, category, label_ar, label_en, des
   ('approval_sla_compliance','governance','التزام SLA الاعتمادات','Approval SLA compliance','الاعتمادات المبتوتة ضمن due_at','decided_within_sla / decided_with_sla','percent','ratio','decided_at<=due_at','الاعتمادات ذات due_at المبتوتة','project_approvals (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',50),
   ('average_review_duration','governance','متوسط مدّة المراجعة','Average review duration','متوسط الأيام بين طلب الاعتماد وبتّه','avg(decided_at - requested_at)','days','avg',null,'الاعتمادات المبتوتة','project_approvals (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',60),
   ('risk_exposure','governance','التعرّض للمخاطر','Risk exposure','مجموع درجات المخاطر المفتوحة (probability×impact)','sum(risk_score) where status not in (closed,accepted)','score','sum','risk_score','المخاطر غير المغلقة وغير المقبولة','project_risks (5A)','يستثني المغلقة والمقبولة؛ يتطلّب 5A','{executive.view_governance_exceptions}',70),
-  ('critical_issue_count','governance','عدد المشكلات الحرجة','Critical issue count','المشكلات الحرجة المفتوحة','count(severity=critical & open)',null,'count','critical open issues','—','project_issues (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',80),
+  ('critical_issue_count','governance','عدد المشكلات الحرجة','Critical issue count','المشكلات الحرجة المفتوحة','count(severity=critical & open)','count','count','critical open issues','—','project_issues (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',80),
   ('change_request_cycle_time','governance','زمن دورة طلب التغيير','Change request cycle time','متوسط الأيام من الإنشاء إلى البتّ','avg(decided_at - created_at)','days','avg',null,'طلبات التغيير المبتوتة','project_change_requests (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',90),
   ('resource_utilization','resources','استغلال الموارد','Resource utilization','نِسَب الاستغلال من محرّك الموارد','booked_hours / capacity_hours','percent','ratio','booked','السعة','resource_bookings (4B)','يتطلّب 4B','{executive.view_resource_capacity}',100),
   ('resource_overload_rate','resources','نسبة تحميل الموارد الزائد','Resource overload rate','الموارد المحمّلة فوق الطاقة','overloaded_resources / total_resources','percent','ratio','utilization>100%','الموارد','resource_bookings (4B)','يتطلّب 4B','{executive.view_resource_capacity}',110),
   ('booking_conflict_rate','resources','نسبة تعارض الحجوزات','Booking conflict rate','الحجوزات ذات تعارض من إجمالي الحجوزات','conflicting_bookings / total_bookings','percent','ratio','has conflict','الحجوزات النشطة','resource_bookings (4B)','يتطلّب 4B','{executive.view_resource_capacity}',120),
   ('baseline_variance_days','schedule','انحراف خط الأساس','Baseline variance (days)','متوسط أيام تجاوز baseline_end','avg(due_date - baseline_end)','days','avg',null,'المهام ذات baseline','project_tasks (4A)','يتطلّب أعمدة 4A','{executive.view_kpis}',130),
   ('schedule_forecast_variance','schedule','انحراف توقّع الجدول','Schedule forecast variance','متوسط أيام الفرق بين التوقّع وdue_date','avg(finish_forecast - due_date)','days','avg',null,'المشاريع ذات جدول','project_schedule_health','يعتمد Gantt V2','{executive.view_forecasts}',140),
-  ('project_health_distribution','portfolio','توزيع صحّة المشاريع','Project health distribution','عدد المشاريع لكل حالة تنفيذ','group by execution status',null,'distribution',null,'المشاريع المرئية','project_execution_health','—','{executive.view_portfolio_health}',150),
-  ('governance_health_distribution','governance','توزيع صحّة الحوكمة','Governance health distribution','عدد المشاريع لكل حالة حوكمة','group by governance status',null,'distribution',null,'المشاريع المرئية','project_governance_health (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',160),
+  ('project_health_distribution','portfolio','توزيع صحّة المشاريع','Project health distribution','عدد المشاريع لكل حالة تنفيذ','group by execution status','count','distribution',null,'المشاريع المرئية','project_execution_health','—','{executive.view_portfolio_health}',150),
+  ('governance_health_distribution','governance','توزيع صحّة الحوكمة','Governance health distribution','عدد المشاريع لكل حالة حوكمة','group by governance status','count','distribution',null,'المشاريع المرئية','project_governance_health (5A)','يتطلّب 5A','{executive.view_governance_exceptions}',160),
   ('delivery_readiness_rate','delivery','نسبة الجاهزية للتسليم','Delivery readiness rate','متوسط نسبة جاهزية التسليم للمشاريع النشطة','avg(readiness_percent)','percent','avg',null,'المشاريع النشطة','executive_delivery_readiness','استرشادي','{executive.view_forecasts}',170),
   ('inactive_project_rate','portfolio','نسبة المشاريع الخاملة','Inactive project rate','المشاريع بلا نشاط منذ ≥14 يومًا','inactive / active','percent','ratio','idle_days>=14','المشاريع النشطة','project_activity','—','{executive.view_portfolio_health}',180)
 on conflict (key) do nothing;
@@ -932,9 +932,22 @@ begin
      or public.exec_norm_status('at_risk') <> 'at_risk' or public.exec_norm_status('weird') <> 'unavailable'
      then raise exception '5B FAIL: تطبيع الحالة خاطئ'; end if;
 
-  -- (ج) الكتالوج مبذور (≥15 مؤشرًا) والصلاحيات مُدرجة
+  -- (ج) عقد الكتالوج: العدد ≥17، لا unit/key/label null، توافق unit مع النوع، critical_issue_count='count'، الصلاحيات مُدرجة.
   select count(*) into v_cat from public.executive_kpi_catalog;
-  if v_cat < 15 then raise exception '5B FAIL: كتالوج المؤشرات ناقص (%)', v_cat; end if;
+  if v_cat < 17 then raise exception '5B FAIL: كتالوج المؤشرات ناقص (%)', v_cat; end if;
+  if exists (select 1 from public.executive_kpi_catalog where unit is null) then raise exception '5B FAIL: مؤشر بـunit=null'; end if;
+  if exists (select 1 from public.executive_kpi_catalog where key is null or label_ar is null or label_en is null or aggregation_method is null)
+    then raise exception '5B FAIL: مؤشر بحقل NOT NULL فارغ'; end if;
+  if coalesce((select unit from public.executive_kpi_catalog where key='critical_issue_count'),'') <> 'count'
+    then raise exception '5B FAIL: critical_issue_count.unit ≠ count'; end if;
+  if exists (select 1 from public.executive_kpi_catalog where (key like '%\_rate' or key like '%\_compliance' or key='resource_utilization') and unit<>'percent')
+    then raise exception '5B FAIL: مؤشر نسبة unit≠percent'; end if;
+  if exists (select 1 from public.executive_kpi_catalog where (key like '%\_days' or key like '%duration%' or key like '%cycle\_time%' or key like '%variance%') and unit<>'days')
+    then raise exception '5B FAIL: مؤشر أيام unit≠days'; end if;
+  if exists (select 1 from public.executive_kpi_catalog where (key like '%\_count' or key like '%\_distribution') and unit<>'count')
+    then raise exception '5B FAIL: مؤشر عدّ/توزيع unit≠count'; end if;
+  if exists (select 1 from public.executive_kpi_catalog where key='risk_exposure' and unit<>'score')
+    then raise exception '5B FAIL: risk_exposure.unit≠score'; end if;
   if (select count(*) from public.permissions where category='executive') < 10 then raise exception '5B FAIL: صلاحيات تنفيذية ناقصة'; end if;
 
   -- (د) قاعدة النسبة: denominator=0 ⇒ null لا 0 مضلّلًا (تأكيد نقيّ بلا أثر خارجي — نفس نمط CASE في snapshot_capture)
