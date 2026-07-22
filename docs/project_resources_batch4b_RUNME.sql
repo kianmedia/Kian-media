@@ -182,7 +182,8 @@ begin
 
   -- (4) المعدات: واقع العهدة (صيانة/توفر/حجوزات custody/السعة الكمية)
   if v_rtype = 'equipment' and v_stype = 'custody_inventory_assets' and v_sid is not null then
-    -- quantity_available يعكس الواقع (يخصم المصروف/الصيانة/المحجوز) — نستخدمه كسقف للسعة
+    -- quantity_available = سقف السعة (يخصم المصروف/الصيانة). ملاحظة: حجوزات العهدة النشطة
+    -- لا تُنقِص quantity_available في نظام العهدة، لذا نضمّها صراحةً إلى المستخدَم أدناه (لا تكرار).
     select a.availability_status, a.condition_status, a.quantity_available
       into v_avail_status, v_cond, v_qtotal
     from public.custody_inventory_assets a where a.id = v_sid;
@@ -212,11 +213,15 @@ begin
       from public.custody_inventory_reservations r
       where r.asset_id = v_sid and r.status = 'active'
         and coalesce(r.reserved_from, p_starts) < p_ends and coalesce(r.reserved_to, p_ends) > p_starts;
-    -- سعة كمية المعدة: الحجوزات التخطيطية المتداخلة فقط (حجوزات العهدة النشطة مطروحة مسبقًا من quantity_available)
+    -- سعة كمية المعدة: الحجوزات التخطيطية المتداخلة + حجوزات العهدة النشطة المتداخلة (الأخيرة
+    -- لا تُنقِص quantity_available فتُحسب هنا صراحةً؛ وإلا لأمكن تجاوز الحجز فوق ما حجزته العهدة).
     if v_qtotal is not null then
       select coalesce(sum(b.quantity),0) into v_used from public.resource_bookings b
       where b.resource_id = p_resource and b.is_deleted = false and b.status in ('hold','pending_approval','confirmed','in_use')
         and (p_exclude is null or b.id <> p_exclude) and b.starts_at < p_ends and b.ends_at > p_starts;
+      v_used := v_used + coalesce((select sum(rr.quantity) from public.custody_inventory_reservations rr
+        where rr.asset_id = v_sid and rr.status = 'active'
+          and coalesce(rr.reserved_from, p_starts) < p_ends and coalesce(rr.reserved_to, p_ends) > p_starts), 0);
       if v_used + p_quantity > v_qtotal then
         return query select 'capacity_conflict','capacity_conflict', null::uuid, null::uuid, p_starts, p_ends,
           'الكمية المطلوبة تتجاوز المتوفر ('||v_qtotal||')', 'Requested quantity exceeds available ('||v_qtotal||')', true;
@@ -301,18 +306,30 @@ begin
   if v_s is null or v_e is null or v_e <= v_s then raise exception 'bad_dates'; end if;
   if v_qty <= 0 then raise exception 'bad_quantity'; end if;
   if v_status not in ('draft','hold','pending_approval','confirmed') then raise exception 'bad_status'; end if;
+  -- الإنشاء المباشر بحالة «مؤكد» يتطلب صلاحية التأكيد (لا تجاوز لمسار الاعتماد)
+  if v_status = 'confirmed' and not public.res_can('resources.confirm_booking') then raise exception 'not authorized'; end if;
 
   select * into v_pr from public.planning_resources where id = v_res and is_deleted = false;
   if v_pr.id is null then raise exception 'bad_resource'; end if;
   if not v_pr.is_active then raise exception 'resource_inactive'; end if;
 
-  -- المشروع + انتماء المهمة/الجلسة لنفس المشروع
+  -- المشروع
   if v_proj is not null and not public.pc_can_read_project(v_proj) then raise exception 'not authorized'; end if;
-  if v_task  is not null and v_proj is not null and not exists
-    (select 1 from public.project_tasks t where t.id = v_task and t.project_id = v_proj and coalesce(t.is_deleted,false)=false)
-    then raise exception 'bad_link'; end if;
-  if v_shoot is not null and v_proj is not null and not exists
-    (select 1 from public.project_shoot_sessions s where s.id = v_shoot and s.project_id = v_proj) then raise exception 'bad_link'; end if;
+  -- انتماء المهمة/الجلسة (يُفحَص دائمًا عند وجودها — لا تزوير عبر مشروع آخر حتى لو project_id فارغ)
+  if v_task is not null then
+    if v_proj is not null then
+      if not exists (select 1 from public.project_tasks t where t.id = v_task and t.project_id = v_proj and coalesce(t.is_deleted,false)=false) then raise exception 'bad_link'; end if;
+    elsif not exists (select 1 from public.project_tasks t where t.id = v_task and coalesce(t.is_deleted,false)=false and public.pc_can_read_project(t.project_id)) then
+      raise exception 'not authorized';
+    end if;
+  end if;
+  if v_shoot is not null then
+    if v_proj is not null then
+      if not exists (select 1 from public.project_shoot_sessions s where s.id = v_shoot and s.project_id = v_proj) then raise exception 'bad_link'; end if;
+    elsif not exists (select 1 from public.project_shoot_sessions s where s.id = v_shoot and public.pc_can_read_project(s.project_id)) then
+      raise exception 'not authorized';
+    end if;
+  end if;
 
   -- التعارضات
   -- الحجب على التعارض الحاد أو تجاوز السعة (كلاهما يمنع الحجز إلا بتجاوز مُصرّح)
@@ -471,9 +488,14 @@ begin
   if b.id is null then raise exception 'not_found'; end if;
   if b.project_id is not null and not public.pc_can_read_project(b.project_id) then raise exception 'not authorized'; end if;
   if p_expected_version is not null and p_expected_version <> b.version then raise exception 'stale_update'; end if;
-  select count(*) filter (where c.severity in ('hard_conflict','capacity_conflict')) into v_hard
-    from public.resource_booking_conflicts(b.resource_id, b.starts_at, b.ends_at, b.id, b.quantity) c;
-  if v_hard > 0 and b.conflict_override_by is null then raise exception 'hard_conflict'; end if;
+  -- بالهوية لا العدد: احسب التعارضات الحاجبة الحالية غير المشمولة في لقطة التجاوز (type+booking_id).
+  -- أي تعارض حاجب جديد لم يُراجَع (booking جديد أو نوع لم يُعتمد) يمنع التأكيد؛ بلا تجاوز → الكل يمنع.
+  select count(*) into v_hard
+  from public.resource_booking_conflicts(b.resource_id, b.starts_at, b.ends_at, b.id, b.quantity) c
+  where c.severity in ('hard_conflict','capacity_conflict')
+    and not (b.overridden_conflicts is not null
+             and b.overridden_conflicts @> jsonb_build_array(jsonb_build_object('conflict_type', c.conflict_type, 'conflicting_booking_id', c.conflicting_booking_id)));
+  if v_hard > 0 then raise exception 'hard_conflict'; end if;
   update public.resource_bookings set status = 'confirmed', approved_by = auth.uid(), approved_at = now(),
     version = version + 1, updated_at = now() where id = p_id;
   if b.project_id is not null then
@@ -532,8 +554,16 @@ begin
                         and coalesce(h.is_deleted,false)=false and h.type in ('public_holiday','company_holiday','closed_day'));
   v_avail := greatest((v_workdays - coalesce(v_leavedays,0)) * v_hpd, 0);
 
-  -- الساعات المخطّطة فقط: مهام مُسندة بتقدير، ليست أبًا (بلا Double Counting)، تتقاطع النطاق، غير منتهية.
-  select coalesce(sum(t.estimated_hours),0) into v_planned
+  -- الساعات المخطّطة: مهام مُسندة بتقدير، ليست أبًا (بلا Double Counting)، غير منتهية، تتقاطع النطاق.
+  -- تُقسَّم ساعات المهمة على نسبة أيام عملها داخل النافذة إلى إجمالي أيام عملها (لئلا تُحسب مهمة
+  -- طويلة بالكامل ضمن نافذة قصيرة فتضخّم الاستغلال) — النافذة نفسها مقيّدة بأيام العمل.
+  select coalesce(sum(
+      t.estimated_hours * case
+        when t.start_date is not null and t.due_date is not null and t.due_date >= t.start_date
+          -- نطاق بلا أيام عمل (المقام 0) ⇒ coalesce إلى 1 (نحسب التقدير كاملًا، لا نُسقطه بـnull)
+          then coalesce(public.working_days_between(greatest(t.start_date, p_from), least(t.due_date, p_to))::numeric
+               / nullif(public.working_days_between(t.start_date, t.due_date), 0), 1)
+        else 1 end), 0) into v_planned
   from public.project_tasks t
   where coalesce(t.is_deleted,false)=false and t.status not in ('done','cancelled')
     and (t.assignee_id = p_user or exists (select 1 from public.project_task_assignees a where a.task_id = t.id and a.user_id = p_user))
@@ -863,19 +893,25 @@ begin
   end;
   if not v_conf_ok then raise exception '4B FAIL: لم يكتمل اختبار التعارض'; end if;
 
-  -- (ب) عقد لوحة الموارد على مشروع حقيقي (قراءة فقط) — لا يرمي، عقد صالح
+  -- (ب) عقود دوال القراءة الداخلية على معرّفات غير موجودة (بلا auth، بلا بيانات): كائنات صالحة بلا رمي
   begin
-    select id into v_r from public.projects where coalesce(is_deleted,false)=false order by (project_name ilike '%تست 01%') desc, id limit 1;
-    if v_r is not null then
-      -- استدعاء داخلي للمنطق (نتجاوز بوابة الصلاحية عبر دالة القراءة المباشرة project_team_workload غير ممكن بلا auth)
-      -- نكتفي بالتحقق من محرك التعارض على مورد غير موجود ⇒ لا صفوف، لا خطأ
-      perform * from public.resource_booking_conflicts(gen_random_uuid(), now(), now()+interval '1 hour', null, 1);
-    end if;
+    -- مورد/مشروع غير موجود ⇒ محرك التعارض لا صفوف، لا خطأ (مشروع بلا حجوزات)
+    perform * from public.resource_booking_conflicts(gen_random_uuid(), now(), now()+interval '1 hour', null, 1);
+    -- بطاقة مورد غير موجود ⇒ '{}'
+    if jsonb_typeof(public.res_card(gen_random_uuid())) <> 'object' then raise exception '4B FAIL: res_card ليست object'; end if;
+    -- عبء موظف غير موجود ⇒ عقد صالح (available/planned/daily_breakdown/classification)
+    v_dash := public.employee_workload_core(gen_random_uuid(), (now() at time zone 'utc')::date, ((now() at time zone 'utc')::date + 7));
+    if v_dash is null or jsonb_typeof(v_dash) <> 'object' or jsonb_typeof(v_dash->'daily_breakdown') <> 'array'
+       or (v_dash->>'classification') is null or (v_dash->>'available_hours') is null
+      then raise exception '4B FAIL: employee_workload_core عقد غير صالح'; end if;
+    -- عبء فريق مشروع غير موجود ⇒ members = [] بلا خطأ
+    v_dash := public.project_team_workload_core(gen_random_uuid(), (now() at time zone 'utc')::date, ((now() at time zone 'utc')::date + 7));
+    if jsonb_typeof(v_dash->'members') <> 'array' then raise exception '4B FAIL: project_team_workload_core.members ليست array'; end if;
   exception when others then
-    raise exception '4B FAIL: خطأ غير متوقّع في مسار القراءة: %', sqlerrm;
+    if sqlerrm like '4B FAIL%' then raise; else raise exception '4B FAIL: خطأ غير متوقّع في مسار القراءة: %', sqlerrm; end if;
   end;
 
-  raise notice '4B ✅ نجح الاختبار الذاتي — محرك التعارض والسعة يعملان، ومسار القراءة سليم.';
+  raise notice '4B ✅ نجح الاختبار الذاتي — تعارض/سعة/إجازة-صيانة-عهدة عبر المحرك، وعقود القراءة الداخلية سليمة.';
 end $selftest$;
 
 commit;
