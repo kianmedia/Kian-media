@@ -682,6 +682,15 @@ export function UnifiedGanttTab({ projectId, canManage, flash, gotoTab }: { proj
   return (
     <div className="space-y-2" id="pc-sched-print">
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
+      {/* Phase 4C closure: هذا المخطّط الموحّد (مهام + عناصر الخطة + جلسات) عرضٌ توافقي قديم.
+          نظام جدولة المهام الرسمي الحديث هو «المخطط الزمني» (Planner / Gantt V2) المبني على
+          project_tasks. عناصر الخطة (project_schedule_items) تبقى طبقة التقويم/الأحداث المستقلة. */}
+      {gotoTab && (
+        <div className="no-print text-[10px] text-stone-500 border border-stone-800 rounded-lg px-3 py-1.5 flex items-center gap-2 flex-wrap">
+          <span>{t({ ar: "عرض موحّد (توافقي). لجدولة المهام الرسمية استخدم:", en: "Legacy unified view. For task scheduling use:" })}</span>
+          <button onClick={() => gotoTab("planning")} className="text-sky-300 hover:text-sky-200 underline">{t({ ar: "المخطط الزمني (Planner)", en: "Planner" })}</button>
+        </div>
+      )}
       <div className="flex items-center justify-between flex-wrap gap-2 no-print">
         <div className="flex gap-1">{(["day", "week", "month"] as const).map((z) => (
           <button key={z} onClick={() => setZoom(z)} className={`px-2 py-1 rounded text-[10px] ${zoom === z ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>

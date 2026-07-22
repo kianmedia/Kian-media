@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
   projectGanttSnapshot, projectSchedulePreview, projectScheduleApply, pcTaskReschedule, projectBaselineSet, pcErr,
+  projectResourceLevelingPreview, projectResourceLevelingApply,
   type GanttSnapshot, type GanttTask,
 } from "@/lib/portal/projectCore";
 
@@ -142,6 +143,20 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
     if (!a.ok) { flash(pcErr(a.error)); return; }
     flash(t({ ar: `أُعيدت جدولة ${a.data.rescheduled} مهمة.`, en: `Rescheduled ${a.data.rescheduled}.` })); await load(true);
   }
+  async function levelResources() {
+    if (busy) return; setBusy(true);
+    const p = await projectResourceLevelingPreview(projectId); setBusy(false);
+    if (!p.ok) { flash(pcErr(p.error)); return; }
+    const moved = p.data.moved_count;
+    if (moved === 0) { flash(t({ ar: "لا حاجة لموازنة الموارد — لا تداخل قابل للحل.", en: "No leveling needed." })); return; }
+    if (!window.confirm(t({
+      ar: `موازنة الموارد ستُعيد جدولة ${moved} مهمة «آلية». نهاية المشروع: ${p.data.project_finish_before ?? "—"} → ${p.data.project_finish_after ?? "—"}. لا تتغيّر المهام اليدوية/المنتهية ولا خط الأساس. متابعة؟`,
+      en: `Level ${moved} auto tasks? Finish ${p.data.project_finish_before ?? "—"} → ${p.data.project_finish_after ?? "—"}.` }))) return;
+    setBusy(true);
+    const a = await projectResourceLevelingApply(projectId, null); setBusy(false);
+    if (!a.ok) { flash(pcErr(a.error)); return; }
+    flash(t({ ar: `أُعيدت جدولة ${a.data.moved} مهمة (موازنة موارد).`, en: `Leveled ${a.data.moved} tasks.` })); await load(true);
+  }
   async function setBaseline() {
     const hasBaseline = !!g?.tasks.some((x) => x.baseline_start);
     const reason = hasBaseline ? window.prompt(t({ ar: "سبب إعادة ضبط خط الأساس (إلزامي):", en: "Baseline reset reason (required):" })) : "";
@@ -179,6 +194,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
         </div>
         <button onClick={jumpToday} className="text-[11px] text-stone-300 border border-stone-700 rounded px-2 py-1">{t({ ar: "اليوم", en: "Today" })}</button>
         {canManage && <button disabled={busy} onClick={() => void autoSchedule()} className="text-[11px] text-sky-300 border border-sky-800 rounded px-2 py-1">{t({ ar: "جدولة آلية", en: "Auto-schedule" })}</button>}
+        {canManage && <button disabled={busy} onClick={() => void levelResources()} className="text-[11px] text-violet-300 border border-violet-800 rounded px-2 py-1" title={t({ ar: "تسلسل مهام كل مورد لإزالة التداخل", en: "Serialize per-resource to remove overlap" })}>{t({ ar: "موازنة الموارد", en: "Level" })}</button>}
         {canManage && <button onClick={() => void setBaseline()} className="text-[11px] text-amber-300 border border-amber-800 rounded px-2 py-1">{t({ ar: "خط الأساس", en: "Baseline" })}</button>}
         <span className="text-[10px] text-stone-500">
           {cp.computable ? <><span className="text-red-400">■</span> {t({ ar: "المسار الحرج", en: "Critical" })} ({cp.critical_task_ids.length}) · {cp.total_duration} {t({ ar: "يوم عمل", en: "wd" })}</> : t({ ar: "المسار الحرج غير قابل للحساب (لا اعتماديات كافية)", en: "Critical path N/A" })}

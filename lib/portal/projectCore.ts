@@ -309,6 +309,35 @@ export interface SchedulePreview { project_id: string; tasks: { id: string; curr
 export const projectGanttSnapshot = (projectId: string, includeChildren = false) =>
   prpc<GanttSnapshot>("project_gantt_snapshot_v2", { p_project: projectId, p_include_children: includeChildren });
 export const projectSchedulePreview = (projectId: string) => prpc<SchedulePreview>("project_schedule_preview_v2", { p_project: projectId });
+
+// ─── Phase 4C: resource leveling · schedule health · portfolio ───
+export interface LevelingPreview {
+  project_id: string; strategy: string; moved_count: number;
+  project_finish_before: string | null; project_finish_after: string | null; critical_note_ar?: string;
+  changes: { task_id: string; before_start: string | null; before_end: string | null; after_start: string; after_end: string; moved: boolean }[];
+  warnings: { type: string; ar: string }[];
+}
+export type LevelingStrategy = "minimize_project_delay" | "minimize_resource_overload" | "preserve_milestones" | "preserve_baseline" | "balanced";
+export const projectResourceLevelingPreview = (projectId: string, strategy: LevelingStrategy = "minimize_resource_overload") =>
+  prpc<LevelingPreview>("project_resource_leveling_preview", { p_project: projectId, p_options: { strategy } });
+export const projectResourceLevelingApply = (projectId: string, expectedUpdatedAt: string | null, strategy: LevelingStrategy = "minimize_resource_overload") =>
+  prpc<{ ok: boolean; moved: number; project_finish_after: string | null }>("project_resource_leveling_apply", { p_project: projectId, p_expected_updated_at: expectedUpdatedAt ?? null, p_options: { strategy } });
+
+export interface ScheduleHealth {
+  project_id: string; schedule_status: "on_track" | "at_risk" | "off_track";
+  tasks_without_dates: number; tasks_without_duration: number; baseline_slippage: number; overdue_tasks: number;
+  unscheduled_auto_tasks: number; booking_conflicts: number; project_finish_forecast: string | null;
+  critical_path_computable: boolean; critical_total_duration: number; warnings: { type: string; ar: string }[];
+}
+export const projectScheduleHealth = (projectId: string) => prpc<ScheduleHealth>("project_schedule_health", { p_project: projectId });
+
+export interface PortfolioProject {
+  project_id: string; name: string | null; status: string | null; is_subproject: boolean;
+  start_date: string | null; due_date: string | null; delivery_date: string | null; core_stage: string;
+  health: string; progress_pct: number; schedule: ScheduleHealth; open_tasks: number; milestones: number;
+}
+export const portfolioScheduleDashboard = (filters: Record<string, unknown> = {}) =>
+  prpc<{ projects: PortfolioProject[]; generated_at: string; summary: { total: number; off_track: number; at_risk: number } }>("portfolio_schedule_dashboard", { p_filters: filters });
 export const projectScheduleApply = (projectId: string, expectedUpdatedAt?: string | null) =>
   prpc<{ ok: boolean; rescheduled: number; warnings: unknown[] }>("project_schedule_apply", { p_project: projectId, p_expected_updated_at: expectedUpdatedAt ?? null });
 export const pcTaskReschedule = (taskId: string, plannedStart: string | null, plannedEnd: string | null, cascade = false, expectedVersion?: number | null) =>
