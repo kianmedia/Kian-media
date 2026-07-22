@@ -686,8 +686,9 @@ export function UnifiedGanttTab({ projectId, canManage, flash, gotoTab }: { proj
           نظام جدولة المهام الرسمي الحديث هو «المخطط الزمني» (Planner / Gantt V2) المبني على
           project_tasks. عناصر الخطة (project_schedule_items) تبقى طبقة التقويم/الأحداث المستقلة. */}
       {gotoTab && (
-        <div className="no-print text-[10px] text-stone-500 border border-stone-800 rounded-lg px-3 py-1.5 flex items-center gap-2 flex-wrap">
-          <span>{t({ ar: "عرض موحّد (توافقي). لجدولة المهام الرسمية استخدم:", en: "Legacy unified view. For task scheduling use:" })}</span>
+        <div className="no-print text-[10px] text-stone-500 border border-amber-900/40 bg-amber-950/10 rounded-lg px-3 py-1.5 flex items-center gap-2 flex-wrap">
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 shrink-0">{t({ ar: "عرض تشغيلي (قديم)", en: "Legacy operational view" })}</span>
+          <span>{t({ ar: "يوحّد المهام + عناصر الخطة + الجلسات (قراءة). لا يكتب تواريخ المهام. لجدولة المهام الرسمية:", en: "Read-only unified view. For task scheduling:" })}</span>
           <button onClick={() => gotoTab("planning")} className="text-sky-300 hover:text-sky-200 underline">{t({ ar: "المخطط الزمني (Planner)", en: "Planner" })}</button>
         </div>
       )}

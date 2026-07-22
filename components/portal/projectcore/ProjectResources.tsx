@@ -12,6 +12,10 @@ import {
   WORKLOAD_LABELS, BOOKING_STATUS_LABELS, BOOKING_TYPE_LABELS,
   type ResourcesDashboard, type ResourceTimeline, type WorkloadSnapshot, type BookingType, type BookingConflict,
 } from "@/lib/portal/projectResources";
+import ResourceLabel from "./ResourceLabel";
+import PlanningHealthCard from "./PlanningHealthCard";
+import ConflictCenter from "./ConflictCenter";
+import PlanningReports from "./PlanningReports";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const addDaysISO = (iso: string, n: number) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -30,6 +34,8 @@ export default function ProjectResources({ projectId, canManage, flash }: { proj
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [showConflicts, setShowConflicts] = useState(false);
+  const [showReports, setShowReports] = useState(false);
   const reqSeq = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -97,18 +103,26 @@ export default function ProjectResources({ projectId, canManage, flash }: { proj
           <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-stone-200" style={{ colorScheme: "dark" }} /></label>
         {canManage && <button onClick={() => setShowForm((s) => !s)} className="text-sky-300 border border-sky-800 rounded px-2.5 py-1">{t({ ar: "حجز مورد", en: "Book" })}</button>}
         {canManage && <button disabled={busy} onClick={() => void sync()} className="text-stone-300 border border-stone-700 rounded px-2.5 py-1" title={t({ ar: "تسجيل الموظفين/المعدات كموارد", en: "Register employees/equipment" })}>{t({ ar: "مزامنة الموارد", en: "Sync" })}</button>}
+        <button onClick={() => setShowConflicts(true)} className="text-red-300 border border-red-900 rounded px-2.5 py-1">{t({ ar: "مركز التعارضات", en: "Conflicts" })}</button>
+        <button onClick={() => setShowReports(true)} className="text-green-300 border border-green-900 rounded px-2.5 py-1">{t({ ar: "التقارير", en: "Reports" })}</button>
       </div>
+
+      {/* §11 بطاقة الصحّة الموحّدة */}
+      <PlanningHealthCard projectId={projectId} />
 
       {showForm && tl && <BookingForm projectId={projectId} resources={tl.resources.map((r) => r.resource)} defaultFrom={from} flash={flash}
         onDone={() => { setShowForm(false); void load(); }} onClose={() => setShowForm(false)} />}
+      {showConflicts && <ConflictCenter projectId={projectId} onClose={() => { setShowConflicts(false); void load(); }} />}
+      {showReports && <PlanningReports projectId={projectId} onClose={() => setShowReports(false)} />}
 
       {/* التعارضات */}
       {dash && dash.conflicts.length > 0 && (
         <section className="border border-red-900/60 bg-red-950/20 rounded-xl p-3 space-y-2">
-          <h4 className="text-xs font-semibold text-red-300">{t({ ar: "تعارضات الحجوزات", en: "Booking conflicts" })} ({dash.conflicts.length})</h4>
+          <div className="flex items-center justify-between"><h4 className="text-xs font-semibold text-red-300">{t({ ar: "تعارضات الحجوزات", en: "Booking conflicts" })} ({dash.conflicts.length})</h4>
+            <button onClick={() => setShowConflicts(true)} className="text-[10px] text-red-300 underline">{t({ ar: "معالجة", en: "Resolve" })}</button></div>
           {dash.conflicts.map((c) => (
-            <div key={c.booking_id} className="text-[11px] text-red-200">
-              <span className="font-medium">{c.resource.display_name}</span>
+            <div key={c.booking_id} className="text-[11px] text-red-200 flex items-center gap-1 flex-wrap">
+              <ResourceLabel r={c.resource} size="xs" />
               {(c.conflicts ?? []).map((cf, i) => <span key={i} className="text-red-300/80"> · {cf.explanation_ar}</span>)}
             </div>
           ))}
@@ -137,7 +151,7 @@ export default function ProjectResources({ projectId, canManage, flash }: { proj
             return (
               <div key={b.id} className="flex items-center gap-2 text-[11px] border border-stone-800 rounded-lg px-2.5 py-1.5 bg-stone-950">
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ background: st.color }} />
-                <span className="text-stone-200 font-medium truncate">{b.resource.display_name}</span>
+                <ResourceLabel r={b.resource} size="xs" />
                 <span className="text-stone-500">{BOOKING_TYPE_LABELS[b.booking_type as BookingType]}</span>
                 <span className="text-stone-500">{fmtDT(b.starts_at)} → {fmtDT(b.ends_at)}</span>
                 {b.overridden && <span className="text-amber-400" title={t({ ar: "تم تجاوز تعارض", en: "Conflict overridden" })}>⚠ تجاوز</span>}
@@ -216,7 +230,7 @@ function ResourceTimelineView({ tl, from, to }: { tl: ResourceTimeline; from: st
           </div>
           {tl.resources.slice(0, 40).map((r) => (
             <div key={r.resource.id} className="flex border-b border-stone-900 items-stretch" style={{ minHeight: 26 }}>
-              <div className="shrink-0 border-e border-stone-800 px-1 py-1 text-[10px] text-stone-300 truncate self-center" style={{ width: 120 }} dir="auto" title={r.resource.display_name}>{r.resource.display_name}</div>
+              <div className="shrink-0 border-e border-stone-800 px-1 py-1 self-center overflow-hidden" style={{ width: 120 }}><ResourceLabel r={r.resource} size="xs" /></div>
               <div className="flex-1 relative">
                 {r.bookings.map((b) => {
                   const left = posOf(b.starts_at); const right = posOf(b.ends_at);

@@ -80,6 +80,21 @@ export const resourceSuggestions = (projectId: string, taskId: string | null, pr
 export const resourceCheckConflicts = (resourceId: string, startsAt: string, endsAt: string, quantity = 1) =>
   prpc<{ conflicts: BookingConflict[] }>("resource_check_conflicts", { p_resource: resourceId, p_starts: startsAt, p_ends: endsAt, p_quantity: quantity });
 
+// ─── Phase 4D: conflict resolutions (explainable) + alerts scan ───
+export interface ConflictResolutions {
+  booking_id: string; conflicts: BookingConflict[];
+  resolutions: {
+    alternative_resources: { resource: ResourceCard; available: boolean; kind: string; reason_ar: string; rank: number }[];
+    change_time: { kind: string; reason_ar: string };
+    override: { kind: string; reason_ar: string; requires: string };
+    cancel: { kind: string; reason_ar: string };
+  };
+  note_ar: string;
+}
+export const resourceConflictResolutions = (bookingId: string) =>
+  prpc<ConflictResolutions>("resource_conflict_resolutions", { p_booking: bookingId });
+export const resourceAlertsScan = () => prpc<{ ok: boolean; alerts_emitted: number }>("resource_alerts_scan", {});
+
 // ─── الكتابة (RPCs ذرّية) ───
 export const resourceBookingCreate = (payload: Record<string, unknown>) =>
   prpc<BookingResult>("resource_booking_create", { p_payload: payload });

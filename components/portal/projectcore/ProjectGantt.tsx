@@ -11,9 +11,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
   projectGanttSnapshot, projectSchedulePreview, projectScheduleApply, pcTaskReschedule, projectBaselineSet, pcErr,
-  projectResourceLevelingPreview, projectResourceLevelingApply,
-  type GanttSnapshot, type GanttTask,
+  projectResourceLevelingPreview, projectResourceLevelingApply, projectSubprojectsSummary,
+  type GanttSnapshot, type GanttTask, type Subproject,
 } from "@/lib/portal/projectCore";
+import WarningGroups from "./WarningGroups";
 
 const ROW_H = 30, HEAD_H = 44, LABEL_W = 220;
 const ZOOM: Record<"day" | "week" | "month", number> = { day: 26, week: 9, month: 3 };
@@ -34,6 +35,8 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [err, setErr] = useState("");
+  const [subs, setSubs] = useState<Subproject[] | null>(null);   // §5 المشاريع الفرعية (تحميل عند الطلب)
+  const [showSubs, setShowSubs] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tRef = useRef(t); tRef.current = t;              // أحدث t بلا إدراجه في deps (تفاديًا لحلقة useEffect)
   const reqSeq = useRef(0);                               // تسلسل الطلبات: الأحدث يفوز ويتجاهل نتائج الأقدم
@@ -166,6 +169,14 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
     if (!r.ok) { flash(pcErr(r.error)); return; }
     flash(t({ ar: "تم حفظ خط الأساس.", en: "Baseline saved." })); await load(true);
   }
+  async function toggleSubs() {
+    if (showSubs) { setShowSubs(false); return; }
+    setShowSubs(true);
+    if (subs === null) {   // §5 تحميل ملخّص المشاريع الفرعية عند أول طلب (RPC واحد، بلا N+1)
+      const r = await projectSubprojectsSummary(projectId);
+      if (r.ok) setSubs(r.data.subprojects); else { setSubs([]); flash(pcErr(r.error)); }
+    }
+  }
 
   if (phase === "loading") return <p className="text-xs text-stone-500 py-6 text-center">{t({ ar: "جارٍ تحميل المخطط الزمني…", en: "Loading the schedule…" })}</p>;
   if (phase === "error") return (
@@ -196,11 +207,32 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
         {canManage && <button disabled={busy} onClick={() => void autoSchedule()} className="text-[11px] text-sky-300 border border-sky-800 rounded px-2 py-1">{t({ ar: "جدولة آلية", en: "Auto-schedule" })}</button>}
         {canManage && <button disabled={busy} onClick={() => void levelResources()} className="text-[11px] text-violet-300 border border-violet-800 rounded px-2 py-1" title={t({ ar: "تسلسل مهام كل مورد لإزالة التداخل", en: "Serialize per-resource to remove overlap" })}>{t({ ar: "موازنة الموارد", en: "Level" })}</button>}
         {canManage && <button onClick={() => void setBaseline()} className="text-[11px] text-amber-300 border border-amber-800 rounded px-2 py-1">{t({ ar: "خط الأساس", en: "Baseline" })}</button>}
+        <button onClick={() => void toggleSubs()} className={`text-[11px] border rounded px-2 py-1 ${showSubs ? "text-emerald-200 border-emerald-700 bg-emerald-900/30" : "text-emerald-300 border-emerald-800"}`}>{t({ ar: "المشاريع الفرعية", en: "Subprojects" })}</button>
         <span className="text-[10px] text-stone-500">
           {cp.computable ? <><span className="text-red-400">■</span> {t({ ar: "المسار الحرج", en: "Critical" })} ({cp.critical_task_ids.length}) · {cp.total_duration} {t({ ar: "يوم عمل", en: "wd" })}</> : t({ ar: "المسار الحرج غير قابل للحساب (لا اعتماديات كافية)", en: "Critical path N/A" })}
         </span>
       </div>
 
+      {/* §5 عرض تجميعي للمشاريع الفرعية (صفوف ملخّص؛ لا نقل مهام ولا تغيير parent_project_id) */}
+      {showSubs && (
+        <section className="border border-emerald-900/40 rounded-xl p-2 bg-emerald-950/10 space-y-1" dir="rtl">
+          <h5 className="text-[11px] font-semibold text-emerald-200">{t({ ar: "المشاريع الفرعية (ملخّص)", en: "Subprojects (summary)" })}</h5>
+          {subs === null && <p className="text-[10px] text-stone-500">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>}
+          {subs !== null && subs.length === 0 && <p className="text-[10px] text-stone-500">{t({ ar: "لا مشاريع فرعية (أو خاصية التسلسل غير مطبّقة).", en: "No subprojects." })}</p>}
+          {subs?.map((s) => (
+            <div key={s.project_id} className="flex items-center gap-2 text-[10px] border-b border-stone-900 py-1 flex-wrap">
+              <span className="text-stone-500">↳</span>
+              <span className="text-stone-200 truncate max-w-[180px]" dir="auto">{s.name ?? "—"}</span>
+              <span className="text-stone-500">{s.start ?? "—"} → {s.end ?? "—"}</span>
+              <span className="text-stone-400">{s.progress_pct}%</span>
+              <span className="text-stone-500">{s.open_tasks} {t({ ar: "مهمة", en: "tasks" })}</span>
+              {s.milestones > 0 && <span className="text-amber-400">◆ {s.milestones}</span>}
+              <a href={`/client-portal/project-core/${s.project_id}?tab=planning`} className="text-sky-300 hover:text-sky-200 ms-auto">{t({ ar: "فتح المخطط", en: "Open planner" })}</a>
+            </div>
+          ))}
+          <p className="text-[9px] text-stone-600">{t({ ar: "لكل مشروع فرعي مساره الحرج المستقل — افتح مخططه. الصحّة التفصيلية في «جدولة المشاريع».", en: "Each subproject has its own critical path." })}</p>
+        </section>
+      )}
       <div className="border border-stone-800 rounded-xl overflow-hidden bg-stone-950">
         <div className="flex">
           {/* عمود المهام (Sticky) */}
@@ -274,7 +306,7 @@ export default function ProjectGantt({ projectId, canManage, flash }: { projectI
           </div>
         </div>
       </div>
-      {(cp.warnings.length > 0 || g.warnings.length > 0) && <p className="text-[10px] text-amber-400">{[...g.warnings, ...cp.warnings].map((w) => t({ ar: w.ar, en: w.type })).join(" · ")}</p>}
+      {(cp.warnings.length > 0 || g.warnings.length > 0) && <WarningGroups warnings={[...g.warnings, ...cp.warnings]} />}
       <p className="text-[10px] text-stone-600" dir="auto">{t({ ar: "اسحب المهمة لنقلها، أو حافتها اليمنى لتغيير المدة. الجدولة الآلية تُعيد جدولة مهام «auto» فقط. على الجوال استخدم تبويب المهام لتغيير التواريخ.", en: "Drag to move / right edge to resize. Auto-schedule affects auto tasks only." })}</p>
     </div>
   );

@@ -338,6 +338,20 @@ export interface PortfolioProject {
 }
 export const portfolioScheduleDashboard = (filters: Record<string, unknown> = {}) =>
   prpc<{ projects: PortfolioProject[]; generated_at: string; summary: { total: number; off_track: number; at_risk: number } }>("portfolio_schedule_dashboard", { p_filters: filters });
+
+// ─── Phase 4D: combined planning health ───
+export interface PlanningHealth {
+  project_id: string; combined_status: "on_track" | "at_risk" | "off_track" | "unknown";
+  execution: { status?: string; reasons?: { type: string; ar: string }[] } & Record<string, unknown>;
+  schedule: ScheduleHealth & Record<string, unknown>;
+  resource: { status: string; booking_conflicts: number; unassigned_tasks: number; reasons: { type: string; ar: string }[] };
+  calculated_at: string;
+}
+export const projectPlanningHealth = (projectId: string) => prpc<PlanningHealth>("project_planning_health", { p_project: projectId });
+
+export interface Subproject { project_id: string; name: string | null; status: string | null; start: string | null; end: string | null; progress_pct: number; milestones: number; open_tasks: number }
+export const projectSubprojectsSummary = (projectId: string) =>
+  prpc<{ project_id: string; subprojects: Subproject[] }>("project_subprojects_summary", { p_project: projectId });
 export const projectScheduleApply = (projectId: string, expectedUpdatedAt?: string | null) =>
   prpc<{ ok: boolean; rescheduled: number; warnings: unknown[] }>("project_schedule_apply", { p_project: projectId, p_expected_updated_at: expectedUpdatedAt ?? null });
 export const pcTaskReschedule = (taskId: string, plannedStart: string | null, plannedEnd: string | null, cascade = false, expectedVersion?: number | null) =>
