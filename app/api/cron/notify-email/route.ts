@@ -97,9 +97,23 @@ async function run(req: Request) {
     else log("TASK_ALERTS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
   } catch (e) { log("TASK_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
+  // Batch 5B: executive portfolio alerts (project became critical) — idempotent via
+  // reminder_tracking + notification_events idem key. Reuses this same daily cron (no new cron).
+  // Guarded: if 5B not applied, the RPC is absent and this block no-ops.
+  let execAlerts = 0;
+  try {
+    const r = await rpcAsService<{ ok: boolean; emitted: number }>("executive_alerts_scan", {});
+    if (r.ok) execAlerts = r.data?.emitted ?? 0;
+    else log("EXEC_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+  } catch (e) { log("EXEC_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+
+  // Batch 5B: capture a weekly KPI snapshot (idempotent per ISO period) — foundation for trends.
+  try { await rpcAsService<{ ok: boolean }>("executive_snapshot_capture", { p_period: "weekly" }); }
+  catch (e) { log("EXEC_SNAPSHOT_ERROR", { error: String(e).slice(0, 200) }); }
+
   const queue = await processQueue();
-  log("NOTIFY_EMAIL_RUN", { reminders, taskAlerts, ...queue, email_enabled: projectEmailEnabled() });
-  return NextResponse.json({ ok: true, reminders, taskAlerts, ...queue, email_enabled: projectEmailEnabled() });
+  log("NOTIFY_EMAIL_RUN", { reminders, taskAlerts, execAlerts, ...queue, email_enabled: projectEmailEnabled() });
+  return NextResponse.json({ ok: true, reminders, taskAlerts, execAlerts, ...queue, email_enabled: projectEmailEnabled() });
 }
 
 export async function GET(req: Request) { return run(req); }
