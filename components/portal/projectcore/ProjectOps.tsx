@@ -4,6 +4,7 @@
 // الاعتمادات + سجل النشاط. كل الكتابات عبر RPCs (projectCore.ts). staff فقط.
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
@@ -31,6 +32,9 @@ import ProjectGantt from "./ProjectGantt";
 import ProjectResources from "./ProjectResources";
 import GovernanceTab from "./GovernanceTab";
 import ClosureTab from "./ClosureTab";
+import SubprojectsTab from "./SubprojectsTab";
+import CreateProjectWizard from "./CreateProjectWizard";
+import { projectHierarchyContext, projectHierarchyPromoteToMaster, hierErr, SCOPE_LABELS, SCOPE_COLOR, type HierarchyContext } from "@/lib/portal/projectHierarchy";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -44,12 +48,13 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "execution" | "reports" | "planning" | "resources" | "governance" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+type TabKey = "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "execution", ar: "التنفيذ", en: "Execution" }, { k: "reports", ar: "التقارير", en: "Reports" },
   { k: "planning", ar: "المخطط الزمني", en: "Planner" },
   { k: "resources", ar: "الموارد", en: "Resources" },
   { k: "governance", ar: "الحوكمة", en: "Governance" },
+  { k: "subprojects", ar: "المشاريع الفرعية", en: "Subprojects" },
   { k: "closure", ar: "إغلاق المشروع", en: "Closure" },
   { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
@@ -67,10 +72,30 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   const { caps, profile } = usePortal();
   const canManage = caps.isAdminArea || caps.isEditor;
   const isFinance = caps.isOwner || profile.staff_role === "finance";   // عزل الحسابات
+  // 6A: سياق الهرمية — تبويب «المشاريع الفرعية» يظهر للمشروع الرئيسي فقط.
+  const [hier, setHier] = useState<HierarchyContext | null>(null);
+  const [addSub, setAddSub] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void projectHierarchyContext(projectId).then((r) => { if (alive && r.ok) setHier(r.data); });
+    return () => { alive = false; };
+  }, [projectId]);
+  const isMaster = hier?.project_scope === "master";
+  async function promoteToMaster() {
+    const reason = window.prompt(t({ ar: "سبب الترقية إلى «مشروع رئيسي» (إلزامي):", en: "Promote reason (required):" }));
+    if (!reason || !reason.trim()) return;
+    const r = await projectHierarchyPromoteToMaster(projectId, reason);
+    if (!r.ok) { flash(hierErr(r.error)); return; }
+    flash(t({ ar: "أصبح مشروعًا رئيسيًّا.", en: "Promoted to master." }));
+    const c = await projectHierarchyContext(projectId); if (c.ok) setHier(c.data);
+    onChanged?.();
+  }
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
-  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage));
+  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster));
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
+  // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
+  useEffect(() => { if (initialTab === "subprojects" && isMaster) setTab("subprojects"); }, [initialTab, isMaster]);
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
@@ -170,11 +195,33 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
 
   return (
     <div className="space-y-4">
+      {/* 6A: مسار الهرمية (Breadcrumb) + شارة النوع */}
+      {hier && hier.project_scope !== "standalone" && (
+        <nav aria-label={t({ ar: "مسار المشروع", en: "Project path" })} className="flex items-center gap-2 text-[11px] flex-wrap">
+          {hier.parent_project_id && (
+            <>
+              {hier.parent_readable
+                ? <Link href={`/client-portal/project-core/${hier.parent_project_id}`} className="text-sky-400 hover:text-sky-300">{hier.parent_name ?? t({ ar: "المشروع الرئيسي", en: "Master" })}</Link>
+                : <span className="text-stone-600">{t({ ar: "مشروع رئيسي غير مصرّح", en: "Restricted master" })}</span>}
+              <span className="text-stone-600">←</span>
+            </>
+          )}
+          <span className="text-stone-300">{projectName}</span>
+          <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: SCOPE_COLOR[hier.project_scope] + "22", color: SCOPE_COLOR[hier.project_scope] }}>
+            {t(SCOPE_LABELS[hier.project_scope])}
+          </span>
+        </nav>
+      )}
+
       {/* دورة الحياة */}
       <section className={`${card} p-4`}>
         <div className="flex items-center justify-between mb-3 gap-2">
           <h3 className="text-sm font-semibold text-white shrink-0">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
           <div className="flex gap-2 flex-wrap">
+            {isMaster && canManage && <button onClick={() => setAddSub(true)} className={`${btnGhost} px-3 py-1.5 text-xs text-sky-300 border-sky-800`}>+ {t({ ar: "إضافة مشروع فرعي", en: "Add subproject" })}</button>}
+            {hier?.project_scope === "standalone" && canManage && hier.hierarchy_enabled && (
+              <button onClick={() => void promoteToMaster()} className={`${btnGhost} px-3 py-1.5 text-xs text-violet-300 border-violet-800`}>{t({ ar: "ترقية إلى مشروع رئيسي", en: "Promote to master" })}</button>
+            )}
             <button onClick={() => setPrintPack(true)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "طباعة حزمة المشروع", en: "Print Pack" })}</button>
             {caps.isAdminArea && <TemplateManagerButton projectId={projectId} flash={flash} onApplied={() => { void loadProg(); onChanged?.(); }} />}
           </div>
@@ -236,7 +283,9 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "planning" && <ProjectGantt projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "resources" && <ProjectResources projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "governance" && <GovernanceTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "subprojects" && isMaster && <SubprojectsTab projectId={projectId} canManage={canManage} flash={flash} onAddSubproject={() => setAddSub(true)} />}
       {tab === "closure" && <ClosureTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {addSub && <CreateProjectWizard parentProjectId={projectId} initialScope="subproject" onClose={() => setAddSub(false)} onCreated={() => { setAddSub(false); onChanged?.(); }} />}
       {tab === "tasks" && <ProjectTasks projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "gantt" && (
         <div className="space-y-6">
@@ -361,6 +410,11 @@ const ACTIVITY_LABELS: Record<string, string> = {
   task_review: "مراجعة مهمة", task_assigned: "تعيين على مهمة", task_unassigned: "إزالة مشارك", task_deleted: "حذف مهمة",
   task_comment: "تعليق", task_dep_added: "إضافة اعتمادية", task_dep_removed: "إزالة اعتمادية", time_logged: "تسجيل وقت",
   approval_requested: "طلب اعتماد", approval_approved: "اعتماد", approval_rejected: "رفض اعتماد", approval_revision_requested: "طلب تعديل", project_created: "إنشاء المشروع",
+  // 6A — أحداث الهرمية (وإلّا ظهرت مفاتيح ASCII خام داخل السجل العربي وتعذّر الفلترة عليها)
+  subproject_created: "إنشاء مشروع فرعي", subproject_moved: "نقل مشروع فرعي",
+  subproject_moved_out: "نقل فرع خارج المشروع", subproject_moved_in: "استقبال فرع من مشروع آخر",
+  subproject_detached: "فصل مشروع فرعي", subproject_detached_out: "فصل فرع عن المشروع",
+  project_promoted_to_master: "ترقية إلى مشروع رئيسي", project_demoted_to_standalone: "خفض إلى مشروع مستقل",
 };
 function activityDesc(a: ActivityEvent): string {
   const d = (a.detail ?? {}) as Record<string, unknown>;

@@ -349,7 +349,14 @@ export interface PlanningHealth {
 }
 export const projectPlanningHealth = (projectId: string) => prpc<PlanningHealth>("project_planning_health", { p_project: projectId });
 
-export interface Subproject { project_id: string; name: string | null; status: string | null; start: string | null; end: string | null; progress_pct: number; milestones: number; open_tasks: number }
+// 6A: وسّعت project_subprojects_summary لتعيد المرحلة/الصحة/المدير/المخاطر — الحقول الجديدة اختيارية
+// كي تبقى الاستهلاكات القديمة (ProjectGantt) سليمة قبل تطبيق هجرة 6A.
+export interface Subproject {
+  project_id: string; name: string | null; status: string | null; start: string | null; end: string | null;
+  progress_pct: number; milestones: number; open_tasks: number;
+  core_stage?: string | null; health?: string | null; priority?: string | null; rollup_weight?: number;
+  manager_id?: string | null; manager_name?: string | null; critical_risks?: number; critical_issues?: number;
+}
 export const projectSubprojectsSummary = (projectId: string) =>
   prpc<{ project_id: string; subprojects: Subproject[] }>("project_subprojects_summary", { p_project: projectId });
 export const projectScheduleApply = (projectId: string, expectedUpdatedAt?: string | null) =>
