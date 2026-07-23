@@ -15,6 +15,7 @@ import ExecutiveDashboard from "./ExecutiveDashboard";
 import HierarchyTree from "./HierarchyTree";
 import ClosureCenter from "./ClosureCenter";
 import TemplateLibrary from "./TemplateLibrary";
+import OperationsCenter, { type OpsPanel } from "./OperationsCenter";
 import {
   pcDashboard, pcDeletedList, pcRestoreProject, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
   type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth, type DeletedProject,
@@ -45,6 +46,7 @@ export default function ProjectCoreDashboard() {
   const [showTree, setShowTree] = useState(false);
   const [showClosure, setShowClosure] = useState(false);
   const [showTplLib, setShowTplLib] = useState(false);
+  const [showOps, setShowOps] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = useCallback((m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); }, []);
 
@@ -96,6 +98,8 @@ export default function ProjectCoreDashboard() {
         <h2 className="text-lg font-semibold text-white">{t({ ar: "منصّة إدارة المشاريع", en: "Project Core" })}</h2>
         <div className="flex items-center gap-2">
           <button onClick={() => void load(filter, search)} className="text-xs text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+          {/* isAdminArea يغطّي المالك (account_type=admin ⇒ caps.isStaff=false محليًّا) مع مطابقة بوابة DB is_staff() */}
+          {(caps.isStaff || caps.isAdminArea) && <button onClick={() => setShowOps(true)} className="text-xs text-white hover:bg-red-700 border border-red-700 bg-red-600/90 rounded-lg px-3 py-1.5">{t({ ar: "مركز العمليات", en: "Operations" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowTree(true)} className="text-xs text-stone-200 hover:text-white border border-violet-800/70 bg-violet-950/30 rounded-lg px-3 py-1.5">{t({ ar: "شجرة المشاريع", en: "Tree" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowExecutive(true)} className="text-xs text-stone-200 hover:text-white border border-sky-800/70 bg-sky-950/30 rounded-lg px-3 py-1.5">{t({ ar: "الإدارة التنفيذية", en: "Executive" })}</button>}
           {(caps.isAdminArea || caps.isEditor) && <button onClick={() => setShowClosure(true)} className="text-xs text-stone-200 hover:text-white border border-emerald-800/70 bg-emerald-950/30 rounded-lg px-3 py-1.5">{t({ ar: "مركز الإغلاق", en: "Closure" })}</button>}
@@ -177,6 +181,13 @@ export default function ProjectCoreDashboard() {
       {showDeleted && <DeletedProjectsModal canRestore={caps.isOwner} onClose={() => setShowDeleted(false)} onRestored={() => void load(filter, search)} />}
       {showExecutive && <ExecutiveDashboard onClose={() => setShowExecutive(false)} />}
       {showTree && <HierarchyTree onClose={() => setShowTree(false)} />}
+      {showOps && <OperationsCenter onClose={() => setShowOps(false)} onNavigate={(p: OpsPanel) => {
+        if (p === "executive") setShowExecutive(true);
+        else if (p === "closure") setShowClosure(true);
+        else if (p === "conflicts") setShowConflicts(true);
+        else if (p === "templates") setShowTplLib(true);
+        else if (p === "create") setShowCreate(true);
+      }} />}
       {showClosure && <ClosureCenter onClose={() => { setShowClosure(false); void load(filter, search); }} />}
       {showTplLib && <TemplateLibrary onClose={() => setShowTplLib(false)} onCreated={() => { setShowTplLib(false); void load(filter, search); }} />}
       {showPortfolio && <PortfolioSchedule onClose={() => setShowPortfolio(false)} />}
