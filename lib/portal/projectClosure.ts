@@ -79,6 +79,44 @@ export const projectArchiveCreate = (projectId: string, data: Dict) => prpc<Dict
 export const projectArchiveRestore = (archiveId: string, reason: string) => prpc<Dict>("project_archive_restore", { p_archive: archiveId, p_reason: reason });
 export const projectArchiveSetLegalHold = (archiveId: string, hold: boolean, reason?: string) => prpc<Dict>("project_archive_set_legal_hold", { p_archive: archiveId, p_hold: hold, p_reason: reason ?? null });
 
+// ─── 6C: السجلّات المؤسسية والعدسة التنفيذية للإغلاق ───
+export interface KnowledgeLesson {
+  id: string; project_id: string; project_name: string | null; category: string; title: string;
+  description: string | null; recommendation: string | null; reusable_practice: string | null;
+  what_worked: string | null; what_did_not_work: string | null; root_cause: string | null;
+  impact_level: string; confidentiality: string;
+  approved_for_knowledge_base: boolean; approved_at: string | null; created_at: string;
+}
+export interface KnowledgeRegister {
+  lessons: KnowledgeLesson[];
+  stats: { total: number; approved: number; critical: number; projects: number };
+  limit: number; offset: number; returned: number; has_more: boolean;
+  can_see_management: boolean; generated_at: string;
+}
+export interface ClosureMetricsRow { project_id: string; project_name: string | null; closure_status: ClosureStatus }
+export interface ExecutiveClosureMetrics {
+  total: number;
+  distribution: Record<string, number>;
+  in_progress_rows: ClosureMetricsRow[];
+  avg_closure_cycle_days: number | null;
+  closure_cycle_sample: number;
+  overdue_closures: { project_id: string; project_name: string | null; request_id: string; planned_closure_date: string | null; days_overdue: number | null; status: string }[];
+  delivered_not_closed: { project_id: string; project_name: string | null; due_date: string | null; days_since_due: number | null }[];
+  pending_client_acceptance: { project_id: string; project_name: string | null; acceptance_id: string; acceptance_type: string; requested_at: string; due_at: string | null; overdue: boolean }[];
+  lessons: { closed_projects: number; with_lessons: number; capture_rate: number | null };
+  archived_count: number;
+  generated_at: string;
+}
+export interface KnowledgeFilters {
+  category?: string; impact_level?: string; project_id?: string; search?: string;
+  approved_only?: boolean; limit?: number; offset?: number;
+}
+
+export const closureKnowledgeRegister = (f: KnowledgeFilters = {}) =>
+  prpc<KnowledgeRegister>("closure_knowledge_register", { p_filters: f });
+export const executiveClosureMetrics = (f: Dict = {}) =>
+  prpc<ExecutiveClosureMetrics>("executive_closure_metrics", { p_filters: f });
+
 // ─── تسميات ───
 export const CLOSURE_STATUS: Record<ClosureStatus, { ar: string; color: string }> = {
   closure_not_started: { ar: "لم يبدأ", color: "#78716c" }, closure_in_progress: { ar: "قيد الإغلاق", color: "#0891b2" },
