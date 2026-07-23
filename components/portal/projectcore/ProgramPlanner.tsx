@@ -91,8 +91,14 @@ export default function ProgramPlanner({ projectId, unitWord, onClose, onCreated
     if (!mounted.current) return;
     setBusy(false);
     if (!r.ok) { setErr(planErr(r.error)); return; }
-    // replayed=true ⇒ لم يُنشأ شيء جديد؛ الإبلاغ عنه كإنشاء ناجح كذب على المستخدم.
-    onCreated(r.data.replayed ? 0 : r.data.created_count);
+    // replayed=true ⇒ لم يُنشأ شيء جديد. لا نُبلّغ بنجاح إنشاء ولا بـ«صفر وحدة»
+    // (كلاهما مضلِّل)، بل نشرح أنّ الدفعة نُفِّذت سابقًا ونُبقي المعالج مفتوحًا.
+    if (r.data.replayed) {
+      setErr(t({ ar: `سبق تنفيذ هذه الدفعة (${r.data.created_count} وحدة) — لم تُنشأ وحدات جديدة. أغلِق المعالج وافتحه لبدء دفعة جديدة.`,
+                 en: `This batch already ran (${r.data.created_count} units) — nothing new was created. Close and reopen to start a new batch.` }));
+      return;
+    }
+    onCreated(r.data.created_count);
   }
 
   return (

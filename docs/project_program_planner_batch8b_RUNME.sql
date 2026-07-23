@@ -161,8 +161,10 @@ begin
     'duplicate_count', v_dupe, 'parent_name', v_parent_name,
     'settings_present', (v_set.project_id is not null));
 end $$;
-revoke execute on function public.program_plan_build(uuid,jsonb) from public, anon;
-grant execute on function public.program_plan_build(uuid,jsonb) to authenticated;
+-- مساعد داخليّ: لا يُمنح لأحد إطلاقًا (نفس نمط pc_is_master/pc_parent_of في 6A).
+-- المتصل الوحيد project_program_plan_preview وهي SECURITY DEFINER فتناديه بصلاحية المالك،
+-- فالمنح لا يفيد شيئًا ويوسّع سطح الهجوم بلا داعٍ.
+revoke execute on function public.program_plan_build(uuid,jsonb) from public, anon, authenticated;
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- §3) المعاينة — قراءة فقط، لا تكتب شيئًا إطلاقًا

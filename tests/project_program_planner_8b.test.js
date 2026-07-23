@@ -128,8 +128,16 @@ test("العزل والصلاحيات: بوابة 8A + master فقط + منح/إ
     assert.match(b, /program_can\(p_parent, 'programs\.manage_units'\)/, `${f} بلا بوابة`);
     assert.match(b, /pc_is_master\(p_parent\)[\s\S]{0,80}program_requires_master/, `${f} لا يشترط master`);
   });
+  // program_plan_build مساعد داخليّ: يُبطَل للجميع ولا يُمنح (وإلّا ثبّت الحارس التسريب).
+  const INTERNAL = ["program_plan_build"];
   const fns = [...SQL.matchAll(/create or replace function public\.([a-z_]+)\s*\(/g)].map((m) => m[1]);
   fns.forEach((f) => {
+    if (INTERNAL.includes(f)) {
+      assert.match(SQL, new RegExp("revoke execute on function public\\." + f + "\\([^)]*\\) from public, anon, authenticated"),
+        `${f} مساعد داخليّ ويجب إبطاله للجميع`);
+      assert.doesNotMatch(SQL, new RegExp("grant execute on function public\\." + f + "\\("), `${f} مساعد داخليّ ولا يُمنح`);
+      return;
+    }
     assert.match(SQL, new RegExp("revoke execute on function public\\." + f + "\\([^)]*\\) from public, anon"), `${f} بلا revoke`);
     assert.match(SQL, new RegExp("grant execute on function public\\." + f + "\\([^)]*\\) to authenticated"), `${f} بلا grant`);
   });
@@ -255,7 +263,9 @@ test("إزاحة التواريخ تحتاج حقّ التحرير لا القر
 test("الواجهة: مفتاح منع التكرار يصل المعاينة، وإعادة التشغيل لا تُبلَّغ كإنشاء", () => {
   assert.match(UI, /idempotency_key: idemRef\.current/, "المفتاح لا يصل المعاينة ⇒ already_applied ميت");
   assert.match(TS, /idempotency_key\?: string;/, "النوع لا يحمل المفتاح");
-  assert.match(UI, /onCreated\(r\.data\.replayed \? 0 : r\.data\.created_count\)/, "إعادة التشغيل تُبلَّغ كإنشاء ناجح");
+  // لا «أُنشئت N» ولا «أُنشئت ٠»: رسالة صريحة أنّ الدفعة نُفِّذت سابقًا
+  assert.match(UI, /if \(r\.data\.replayed\) \{[\s\S]{0,400}سبق تنفيذ هذه الدفعة/, "إعادة التشغيل تُبلَّغ كإنشاء");
+  assert.doesNotMatch(UI, /onCreated\(r\.data\.replayed \? 0/, "رسالة «صفر وحدة» مضلِّلة أيضًا");
 });
 
 test("الواجهة: إبطال المعاينة يُلغي الطلب الجاري، ولا إغلاق أثناء التطبيق", () => {
