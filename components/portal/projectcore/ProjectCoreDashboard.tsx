@@ -14,6 +14,7 @@ import PlanningReports from "./PlanningReports";
 import ExecutiveDashboard from "./ExecutiveDashboard";
 import HierarchyTree from "./HierarchyTree";
 import ClosureCenter from "./ClosureCenter";
+import TemplateLibrary from "./TemplateLibrary";
 import {
   pcDashboard, pcDeletedList, pcRestoreProject, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
   type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth, type DeletedProject,
@@ -43,6 +44,7 @@ export default function ProjectCoreDashboard() {
   const [showExecutive, setShowExecutive] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showClosure, setShowClosure] = useState(false);
+  const [showTplLib, setShowTplLib] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = useCallback((m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); }, []);
 
@@ -102,6 +104,7 @@ export default function ProjectCoreDashboard() {
           {caps.isAdminArea && <button onClick={() => setShowReports(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "التقارير", en: "Reports" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowNotify((v) => !v)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "مراقبة الإشعارات", en: "Notify Monitor" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowDeleted(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "المحذوفة/المؤرشفة", en: "Deleted/Archived" })}</button>}
+          {caps.isAdminArea && <button onClick={() => setShowTplLib(true)} className="text-xs text-stone-200 hover:text-white border border-amber-800/70 bg-amber-950/20 rounded-lg px-3 py-1.5">{t({ ar: "من قالب", en: "From template" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowCreate(true)} className="rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2">+ {t({ ar: "إنشاء مشروع", en: "Create Project" })}</button>}
         </div>
       </div>
@@ -175,6 +178,7 @@ export default function ProjectCoreDashboard() {
       {showExecutive && <ExecutiveDashboard onClose={() => setShowExecutive(false)} />}
       {showTree && <HierarchyTree onClose={() => setShowTree(false)} />}
       {showClosure && <ClosureCenter onClose={() => { setShowClosure(false); void load(filter, search); }} />}
+      {showTplLib && <TemplateLibrary onClose={() => setShowTplLib(false)} onCreated={() => { setShowTplLib(false); void load(filter, search); }} />}
       {showPortfolio && <PortfolioSchedule onClose={() => setShowPortfolio(false)} />}
       {showConflicts && <ConflictCenter onClose={() => setShowConflicts(false)} />}
       {showReports && <PlanningReports onClose={() => setShowReports(false)} />}

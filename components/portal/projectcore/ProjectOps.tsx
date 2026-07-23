@@ -22,6 +22,7 @@ import {
 import { TeamTab, DeliverablesTab, CostsTab, RisksTab, MeetingsTab, ShootsTab, TimelineTab } from "./ProjectModules";
 import { LocationsTab, TagsTab } from "./ProjectAdvanced";
 import { TemplateManagerButton } from "./ProjectTemplates";
+import { projectSaveAsTemplate, tplErr } from "@/lib/portal/projectTemplates";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
@@ -98,6 +99,22 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     flash(t({ ar: "أصبح مشروعًا مستقلًّا.", en: "Demoted to standalone." }));
     const c = await projectHierarchyContext(projectId); if (c.ok) setHier(c.data);
     onChanged?.();
+  }
+  // 7A: «حفظ كقالب» على الخادم — الالتقاط القديم كان يُجمَّع في المتصفّح فينتج قالبًا
+  // ناقصًا صامتًا لمن لا يقرأ كل الصفوف، وبلا ذرّية.
+  async function saveAsTemplate() {
+    const name = window.prompt(t({ ar: "اسم القالب الجديد (إلزامي):", en: "New template name (required):" }));
+    if (!name || !name.trim()) return;
+    const r = await projectSaveAsTemplate(projectId, { name: name.trim() });
+    if (!r.ok) { flash(tplErr(r.error)); return; }
+    const c = r.data.counts;
+    // العدّ كاملًا (المخاطر ضمنه) + تنبيه صريح حين لا يملك المشروع تاريخ بداية:
+    // عندها تكون كل الإزاحات NULL ⇒ قالب بلا تواريخ.
+    const warn = r.data.start_date_missing
+      ? t({ ar: " — لا تاريخ بداية للمشروع، فالقالب بلا تواريخ نسبية.", en: " — project has no start date, so the template has no relative dates." })
+      : "";
+    flash(t({ ar: `حُفظ القالب (${c.tasks} مهمة، ${c.milestones} معلَم، ${c.deliverables} مخرَج، ${c.risks} مخاطرة).${warn}`,
+              en: `Template saved (${c.tasks} tasks, ${c.milestones} milestones, ${c.deliverables} deliverables, ${c.risks} risks).${warn}` }));
   }
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
   const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster));
@@ -247,6 +264,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
               <button onClick={() => void promoteToMaster()} className={`${btnGhost} px-3 py-1.5 text-xs text-violet-300 border-violet-800`}>{t({ ar: "ترقية إلى مشروع رئيسي", en: "Promote to master" })}</button>
             )}
             <button onClick={() => setPrintPack(true)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "طباعة حزمة المشروع", en: "Print Pack" })}</button>
+            {caps.isAdminArea && canManage && <button onClick={() => void saveAsTemplate()} className={`${btnGhost} px-3 py-1.5 text-xs text-amber-300 border-amber-900`}>{t({ ar: "حفظ كقالب", en: "Save as template" })}</button>}
             {caps.isAdminArea && <TemplateManagerButton projectId={projectId} flash={flash} onApplied={() => { void loadProg(); onChanged?.(); }} />}
           </div>
         </div>

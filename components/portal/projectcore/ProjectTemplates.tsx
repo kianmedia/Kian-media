@@ -65,24 +65,9 @@ function TemplateManager({ projectId, flash, onApplied, onClose }: { projectId: 
     if (!r.ok) { flash(pcErr(r.error)); return; }
     flash(t(active ? { ar: "استُعيد القالب.", en: "Restored." } : { ar: "أُرشف القالب.", en: "Archived." })); void load();
   }
-  // إنشاء من المشروع الحالي: يلتقط المهام + المخاطر + المخرجات بتواريخ نسبية من بداية المشروع.
-  async function fromProject() {
-    if (busy) return; setBusy(true);
-    const [tk, rk, dl, core] = await Promise.all([pcListTasks(projectId), pcListRisks(projectId), pcListDeliverables(projectId), pcGetProjectCore(projectId)]);
-    setBusy(false);
-    const base = core.ok && core.data?.start_date ? new Date(core.data.start_date).getTime() : null;
-    const off = (d: string | null | undefined) => base && d ? Math.round((new Date(d).getTime() - base) / 86400000) : undefined;
-    const spec: Spec = {
-      tasks: tk.ok ? tk.data.filter((x) => !x.parent_task_id).map((x) => ({
-        title: x.title, description: x.description ?? undefined, priority: x.priority,
-        estimated_hours: x.estimated_hours ?? undefined, offset_days: off(x.start_date), due_offset_days: off(x.due_date),
-        subtasks: tk.data.filter((s) => s.parent_task_id === x.id).map((s) => ({ title: s.title })),
-      })) : [],
-      risks: rk.ok ? rk.data.map((x) => ({ title: x.title, severity: x.severity })) : [],
-      deliverables: dl.ok ? dl.data.map((x) => ({ title: x.title, type: x.type, offset_days: off(x.due_date ?? null) })) : [],
-    };
-    setEditor({ id: "", name: "", description: null, spec: spec as Record<string, unknown>, is_active: true, created_at: "" } as ProjectTemplate);
-  }
+  // 7A: أُزيل التقاط «من هذا المشروع» من هنا — كان يُجمَّع spec في المتصفّح فينتج قالبًا
+  // ناقصًا صامتًا لمن لا يقرأ كل الصفوف، وبلا ذرّية، وبلا قوائم تحقّق/اعتماديات.
+  // البديل الوحيد الآن: زرّ «حفظ كقالب» في شريط أدوات المشروع (project_save_as_template).
   const list = tpls.filter((x) => showArchived ? !x.is_active : x.is_active);
 
   return (
@@ -92,7 +77,6 @@ function TemplateManager({ projectId, flash, onApplied, onClose }: { projectId: 
           <h3 className="text-sm font-semibold text-white">{t({ ar: "قوالب المشاريع", en: "Project Templates" })}</h3>
           <div className="flex gap-2 items-center">
             <label className="flex items-center gap-1 text-[11px] text-stone-400"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />{t({ ar: "المؤرشفة", en: "Archived" })}</label>
-            <button onClick={() => void fromProject()} className={`${btnGhost} px-2.5 py-1 text-[11px]`}>{t({ ar: "من هذا المشروع", en: "From project" })}</button>
             <button onClick={() => setEditor("new")} className={`${btnRed} px-2.5 py-1 text-[11px]`}>+ {t({ ar: "قالب جديد", en: "New" })}</button>
             <button onClick={onClose} className="text-stone-400 text-sm">✕</button>
           </div>
