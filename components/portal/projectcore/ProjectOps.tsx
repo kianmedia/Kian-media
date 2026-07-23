@@ -34,6 +34,7 @@ import ProjectResources from "./ProjectResources";
 import GovernanceTab from "./GovernanceTab";
 import ClosureTab from "./ClosureTab";
 import SubprojectsTab from "./SubprojectsTab";
+import ProgramTab from "./ProgramTab";
 import CreateProjectWizard from "./CreateProjectWizard";
 import { projectHierarchyContext, projectHierarchyPromoteToMaster, projectHierarchyDemoteToStandalone, hierErr, SCOPE_LABELS, SCOPE_COLOR, type HierarchyContext } from "@/lib/portal/projectHierarchy";
 import { TrashTab } from "./ProjectTrash";
@@ -49,13 +50,14 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+type TabKey = "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
 const TABS: { k: TabKey; ar: string; en: string }[] = [
   { k: "execution", ar: "التنفيذ", en: "Execution" }, { k: "reports", ar: "التقارير", en: "Reports" },
   { k: "planning", ar: "المخطط الزمني", en: "Planner" },
   { k: "resources", ar: "الموارد", en: "Resources" },
   { k: "governance", ar: "الحوكمة", en: "Governance" },
   { k: "subprojects", ar: "المشاريع الفرعية", en: "Subprojects" },
+  { k: "program", ar: "إدارة البرنامج", en: "Program" },
   { k: "closure", ar: "إغلاق المشروع", en: "Closure" },
   { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
   { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
@@ -117,13 +119,13 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
               en: `Template saved (${c.tasks} tasks, ${c.milestones} milestones, ${c.deliverables} deliverables, ${c.risks} risks).${warn}` }));
   }
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
-  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster));
+  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster));
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
   useEffect(() => { if (initialTab === "subprojects" && isMaster) setTab("subprojects"); }, [initialTab, isMaster]);
   // 6B: بعد «الخفض إلى مستقل» يختفي تبويب الفروع — بلا هذا السقوط تبقى منطقة المحتوى فارغة.
-  useEffect(() => { if (tab === "subprojects" && !isMaster) setTab("tasks"); }, [tab, isMaster]);
+  useEffect(() => { if ((tab === "subprojects" || tab === "program") && !isMaster) setTab("tasks"); }, [tab, isMaster]);
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
@@ -325,6 +327,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "planning" && <ProjectGantt projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "resources" && <ProjectResources projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "governance" && <GovernanceTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "program" && isMaster && <ProgramTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "subprojects" && isMaster && <SubprojectsTab projectId={projectId} canManage={canManage} flash={flash} onAddSubproject={() => setAddSub(true)} />}
       {tab === "closure" && <ClosureTab projectId={projectId} canManage={canManage} flash={flash} />}
       {addSub && <CreateProjectWizard parentProjectId={projectId} initialScope="subproject" onClose={() => setAddSub(false)} onCreated={() => { setAddSub(false); onChanged?.(); }} />}

@@ -212,7 +212,8 @@ test("الواجهة: فشل جلب الفروع لا يُخزَّن كـ«لا 
 test("الواجهة: تسميات الصحّة مترجَمة + الخفض لا يترك تبويبًا فارغًا", () => {
   assert.match(TAB, /pdash\.own_health \? t\(HEALTH_LABELS\[/, "own_health يُطبع خامًا");
   assert.match(TAB, /pdash\.children_aggregate_health \? t\(HEALTH_LABELS\[/, "children_aggregate_health يُطبع خامًا");
-  assert.match(OPS, /if \(tab === "subprojects" && !isMaster\) setTab\("tasks"\)/, "الخفض يترك منطقة المحتوى فارغة");
+  // 8A وسّع الحارس ليشمل تبويب البرنامج أيضًا (سلوك فائق لا ناقص)
+  assert.match(OPS, /if \(\(?tab === "subprojects"[^)]*\)? *(\|\| tab === "program" *\))? *&& !isMaster\) setTab\("tasks"\)/, "الخفض يترك منطقة المحتوى فارغة");
 });
 
 test("رسائل الخطأ العربية تغطّي الرموز الجديدة", () => {
