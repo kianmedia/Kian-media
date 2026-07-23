@@ -90,6 +90,10 @@ export function hierErr(e: string): string {
   if (/not authorized: source_parent/.test(e)) return "لا تملك صلاحية على المشروع الرئيسي الحالي.";
   if (/parent_not_allowed_for_scope/.test(e)) return "المشروع المستقل/الرئيسي لا يقبل مشروعًا أبًا.";
   if (/reason_required/.test(e)) return "السبب إلزامي.";
+  // 8A أضاف فهرسًا فريدًا على (parent_project_id, unit_number): النقل/الاستعادة قد
+  // يصطدمان برقم وحدة مستخدم عند الأب الجديد فيرفعان 23505 خامًا بلا هذه الترجمة.
+  if (/ux_projects_parent_unit_number|duplicate_unit_number/.test(e)) return "رقم الوحدة مستخدم عند المشروع الرئيسي الوجهة — غيّر رقم الوحدة قبل النقل.";
+  if (/ux_projects_parent_seq/.test(e)) return "تعارض في ترتيب الفروع — أعد المحاولة.";
   if (/order_set_partial_visibility/.test(e)) return "لا يمكن إعادة الترتيب: توجد فروع لا تملك صلاحية رؤيتها.";
   if (/order_set_mismatch/.test(e)) return "قائمة الترتيب لا تطابق فروع هذا المشروع.";
   if (/duplicate_ids/.test(e)) return "تكرار في قائمة الترتيب.";

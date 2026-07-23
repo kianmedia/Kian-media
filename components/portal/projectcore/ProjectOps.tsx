@@ -123,7 +123,10 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
+  // الروابط العميقة للتبويبات الخاصّة بالمشروع الرئيسي تُحسم بعد وصول سياق الهرمية
+  // (isMaster غير معروف عند أول render فيسقط التبويب إلى «المهام»).
   useEffect(() => { if (initialTab === "subprojects" && isMaster) setTab("subprojects"); }, [initialTab, isMaster]);
+  useEffect(() => { if (initialTab === "program" && isMaster) setTab("program"); }, [initialTab, isMaster]);
   // 6B: بعد «الخفض إلى مستقل» يختفي تبويب الفروع — بلا هذا السقوط تبقى منطقة المحتوى فارغة.
   useEffect(() => { if ((tab === "subprojects" || tab === "program") && !isMaster) setTab("tasks"); }, [tab, isMaster]);
   const [busy, setBusy] = useState(false);
