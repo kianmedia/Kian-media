@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { csvDownload } from "@/lib/portal/csv";
+import ProgramPlanner from "./ProgramPlanner";
 import { PC_STAGE_LABELS, HEALTH_LABELS, type PcStage, type PcHealth } from "@/lib/portal/projectCore";
 import {
   projectProgramDashboard, projectProgramUnits, projectProgramSettingsUpsert, projectUnitMetadataUpsert,
@@ -28,6 +29,7 @@ export default function ProgramTab({ projectId, canManage, flash }:
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [err, setErr] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [showPlanner, setShowPlanner] = useState(false);
   const [rev, setRev] = useState(0);
   const seq = useRef(0); const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -80,6 +82,7 @@ export default function ProgramTab({ projectId, canManage, flash }:
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => setRev((v) => v + 1)} className="text-[11px] text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+              {canManage && <button onClick={() => setShowPlanner(true)} className="text-[11px] text-white bg-red-600 hover:bg-red-700 rounded-lg px-2.5 py-1">+ {t({ ar: `إنشاء دفعة ${ul}`, en: "Create batch" })}</button>}
               {canManage && <button onClick={() => setShowSettings(true)} className="text-[11px] text-stone-300 border border-stone-700 rounded-lg px-2.5 py-1">{t({ ar: "الإعدادات", en: "Settings" })}</button>}
             </div>
           </div>
@@ -170,6 +173,11 @@ export default function ProgramTab({ projectId, canManage, flash }:
       </section>
 
       <UnitRegister projectId={projectId} unitWord={ul} canManage={canManage} onChanged={() => setRev((v) => v + 1)} />
+
+      {showPlanner && (
+        <ProgramPlanner projectId={projectId} unitWord={ul} onClose={() => setShowPlanner(false)}
+          onCreated={(n) => { setShowPlanner(false); setRev((v) => v + 1); flash(t({ ar: `أُنشئت ${n} وحدة.`, en: `${n} units created.` })); }} />
+      )}
 
       {showSettings && s !== undefined && (
         <SettingsModal projectId={projectId} current={dash.settings} onClose={() => setShowSettings(false)}
