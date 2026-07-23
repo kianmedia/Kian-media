@@ -12,6 +12,7 @@ import PortfolioSchedule from "./PortfolioSchedule";
 import ConflictCenter from "./ConflictCenter";
 import PlanningReports from "./PlanningReports";
 import ExecutiveDashboard from "./ExecutiveDashboard";
+import HierarchyTree from "./HierarchyTree";
 import {
   pcDashboard, pcDeletedList, pcRestoreProject, PC_STAGE_LABELS, PRIORITY_LABELS, HEALTH_LABELS, pcErr,
   type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth, type DeletedProject,
@@ -39,6 +40,7 @@ export default function ProjectCoreDashboard() {
   const [showConflicts, setShowConflicts] = useState(false);
   const [showReports, setShowReports] = useState(false);
   const [showExecutive, setShowExecutive] = useState(false);
+  const [showTree, setShowTree] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = useCallback((m: string) => { setToast(m); window.setTimeout(() => setToast(null), 4200); }, []);
 
@@ -90,6 +92,7 @@ export default function ProjectCoreDashboard() {
         <h2 className="text-lg font-semibold text-white">{t({ ar: "منصّة إدارة المشاريع", en: "Project Core" })}</h2>
         <div className="flex items-center gap-2">
           <button onClick={() => void load(filter, search)} className="text-xs text-stone-400 hover:text-white">↻ {t({ ar: "تحديث", en: "Refresh" })}</button>
+          {caps.isAdminArea && <button onClick={() => setShowTree(true)} className="text-xs text-stone-200 hover:text-white border border-violet-800/70 bg-violet-950/30 rounded-lg px-3 py-1.5">{t({ ar: "شجرة المشاريع", en: "Tree" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowExecutive(true)} className="text-xs text-stone-200 hover:text-white border border-sky-800/70 bg-sky-950/30 rounded-lg px-3 py-1.5">{t({ ar: "الإدارة التنفيذية", en: "Executive" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowPortfolio(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "جدولة المشاريع", en: "Portfolio" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowConflicts(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "مركز التعارضات", en: "Conflicts" })}</button>}
@@ -167,6 +170,7 @@ export default function ProjectCoreDashboard() {
       {showCreate && <CreateProjectWizard onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(filter, search); }} />}
       {showDeleted && <DeletedProjectsModal canRestore={caps.isOwner} onClose={() => setShowDeleted(false)} onRestored={() => void load(filter, search)} />}
       {showExecutive && <ExecutiveDashboard onClose={() => setShowExecutive(false)} />}
+      {showTree && <HierarchyTree onClose={() => setShowTree(false)} />}
       {showPortfolio && <PortfolioSchedule onClose={() => setShowPortfolio(false)} />}
       {showConflicts && <ConflictCenter onClose={() => setShowConflicts(false)} />}
       {showReports && <PlanningReports onClose={() => setShowReports(false)} />}

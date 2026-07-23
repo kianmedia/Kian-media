@@ -9,8 +9,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { projectSubprojectsSummary, PC_STAGE_LABELS, HEALTH_LABELS, type Subproject, type PcStage, type PcHealth } from "@/lib/portal/projectCore";
 import {
-  projectHierarchyRollup, projectHierarchyDetachSubproject, projectHierarchyMoveSubproject,
-  projectHierarchyMastersList, hierErr, type HierarchyRollup, type MasterLite,
+  projectHierarchyParentDashboard, projectHierarchyDetachSubproject, projectHierarchyMoveSubproject,
+  projectHierarchyMastersList, projectHierarchyReorderSubprojects, hierErr,
+  type ParentDashboard, type MasterLite,
 } from "@/lib/portal/projectHierarchy";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
@@ -20,7 +21,7 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
   { projectId: string; canManage: boolean; flash: (m: string) => void; onAddSubproject?: () => void }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<Subproject[]>([]);
-  const [rollup, setRollup] = useState<HierarchyRollup | null>(null);
+  const [pdash, setPdash] = useState<ParentDashboard | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,12 +33,12 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const [s, r] = await Promise.race([
-        Promise.all([projectSubprojectsSummary(projectId), projectHierarchyRollup(projectId)]),
+        Promise.all([projectSubprojectsSummary(projectId), projectHierarchyParentDashboard(projectId)]),
         new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error("hier_timeout")), 20000); }),
       ]);
       if (!mountedRef.current || my !== reqSeq.current) return;
       if (!s.ok) { if (process.env.NODE_ENV !== "production") console.error("[subprojects]", s.error); setErr(hierErr(s.error)); setPhase("error"); return; }
-      setRows(s.data.subprojects ?? []); setRollup(r.ok ? r.data : null); setPhase("ready");
+      setRows(s.data.subprojects ?? []); setPdash(r.ok ? r.data : null); setPhase("ready");
     } catch (e) {
       if (!mountedRef.current || my !== reqSeq.current) return;
       setErr(e instanceof Error && e.message === "hier_timeout" ? t({ ar: "انتهت المهلة.", en: "Timed out." }) : hierErr(String(e))); setPhase("error");
@@ -66,6 +67,16 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
     if (!r.ok) { flash(hierErr(r.error)); return; }
     flash(t({ ar: "نُقل المشروع الفرعي.", en: "Moved." })); await load();
   }
+  // 6B: إعادة الترتيب — نرسل الترتيب الكامل لـRPC ذرّية (لا max()+1، لا تكرار تسلسل).
+  async function reorder(index: number, dir: -1 | 1) {
+    const next = index + dir;
+    if (busy || next < 0 || next >= rows.length) return;
+    const ids = rows.map((r) => r.project_id);
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    setBusy(true); const r = await projectHierarchyReorderSubprojects(projectId, ids); setBusy(false);
+    if (!r.ok) { flash(hierErr(r.error)); return; }
+    flash(t({ ar: "أُعيد الترتيب.", en: "Reordered." })); await load();
+  }
 
   if (phase === "loading") return <p className="text-xs text-stone-500 py-6 text-center">{t({ ar: "جارٍ تحميل المشاريع الفرعية…", en: "Loading subprojects…" })}</p>;
   if (phase === "error") return (
@@ -79,7 +90,7 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
   return (
     <div className="space-y-4" dir="rtl">
       {/* تجميع الأب — مشتقّ */}
-      {rollup && (
+      {pdash && (
         <section className={`${card} p-3`}>
           <div className="flex items-center justify-between mb-2">
             <h4 className="text-xs font-semibold text-stone-200">{t({ ar: "تجميع المشاريع الفرعية", en: "Children rollup" })}</h4>
@@ -87,18 +98,29 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {[
-              { ar: "إنجاز المشروع الرئيسي", n: rollup.own_progress == null ? "—" : `${rollup.own_progress}%` },
-              { ar: "تجميع إنجاز الفروع", n: rollup.children_aggregate_progress == null ? t({ ar: "غير متاح", en: "n/a" }) : `${rollup.children_aggregate_progress}%` },
-              { ar: "إجمالي الفروع", n: rollup.total_children },
-              { ar: "نشطة", n: rollup.active_children, c: "#16a34a" },
-              { ar: "متأخرة", n: rollup.delayed_children, c: rollup.delayed_children > 0 ? "#dc2626" : undefined },
-              { ar: "حرجة", n: rollup.critical_children, c: rollup.critical_children > 0 ? "#dc2626" : undefined },
+              { ar: "إنجاز المشروع الرئيسي", n: pdash.rollup.own_progress == null ? "—" : `${pdash.rollup.own_progress}%` },
+              { ar: "تجميع إنجاز الفروع", n: pdash.rollup.children_aggregate_progress == null ? t({ ar: "غير متاح", en: "n/a" }) : `${pdash.rollup.children_aggregate_progress}%` },
+              { ar: "إجمالي الفروع", n: pdash.rollup.total_children },
+              { ar: "نشطة", n: pdash.rollup.active_children, c: "#16a34a" },
+              { ar: "متأخرة", n: pdash.rollup.delayed_children, c: pdash.rollup.delayed_children > 0 ? "#dc2626" : undefined },
+              { ar: "حرجة", n: pdash.rollup.critical_children, c: pdash.rollup.critical_children > 0 ? "#dc2626" : undefined },
             ].map((x, i) => (
               <div key={i} className="border border-stone-800 rounded-lg p-2">
                 <div className="text-base font-bold" style={{ color: x.c || "#e7e5e4" }}>{x.n}</div>
                 <div className="text-[10px] text-stone-500">{x.ar}</div>
               </div>
             ))}
+          </div>
+          {/* 6B: مؤشرات الأب الموسّعة — كلها مشتقّة */}
+          <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
+            <span className="px-2 py-0.5 rounded border border-stone-800 text-stone-400">{t({ ar: "صحّة الأب", en: "Own health" })}: <b style={{ color: HEALTH_CLS[pdash.own_health ?? ""] ?? "#78716c" }}>{pdash.own_health ? t(HEALTH_LABELS[pdash.own_health as PcHealth] ?? { ar: pdash.own_health, en: pdash.own_health }) : "—"}</b></span>
+            <span className="px-2 py-0.5 rounded border border-stone-800 text-stone-400">{t({ ar: "صحّة الفروع", en: "Children health" })}: <b style={{ color: HEALTH_CLS[pdash.children_aggregate_health ?? ""] ?? "#78716c" }}>{pdash.children_aggregate_health ? t(HEALTH_LABELS[pdash.children_aggregate_health as PcHealth] ?? { ar: pdash.children_aggregate_health, en: pdash.children_aggregate_health }) : t({ ar: "غير متاح", en: "n/a" })}</b></span>
+            <span className="px-2 py-0.5 rounded border border-stone-800 text-stone-400">{t({ ar: "أقرب تسليم", en: "Earliest due" })}: <b dir="ltr">{pdash.earliest_child_due ?? "—"}</b></span>
+            <span className="px-2 py-0.5 rounded border border-stone-800 text-stone-400">{t({ ar: "أبعد تسليم", en: "Latest due" })}: <b dir="ltr">{pdash.latest_child_due ?? "—"}</b></span>
+            {pdash.children_critical_risks > 0 && <span className="px-2 py-0.5 rounded border border-red-900/60 text-red-400">{t({ ar: "مخاطر حرجة بالفروع", en: "Child risks" })}: {pdash.children_critical_risks}</span>}
+            {pdash.children_critical_issues > 0 && <span className="px-2 py-0.5 rounded border border-red-900/60 text-red-400">{t({ ar: "مشكلات حرجة بالفروع", en: "Child issues" })}: {pdash.children_critical_issues}</span>}
+            {pdash.children_open_bookings > 0 && <span className="px-2 py-0.5 rounded border border-stone-800 text-amber-400">{t({ ar: "حجوزات مفتوحة", en: "Open bookings" })}: {pdash.children_open_bookings}</span>}
+            {pdash.children_overdue_approvals > 0 && <span className="px-2 py-0.5 rounded border border-stone-800 text-amber-400">{t({ ar: "اعتمادات متأخرة", en: "Overdue approvals" })}: {pdash.children_overdue_approvals}</span>}
           </div>
           <p className="text-[9px] text-stone-600 mt-1.5">{t({ ar: "التجميع مشتقّ للعرض فقط — لا يُكتب على نسبة إنجاز المشروع الرئيسي.", en: "Rollup is derived for display only." })}</p>
         </section>
@@ -119,7 +141,7 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
       )}
 
       <div className="space-y-1.5">
-        {rows.map((s) => (
+        {rows.map((s, idx) => (
           <div key={s.project_id} className={`${card} p-2.5 space-y-1`}>
             <div className="flex items-center gap-2 flex-wrap text-[11px]">
               <Link href={`/client-portal/project-core/${s.project_id}`} className="text-stone-100 hover:text-sky-300 font-medium truncate max-w-[220px]" dir="auto">{s.name}</Link>
@@ -130,6 +152,8 @@ export default function SubprojectsTab({ projectId, canManage, flash, onAddSubpr
               {(s.critical_issues ?? 0) > 0 && <span className="text-red-400">{t({ ar: "مشكلات", en: "issues" })}: {s.critical_issues}</span>}
               {canManage && (
                 <span className="flex items-center gap-2 ms-auto">
+                  <button disabled={busy || idx === 0} onClick={() => void reorder(idx, -1)} aria-label={t({ ar: "تحريك لأعلى", en: "Move up" })} className="text-stone-400 hover:text-white disabled:opacity-30">↑</button>
+                  <button disabled={busy || idx === rows.length - 1} onClick={() => void reorder(idx, 1)} aria-label={t({ ar: "تحريك لأسفل", en: "Move down" })} className="text-stone-400 hover:text-white disabled:opacity-30">↓</button>
                   <button disabled={busy} onClick={() => void move(s.project_id)} className="text-violet-300 hover:text-violet-200">{t({ ar: "نقل", en: "Move" })}</button>
                   <button disabled={busy} onClick={() => void detach(s.project_id)} className="text-amber-300 hover:text-amber-200">{t({ ar: "فصل", en: "Detach" })}</button>
                 </span>

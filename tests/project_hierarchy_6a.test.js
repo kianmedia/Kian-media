@@ -139,7 +139,8 @@ test("الواجهة: نوع المشروع + حقل الرئيسي + تبويب
   assert.match(OPS, /aria-label=\{t\(\{ ar: "مسار المشروع"/, "لا Breadcrumb");
   assert.match(OPS, /setAddSub\(true\)/, "لا زر «إضافة مشروع فرعي»");
   assert.match(TAB, /projectSubprojectsSummary\(/, "التبويب لا يستهلك القائمة القائمة");
-  assert.match(TAB, /projectHierarchyRollup\(/, "التبويب بلا تجميع");
+  // 6B رقّى التبويب إلى project_hierarchy_parent_dashboard الذي يحوي rollup داخله (مجموعة أشمل).
+  assert.match(TAB, /projectHierarchyRollup\(|projectHierarchyParentDashboard\(/, "التبويب بلا تجميع");
   assert.match(TAB, /process\.env\.NODE_ENV !== "production"/, "تسجيل الخطأ الخام غير محصور");
   assert.doesNotMatch(TAB, /\bmockData|dummyData|fakeData\b/i, "بيانات وهمية");
 });

@@ -7,10 +7,29 @@ import { prpc } from "./client";
 
 export type ProjectScope = "standalone" | "master" | "subproject";
 
+export interface SiblingRef { project_id: string; project_name: string | null }
 export interface HierarchyContext {
   project_id: string; project_scope: ProjectScope;
   parent_project_id: string | null; parent_name: string | null; parent_readable: boolean;
   hierarchy_enabled: boolean; generated_at: string;
+  // 6B: تنقّل الإخوة داخل الأب حسب sequence_number
+  sequence_number?: number | null; sibling_count?: number; sibling_index?: number | null;
+  prev_sibling?: SiblingRef | null; next_sibling?: SiblingRef | null;
+}
+export interface TreeRow {
+  project_id: string; project_name: string | null; client_id: string | null; client_name: string | null;
+  project_scope: ProjectScope; parent_project_id: string | null; sequence_number: number | null;
+  core_stage: string | null; health: string | null; priority: string | null; due_date: string | null;
+  progress_pct: number; manager_name: string | null; open_tasks: number;
+  children_total: number; children_active: number; children_delayed: number; children_critical: number;
+}
+export interface ParentDashboard {
+  project_id: string; rollup: HierarchyRollup;
+  own_health: string | null; children_aggregate_health: string | null;
+  earliest_child_due: string | null; latest_child_due: string | null;
+  children_critical_risks: number; children_critical_issues: number;
+  children_open_bookings: number; children_overdue_approvals: number;
+  children_closure: { project_id: string; name: string | null; closure_status: string }[];
 }
 export interface HierarchyRollup {
   project_id: string; project_scope: ProjectScope;
@@ -24,6 +43,13 @@ export interface MasterLite { id: string; project_name: string; client_id: strin
 export const projectHierarchyMastersList = (clientId?: string | null) =>
   prpc<{ masters: MasterLite[] }>("project_hierarchy_masters_list", { p_client: clientId ?? null });
 export const projectHierarchyContext = (projectId: string) => prpc<HierarchyContext>("project_hierarchy_context", { p_project: projectId });
+// 6B — شجرة مصفّاة من الخادم + إعادة ترتيب ذرّية + لوحة الأب الموسّعة
+export const projectHierarchyTree = (filters: Record<string, unknown> = {}) =>
+  prpc<{ rows: TreeRow[]; limit: number; offset: number; returned: number; has_more: boolean }>("project_hierarchy_tree", { p_filters: filters });
+export const projectHierarchyReorderSubprojects = (parentId: string, orderedIds: string[]) =>
+  prpc<{ ok: boolean; parent_project_id: string; count: number }>("project_hierarchy_reorder_subprojects", { p_parent: parentId, p_ordered_ids: orderedIds });
+export const projectHierarchyParentDashboard = (projectId: string) =>
+  prpc<ParentDashboard>("project_hierarchy_parent_dashboard", { p_project: projectId });
 export const projectHierarchyRollup = (projectId: string) => prpc<HierarchyRollup>("project_hierarchy_rollup", { p_project: projectId });
 export const projectHierarchyGetFlags = () => prpc<{ hierarchy_enabled: boolean; updated_at: string }>("project_hierarchy_get_flags", {});
 // يعيد boolean (توقيع Batch 1 — لا يجوز تغيير نوع الإرجاع عبر CREATE OR REPLACE).
@@ -64,6 +90,11 @@ export function hierErr(e: string): string {
   if (/not authorized: source_parent/.test(e)) return "لا تملك صلاحية على المشروع الرئيسي الحالي.";
   if (/parent_not_allowed_for_scope/.test(e)) return "المشروع المستقل/الرئيسي لا يقبل مشروعًا أبًا.";
   if (/reason_required/.test(e)) return "السبب إلزامي.";
+  if (/order_set_partial_visibility/.test(e)) return "لا يمكن إعادة الترتيب: توجد فروع لا تملك صلاحية رؤيتها.";
+  if (/order_set_mismatch/.test(e)) return "قائمة الترتيب لا تطابق فروع هذا المشروع.";
+  if (/duplicate_ids/.test(e)) return "تكرار في قائمة الترتيب.";
+  if (/not_a_master/.test(e)) return "هذا ليس مشروعًا رئيسيًّا.";
+  if (/empty_order/.test(e)) return "لا عناصر لإعادة ترتيبها.";
   if (/bad_scope/.test(e)) return "نوع المشروع غير صالح.";
   if (/not authorized/.test(e)) return "لا تملك صلاحية هذا الإجراء.";
   if (/does not exist|schema cache|PGRST/i.test(e)) return "هرمية المشاريع (6A) غير مطبّقة في قاعدة البيانات.";

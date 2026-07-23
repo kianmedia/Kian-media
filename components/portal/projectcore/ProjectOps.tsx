@@ -34,7 +34,7 @@ import GovernanceTab from "./GovernanceTab";
 import ClosureTab from "./ClosureTab";
 import SubprojectsTab from "./SubprojectsTab";
 import CreateProjectWizard from "./CreateProjectWizard";
-import { projectHierarchyContext, projectHierarchyPromoteToMaster, hierErr, SCOPE_LABELS, SCOPE_COLOR, type HierarchyContext } from "@/lib/portal/projectHierarchy";
+import { projectHierarchyContext, projectHierarchyPromoteToMaster, projectHierarchyDemoteToStandalone, hierErr, SCOPE_LABELS, SCOPE_COLOR, type HierarchyContext } from "@/lib/portal/projectHierarchy";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -90,12 +90,23 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     const c = await projectHierarchyContext(projectId); if (c.ok) setHier(c.data);
     onChanged?.();
   }
+  async function demoteToStandalone() {
+    const reason = window.prompt(t({ ar: "سبب الخفض إلى «مشروع مستقل» (إلزامي):", en: "Demote reason (required):" }));
+    if (!reason || !reason.trim()) return;
+    const r = await projectHierarchyDemoteToStandalone(projectId, reason);
+    if (!r.ok) { flash(hierErr(r.error)); return; }
+    flash(t({ ar: "أصبح مشروعًا مستقلًّا.", en: "Demoted to standalone." }));
+    const c = await projectHierarchyContext(projectId); if (c.ok) setHier(c.data);
+    onChanged?.();
+  }
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
   const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster));
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
   useEffect(() => { if (initialTab === "subprojects" && isMaster) setTab("subprojects"); }, [initialTab, isMaster]);
+  // 6B: بعد «الخفض إلى مستقل» يختفي تبويب الفروع — بلا هذا السقوط تبقى منطقة المحتوى فارغة.
+  useEffect(() => { if (tab === "subprojects" && !isMaster) setTab("tasks"); }, [tab, isMaster]);
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
@@ -210,6 +221,18 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: SCOPE_COLOR[hier.project_scope] + "22", color: SCOPE_COLOR[hier.project_scope] }}>
             {t(SCOPE_LABELS[hier.project_scope])}
           </span>
+          {/* 6B: تنقّل الإخوة داخل الأب حسب sequence_number */}
+          {hier.parent_project_id && (hier.sibling_count ?? 0) > 1 && (
+            <span className="flex items-center gap-2 ms-auto">
+              <span className="text-[10px] text-stone-600">{hier.sibling_index}/{hier.sibling_count}</span>
+              {hier.prev_sibling
+                ? <Link href={`/client-portal/project-core/${hier.prev_sibling.project_id}?tab=subprojects`} className="text-[11px] text-stone-300 hover:text-white border border-stone-700 rounded px-2 py-0.5">‹ {t({ ar: "السابق", en: "Prev" })}</Link>
+                : <span className="text-[11px] text-stone-700 border border-stone-800 rounded px-2 py-0.5">‹</span>}
+              {hier.next_sibling
+                ? <Link href={`/client-portal/project-core/${hier.next_sibling.project_id}?tab=subprojects`} className="text-[11px] text-stone-300 hover:text-white border border-stone-700 rounded px-2 py-0.5">{t({ ar: "التالي", en: "Next" })} ›</Link>
+                : <span className="text-[11px] text-stone-700 border border-stone-800 rounded px-2 py-0.5">›</span>}
+            </span>
+          )}
         </nav>
       )}
 
@@ -219,6 +242,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           <h3 className="text-sm font-semibold text-white shrink-0">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
           <div className="flex gap-2 flex-wrap">
             {isMaster && canManage && <button onClick={() => setAddSub(true)} className={`${btnGhost} px-3 py-1.5 text-xs text-sky-300 border-sky-800`}>+ {t({ ar: "إضافة مشروع فرعي", en: "Add subproject" })}</button>}
+            {isMaster && canManage && <button onClick={() => void demoteToStandalone()} className={`${btnGhost} px-3 py-1.5 text-xs text-stone-400`}>{t({ ar: "خفض إلى مستقل", en: "Demote" })}</button>}
             {hier?.project_scope === "standalone" && canManage && hier.hierarchy_enabled && (
               <button onClick={() => void promoteToMaster()} className={`${btnGhost} px-3 py-1.5 text-xs text-violet-300 border-violet-800`}>{t({ ar: "ترقية إلى مشروع رئيسي", en: "Promote to master" })}</button>
             )}
