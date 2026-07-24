@@ -60,16 +60,17 @@ export default function VersionHistory({
     setBusy(true); setMsg(null);
     const r = await reviewVersion(v.id, decision, note);
     setBusy(false);
-    if (!r.ok) { setMsg(t({ ar: "تعذّر تسجيل القرار.", en: "Failed." })); return; }
-    // Batch 9F: honest result — the server route processed the notification email
-    // in the same request; surface whether it actually went out.
-    const p = r.data?.processed as { claimed?: number; sent?: number } | undefined;
-    const chOff = r.data?.email_channel_enabled === false;
+    if (!r.ok) { setMsg(t({ ar: "تعذّر تسجيل قرارك.", en: "Failed to record your decision." })); return; }
+    // Batch 9G: honest, event-bound result. r.ok means the DECISION was saved; the
+    // payload says whether the email actually went out (sent>0) or not.
+    const d = r.data ?? {};
+    const sent = d.sent ?? 0; const failed = d.failed ?? 0; const track = d.correlation_id ? ` (${d.correlation_id})` : "";
     setMsg(
-      chOff ? t({ ar: "تم تسجيل قرارك (قناة البريد معطّلة على الخادم).", en: "Recorded (email channel off on server)." })
-        : (p && (p.sent ?? 0) > 0) ? t({ ar: "تم تسجيل قرارك وإرسال الإشعار.", en: "Recorded and notification sent." })
-        : (p && (p.claimed ?? 0) > 0) ? t({ ar: "تم تسجيل قرارك؛ تعذّر إرسال البريد لبعض المستلمين.", en: "Recorded; some emails could not be sent." })
-        : t({ ar: "تم تسجيل قرارك.", en: "Recorded." }));
+      sent > 0 && failed === 0 ? t({ ar: "تم تسجيل قرارك وإرسال الإشعار.", en: "Recorded and notification sent." })
+        : sent > 0 && failed > 0 ? t({ ar: "تم تسجيل القرار، ووصل البريد إلى بعض المستلمين فقط.", en: "Recorded; email reached only some recipients." }) + track
+        : d.code === "EMAIL_ROWS_NOT_CLAIMED" || d.email_channel_enabled === false
+          ? t({ ar: "تم تسجيل قرارك، لكن تعذّر بدء إرسال البريد. رقم التتبع:", en: "Recorded, but email could not start. Trace:" }) + track
+          : t({ ar: "تم تسجيل قرارك.", en: "Your decision was recorded." }));
     setReviseFor(null); setReviseNote("");
     await load(); onChanged?.();
   }

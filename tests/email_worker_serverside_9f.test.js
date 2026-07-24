@@ -84,11 +84,11 @@ test("9F-6: claimed=0 while a recent pending row exists is detectable as failure
 });
 
 // ─── (B) STRUCTURAL PINS — real routes are server-authoritative ───
-test("9F PIN: review route runs the mutation AND drains in-request (server-authoritative)", () => {
-  assert.ok(REVIEW.includes("client_review_version") && REVIEW.includes("rpcAsUser"), "runs the RLS-enforced mutation as the user");
-  assert.ok(REVIEW.includes("processQueue(20, { recentMinutes: 15 })"), "drains directly (imported fn) recent-only + bounded");
+test("9F/9G PIN: review route runs the mutation AND processes exact IDs in-request", () => {
+  assert.ok(REVIEW.includes("client_review_and_enqueue_notifications") && REVIEW.includes("rpcAsUser"), "event-bound RPC (mutation + enqueue) as the user");
+  assert.ok(REVIEW.includes("processQueue(deliveryIds.length, { deliveryIds })"), "processes EXACTLY the event's delivery IDs (no time window)");
   assert.ok(REVIEW.includes('from "@/lib/server/notifyWorker"'), "imports the shared worker (no internal HTTP hop)");
-  assert.ok(REVIEW.includes("event_created") && REVIEW.includes("processed"), "returns the real outcome");
+  assert.ok(REVIEW.includes("EMAIL_ROWS_NOT_CLAIMED"), "no false success when expected>0 and claimed=0");
 });
 test("9F PIN: browser reviewVersion posts to the server route; no browser drain kick", () => {
   assert.ok(DELIVERABLES.includes("/api/integrations/project/review"), "browser calls the server-authoritative route");
@@ -99,16 +99,16 @@ test("9F PIN: general drain endpoint is ADMIN-only now (regular users can't drai
   assert.ok(DRAIN.includes("can_manage_projects") && DRAIN.includes("forbidden"), "admin-gated");
   assert.ok(DRAIN.includes("recentMinutes"), "recent-only bounded");
 });
-test("9F PIN: preview + admin process-now are recent-only (no old-backlog blast)", () => {
-  assert.ok(PREVIEW.includes("processQueue(20, { recentMinutes: 15 })"), "preview drain is recent-only");
+test("9F/9G PIN: preview is event-bound (exact IDs); admin process-now is recent-only", () => {
+  assert.ok(PREVIEW.includes("deliverable_preview_enqueue_notifications") && PREVIEW.includes("{ deliveryIds }"), "preview enqueues exact recipients + processes those IDs");
   assert.ok(ADMIN.includes("recentMinutes: 60"), "process-now is recent-only + bounded");
 });
 test("9F PIN: worker supports recentMinutes windowing", () => {
   assert.ok(WORKER.includes("recentMinutes") && WORKER.includes("ProcessOpts"), "processQueue accepts a recent window");
 });
-test("9F PIN: honest user-facing result (no blanket success when nothing sent)", () => {
-  assert.ok(VERSIONS.includes("email_channel_enabled") && VERSIONS.includes("processed"), "surfaces the real send outcome");
-  assert.ok(/could not be sent|تعذّر إرسال البريد/.test(VERSIONS), "distinguishes recorded-but-email-failed");
+test("9F/9G PIN: honest user-facing result (no blanket success when nothing sent)", () => {
+  assert.ok(VERSIONS.includes("email_channel_enabled") && VERSIONS.includes("EMAIL_ROWS_NOT_CLAIMED"), "surfaces the real send outcome + not-claimed code");
+  assert.ok(/could not start|تعذّر بدء إرسال البريد/.test(VERSIONS), "distinguishes recorded-but-email-failed");
 });
 test("9F safety: static only (no DB/network/real email)", () => {
   const self = R("tests/email_worker_serverside_9f.test.js");

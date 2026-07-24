@@ -247,13 +247,13 @@ test("PIN MAJOR-2: reaper leases on next_attempt_at (dwell-in-processing); claim
   assert.ok(WORKER.includes("status=eq.processing&next_attempt_at=lt."), "reaper reclaims by lease deadline, not row age");
 });
 test("PIN MAJOR-3: trace outcomes stay within the delivery-log CHECK vocabulary", () => {
-  assert.ok(!/pushTrace\([^;]*"email_dead_letter"/.test(WORKER) && !/pushTrace\([^;]*"email_retry_scheduled"/.test(WORKER), "no out-of-CHECK outcome literal reaches the log");
+  assert.ok(!/traceRow\([^;]*"email_dead_letter"/.test(WORKER) && !/traceRow\([^;]*"email_retry_scheduled"/.test(WORKER), "no out-of-CHECK outcome literal reaches the log");
   assert.ok(WORKER.includes('"dead_letter"') && WORKER.includes('"retry_scheduled"') && WORKER.includes("lifecycle"), "retry/dead-letter distinction carried in meta.lifecycle");
-  assert.ok(/pushTrace\(d, "email_failed"/.test(WORKER), "failures logged as the allowed 'email_failed' outcome");
+  assert.ok(/traceRow\(d, "email_failed"/.test(WORKER), "failures logged as the allowed 'email_failed' outcome");
 });
-test("PIN MAJOR-1: preview route suppresses bridge-enqueued duplicates before draining", () => {
-  assert.ok(PROJNOTIFY_ROUTE.includes("sent_direct") && PROJNOTIFY_ROUTE.includes("notification_id=in."), "marks bridged pending rows skipped for directly-sent recipients");
-  assert.ok(PROJNOTIFY_ROUTE.includes("staffSent ? staff") && PROJNOTIFY_ROUTE.includes("clientSent ? client"), "only suppresses recipients whose direct send succeeded");
+test("PIN MAJOR-1: preview route suppresses bridge-enqueued duplicates (9G: one queue source)", () => {
+  assert.ok(PROJNOTIFY_ROUTE.includes("notification_id=in."), "targets the bridge rows for the deliverable");
+  assert.ok(PROJNOTIFY_ROUTE.includes("idempotency_key=is.null") && PROJNOTIFY_ROUTE.includes("superseded_event_bound"), "keeps event-bound rows, skips the bridge duplicates");
 });
 test("PIN worker: atomic claim + provider confirmation + provider_message_id + lifecycle log", () => {
   assert.ok(WORKER.includes("id=eq.${d.id}&status=eq.pending") && WORKER.includes('status: "processing"'), "atomic claim pending→processing (guarded on still-pending)");

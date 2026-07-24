@@ -85,15 +85,12 @@ test("preview: staff-notify trigger fires on status→client_review for all path
   assert.ok(b.includes("exception when others then return new"), "never fails the deliverable status change");
   assert.ok(SQL.includes("after insert or update of status on public.deliverables"), "covers insert + status update (all send paths)");
 });
-test("preview: server route resolves canonical recipients + sends immediately + traces", () => {
-  assert.ok(ROUTE_PROJ.includes("notification_resolve_recipients"), "uses the canonical resolver");
-  assert.ok(ROUTE_PROJ.includes("sendProjectEmail"), "sends email immediately (not via the daily cron)");
-  assert.ok(ROUTE_PROJ.includes("notification_trace"), "writes the delivery trace");
-  assert.ok(ROUTE_PROJ.includes("staffSubject") && ROUTE_PROJ.includes("clientSubject"), "distinct staff vs client subject");
-  assert.ok(ROUTE_PROJ.includes("selectAsUser") && ROUTE_PROJ.includes("not_visible"), "anti-forgery visibility check");
-  // A client can SEE their own deliverable, so preview-send is gated on is_staff
-  // (blocks a client triggering/flooding internal-staff email) + rate limited.
-  assert.ok(ROUTE_PROJ.includes("isStaff") && ROUTE_PROJ.includes("forbidden"), "staff-only gate (visibility alone is insufficient)");
+test("preview: server route is event-bound (9G) — enqueue exact recipients + process IDs", () => {
+  // 9G superseded the 9D direct-send: the route now enqueues via the RPC and
+  // processes the exact delivery IDs (authorization/is_staff enforced in the RPC).
+  assert.ok(ROUTE_PROJ.includes("deliverable_preview_enqueue_notifications"), "event-bound enqueue RPC");
+  assert.ok(ROUTE_PROJ.includes("{ deliveryIds }"), "processes exactly the event's delivery IDs");
+  assert.ok(ROUTE_PROJ.includes("EMAIL_ROWS_NOT_CLAIMED"), "no false success when nothing sent");
   assert.ok(ROUTE_PROJ.includes("rate_limited") && ROUTE_PROJ.includes("RATE_MS"), "rate limited against floods");
 });
 test("preview: ALL THREE send paths fire the producer (admin/editor/version)", () => {

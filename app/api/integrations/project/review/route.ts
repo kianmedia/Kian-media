@@ -1,14 +1,18 @@
 // ════════════════════════════════════════════════════════════════════════
-// POST /api/integrations/project/review   (SERVER-ONLY, server-authoritative)
+// POST /api/integrations/project/review   (SERVER-ONLY, EVENT-BOUND)
 //
-// Batch 9F HOTFIX — the client's approve / request-revision decision. Previously
-// the browser called the client_review_version RPC directly and then relied on a
-// separate fire-and-forget notifyDrainKick() to run the worker; in production that
-// second call was unreliable, so the approval email sat pending (attempts=0)
-// until the daily cron. This route makes it ATOMIC on the server: it runs the
-// mutation (RLS-enforced inside the RPC) AND then drains the just-enqueued mail in
-// the SAME request, returning the real outcome. No browser second-call, no general
-// queue exposure — the drain is bounded + recent-only (this event's fresh rows).
+// Batch 9G — the client approve/revision decision. Production proof: the old
+// path returned 200 with claimed=0/sent=0 because the approval enqueued NO
+// email_deliveries rows for the right recipients (admin-broadcast is bridge-
+// skipped; the assignee trigger only fires when an assignee exists), so a
+// generic recent-window scan had nothing to claim.
+//
+// This route is EVENT-BOUND: one RPC runs the mutation AND enqueues the exact
+// recipients (management + PM + assignee) in the same transaction and RETURNS
+// their delivery IDs; then the worker processes precisely those IDs (no time
+// window, no old backlog). If recipients were expected but nothing could be
+// sent, it returns HTTP 502 EMAIL_ROWS_NOT_CLAIMED — never a false success.
+// The client's decision is persisted regardless (committed by the RPC).
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
 import { authGetUserId, rpcAsUser, adminConfigured } from "@/lib/server/supabaseAdmin";
@@ -20,7 +24,10 @@ export const dynamic = "force-dynamic";
 const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.stringify({ tag, ...extra }));
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
+interface EnqueueResult { ok?: boolean; correlation_id?: string; decision?: string; entity_id?: string; project_id?: string; expected_recipients?: number; new_ids?: string[]; delivery_ids?: string[] }
+
 export async function POST(req: Request) {
+  const t0 = Date.now();
   const auth = req.headers.get("authorization") ?? "";
   const bearer = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
   if (!bearer) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -36,27 +43,47 @@ export async function POST(req: Request) {
   const uid = await authGetUserId(bearer);
   if (!uid) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
-  // 1) Mutation — authorization (is_client_owner + current + in-review) is enforced
-  //    INSIDE client_review_version; we run it AS THE USER so RLS/ownership applies.
-  const rpc = await rpcAsUser<boolean>("client_review_version", { p_version: versionId, p_decision: decision, p_comments: comments }, bearer);
-  if (!rpc.ok) {
+  // 1) MUTATION + EVENT-BOUND ENQUEUE in one RPC (authorization is enforced inside
+  //    via client_review_version → is_client_owner). Returns the exact delivery IDs.
+  const rpc = await rpcAsUser<EnqueueResult>("client_review_and_enqueue_notifications",
+    { p_version: versionId, p_decision: decision, p_comments: comments, p_correlation: null }, bearer);
+  if (!rpc.ok || !rpc.data) {
     const err = String((rpc as { error?: string }).error ?? "review_failed");
     const denied = /not authorized|not_found|not_current|not_in_review|bad_decision|reason_required/i.test(err);
     log("PROJECT_REVIEW_RPC_FAILED", { decision, error: err.slice(0, 160) });
     return NextResponse.json({ ok: false, error: err.slice(0, 160) }, { status: denied ? 403 : 200 });
   }
+  const correlationId = rpc.data.correlation_id ?? null;
+  const deliveryIds = Array.isArray(rpc.data.delivery_ids) ? rpc.data.delivery_ids : [];
+  const newIds = Array.isArray(rpc.data.new_ids) ? rpc.data.new_ids : [];
+  const expected = typeof rpc.data.expected_recipients === "number" ? rpc.data.expected_recipients : deliveryIds.length;
 
-  // 2) Drain the just-enqueued approval/revision email in THIS server request —
-  //    recent-only + bounded, so it never touches the old backlog.
-  let processed = { claimed: 0, sent: 0, retrying: 0, dead_letter: 0, failed: 0, skipped: 0, backlog_deferred: 0 };
-  if (adminConfigured()) {
-    try { processed = await processQueue(20, { recentMinutes: 15 }); }
-    catch (e) { log("PROJECT_REVIEW_DRAIN_ERROR", { error: String(e).slice(0, 160) }); }
-  }
-  log("PROJECT_REVIEW", { decision, ...processed, email_enabled: projectEmailEnabled() });
+  // 2) Process EXACTLY those delivery IDs in this same server request.
+  const processed = adminConfigured() && deliveryIds.length > 0
+    ? await processQueue(deliveryIds.length, { deliveryIds })
+    : { claimed: 0, sent: 0, retrying: 0, dead_letter: 0, failed: 0, skipped: 0, backlog_deferred: 0, perId: {} as Record<string, string> };
+  const alreadySent = Object.values(processed.perId ?? {}).filter((o) => o === "already_sent").length;
+  const anySent = processed.sent > 0 || alreadySent > 0;
 
-  return NextResponse.json({
-    ok: true, event_created: true, decision,
-    processed, email_channel_enabled: projectEmailEnabled(),
+  const base = {
+    correlation_id: correlationId, decision,
+    expected_recipients: expected, queued: newIds.length,
+    claimed: processed.claimed, sent: processed.sent, retrying: processed.retrying,
+    failed: processed.failed, dead_letter: processed.dead_letter,
+    delivery_ids: deliveryIds, email_channel_enabled: projectEmailEnabled(),
+  };
+  log("PROJECT_REVIEW_EMAIL", {
+    correlation_id: correlationId, decision, expected_recipients: expected,
+    delivery_ids_count: deliveryIds.length, queued: newIds.length, claimed: processed.claimed,
+    sent: processed.sent, retrying: processed.retrying, failed: processed.failed,
+    already_sent: alreadySent, duration_ms: Date.now() - t0,
+    producer_stage: deliveryIds.length === 0 ? (expected === 0 ? "no_recipients" : "no_rows_created") : null,
   });
+
+  // 3) HONEST outcome — the decision is saved either way. If recipients were
+  //    expected but nothing was sent/claimed, this is NOT a success.
+  if (expected > 0 && !anySent && processed.claimed === 0) {
+    return NextResponse.json({ ok: false, code: "EMAIL_ROWS_NOT_CLAIMED", decision_saved: true, ...base }, { status: 502 });
+  }
+  return NextResponse.json({ ok: true, decision_saved: true, ...base }, { status: 200 });
 }
