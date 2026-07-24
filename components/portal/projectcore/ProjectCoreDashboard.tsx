@@ -22,6 +22,7 @@ import {
 } from "@/lib/portal/projectCore";
 import CreateProjectWizard from "./CreateProjectWizard";
 import FastCreateWizard from "./FastCreateWizard";
+import PortfolioView from "./PortfolioView";
 import { fastlaneQuickProjectIds } from "@/lib/portal/fastlane";
 import { NotifyMonitor } from "./NotifyMonitor";
 
@@ -43,6 +44,10 @@ export default function ProjectCoreDashboard() {
   // 8C: مجموعة المشاريع «السريعة» — قراءة واحدة (لا N+1)؛ فشلها يُخفي الشارة فقط.
   const [quickIds, setQuickIds] = useState<Set<string> | null>(null);
   const [onlyQuick, setOnlyQuick] = useState(false);
+  // Batch 9 Part 2: المحفظة الهرمية هي العرض الأساسيّ؛ المؤشّرات التفصيلية القديمة
+  // تبقى كاملةً خلف قسم قابل للتوسيع (تحميل كسول).
+  const [pfView, setPfView] = useState<"grouped" | "flat">("grouped");
+  const [showClassic, setShowClassic] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
   const [showNotify, setShowNotify] = useState(false);
   const [showPortfolio, setShowPortfolio] = useState(false);
@@ -64,7 +69,7 @@ export default function ProjectCoreDashboard() {
     const q = await fastlaneQuickProjectIds();
     setQuickIds(q.ok ? new Set(q.data.map((x) => x.id)) : null);
   }, []);
-  useEffect(() => { void load(filter, search); }, [load, filter]);   // البحث عبر زر/Enter
+  useEffect(() => { if (showClassic) void load(filter, search); }, [load, filter, showClassic]);   // كسول: يُحمَّل مع فتح المؤشرات التفصيلية
 
   const c = data?.counters;
   const rows: DashRow[] = data?.rows ?? [];
@@ -133,6 +138,15 @@ export default function ProjectCoreDashboard() {
       )}
       {toast && <div className="fixed bottom-4 inset-x-4 z-[80] mx-auto max-w-sm bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-sm text-stone-100 text-center shadow-lg">{toast}</div>}
 
+      {/* المحفظة الهرمية — العرض الأساسيّ (برامج/رئيسية بفروع، مستقلة، سريعة) */}
+      <PortfolioView view={pfView} onView={setPfView} />
+
+      {/* المؤشّرات التفصيلية القديمة (العدّادات + القائمة المسطّحة) — قابلة للتوسيع، تُحمَّل كسولًا */}
+      <button onClick={() => setShowClassic((v) => !v)} aria-expanded={showClassic}
+        className="w-full text-[11px] text-stone-400 border border-stone-800 rounded-lg px-3 py-2">
+        {showClassic ? t({ ar: "إخفاء المؤشرات التفصيلية ▴", en: "Hide detailed metrics ▴" }) : t({ ar: "المؤشرات التفصيلية (العدّادات والقائمة الكاملة) ▾", en: "Detailed metrics ▾" })}
+      </button>
+      {showClassic && (<div className="space-y-4">
       {/* بحث */}
       <div className="flex gap-2">
         <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void load(filter, search); }}
@@ -202,6 +216,7 @@ export default function ProjectCoreDashboard() {
       {onlyQuick && shownRows.length === 0 && (
         <div className={`${card} p-6 text-center text-sm text-stone-400`}>{t({ ar: "لا مشاريع سريعة في القائمة المعروضة.", en: "No quick projects in the loaded list." })}</div>
       )}
+      </div>)}
 
       {showCreate && <CreateProjectWizard onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(filter, search); }} />}
       {/* 8C: onCreated يُحدّث القائمة فقط — إغلاق النافذة هنا كان يُفكّك المعالج
