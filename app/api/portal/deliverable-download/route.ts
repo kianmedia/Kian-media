@@ -54,8 +54,15 @@ async function signStorage(bucket: string, path: string): Promise<string | null>
   } catch { return null; }
 }
 
-// Best-effort admin email after a permitted download starts. Honest wording:
+// Best-effort management email after a permitted download starts. Honest wording:
 // "started downloading" (issuance is provable; completion is not). Never throws.
+//
+// Batch 10 · Phase 3: routed through the UNIFIED pipeline (emitEventEmail) so the
+// receipt gains a queue row, retry, trace, and monitoring instead of a fire-and-
+// forget direct send. The central resolver decides recipients (management + PM;
+// the client is NOT included for this non-client-facing event). SAFE FALLBACK: if
+// the queue path is unavailable (e.g. notify_emit_event not yet applied on prod),
+// we fall back to the previous direct send so the alert is never lost mid-migration.
 async function notifyAdminsOfDownload(deliverableId: string): Promise<void> {
   if (!SERVICE_KEY) return;
   const svc = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` };
@@ -65,17 +72,36 @@ async function notifyAdminsOfDownload(deliverableId: string): Promise<void> {
   if (!d) return;
   const cntRes = await fetch(`${SUPABASE_URL}/rest/v1/deliverable_downloads?deliverable_id=eq.${deliverableId}&select=id`, { headers: { ...svc, Prefer: "count=exact" }, cache: "no-store" });
   const count = Number(cntRes.headers.get("content-range")?.split("/")[1] ?? "0");
+  const project = d.projects?.project_name ?? "";
+  const subject = `تنزيل نهائي — ${project}`;
+  const body = `بدأ العميل تنزيل الملف النهائي.\nالمشروع: ${project}\nالمخرَج: ${d.title} (v${d.version})\nرقم التنزيل: ${count}\nالوقت: ${new Date().toLocaleString("en-GB")}`;
+  const directUrl = `/client-portal/projects/${d.project_id}`;
+
+  // UNIFIED path — resolve + enqueue + process, event-bound. Idempotency
+  // (event:deliverable:recipient) means management is alerted on the FIRST download
+  // and repeats are deduped — the intended "client received the final" signal, not a
+  // per-click stream. The download count is carried in the body/payload for context.
+  const { emitEventEmail, logEmitOutcome } = await import("@/lib/server/notifyEvent");
+  const emit = await emitEventEmail({
+    event: "deliverable.download_recorded",
+    entity_type: "deliverable",
+    entity_id: deliverableId,
+    project_id: d.project_id,
+    actor: null,
+    subject,
+    body,
+    payload: { action_url: directUrl, occurrence: count },
+    correlation_id: null,
+  });
+  logEmitOutcome("DELIVERABLE_DOWNLOAD_EMAIL", "deliverable.download_recorded", emit);
+  if (emit.code !== "EMAIL_ENQUEUE_FAILED" && emit.code !== "SERVER_NOT_CONFIGURED") return;
+
+  // SAFE FALLBACK — queue path unavailable; send directly (previous behavior).
   const aRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=email&account_type=eq.admin&account_status=eq.active`, { headers: svc, cache: "no-store" });
   const admins = aRes.ok ? ((await aRes.json()) as Array<{ email: string | null }>).map((p) => p.email).filter((e): e is string => !!e && e.includes("@")) : [];
   if (admins.length === 0) return;
   const { sendProjectEmail } = await import("@/lib/server/projectNotify");
-  await sendProjectEmail({
-    to: admins,
-    subject: `تنزيل نهائي — ${d.projects?.project_name ?? ""}`,
-    body: `بدأ العميل تنزيل الملف النهائي.\nالمشروع: ${d.projects?.project_name ?? ""}\nالمخرَج: ${d.title} (v${d.version})\nرقم التنزيل: ${count}\nالوقت: ${new Date().toLocaleString("en-GB")}`,
-    directUrl: `/client-portal/projects/${d.project_id}`,
-    eventType: "deliverable_download_started",
-  });
+  await sendProjectEmail({ to: admins, subject, body, directUrl, eventType: "deliverable_download_started" });
 }
 
 export async function POST(req: Request) {
