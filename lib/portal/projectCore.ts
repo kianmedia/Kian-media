@@ -558,6 +558,26 @@ export interface EmailDeliveryRow {
 }
 export interface NotifyMonitorData { items: EmailDeliveryRow[]; counts: Record<string, number> | null }
 export const pcNotifyMonitor = (limit = 100) => prpc<NotifyMonitorData>("pc_notify_monitor", { p_limit: limit });
+
+// ─── Batch 9C: مراقب الرحلة الكاملة (v2) — يغطّي ما لا يراه v1: القناة/النبضة/
+// queued-nowhere/dead-letter/صندوق البوابة/التصنيف حسب الشدّة والنوع ───
+export interface NotifyCronRun {
+  job: string; ok: boolean; ran_at: string; error: string | null;
+  stats: Record<string, unknown> | null;
+}
+export interface NotifyMonitorV2 {
+  items: EmailDeliveryRow[];
+  counts: Record<string, number> | null;
+  by_severity: Record<string, number>;
+  by_event: Record<string, number>;
+  by_channel: { email: number; portal_7d: number };
+  portal_inbox: { last7d: number; unread_30d: number };
+  queued_nowhere: number; dead_letter: number; retrying: number; disabled_pending: number;
+  channel_state: "active" | "disabled" | "failing" | "unknown";
+  last_run: NotifyCronRun | null;
+  generated_at: string;
+}
+export const pcNotifyMonitorV2 = (limit = 150) => prpc<NotifyMonitorV2>("pc_notify_monitor_v2", { p_limit: limit });
 export const pcEmailRetry = (id: string) => prpc<boolean>("pc_email_retry", { p_id: id });
 export const pcEmailCancel = (id: string) => prpc<boolean>("pc_email_cancel", { p_id: id });
 export const EMAIL_STATUS_LABELS: Record<string, { ar: string; en: string }> = {

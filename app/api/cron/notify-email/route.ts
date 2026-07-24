@@ -120,9 +120,46 @@ async function run(req: Request) {
     else log("CLOSURE_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
   } catch (e) { log("CLOSURE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
+  // Batch 9C: resource/planning conflict alerts. The producer resource_alerts_scan was
+  // fully built (4D) but NEVER invoked by any cron — a confirmed break (conflicts/
+  // bookings-soon/maintenance-soon written to nobody). Idempotent via reminder_tracking;
+  // guarded so it no-ops if 4D isn't applied.
+  let resourceAlerts = 0;
+  try {
+    const r = await rpcAsService<{ ok: boolean; alerts_emitted: number }>("resource_alerts_scan", {});
+    if (r.ok) resourceAlerts = r.data?.alerts_emitted ?? 0;
+    else log("RESOURCE_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+  } catch (e) { log("RESOURCE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+
+  // Batch 9C: governance critical alerts — a critical risk/issue was raised but no event
+  // was ever emitted (confirmed break). Idempotent via reminder_tracking; guarded if absent.
+  let govAlerts = 0;
+  try {
+    const r = await rpcAsService<{ ok: boolean; emitted: number }>("pc_governance_alerts_scan", {});
+    if (r.ok) govAlerts = r.data?.emitted ?? 0;
+    else log("GOV_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+  } catch (e) { log("GOV_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+
+  // Batch 9C: program SLA breach alerts (8D). The RPC self-guards (returns skipped) if 8D
+  // isn't installed, so this block is safe regardless of environment.
+  let slaAlerts = 0;
+  try {
+    const r = await rpcAsService<{ ok: boolean; emitted: number }>("pc_program_sla_scan", {});
+    if (r.ok) slaAlerts = r.data?.emitted ?? 0;
+    else log("SLA_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+  } catch (e) { log("SLA_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+
   const queue = await processQueue();
-  log("NOTIFY_EMAIL_RUN", { reminders, taskAlerts, execAlerts, closureAlerts, ...queue, email_enabled: projectEmailEnabled() });
-  return NextResponse.json({ ok: true, reminders, taskAlerts, execAlerts, closureAlerts, ...queue, email_enabled: projectEmailEnabled() });
+  const stats = {
+    reminders, taskAlerts, execAlerts, closureAlerts, resourceAlerts, govAlerts, slaAlerts,
+    ...queue, email_enabled: projectEmailEnabled(),
+  };
+  log("NOTIFY_EMAIL_RUN", stats);
+  // Batch 9C: persist a cron heartbeat so the monitor can distinguish a dead cron / disabled
+  // channel from a quiet-but-healthy queue. Best-effort — a telemetry failure never fails the run.
+  try { await rpcAsService("pc_notify_cron_record", { p_job: "notify-email", p_ok: true, p_stats: stats, p_error: null }); }
+  catch (e) { log("CRON_HEARTBEAT_ERROR", { error: String(e).slice(0, 200) }); }
+  return NextResponse.json({ ok: true, ...stats });
 }
 
 export async function GET(req: Request) { return run(req); }
