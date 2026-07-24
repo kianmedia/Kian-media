@@ -48,9 +48,15 @@ export default function ProjectTasks({ projectId, canManage, flash }: { projectI
   const [nTitle, setNTitle] = useState(""); const [nPrio, setNPrio] = useState<PcPriority>("normal");
   const [nDue, setNDue] = useState(""); const [nAssignee, setNAssignee] = useState(""); const [busy, setBusy] = useState(false);
 
+  // حالة التحميل صريحة: فشل القراءة (RPC غير مطبّق/خطأ عابر) كان يظهر كلوحة فارغة
+  // لا تُميَّز عن «لا مهام»، بلا خطأ ولا إعادة محاولة (8-STAB).
+  const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
+  const [loadErr, setLoadErr] = useState("");
   const load = useCallback(async () => {
+    setPhase("loading");
     const r = await pcProjectTasksBoard(projectId);
-    if (r.ok) { setTasks(r.data.tasks); setProg(r.data.progress); }
+    if (r.ok) { setTasks(r.data.tasks); setProg(r.data.progress); setPhase("ready"); }
+    else { setLoadErr(pcErr(r.error)); setPhase("error"); }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void pcListStaff().then((r) => { if (r.ok) setStaff(r.data); }); }, []);
@@ -125,6 +131,16 @@ export default function ProjectTasks({ projectId, canManage, flash }: { projectI
   const clearFilters = () => { setQ(""); setFStatus(""); setFPrio(""); setFAssignee(""); setFMine(false); setFOverdue(false); setFReview(false); setFClient(false); setFLinked(false); setFDeps(false); setFBlocked(false); };
   const openTask = tasks.find((x) => x.id === open) ?? null;
   const boardHandlers: BoardHandlers = { onMove: doMove, onOpen: setOpen, onQuickCreate: quickCreate, canManage, nameOf };
+
+  if (phase === "loading" && tasks.length === 0)
+    return <p className="text-xs text-stone-500 py-8 text-center">{t({ ar: "جارٍ تحميل المهام…", en: "Loading tasks…" })}</p>;
+  if (phase === "error")
+    return (
+      <div className={`${card} p-6 text-center space-y-2`} role="alert">
+        <p className="text-sm text-red-300">{loadErr}</p>
+        <button onClick={() => void load()} className={`${btnGhost} px-4 py-2`}>{t({ ar: "إعادة المحاولة", en: "Retry" })}</button>
+      </div>
+    );
 
   return (
     <div className="space-y-3">
