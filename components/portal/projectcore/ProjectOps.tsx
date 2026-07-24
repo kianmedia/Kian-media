@@ -54,28 +54,58 @@ const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_revie
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
 type TabKey = "quick" | "program_sla" | "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
-// 8C: تبويبات المسار السريع — تظهر أولًا في تجربة «سريع»، وما عداها يبقى موجودًا
-// كاملًا خلف «إدارة متقدمة». لا تبويب يُحذف ولا وصول يُمنع؛ الترتيب والظهور فقط.
-const SIMPLE_TABS: TabKey[] = ["quick", "tasks", "shoots", "deliverables", "team", "closure"];
-const TABS: { k: TabKey; ar: string; en: string }[] = [
-  { k: "quick", ar: "نظرة سريعة", en: "Quick view" },
-  { k: "execution", ar: "التنفيذ", en: "Execution" }, { k: "reports", ar: "التقارير", en: "Reports" },
-  { k: "planning", ar: "المخطط الزمني", en: "Planner" },
-  { k: "resources", ar: "الموارد", en: "Resources" },
-  { k: "governance", ar: "الحوكمة", en: "Governance" },
-  { k: "subprojects", ar: "المشاريع الفرعية", en: "Subprojects" },
-  { k: "program", ar: "إدارة البرنامج", en: "Program" },
-  { k: "program_sla", ar: "الالتزامات والتسليم", en: "Commitments & Delivery" },
-  { k: "closure", ar: "إغلاق المشروع", en: "Closure" },
-  { k: "schedule", ar: "الخطة الزمنية", en: "Schedule" },
-  { k: "tasks", ar: "المهام", en: "Tasks" }, { k: "gantt", ar: "المخطّط", en: "Gantt" }, { k: "calendar", ar: "التقويم", en: "Calendar" },
-  { k: "team", ar: "الفريق", en: "Team" }, { k: "deliverables", ar: "المخرجات", en: "Deliverables" }, { k: "approvals", ar: "الاعتمادات", en: "Approvals" },
-  { k: "finance", ar: "حسابات المشروع", en: "Accounts" }, { k: "costs", ar: "التكاليف", en: "Costs" }, { k: "risks", ar: "المخاطر", en: "Risks" },
-  { k: "meetings", ar: "الاجتماعات", en: "Meetings" }, { k: "shoots", ar: "جلسات التصوير", en: "Shoots" },
-  { k: "locations", ar: "المواقع", en: "Locations" }, { k: "tags", ar: "الوسوم", en: "Tags" },
-  { k: "timeline", ar: "سجل المراحل", en: "Stage History" }, { k: "activity", ar: "سجل النشاط", en: "Activity Log" },
-  { k: "trash", ar: "المحذوفات", en: "Trash" },
+// Batch 9 · Part 1 — التبويبات مرتَّبة حسب دورة العمل ومجمَّعة بصريًّا في خمس مجموعات.
+// **المفاتيح التقنية لم تتغيّر** (الهوية بالـkey لا بالترتيب): الروابط العميقة
+// وشروط الظهور ومكوّنات التبويبات كما هي. غُيِّر الاسم الظاهر فقط حيث كان مضلِّلًا:
+//   · planning = ProjectGantt (محرّك Gantt V2) ⇒ «مخطط جانت» (كان «المخطط الزمني»).
+//   · gantt    = PreProductionCenter + المخطّط الموحّد (تحضير+خطة، **ليس Kanban**)
+//                ⇒ «الخطة والتحضير» (كان «المخطّط» الغامض المتصادم مع جانت).
+// «المهام» (tasks) يحوي القائمة ولوحة Kanban معًا (تبديل داخليّ) — لا تبويب لوحة منفصل.
+type TabGroup = "overview" | "planning" | "delivery" | "control" | "records";
+const GROUP_LABELS: Record<TabGroup, { ar: string; en: string }> = {
+  overview: { ar: "نظرة عامة وقيادة", en: "Overview & leadership" },
+  planning: { ar: "التخطيط", en: "Planning" },
+  delivery: { ar: "التشغيل والتسليم", en: "Operations & delivery" },
+  control: { ar: "الرقابة والإدارة", en: "Control & management" },
+  records: { ar: "السجلات والإقفال", en: "Records & closure" },
+};
+// 8C: في تجربة «سريع» تُعرض الأساسيات التشغيلية أوّلًا، والبقية خلف «إدارة متقدمة».
+const SIMPLE_TABS: TabKey[] = ["quick", "execution", "team", "tasks", "shoots", "deliverables", "approvals", "program_sla"];
+const TABS: { k: TabKey; ar: string; en: string; group: TabGroup }[] = [
+  // أ) نظرة عامة وقيادة المشروع
+  { k: "quick", ar: "نظرة سريعة", en: "Quick view", group: "overview" },
+  { k: "execution", ar: "التنفيذ", en: "Execution", group: "overview" },
+  { k: "program", ar: "إدارة البرنامج", en: "Program", group: "overview" },
+  { k: "subprojects", ar: "المشاريع الفرعية", en: "Subprojects", group: "overview" },
+  { k: "team", ar: "الفريق", en: "Team", group: "overview" },
+  // ب) التخطيط
+  { k: "locations", ar: "المواقع", en: "Locations", group: "planning" },
+  { k: "meetings", ar: "الاجتماعات", en: "Meetings", group: "planning" },
+  { k: "schedule", ar: "الخطة الزمنية", en: "Schedule", group: "planning" },
+  { k: "calendar", ar: "التقويم", en: "Calendar", group: "planning" },
+  { k: "planning", ar: "مخطط جانت", en: "Gantt", group: "planning" },
+  { k: "gantt", ar: "الخطة والتحضير", en: "Plan & pre-production", group: "planning" },
+  { k: "resources", ar: "الموارد", en: "Resources", group: "planning" },
+  // ج) التشغيل والتسليم
+  { k: "tasks", ar: "المهام", en: "Tasks", group: "delivery" },
+  { k: "shoots", ar: "جلسات التصوير", en: "Shoots", group: "delivery" },
+  { k: "deliverables", ar: "المخرجات", en: "Deliverables", group: "delivery" },
+  { k: "approvals", ar: "الاعتمادات", en: "Approvals", group: "delivery" },
+  { k: "program_sla", ar: "الالتزامات والتسليم", en: "Commitments & Delivery", group: "delivery" },
+  // د) الرقابة والإدارة
+  { k: "risks", ar: "المخاطر", en: "Risks", group: "control" },
+  { k: "governance", ar: "الحوكمة", en: "Governance", group: "control" },
+  { k: "costs", ar: "التكاليف", en: "Costs", group: "control" },
+  { k: "finance", ar: "حسابات المشروع", en: "Accounts", group: "control" },
+  { k: "reports", ar: "التقارير", en: "Reports", group: "control" },
+  // هـ) السجلات والإقفال
+  { k: "timeline", ar: "سجل المراحل", en: "Stage History", group: "records" },
+  { k: "activity", ar: "سجل النشاط", en: "Activity Log", group: "records" },
+  { k: "tags", ar: "الوسوم", en: "Tags", group: "records" },
+  { k: "closure", ar: "إغلاق المشروع", en: "Closure", group: "records" },
+  { k: "trash", ar: "المحذوفات", en: "Trash", group: "records" },
 ];
+const GROUP_ORDER: TabGroup[] = ["overview", "planning", "delivery", "control", "records"];
 
 export default function ProjectOps({ projectId, projectName, onChanged, initialTab }: { projectId: string; projectName: string; onChanged?: () => void; initialTab?: string }) {
   const { t } = useI18n();
@@ -179,6 +209,14 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   // التحويل إلى «قياسي» يُخفي التبويب — بلا هذا السقوط تبقى منطقة المحتوى فارغة.
   useEffect(() => { if (tab === "quick" && !isSimple) setTab("tasks"); }, [tab, isSimple]);
   const pickTab = useCallback((k: TabKey) => { touchedRef.current = true; setTab(k); }, []);
+  // إبقاء التبويب النشط ظاهرًا أفقيًّا داخل الشريط — بعد أوّل رسم فقط (حتى لا يقفز
+  // التمرير العموديّ عند التحميل)، وبمحور أفقيّ فقط (block:nearest كان يجرّ الصفحة).
+  const activeTabRef = useRef<HTMLButtonElement | null>(null);
+  const tabScrolledRef = useRef(false);
+  useEffect(() => {
+    if (!tabScrolledRef.current) { tabScrolledRef.current = true; return; }   // تخطّي الرسم الأوّل
+    activeTabRef.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [tab]);
   // في «سريع» نعرض التبويبات الأساسية أوّلًا؛ الباقي خلف «إدارة متقدمة».
   // الفتح التلقائي حين يكون التبويب النشط متقدّمًا يجب أن يضبط **الحالة** لا أن
   // يُجبر المشتقّ: وإلّا صار الزرّ عاجزًا عن فعل شيء (يقلب حالة لا أثر لها) بينما
@@ -389,17 +427,50 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       </section>
       </div>
 
-      {/* تبويبات */}
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-        {shownTabs.map((tb) => (
-          <button key={tb.k} onClick={() => pickTab(tb.k)} aria-current={tab === tb.k ? "page" : undefined}
-            className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
-            {t({ ar: tb.ar, en: tb.en })}
+      {/* تبويبات — مجمَّعة بصريًّا (فواصل مجموعات على الشاشات، قائمة أقسام على الجوال) */}
+      {/* الجوال: قائمة «الأقسام» منظَّمة بدل الاعتماد على التمرير الأفقيّ وحده */}
+      <div className="sm:hidden">
+        <label className="sr-only" htmlFor="tab-jump">{t({ ar: "الأقسام", en: "Sections" })}</label>
+        <select id="tab-jump" value={tab} onChange={(e) => pickTab(e.target.value as TabKey)}
+          className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200" style={{ colorScheme: "dark" }}>
+          {GROUP_ORDER.filter((g) => shownTabs.some((tb) => tb.group === g)).map((g) => (
+            <optgroup key={g} label={t(GROUP_LABELS[g])}>
+              {shownTabs.filter((tb) => tb.group === g).map((tb) => (
+                <option key={tb.k} value={tb.k}>{t({ ar: tb.ar, en: tb.en })}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        {isSimple && (
+          <button onClick={() => setShowAdvanced((v) => !v)} aria-expanded={!collapseAdvanced}
+            className="mt-2 w-full text-[11px] text-stone-400 border border-stone-700 rounded-lg px-3 py-1.5">
+            {collapseAdvanced
+              ? `${t({ ar: "إظهار الإدارة المتقدمة", en: "Show advanced" })} (${visibleTabs.length - shownTabs.length}) ▾`
+              : `${t({ ar: "إخفاء المتقدمة", en: "Hide advanced" })} ▴`}
           </button>
+        )}
+      </div>
+      {/* الشاشات: شريط أفقيّ مقسوم إلى مجموعات بعناوين خفيفة. أزرار بـaria-current
+          (لا tablist مسطَّح — التجميع يكسر نموذج tablist؛ القائمة على الجوال هي
+          البنية المنظَّمة لقارئ الشاشة). */}
+      <div className="hidden sm:flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 items-center"
+        role="group" aria-label={t({ ar: "أقسام المشروع", en: "Project sections" })}>
+        {GROUP_ORDER.filter((g) => shownTabs.some((tb) => tb.group === g)).map((g, gi) => (
+          <div key={g} className="flex gap-1.5 items-center" role="group" aria-label={t(GROUP_LABELS[g])}>
+            {gi > 0 && <span aria-hidden="true" className="text-stone-700 px-0.5 shrink-0">·</span>}
+            <span aria-hidden="true" className="text-[9px] text-stone-600 uppercase tracking-wide whitespace-nowrap shrink-0 self-center">{t(GROUP_LABELS[g])}</span>
+            {shownTabs.filter((tb) => tb.group === g).map((tb) => (
+              <button key={tb.k} ref={tab === tb.k ? activeTabRef : undefined}
+                onClick={() => pickTab(tb.k)} aria-current={tab === tb.k ? "page" : undefined}
+                className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
+                {t({ ar: tb.ar, en: tb.en })}
+              </button>
+            ))}
+          </div>
         ))}
         {isSimple && (
           <button onClick={() => setShowAdvanced((v) => !v)} aria-expanded={!collapseAdvanced}
-            className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap bg-stone-900 border border-stone-700 text-stone-400 hover:text-white">
+            className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap bg-stone-900 border border-stone-700 text-stone-400 hover:text-white shrink-0">
             {collapseAdvanced
               ? `${t({ ar: "إدارة متقدمة", en: "Advanced" })} (${visibleTabs.length - shownTabs.length}) ▾`
               : `${t({ ar: "إخفاء المتقدمة", en: "Hide advanced" })} ▴`}
@@ -428,8 +499,8 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "tasks" && <ProjectTasks projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "gantt" && (
         <div className="space-y-6">
-          {/* Structured pre-production center (§4) lives in the planning ("المخطّط")
-              tab; the legacy unified Gantt/plan stays below it. */}
+          {/* تبويب «الخطة والتحضير» (مفتاح gantt): مركز التحضير المنظَّم (§4) أعلى،
+              والمخطّط الموحّد أسفله. مفتاح planning المنفصل يعرض «مخطط جانت» (V2). */}
           <PreProductionCenter projectId={projectId} canManage={canManage} projectName={projectName} />
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "16px" }}>
             <UnifiedGanttTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />
