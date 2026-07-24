@@ -60,7 +60,16 @@ export default function VersionHistory({
     setBusy(true); setMsg(null);
     const r = await reviewVersion(v.id, decision, note);
     setBusy(false);
-    if (!r.ok) { setMsg(t({ ar: "تعذّر الإرسال.", en: "Failed." })); return; }
+    if (!r.ok) { setMsg(t({ ar: "تعذّر تسجيل القرار.", en: "Failed." })); return; }
+    // Batch 9F: honest result — the server route processed the notification email
+    // in the same request; surface whether it actually went out.
+    const p = r.data?.processed as { claimed?: number; sent?: number } | undefined;
+    const chOff = r.data?.email_channel_enabled === false;
+    setMsg(
+      chOff ? t({ ar: "تم تسجيل قرارك (قناة البريد معطّلة على الخادم).", en: "Recorded (email channel off on server)." })
+        : (p && (p.sent ?? 0) > 0) ? t({ ar: "تم تسجيل قرارك وإرسال الإشعار.", en: "Recorded and notification sent." })
+        : (p && (p.claimed ?? 0) > 0) ? t({ ar: "تم تسجيل قرارك؛ تعذّر إرسال البريد لبعض المستلمين.", en: "Recorded; some emails could not be sent." })
+        : t({ ar: "تم تسجيل قرارك.", en: "Recorded." }));
     setReviseFor(null); setReviseNote("");
     await load(); onChanged?.();
   }

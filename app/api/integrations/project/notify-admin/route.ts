@@ -120,7 +120,9 @@ export async function POST(req: Request) {
   // action === "process_now" — bounded drain via the shared worker, with honesty:
   // report pending counts + WHY nothing was claimed (backlog / not due / channel off).
   const backlog = await pendingBacklog(BACKLOG_HOURS);
-  const result = await processQueue(25);
+  // Batch 9F: recent-only (last 60m) + bounded — Process Now must NOT blast the old
+  // backlog. The Backlog preview/Expire tools handle old rows explicitly.
+  const result = await processQueue(25, { recentMinutes: 60 });
   let reason: string | null = null;
   if (result.claimed === 0 && backlog.total > 0) {
     reason = !projectEmailEnabled() ? "email_channel_disabled"

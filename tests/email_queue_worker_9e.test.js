@@ -267,11 +267,12 @@ test("PIN sender: reads relay body + follows redirect; not sent on explicit fail
   assert.ok(PROJNOTIFY.includes("await res.text()"), "reads the response body (not bare HTTP 200)");
   assert.ok(PROJNOTIFY.includes("conf.rejected"), "explicit failure body → not sent");
 });
-test("PIN immediate dispatch: drain endpoint (auth+rate-limit) + kick wired to approval + preview", () => {
-  assert.ok(DRAIN.includes("processQueue") && DRAIN.includes("authGetUserId") && DRAIN.includes("rate_limited"), "bounded, authed, rate-limited drain");
-  assert.ok(NOTIFYEMAIL.includes("notifyDrainKick") && NOTIFYEMAIL.includes("/api/integrations/notify/drain"), "kick helper posts to the drain");
-  assert.ok(DELIVERABLES.includes("notifyDrainKick"), "client approve/revision kicks the drain (the stuck-approval fix)");
-  assert.ok(PROJNOTIFY_ROUTE.includes("processQueue"), "preview route drains queued mail immediately too");
+test("PIN immediate dispatch (9F server-authoritative): review route + preview route drain in-request", () => {
+  assert.ok(DRAIN.includes("processQueue") && DRAIN.includes("authGetUserId"), "admin drain uses the shared worker");
+  // 9F: the unreliable browser kick was removed; draining is server-side.
+  assert.ok(!NOTIFYEMAIL.includes("export async function notifyDrainKick"), "browser drain-kick helper removed");
+  assert.ok(!DELIVERABLES.includes("notifyDrainKick"), "approval no longer relies on a browser kick");
+  assert.ok(PROJNOTIFY_ROUTE.includes("processQueue"), "preview route drains queued mail server-side");
 });
 test("15/16. cron AND admin AND drain all reuse the SAME shared worker", () => {
   for (const [name, src] of [["cron", CRON], ["admin", ADMIN], ["drain", DRAIN]]) {

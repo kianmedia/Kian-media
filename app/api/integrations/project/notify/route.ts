@@ -176,9 +176,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // Batch 9E: opportunistically drain a small bounded batch of any OTHER DB-queued
-  // mail (e.g. approvals) so it doesn't wait for the daily cron. Bounded; never blocks.
-  try { await processQueue(10); } catch { /* immediate drain is best-effort */ }
+  // Batch 9F: server-authoritative drain of any OTHER freshly-enqueued mail —
+  // recent-only (15m) + bounded, so it never touches the old backlog.
+  try { await processQueue(20, { recentMinutes: 15 }); } catch { /* immediate drain is best-effort */ }
 
   return NextResponse.json({
     ok: true,

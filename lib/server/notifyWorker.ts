@@ -49,12 +49,19 @@ export async function pendingBacklog(maxAgeHours = DEFAULT_MAX_AGE_HOURS): Promi
   return { total, recent: Math.max(0, total - oldN), old: oldN };
 }
 
-/** Drain up to `limit` due email_deliveries rows. Best-effort, never throws. */
-export async function processQueue(limit = 30, maxAgeHours = DEFAULT_MAX_AGE_HOURS): Promise<QueueResult> {
+export interface ProcessOpts { maxAgeHours?: number; recentMinutes?: number }
+
+/** Drain up to `limit` due email_deliveries rows. Best-effort, never throws.
+ *  Batch 9F: the immediate (server-authoritative) path passes recentMinutes so it
+ *  claims ONLY freshly-enqueued rows (the current event), never the old backlog. */
+export async function processQueue(limit = 30, opts: ProcessOpts = {}): Promise<QueueResult> {
   const out = emptyResult();
   const nowIso = new Date().toISOString();
   const staleIso = new Date(Date.now() - STALE_MS).toISOString();
-  const cutoffIso = new Date(Date.now() - maxAgeHours * 3600_000).toISOString();
+  const windowMs = opts.recentMinutes != null
+    ? Math.max(1, opts.recentMinutes) * 60_000
+    : (opts.maxAgeHours ?? DEFAULT_MAX_AGE_HOURS) * 3600_000;
+  const cutoffIso = new Date(Date.now() - windowMs).toISOString();
   const trace: Record<string, unknown>[] = [];
 
   // Reaper: reclaim rows whose PROCESSING LEASE expired — measured by time IN

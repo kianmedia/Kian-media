@@ -10,12 +10,12 @@
 // so mail goes out within seconds. The daily cron remains the fallback for
 // retries, stale rows, and anything missed.
 //
-// Auth: any signed-in user (it only processes the legitimate global queue,
-// bounded, and never returns email content). Rate-limited per user. Service
-// role does the DB work; no secret is exposed to the client.
+// Batch 9F: ADMIN-ONLY (can_manage_projects). Regular users can no longer drain
+// the general queue — event-scoped draining now happens server-authoritatively
+// inside the review/preview routes. Recent-only + bounded; no secret exposed.
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
-import { authGetUserId, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { authGetUserId, rpcAsUser, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { projectEmailEnabled } from "@/lib/server/projectNotify";
 import { processQueue } from "@/lib/server/notifyWorker";
 
@@ -26,7 +26,7 @@ const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.st
 // Best-effort per-user rate limit (abuse-prevention; the work is always bounded).
 const lastCall = new Map<string, number>();
 const RATE_MS = 4000;
-const BATCH = 15;
+const BATCH = 20;
 
 export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
@@ -36,12 +36,16 @@ export async function POST(req: Request) {
   if (!uid) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminConfigured()) return NextResponse.json({ ok: true, drained: false, reason: "server_not_configured" });
 
+  // Admin gate — a regular user must not be able to drain the general queue.
+  const can = await rpcAsUser<boolean>("can_manage_projects", {}, bearer);
+  if (!can.ok || can.data !== true) return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
+
   const now = Date.now();
   const prev = lastCall.get(uid) ?? 0;
   if (now - prev < RATE_MS) return NextResponse.json({ ok: true, drained: false, reason: "rate_limited" });
   lastCall.set(uid, now);
 
-  const result = await processQueue(BATCH);
-  log("NOTIFY_DRAIN_KICK", { ...result, email_enabled: projectEmailEnabled() });
+  const result = await processQueue(BATCH, { recentMinutes: 60 });
+  log("NOTIFY_DRAIN_ADMIN", { ...result, email_enabled: projectEmailEnabled() });
   return NextResponse.json({ ok: true, drained: true, result, email_enabled: projectEmailEnabled() });
 }
