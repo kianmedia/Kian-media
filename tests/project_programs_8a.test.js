@@ -177,7 +177,17 @@ test("الواجهة: تبويب البرنامج للمشروع الرئيسي 
   assert.match(OPS, /import ProgramTab/, "ProjectOps لا يستورد تبويب البرنامج");
   assert.match(OPS, /\(tb\.k !== "program" \|\| isMaster\)/, "تبويب البرنامج يظهر لغير الرئيسي");
   assert.match(OPS, /tab === "program" && isMaster && <ProgramTab/, "التبويب غير مُصيَّر أو بلا حارس master");
-  assert.match(OPS, /\(tab === "subprojects" \|\| tab === "program"\) && !isMaster\) setTab\("tasks"\)/, "لا سقوط عند فقدان صفة master");
+  // 8D وسّع القائمة بتبويب program_sla — نحرس الخاصيّة (كل تبويب خاصّ بالرئيسي
+  // يسقط إلى «المهام» عند فقدان الصفة) لا نصّ التعبير.
+  const fb = OPS.match(/if \(\(tab === "subprojects"[^)]*\)[^)]*&& !isMaster\) setTab\("tasks"\)/);
+  assert.ok(fb, "لا سقوط عند فقدان صفة master");
+  for (const k of ["subprojects", "program"]) {
+    assert.ok(fb[0].includes(`tab === "${k}"`), `تبويب ${k} بلا سقوط عند فقدان صفة master`);
+  }
+  // وكل تبويب مقصور على الرئيسي في الفلترة يجب أن يكون داخل نفس السقوط
+  for (const m of OPS.matchAll(/tb\.k !== "([a-z_]+)" \|\| isMaster/g)) {
+    assert.ok(fb[0].includes(`tab === "${m[1]}"`), `تبويب ${m[1]} مقصور على الرئيسي وبلا سقوط`);
+  }
   ["projectProgramDashboard", "projectProgramUnits", "projectProgramSettingsUpsert"].forEach((f) =>
     assert.match(UI, new RegExp(f + "\\("), `الواجهة لا تستدعي ${f}`));
   assert.doesNotMatch(UI, /\bmockData|dummyData|fakeData|TODO: wire\b/i, "بيانات وهمية");

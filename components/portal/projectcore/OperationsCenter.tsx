@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { usePortal } from "@/components/portal/PortalShell";
 import NotificationsView from "@/components/portal/NotificationsView";
+import { programSlaAttention, SLA_STATUS_AR, SLA_STATUS_COLOR, slaValue, type SlaAttention } from "@/lib/portal/programSla";
 import {
   operationsCommandCenter, operationsMyWork, operationsAttentionQueue, operationsSchedule,
   URGENCY_META, SCHED_TYPE_AR, opsErr,
@@ -18,11 +19,12 @@ import {
 } from "@/lib/portal/operations";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
-type Tab = "overview" | "mywork" | "attention" | "schedule" | "notifications";
+type Tab = "overview" | "mywork" | "attention" | "schedule" | "sla" | "notifications";
 const TABS: { k: Tab; ar: string; en: string }[] = [
   { k: "overview", ar: "نظرة عامة", en: "Overview" },
   { k: "mywork", ar: "عملي اليوم", en: "My work" },
   { k: "attention", ar: "تحتاج انتباهك", en: "Attention" },
+  { k: "sla", ar: "التزامات البرامج", en: "Program SLA" },
   { k: "schedule", ar: "الجدول القادم", en: "Schedule" },
   { k: "notifications", ar: "الإشعارات", en: "Notifications" },
 ];
@@ -118,6 +120,7 @@ export default function OperationsCenter({ onClose, onNavigate }:
           {tab === "mywork" && <MyWorkTab filters={filters} />}
           {tab === "attention" && <AttentionTab filters={filters} setFilters={setFilters} />}
           {tab === "schedule" && <ScheduleTab filters={filters} setFilters={setFilters} />}
+          {tab === "sla" && <ProgramSlaPanel filters={filters} />}
           {tab === "notifications" && <NotificationsView />}
         </div>
       </div>
@@ -417,6 +420,52 @@ function ScheduleTab({ filters, setFilters }: { filters: OpsFilters; setFilters:
           </div>
         )}
       </Shell>
+    </div>
+  );
+}
+
+// ════════════════ 8D: التزامات البرامج المخروقة/المقتربة (قراءة فقط) ════════════════
+function ProgramSlaPanel({ filters }: { filters: OpsFilters }) {
+  const { t } = useI18n();
+  const { data, phase, err, reload } = useLoader<SlaAttention>(
+    () => programSlaAttention(filters as Record<string, unknown>), [filters]);
+  if (phase === "loading") return <p className="text-xs text-stone-500 py-6 text-center">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
+  if (phase === "error") return (
+    <div className="text-center py-6 space-y-2" role="alert">
+      <p className="text-sm text-red-300">{err}</p>
+      <button onClick={reload} className="text-xs text-stone-200 bg-stone-800 border border-stone-700 rounded-lg px-4 py-2">{t({ ar: "إعادة المحاولة", en: "Retry" })}</button>
+    </div>
+  );
+  if (!data) return null;
+  if (data.rows.length === 0) return (
+    <div className="py-8 text-center">
+      <p className="text-sm text-stone-400">{t({ ar: "لا التزامات مخروقة أو مقتربة من الخرق.", en: "No breached or at-risk commitments." })}</p>
+      <p className="text-[10px] text-stone-600 mt-1">{t({ ar: `فُحص ${data.programs_scanned} برنامجًا.`, en: `${data.programs_scanned} programs scanned.` })}</p>
+    </div>
+  );
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[10px] text-stone-600">{t({ ar: `فُحص ${data.programs_scanned} برنامجًا (حدّ ${data.limit}).`, en: `${data.programs_scanned} programs scanned.` })}</p>
+      {data.rows.map((r, i) => (
+        <Link key={`${r.project_id}-${r.commitment_key}-${i}`} href={`/client-portal/project-core/${r.project_id}?tab=program_sla`}
+          className="block bg-stone-900 border border-stone-800 rounded-xl p-3 hover:border-stone-600">
+          <div className="flex items-start justify-between gap-2 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-sm text-stone-100 truncate" dir="auto">{r.name_ar}</p>
+              <p className="text-[10px] text-stone-500 truncate" dir="auto">{r.project_name}</p>
+            </div>
+            <div className="text-left shrink-0 text-[10px]">
+              <span className="px-1.5 py-0.5 rounded" style={{ background: SLA_STATUS_COLOR[r.status] + "22", color: SLA_STATUS_COLOR[r.status] }}>
+                {SLA_STATUS_AR[r.status]}
+              </span>
+              <div className="text-stone-500 mt-0.5">
+                {t({ ar: "الفعليّ", en: "actual" })} {slaValue(r.actual, r.unit)} / {t({ ar: "الهدف", en: "target" })} {slaValue(r.target, r.unit)}
+              </div>
+              <div className="text-stone-600">{t({ ar: "عيّنة", en: "n" })} {r.sample_size}</div>
+            </div>
+          </div>
+        </Link>
+      ))}
     </div>
   );
 }

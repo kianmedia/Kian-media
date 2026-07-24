@@ -23,6 +23,7 @@ import AdminDeliverables from "@/components/portal/AdminDeliverables";
 import TimelineView from "@/components/portal/TimelineView";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
 import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
+import ClientProgramSummary from "@/components/portal/projectcore/ClientProgramSummary";
 import EditorDeliverables from "@/components/portal/EditorDeliverables";
 import AdminClientNotes from "@/components/portal/AdminClientNotes";
 import AdminProjectStage from "@/components/portal/AdminProjectStage";
@@ -135,6 +136,12 @@ export default function ProjectDetailPage() {
       {/* Authoritative overall progress (P0-9) — same value admin & client see */}
       <div style={{ maxWidth: "560px", marginBottom: "28px" }}>
         <ProjectProgressBar projectId={id} />
+      </div>
+
+      {/* 8D: ملخّص البرنامج للعميل — يُخفي نفسه ما لم يكن المشروع برنامجًا مُفعَّلًا
+          للعميل (بوّابة الخادم). المستهلك الوحيد لسطح العميل في 8D. */}
+      <div style={{ marginBottom: "28px" }}>
+        <ClientProgramSummary projectId={id} />
       </div>
 
       {/* Authoritative lifecycle timeline (states) + shooting/review/delivery cards,

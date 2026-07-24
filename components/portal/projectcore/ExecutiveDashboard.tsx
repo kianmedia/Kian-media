@@ -16,12 +16,14 @@ import {
   EXEC_STATUS, AXIS_LABELS, execErr,
   type ExecPortfolio, type ExecScorecard, type ExecStatus, type ExecReason,
 } from "@/lib/portal/executive";
+import { executiveProgramSla, slaErr, type ExecutiveProgramSla } from "@/lib/portal/programSla";
 
-type Tab = "overview" | "risks" | "approvals" | "changes" | "quality";
+type Tab = "overview" | "risks" | "approvals" | "changes" | "sla" | "quality";
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const TABS: { k: Tab; ar: string; en: string }[] = [
   { k: "overview", ar: "نظرة عامة", en: "Overview" }, { k: "risks", ar: "المخاطر والمشكلات", en: "Risks & Issues" },
   { k: "approvals", ar: "الاعتمادات", en: "Approvals" }, { k: "changes", ar: "طلبات التغيير", en: "Changes" },
+  { k: "sla", ar: "التزامات البرامج", en: "Program SLA" },
   { k: "quality", ar: "جودة البيانات", en: "Data quality" },
 ];
 
@@ -54,6 +56,7 @@ export default function ExecutiveDashboard({ onClose }: { onClose: () => void })
           {tab === "risks" && <RisksTab />}
           {tab === "approvals" && <ApprovalsTab />}
           {tab === "changes" && <ChangesTab />}
+          {tab === "sla" && <ProgramSlaExecTab />}
           {tab === "quality" && <QualityTab />}
         </div>
       </div>
@@ -340,4 +343,59 @@ function csvExport(name: string, rows: readonly object[]) {
   const objs = rows as readonly Record<string, unknown>[];
   const keys = Object.keys(objs[0]);
   csvDownload(name, [[...keys, "exported_at"], ...objs.map((r) => [...keys.map((k) => { const v = r[k]; return v == null ? "" : typeof v === "boolean" ? String(v) : (v as string | number); }), new Date().toISOString()])]);
+}
+
+// ════════════════ 8D: قسم معلوماتيّ — لا يدخل في أيّ Score تنفيذيّ ════════════════
+function ProgramSlaExecTab() {
+  const { t } = useI18n();
+  const [d, setD] = useState<ExecutiveProgramSla | null>(null);
+  const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
+  const [err, setErr] = useState("");
+  const seq = useRef(0); const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const load = useCallback(async () => {
+    const my = ++seq.current; setPhase("loading"); setErr("");
+    const r = await executiveProgramSla({});
+    if (!alive.current || my !== seq.current) return;
+    if (!r.ok) { setErr(slaErr(r.error)); setPhase("error"); return; }
+    setD(r.data); setPhase("ready");
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  if (phase === "loading") return <p className="text-xs text-stone-500 py-8 text-center">{t({ ar: "جارٍ التحميل…", en: "Loading…" })}</p>;
+  if (phase === "error") return (
+    <div className="py-8 text-center space-y-2" role="alert">
+      <p className="text-sm text-red-300">{err}</p>
+      <button onClick={() => void load()} className="text-xs text-stone-200 bg-stone-800 border border-stone-700 rounded-lg px-4 py-2">{t({ ar: "إعادة المحاولة", en: "Retry" })}</button>
+    </div>
+  );
+  if (!d) return null;
+  const cards: { ar: string; v: string; c?: string }[] = [
+    { ar: "برامج ضمن الهدف", v: String(d.programs_on_target), c: "#16a34a" },
+    { ar: "برامج بتحذير", v: String(d.programs_warning), c: "#d97706" },
+    { ar: "برامج مخروقة", v: String(d.programs_breached), c: "#dc2626" },
+    { ar: "برامج بلا بيانات SLA", v: String(d.programs_missing_sla_data), c: "#78716c" },
+    { ar: "نسبة التسليم في الموعد",
+      v: d.on_time_delivery_rate == null ? "غير متاح" : `${d.on_time_delivery_rate}٪`,
+      c: d.on_time_delivery_rate == null ? "#78716c" : "#0ea5e9" },
+    { ar: "وحدات سُلِّمت هذا الشهر", v: String(d.units_delivered_this_month) },
+    { ar: "بانتظار إجراء العميل", v: String(d.client_pending_actions), c: "#0ea5e9" },
+    { ar: "إجمالي البرامج", v: String(d.programs_total) },
+  ];
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {cards.map((c, i) => (
+          <div key={i} className={`${card} p-2.5`}>
+            <div className="text-lg font-bold" style={{ color: c.c ?? "#e7e5e4" }}>{c.v}</div>
+            <div className="text-[10px] text-stone-500 leading-tight">{c.ar}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-stone-600">
+        {d.score_note} · {t({ ar: "حجم عيّنة التسليم في الموعد", en: "on-time sample" })}: {d.on_time_sample_size} ·
+        {" "}{t({ ar: "الشهر من", en: "month from" })} <span dir="ltr">{d.month_from}</span>
+      </p>
+    </div>
+  );
 }
