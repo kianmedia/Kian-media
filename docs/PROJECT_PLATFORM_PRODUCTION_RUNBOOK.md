@@ -33,6 +33,11 @@
 وتأكّد من ظهور رسالة `✅` الخاصّة بالـself-test قبل الانتقال للتالي.
 
 ### أ) الأساس (طُبِّق أغلبه في جلسات سابقة — تحقّق قبل التخطّي)
+0. **`permission_catalog_RUNME.sql` + `staff_roles_task_assignment_RUNME.sql`** —
+   كتالوج الصلاحيات الحبيبيّ: `public.permissions` + `emp_has_permission(text)` +
+   `can_edit_project(uuid)`. **مطبَّق مسبقًا في الإنتاج** (بوّابة التفويض الحيّة
+   تستخدمه). تحقّق قبل التخطّي — **دفعات 5A/6A/8A/8D تفشل في الـPreflight بدونه**
+   (`project_core_FINAL` وحده لا يُنشئ هذه الأعمدة/الدوال).
 1. `project_core_FINAL_RUNME.sql` — **مطبَّق على الإنتاج** (لوحة القيادة الحيّة تُثبته).
 2. `project_core_REMAINING_MODULES_FINAL_RUNME.sql`
 3. `project_core_ABSOLUTE_FINAL_RUNME.sql` — (يفترض تطبيق وحدة المالية قبله).
@@ -183,6 +188,7 @@ select column_name from information_schema.columns
 |---|---|---|
 | `PGRST202 / function not found` في الواجهة | لم يُطبَّق ملف الدفعة، أو لم يُعِد PostgREST تحميل المخطّط | شغّل ملف الدفعة؛ نفّذ `notify pgrst, 'reload schema';` |
 | رسالة عربية «(الدفعة) غير مطبّقة في قاعدة البيانات» | نفس ما سبق (الأغلفة تترجم PGRST) | نفس ما سبق |
+| `5A/6A PREFLIGHT: ... emp_has_permission / can_edit_project / كتالوج الصلاحيات مفقود` | كتالوج الصلاحيات غير مطبَّق | طبّق `permission_catalog_RUNME.sql` (+ `staff_roles_task_assignment_RUNME.sql`) أوّلًا (§1 أ.0) |
 | `42P13 cannot change return type` عند تطبيق دفعة | دالّة أُعيد تعريفها بنوع إرجاع مختلف | تحقّق أنّك لم تشغّل ملفًا Superseded؛ راجع §5(أ) |
 | `42P10 ON CONFLICT` يُجهض الترحيل | ON CONFLICT على فهرس جزئيّ بلا شرطه | لا يحدث في الملفات الحاليّة (محروس باختبارات)؛ إن ظهر فالملف مُعدَّل يدويًّا |
 | لوحة SLA تعرض كل التزام «غير متاح» | لم يُطبَّق 8D، أو لا مصدر بيانات فعليّ | طبّق 8D؛ «غير متاح» صحيحة عند غياب أحداث موثَّقة |

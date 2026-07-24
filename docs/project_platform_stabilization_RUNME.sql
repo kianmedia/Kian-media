@@ -500,6 +500,43 @@ end $$;
 revoke execute on function public.project_closure_readiness(uuid) from public, anon;
 grant execute on function public.project_closure_readiness(uuid) to authenticated;
 
+
+-- ============================================================================
+-- (5) FINAL-REVIEW HARDENING (same bug classes as above, found by the final critic)
+-- ============================================================================
+
+-- (5a) project_client_user_ids: SECURITY DEFINER helper for notification triggers,
+--      but its default ACL is EXECUTE-to-PUBLIC (no revoke anywhere) => any signed-in
+--      user could call it over PostgREST and read a project's client user UUIDs by id.
+--      Same class as the exec_gov_counts leak. Revoke the RPC surface; the definer
+--      triggers keep working (they run as owner). Guarded so absence is a no-op.
+do $h1$
+begin
+  if to_regprocedure('public.project_client_user_ids(uuid)') is not null then
+    revoke all on function public.project_client_user_ids(uuid) from public, anon, authenticated;
+  end if;
+end $h1$;
+
+-- (5b) preproduction_comments.ppc_read: the completion migration tightened the ITEM
+--      policy pp_read to require is_active=true, but never re-created the COMMENTS
+--      policy, so a client kept reading comments on an item staff had deactivated.
+--      Mirror pp_read exactly (client branch adds is_active). Guarded on table+helper.
+do $h2$
+begin
+  if to_regclass('public.preproduction_comments') is not null
+     and to_regprocedure('public.pp_can_manage(uuid)') is not null then
+    drop policy if exists ppc_read on public.preproduction_comments;
+    create policy ppc_read on public.preproduction_comments for select to authenticated using (
+      is_deleted = false and exists (
+        select 1 from public.preproduction_items i where i.id = item_id and i.is_deleted = false and (
+          public.pp_can_manage(i.project_id)
+          or (public.is_client_side(i.project_id) and i.client_visible = true and i.is_active = true)
+        )
+      )
+    );
+  end if;
+end $h2$;
+
 -- ============================================================================
 -- self-test -- no side effects
 -- ============================================================================
@@ -520,6 +557,18 @@ begin
     then raise exception '8-STAB FAIL: pending_changes not canonical'; end if;
   if position('for update' in pg_get_functiondef('public.pc_governance_approval_request(uuid,jsonb)'::regprocedure)) = 0
     then raise exception '8-STAB FAIL: approval request has no lock'; end if;
+  -- (5a) project_client_user_ids no longer executable by authenticated (if present)
+  if to_regprocedure('public.project_client_user_ids(uuid)') is not null
+     and exists (select 1 from information_schema.role_routine_grants
+                 where routine_name='project_client_user_ids' and grantee in ('authenticated','PUBLIC'))
+    then raise exception '8-STAB FAIL: project_client_user_ids still executable by authenticated/PUBLIC'; end if;
+  -- (5b) ppc_read client branch mirrors pp_read (is_active) if the policy exists
+  if to_regclass('public.preproduction_comments') is not null then
+    if not exists (select 1 from pg_policies where schemaname='public'
+                   and tablename='preproduction_comments' and policyname='ppc_read'
+                   and qual ~ 'is_active')
+      then raise exception '8-STAB FAIL: ppc_read missing is_active check'; end if;
+  end if;
   raise notice '8-STAB OK -- exec_gov_counts isolation + issue/change vocab + approval lock.';
 end $selftest$;
 
