@@ -24,7 +24,7 @@ export default function Testimonials(){
               initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true}} transition={{delay:i*.12,duration:.68}}
               className="test-c p-12 text-right" style={{background:"#111"}}>
               <span className="f-bebas block mb-4 leading-none" style={{fontSize:"88px",color:"rgba(193,18,31,.1)"}}>
-                "
+                &ldquo;
               </span>
               <p className="text-white/60 text-sm leading-loose mb-9">{t.q}</p>
               <div className="flex items-center justify-end gap-4">

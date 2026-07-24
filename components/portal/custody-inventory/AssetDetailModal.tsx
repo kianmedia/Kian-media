@@ -226,7 +226,7 @@ function DetailsTab({ det, catName, locName, t }: { det: CivAssetDetails; catNam
     });
   }, [det.id]);
   const rows: [string, ReactNode][] = [
-    [t({ ar: "الكود", en: "Code" }), <span dir="ltr" className="font-mono">{det.asset_code}</span>],
+    [t({ ar: "الكود", en: "Code" }), <span key="code" dir="ltr" className="font-mono">{det.asset_code}</span>],
     [t({ ar: "النوع", en: "Type" }), det.asset_type === "serialized" ? t({ ar: "متسلسل", en: "Serialized" }) : t({ ar: "كمي", en: "Quantity" })],
     [t({ ar: "الرقم التسلسلي", en: "Serial" }), det.serial_number ?? "—"],
     [t({ ar: "الباركود", en: "Barcode" }), det.barcode ?? "—"],
