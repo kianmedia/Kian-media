@@ -15,8 +15,9 @@
 // Failure never blocks the business action. No secrets/tokens logged.
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
-import { authGetUserId, selectAsUser, selectAsService, rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { authGetUserId, selectAsUser, selectAsService, patchAsService, rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { sendProjectEmail, projectEmailEnabled } from "@/lib/server/projectNotify";
+import { processQueue } from "@/lib/server/notifyWorker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -151,6 +152,33 @@ export async function POST(req: Request) {
   }
   // Best-effort delivery trace (never blocks).
   if (trace.length > 0) { try { await rpcAsService("notification_trace", { p_rows: trace }); } catch { /* trace is telemetry */ } }
+
+  // Batch 9E — SUPPRESS DUPLICATES. The dispatch/legacy notify() portal rows for this
+  // deliverable get bridged into email_deliveries (pc_notify_email_bridge) for any
+  // recipient with email_enabled=true. We just sent those recipients DIRECTLY above,
+  // so mark their pending bridge rows 'skipped' to prevent a SECOND email. Only for
+  // recipients whose direct send SUCCEEDED — a failed group keeps its queued row so
+  // the worker retries it. Must run BEFORE the drain below.
+  const sentIds = [
+    ...(staffSent ? staff.map((r) => r.user_id) : []),
+    ...(clientSent ? client.map((r) => r.user_id) : []),
+  ].filter((x): x is string => !!x);
+  if (sentIds.length > 0) {
+    const notifs = await selectAsService<{ id: string }[]>(
+      `notifications?entity_type=eq.deliverable&entity_id=eq.${enc(deliverableId)}&select=id&order=created_at.desc&limit=100`);
+    const nids = notifs.ok && Array.isArray(notifs.data) ? notifs.data.map((n) => n.id) : [];
+    if (nids.length > 0) {
+      try {
+        await patchAsService(
+          `email_deliveries?status=eq.pending&recipient_id=in.(${sentIds.join(",")})&notification_id=in.(${nids.join(",")})`,
+          { status: "skipped", last_error: "sent_direct" });
+      } catch { /* best-effort de-dup */ }
+    }
+  }
+
+  // Batch 9E: opportunistically drain a small bounded batch of any OTHER DB-queued
+  // mail (e.g. approvals) so it doesn't wait for the daily cron. Bounded; never blocks.
+  try { await processQueue(10); } catch { /* immediate drain is best-effort */ }
 
   return NextResponse.json({
     ok: true,

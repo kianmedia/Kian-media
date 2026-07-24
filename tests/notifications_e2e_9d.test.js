@@ -145,8 +145,8 @@ test("worker: extracted + reused by cron and admin process-now", () => {
   assert.ok(WORKER.includes("export async function processQueue"), "shared worker exported");
   assert.ok(ROUTE_CRON.includes('from "@/lib/server/notifyWorker"'), "cron imports the shared worker");
   assert.ok(ROUTE_ADMIN.includes('from "@/lib/server/notifyWorker"'), "admin imports the shared worker");
-  assert.ok(WORKER.includes("status=eq.pending") && WORKER.includes('{ status: "processing" }'), "optimistic lock (no double-send)");
-  assert.ok(WORKER.includes("attempts >= 5"), "dead-letter after max attempts");
+  assert.ok(WORKER.includes("status=eq.pending") && WORKER.includes('status: "processing"'), "optimistic lock (no double-send)");
+  assert.ok(WORKER.includes("MAX_ATTEMPTS") && WORKER.includes("attempts >= MAX_ATTEMPTS"), "dead-letter after max attempts (9E constant)");
 });
 
 // ─── 8. Delivery trace: table + admin reader + monitor surfacing ───

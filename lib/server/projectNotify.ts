@@ -39,8 +39,33 @@ export interface ProjectEmailInput {
   eventType?: string | null;
 }
 
-/** إرسال بريد إشعار مشروع — لا يرمي أبدًا. */
-export async function sendProjectEmail(input: ProjectEmailInput): Promise<{ sent: boolean; reason?: string }> {
+export interface ProjectEmailResult { sent: boolean; reason?: string; providerId?: string }
+
+// Interpret the Apps Script relay response body (read AFTER following the /exec 302).
+// Batch 9E — we must NOT mark 'sent' merely because fetch didn't throw / HTTP was 2xx.
+// Contract: the relay returns JSON on a structured reply. If it is parseable JSON with
+// an explicit failure (ok/success/accepted === false, or a non-empty error), that is a
+// REJECTION even on HTTP 200. If the body is opaque/non-JSON/empty (the relay's normal
+// fire-and-forget shape that demonstrably delivers), we trust the 2xx and treat it as
+// sent — requiring a positive flag would break the working opaque-success path.
+export function interpretRelayResponse(text: string): { rejected: boolean; reason?: string; providerId?: string } {
+  const t = (text ?? "").trim();
+  if (!t) return { rejected: false };
+  let obj: Record<string, unknown> | null = null;
+  try { const p = JSON.parse(t); obj = p && typeof p === "object" ? (p as Record<string, unknown>) : null; } catch { obj = null; }
+  if (!obj) return { rejected: false };   // non-JSON body → trust the HTTP 2xx
+  const pidRaw = obj.messageId ?? obj.message_id ?? obj.id ?? obj.provider_message_id;
+  const providerId = typeof pidRaw === "string" && pidRaw ? pidRaw.slice(0, 120) : undefined;
+  const flag = obj.ok ?? obj.success ?? obj.accepted ?? obj.sent;
+  const errStr = typeof obj.error === "string" ? obj.error : (typeof obj.message === "string" && flag === false ? obj.message : "");
+  if (flag === false || (errStr && errStr.length > 0)) {
+    return { rejected: true, reason: ("provider_rejected:" + errStr).slice(0, 120), providerId };
+  }
+  return { rejected: false, providerId };
+}
+
+/** إرسال بريد إشعار مشروع — لا يرمي أبدًا. يؤكّد القبول من ردّ المُرحِّل (لا HTTP 200 وحده). */
+export async function sendProjectEmail(input: ProjectEmailInput): Promise<ProjectEmailResult> {
   if (!projectEmailEnabled()) return { sent: false, reason: "disabled" };
   const url = endpoint();
   if (!url.startsWith("https://")) return { sent: false, reason: "no_endpoint" };
@@ -51,6 +76,8 @@ export async function sendProjectEmail(input: ProjectEmailInput): Promise<{ sent
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
+      cache: "no-store",
+      redirect: "follow",   // Apps Script /exec answers with a 302 to the real body
       body: JSON.stringify({
         _type: "portal_notify",
         To: to.join(","),
@@ -60,8 +87,13 @@ export async function sendProjectEmail(input: ProjectEmailInput): Promise<{ sent
         Link: link,
       }),
     });
-    if (!res.ok) { log("project_email_failed", { status: res.status }); return { sent: false, reason: `http_${res.status}` }; }
-    return { sent: true };
+    if (!res.ok && res.status !== 302) { log("project_email_failed", { status: res.status }); return { sent: false, reason: `http_${res.status}` }; }
+    // Confirm the relay actually accepted the send (not just HTTP 2xx).
+    let bodyText = "";
+    try { bodyText = await res.text(); } catch { bodyText = ""; }
+    const conf = interpretRelayResponse(bodyText);
+    if (conf.rejected) { log("project_email_rejected", { reason: conf.reason }); return { sent: false, reason: conf.reason ?? "provider_rejected" }; }
+    return { sent: true, providerId: conf.providerId };
   } catch (e) {
     log("project_email_error", { error: String(e).slice(0, 150) });
     return { sent: false, reason: "network_error" };

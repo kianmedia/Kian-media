@@ -38,6 +38,7 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
   const [traceQ, setTraceQ] = useState("");
   const [adminMsg, setAdminMsg] = useState<string | null>(null);
   const [adminBusy, setAdminBusy] = useState(false);
+  const [backlog, setBacklog] = useState<Record<string, unknown> | null>(null);
 
   const load = useCallback(async () => {
     const r = await pcNotifyMonitorV2(150);
@@ -60,8 +61,10 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
     flash(t(action === "retry" ? { ar: "أُعيد للطابور.", en: "Requeued." } : { ar: "أُلغي.", en: "Cancelled." }));
     void load();
   }
-  async function runAdmin(action: "self_test" | "process_now") {
-    if (adminBusy) return; setAdminBusy(true); setAdminMsg(null);
+  async function runAdmin(action: "self_test" | "process_now" | "backlog_preview" | "expire_backlog") {
+    if (adminBusy) return;
+    if (action === "expire_backlog" && !window.confirm(t({ ar: "تعليم رسائل الـBacklog القديمة (أقدم من 24 ساعة) كمتجاهَلة؟ لن تُرسَل.", en: "Mark old backlog (>24h) as skipped? They will NOT be sent." }))) return;
+    setAdminBusy(true); setAdminMsg(null);
     const r = await notificationAdminAction(action);
     setAdminBusy(false);
     if (!r.ok) { setAdminMsg(t({ ar: "فشل: ", en: "Failed: " }) + (r.error ?? "")); return; }
@@ -70,10 +73,21 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
       const ch = r.data?.email_channel_enabled as boolean | undefined;
       setAdminMsg(t({ ar: "أُرسل اختبار لحسابك — بوابة ✓ · بريد ", en: "Self-test sent — portal ✓ · email " })
         + (em?.sent ? "✓" : t({ ar: "لم يُرسل", en: "not sent" })) + (ch === false ? t({ ar: " (القناة معطّلة)", en: " (channel off)" }) : ""));
+    } else if (action === "process_now") {
+      const p = r.data?.processed as { claimed?: number; sent?: number; failed?: number; retrying?: number; dead_letter?: number; skipped?: number } | undefined;
+      const reason = r.data?.reason as string | null | undefined;
+      setAdminMsg(t({ ar: "عولج — التُقط ", en: "Drained — claimed " }) + (p?.claimed ?? 0)
+        + " · " + t({ ar: "أُرسل ", en: "sent " }) + (p?.sent ?? 0)
+        + " · " + t({ ar: "إعادة ", en: "retry " }) + (p?.retrying ?? 0)
+        + " · " + t({ ar: "فشل نهائي ", en: "dead " }) + (p?.dead_letter ?? 0)
+        + (reason ? ` · ${reason}` : ""));
+    } else if (action === "backlog_preview") {
+      setBacklog(r.data ?? null);
+      const w = r.data?.pending as { total?: number } | undefined;
+      setAdminMsg(t({ ar: "المعلّق: ", en: "Pending: " }) + (w?.total ?? 0));
     } else {
-      const p = r.data?.processed as { sent?: number; failed?: number; skipped?: number } | undefined;
-      setAdminMsg(t({ ar: "عولج الطابور — أُرسل ", en: "Queue drained — sent " }) + (p?.sent ?? 0)
-        + " · " + t({ ar: "فشل ", en: "failed " }) + (p?.failed ?? 0) + " · " + t({ ar: "تُخطّي ", en: "skipped " }) + (p?.skipped ?? 0));
+      setAdminMsg(t({ ar: "عُلّم Backlog قديم كمتجاهَل: ", en: "Old backlog expired: " }) + (r.data?.expired ?? 0));
+      setBacklog(null);
     }
     void load();
   }
@@ -158,8 +172,24 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
             <span className="text-[11px] text-stone-300">{t({ ar: "أدوات", en: "Tools" })}:</span>
             <button disabled={adminBusy} onClick={() => void runAdmin("self_test")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "اختبار إشعار لحسابي", en: "Self-test" })}</button>
             <button disabled={adminBusy} onClick={() => void runAdmin("process_now")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "معالجة الطابور الآن", en: "Process now" })}</button>
+            <button disabled={adminBusy} onClick={() => void runAdmin("backlog_preview")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "معاينة المتراكم", en: "Backlog" })}</button>
+            <button disabled={adminBusy} onClick={() => void runAdmin("expire_backlog")} className={`${btnGhost} px-2 py-1 text-[10px] hover:text-red-400`}>{t({ ar: "تجاهُل القديم", en: "Expire old" })}</button>
             {adminMsg && <span className="text-[10px] text-stone-400">{adminMsg}</span>}
           </div>
+          {backlog && (
+            <div className="text-[10px] text-stone-400 border-t border-stone-800/70 pt-1.5 space-y-1">
+              <div className="flex gap-3 flex-wrap">
+                <span dir="ltr">{t({ ar: "نافذة", en: "window" })} {String((backlog.window_hours as number) ?? 24)}h</span>
+                <span dir="ltr" className="text-emerald-400">{t({ ar: "سيُرسل", en: "would send" })} {String((backlog.would_send as number) ?? 0)}</span>
+                <span dir="ltr" className="text-amber-400">{t({ ar: "سيؤجَّل", en: "would defer" })} {String((backlog.would_defer as number) ?? 0)}</span>
+              </div>
+              <div className="flex gap-1.5 flex-wrap">
+                {Object.entries((backlog.by_type as Record<string, number>) ?? {}).slice(0, 12).map(([k, n]) => (
+                  <span key={k} dir="ltr" className="px-1.5 py-0.5 rounded bg-stone-800">{k} {n}</span>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
             <input value={traceQ} onChange={(e) => setTraceQ(e.target.value)}
               placeholder={t({ ar: "تتبّع التسليم: نوع الحدث أو معرّف الكيان", en: "Trace: event type or entity id" })}

@@ -13,7 +13,7 @@
 import { NextResponse } from "next/server";
 import { rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { projectEmailEnabled } from "@/lib/server/projectNotify";
-import { processQueue } from "@/lib/server/notifyWorker";
+import { processQueue, pendingBacklog } from "@/lib/server/notifyWorker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,10 +96,20 @@ async function run(req: Request) {
     else log("SLA_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
   } catch (e) { log("SLA_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
+  // Batch 9E: structured drain telemetry (cron is the FALLBACK path; the primary
+  // path is immediate bounded processing via the drain kick after each action).
+  const t0 = Date.now();
+  const runId = globalThis.crypto?.randomUUID?.() ?? String(t0);
+  const backlog = await pendingBacklog();
   const queue = await processQueue();
   const stats = {
+    cron_run_id: runId,
+    deployment: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) ?? "local",
+    env: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "unknown",
     reminders, taskAlerts, execAlerts, closureAlerts, resourceAlerts, govAlerts, slaAlerts,
-    ...queue, email_enabled: projectEmailEnabled(),
+    ...queue,
+    pending_before: backlog.total, pending_recent: backlog.recent, pending_old_backlog: backlog.old,
+    duration_ms: Date.now() - t0, email_enabled: projectEmailEnabled(),
   };
   log("NOTIFY_EMAIL_RUN", stats);
   // Batch 9C: persist a cron heartbeat so the monitor can distinguish a dead cron / disabled

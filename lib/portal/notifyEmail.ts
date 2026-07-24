@@ -48,6 +48,25 @@ export async function emitProjectDeliverableEvent(
   } catch { /* best-effort: DB triggers still create the portal rows */ }
 }
 
+/**
+ * Batch 9E — kick the immediate email drain after an action that just enqueued
+ * mail (client approve/revision, etc.). DB-trigger producers can't call the
+ * worker, so this fire-and-forget POST drains a bounded batch server-side within
+ * seconds. Best-effort: the daily cron is the fallback, so a failed kick loses
+ * nothing. Never awaited by callers, never throws.
+ */
+export async function notifyDrainKick(): Promise<void> {
+  try {
+    const s = await getValidSession();
+    if (!s?.access_token) return;
+    await fetch("/api/integrations/notify/drain", {
+      method: "POST", keepalive: true,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: "{}",
+    });
+  } catch { /* best-effort; cron drains as fallback */ }
+}
+
 /** Best-effort POST to the Apps Script. Never throws; never blocks the caller. */
 async function postNotify(fields: Record<string, string>): Promise<void> {
   try {

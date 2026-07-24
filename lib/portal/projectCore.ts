@@ -593,9 +593,9 @@ export const notificationDeliveryTrace = (opts: { event?: string; entity_id?: st
     p_correlation: opts.correlation?.trim() || null, p_limit: opts.limit ?? 200,
   });
 
-/** Admin-only diagnostics: self-test the portal+email chain, or drain the queue now. */
+/** Admin-only diagnostics: self-test, drain now, backlog preview, or expire old backlog. */
 export async function notificationAdminAction(
-  action: "self_test" | "process_now",
+  action: "self_test" | "process_now" | "backlog_preview" | "expire_backlog",
 ): Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string }> {
   try {
     const s = await getValidSession();

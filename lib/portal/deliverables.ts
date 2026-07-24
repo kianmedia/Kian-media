@@ -5,6 +5,7 @@
 
 import { pget, ppost, prpc, enc, currentUserId, type Result } from "@/lib/portal/client";
 import { getValidSession, SUPABASE_URL, SUPABASE_KEY } from "@/lib/portalAuth";
+import { notifyDrainKick } from "@/lib/portal/notifyEmail";
 import type {
   ClientComment, Deliverable, DeliverableReview, ReviewDecision, SoftDeletableTable,
 } from "@/lib/portal/types";
@@ -177,8 +178,13 @@ export function listVersionSummary(deliverableId: string): Promise<Result<Versio
 export function addDeliverableVersion(deliverableId: string, data: Record<string, unknown>): Promise<Result<string>> {
   return prpc<string>("admin_add_deliverable_version", { p_deliverable: deliverableId, p_data: data });
 }
-export function reviewVersion(versionId: string, decision: "approved" | "revision_requested", comments?: string): Promise<Result<boolean>> {
-  return prpc<boolean>("client_review_version", { p_version: versionId, p_decision: decision, p_comments: comments ?? null });
+export async function reviewVersion(versionId: string, decision: "approved" | "revision_requested", comments?: string): Promise<Result<boolean>> {
+  const r = await prpc<boolean>("client_review_version", { p_version: versionId, p_decision: decision, p_comments: comments ?? null });
+  // Batch 9E: the client decision enqueues an approval/revision email via the DB
+  // trigger (pc_review_notify_assignee → pc_event_emit). That row has no HTTP
+  // producer, so kick the immediate drain to send it within seconds (cron fallback).
+  if (r.ok) { void notifyDrainKick(); }
+  return r;
 }
 export function setFinalVersion(deliverableId: string, versionId: string, finalUrl?: string): Promise<Result<boolean>> {
   return prpc<boolean>("admin_set_final_version", { p_deliverable: deliverableId, p_version: versionId, p_final_url: finalUrl ?? null });
