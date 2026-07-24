@@ -78,9 +78,17 @@ export async function POST(req: Request) {
       });
       emailSent = res.sent; emailReason = res.reason ?? "sent";
     }
-    log("NOTIFY_ADMIN_SELF_TEST", { portal: portal.ok, email_sent: emailSent, reason: emailReason });
+    // Batch 11 — the decisive diagnosis, surfaced in one click: when the Apps Script has
+    // not been patched with the portal_notify handler it silently drops EVERY portal
+    // email while answering HTTP 200. sendProjectEmail now reports that as
+    // relay_handler_missing, so the monitor can name the real problem and the fix.
+    const relayHandlerMissing = emailReason === "relay_handler_missing";
+    log("NOTIFY_ADMIN_SELF_TEST", { portal: portal.ok, email_sent: emailSent, reason: emailReason, relay_handler_missing: relayHandlerMissing });
     return NextResponse.json({
-      ok: true, portal: portal.ok, email: { sent: emailSent, reason: emailReason, to_self: self.includes("@") },
+      ok: true, portal: portal.ok,
+      email: { sent: emailSent, reason: emailReason, to_self: self.includes("@") },
+      relay_handler_missing: relayHandlerMissing,
+      relay_fix: relayHandlerMissing ? "apply docs/apps_script_portal_notify_HANDLER.gs to the Google Apps Script, then Deploy a NEW version" : null,
       email_channel_enabled: projectEmailEnabled(),
     });
   }

@@ -92,8 +92,23 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
     if (action === "self_test") {
       const em = r.data?.email as { sent?: boolean } | undefined;
       const ch = r.data?.email_channel_enabled as boolean | undefined;
+      // Batch 11 — name the real blocker instead of a vague "not sent".
+      if (r.data?.relay_handler_missing === true) {
+        setAdminMsg(t({
+          ar: "⚠️ قناة البريد لا تعمل: سكربت Google لا يحتوي معالج إشعارات البوابة (portal_notify) — لذلك لا يصل أي بريد من البوابة. الحل: طبّق docs/apps_script_portal_notify_HANDLER.gs ثم انشر نسخة جديدة.",
+          en: "⚠️ Email channel broken: the Google Apps Script has no portal_notify handler — that is why no portal email arrives. Fix: apply docs/apps_script_portal_notify_HANDLER.gs and deploy a NEW version.",
+        }));
+        return;
+      }
+      if (ch === false) {
+        setAdminMsg(t({
+          ar: "⚠️ قناة بريد المشاريع مُطفأة: المتغيّر PROJECT_EMAIL_ALERTS_ENABLED=false في Vercel — لا تُرسَل أي رسالة إطلاقًا. احذف المتغيّر أو اجعله true ثم أعد النشر.",
+          en: "⚠️ Project email channel is OFF: PROJECT_EMAIL_ALERTS_ENABLED=false in Vercel — nothing is ever sent. Remove it (or set it to true) and redeploy.",
+        }));
+        return;
+      }
       setAdminMsg(t({ ar: "أُرسل اختبار لحسابك — بوابة ✓ · بريد ", en: "Self-test sent — portal ✓ · email " })
-        + (em?.sent ? "✓" : t({ ar: "لم يُرسل", en: "not sent" })) + (ch === false ? t({ ar: " (القناة معطّلة)", en: " (channel off)" }) : ""));
+        + (em?.sent ? "✓" : t({ ar: "لم يُرسل", en: "not sent" }) + (em && "reason" in em ? ` (${String((em as { reason?: string }).reason ?? "")})` : "")));
     } else if (action === "process_now") {
       const p = r.data?.processed as { claimed?: number; sent?: number; failed?: number; retrying?: number; dead_letter?: number; skipped?: number } | undefined;
       const reason = r.data?.reason as string | null | undefined;

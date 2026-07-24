@@ -117,7 +117,8 @@ begin
     from public.deliverable_versions dv join public.deliverables d on d.id = dv.deliverable_id
     where dv.id = p_version;
   begin select assignee_id into v_assignee from public.deliverables where id = v_deliverable; exception when others then v_assignee := null; end;
-  select name into v_proj from public.projects where id = v_project;
+  -- BATCH 11 — كان `select name` وهو عمود غير موجود (42703): الصحيح project_name.
+  select project_name into v_proj from public.projects where id = v_project;
 
   v_subject := case when p_decision = 'approved' then 'اعتمد العميل مخرجًا: ' else 'طلب العميل تعديلًا: ' end || coalesce(v_title, '');
   v_body := 'المشروع: ' || coalesce(v_proj, '') || E'\nالمخرَج: ' || coalesce(v_title, '') ||
@@ -166,7 +167,8 @@ begin
   -- Authz: كادر kian فقط (إرسال المعاينة/التسليم إجراء داخليّ).
   if not public.is_staff() then raise exception 'not authorized'; end if;
   begin select assignee_id into v_assignee from public.deliverables where id = p_deliverable; exception when others then v_assignee := null; end;
-  select name into v_proj from public.projects where id = v_project;
+  -- BATCH 11 — كان `select name` وهو عمود غير موجود (42703): الصحيح project_name.
+  select project_name into v_proj from public.projects where id = v_project;
   v_final := p_event in ('deliverable.final_ready', 'project.delivery_recorded');
 
   v_subject := case when v_final then 'تم تسليم الملفات النهائية للعميل: ' else 'معاينة مخرَج جاهزة: ' end || coalesce(v_title, '');

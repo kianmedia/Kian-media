@@ -18,6 +18,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
+import { interpretRelayResponse } from "@/lib/server/projectNotify";
 
 if (typeof window !== "undefined") {
   throw new Error("lib/server/custodyNotify must never be imported in the browser");
@@ -140,7 +141,22 @@ export async function sendCustodyEmail(input: CustodyEventPayload & { recipients
       redirect: "follow",                                    // Apps Script /exec يعيد توجيه 302
     });
     if (res.ok || res.status === 302) {
-      log("custody_email_success", { event: input.event, record, http_status: res.status, recipient_count: to.length });
+      // Batch 11 — this branch used to log custody_email_success on a bare HTTP 2xx
+      // WITHOUT reading the reply, so "success" in the logs proved nothing: the relay
+      // answers 200 even when it drops a portal_notify payload without emailing anyone.
+      // Require the relay's tagged acknowledgment instead.
+      let bodyText = "";
+      try { bodyText = await res.text(); } catch { bodyText = ""; }
+      const conf = interpretRelayResponse(bodyText);
+      if (conf.rejected) {
+        log("custody_email_failed", { event: input.event, record, reason: conf.reason });
+        return { sent: false, reason: conf.reason ?? "provider_rejected" };
+      }
+      if (!conf.handlerPresent) {
+        log("custody_email_failed", { event: input.event, record, reason: "relay_handler_missing", hint: "apply docs/apps_script_portal_notify_HANDLER.gs" });
+        return { sent: false, reason: "relay_handler_missing" };
+      }
+      log("custody_email_success", { event: input.event, record, http_status: res.status, recipient_count: to.length, delivered: conf.sentCount ?? to.length });
       return { sent: true };
     }
     log("custody_email_failed", { event: input.event, record, http_status: res.status });

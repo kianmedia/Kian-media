@@ -11,6 +11,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
+import { interpretRelayResponse } from "@/lib/server/projectNotify";
 
 if (typeof window !== "undefined") {
   throw new Error("lib/server/hrNotify must never be imported in the browser");
@@ -113,7 +114,22 @@ export async function sendHrEmail(input: HrEventPayload & { recipients: string[]
       redirect: "follow",
     });
     if (res.ok || res.status === 302) {
-      log("hr_email_success", { event: input.event, record, http_status: res.status, recipient_count: to.length });
+      // Batch 11 — do NOT trust the HTTP 2xx. The Apps Script answered 200 even when it
+      // silently dropped every portal_notify payload (it emailed only _type:"quote"),
+      // which is why custody/HR mail never arrived while the logs said "success".
+      // Require the relay's positive portal_notify acknowledgment.
+      let bodyText = "";
+      try { bodyText = await res.text(); } catch { bodyText = ""; }
+      const conf = interpretRelayResponse(bodyText);
+      if (conf.rejected) {
+        log("hr_email_failed", { event: input.event, record, reason: conf.reason });
+        return { sent: false, reason: conf.reason ?? "provider_rejected" };
+      }
+      if (!conf.handlerPresent) {
+        log("hr_email_failed", { event: input.event, record, reason: "relay_handler_missing", hint: "apply docs/apps_script_portal_notify_HANDLER.gs" });
+        return { sent: false, reason: "relay_handler_missing" };
+      }
+      log("hr_email_success", { event: input.event, record, http_status: res.status, recipient_count: to.length, delivered: conf.sentCount ?? to.length });
       return { sent: true };
     }
     log("hr_email_failed", { event: input.event, record, http_status: res.status });

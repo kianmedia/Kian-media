@@ -36,18 +36,38 @@ const STALE_MS = 3600_000;
 const HOUR = 3600_000;
 
 // Mirror of interpretRelayResponse (projectNotify.ts) — provider confirmation.
+// BATCH 11: an opaque/non-JSON 2xx is NO LONGER treated as delivered. The Apps Script
+// answered 200 while silently dropping every portal_notify payload (it emailed only
+// _type:"quote"), so "trust the 2xx" marked undelivered mail as sent for months.
+// Positive acknowledgment is now required → handlerPresent.
 function interpretRelay(text) {
   const t = (text ?? "").trim();
-  if (!t) return { rejected: false };
+  if (!t) return { rejected: false, handlerPresent: false, reason: "relay_handler_missing" };
   let obj = null;
   try { const p = JSON.parse(t); obj = p && typeof p === "object" ? p : null; } catch { obj = null; }
-  if (!obj) return { rejected: false };
+  if (!obj) return { rejected: false, handlerPresent: false, reason: "relay_handler_missing" };
   const pidRaw = obj.messageId ?? obj.message_id ?? obj.id ?? obj.provider_message_id;
   const providerId = typeof pidRaw === "string" && pidRaw ? pidRaw.slice(0, 120) : undefined;
-  const flag = obj.ok ?? obj.success ?? obj.accepted ?? obj.sent;
+  const flag = obj.ok ?? obj.success ?? obj.accepted;
   const errStr = typeof obj.error === "string" ? obj.error : (typeof obj.message === "string" && flag === false ? obj.message : "");
-  if (flag === false || (errStr && errStr.length > 0)) return { rejected: true, reason: "provider_rejected", providerId };
-  return { rejected: false, providerId };
+  const isPortalHandler = obj.handler === "portal_notify";
+  const sentCount = typeof obj.sent === "number" ? obj.sent : undefined;
+  if (flag === false || obj.sent === false || (errStr && errStr.length > 0)) {
+    return { rejected: true, handlerPresent: isPortalHandler, reason: "provider_rejected", providerId, sentCount };
+  }
+  if (isPortalHandler) {
+    if (sentCount !== undefined && sentCount <= 0) return { rejected: true, handlerPresent: true, reason: "provider_rejected", providerId, sentCount };
+    return { rejected: false, handlerPresent: true, providerId, sentCount };
+  }
+  // A generic {"ok":true} is NOT proof of delivery — the deployed Web App answers
+  // {"ok":true,"message":"Kian Media forms API is live"} as a health banner.
+  return { rejected: false, handlerPresent: false, reason: "relay_handler_missing", providerId, sentCount };
+}
+// sendProjectEmail's verdict: rejected OR unacknowledged both mean NOT delivered.
+function relayToResult(c) {
+  if (c.rejected) return { sent: false, reason: c.reason };
+  if (!c.handlerPresent) return { sent: false, reason: "relay_handler_missing" };
+  return { sent: true, providerId: c.providerId };
 }
 
 // Mock provider: turns a scenario into a sendProjectEmail-shaped result, using
@@ -58,9 +78,10 @@ function mockSend(scenario) {
     case "no_endpoint": return { sent: false, reason: "no_endpoint" };
     case "http_500": return { sent: false, reason: "http_500" };
     case "timeout": return { sent: false, reason: "network_error" };
-    case "accepted": { const c = interpretRelay(JSON.stringify({ ok: true, messageId: "prov-123" })); return c.rejected ? { sent: false, reason: c.reason } : { sent: true, providerId: c.providerId }; }
-    case "http200_failbody": { const c = interpretRelay(JSON.stringify({ ok: false, error: "quota" })); return c.rejected ? { sent: false, reason: c.reason } : { sent: true, providerId: c.providerId }; }
-    case "opaque_ok": { const c = interpretRelay(""); return c.rejected ? { sent: false, reason: c.reason } : { sent: true, providerId: c.providerId }; }
+    case "accepted": return relayToResult(interpretRelay(JSON.stringify({ ok: true, handler: "portal_notify", sent: 1, messageId: "prov-123" })));
+    case "http200_failbody": return relayToResult(interpretRelay(JSON.stringify({ ok: false, error: "quota" })));
+    // The un-patched Apps Script: HTTP 200 with an opaque body and NO email sent.
+    case "opaque_unhandled": return relayToResult(interpretRelay(""));
     default: return { sent: false, reason: "send_failed" };
   }
 }
@@ -99,8 +120,10 @@ function simulate(queue, sendFor, { now = Date.now(), maxAgeHours = 24, limit = 
     if (res.sent) {
       d.status = "sent"; d.attempts = (d.attempts ?? 0) + 1; d.sent_at = now; d.provider_message_id = res.providerId ?? null; d.last_error = null;
       out.sent++; log.push({ id: d.id, outcome: "email_sent", provider: d.provider_message_id });
-    } else if (res.reason === "disabled" || res.reason === "no_endpoint") {
-      d.status = "pending"; d.last_error = res.reason; d.next_attempt_at = now + 6 * HOUR;
+    } else if (res.reason === "disabled" || res.reason === "no_endpoint" || res.reason === "relay_handler_missing") {
+      // CHANNEL-level: defer, never burn an attempt, never dead-letter, never duplicate.
+      d.status = "pending"; d.last_error = res.reason;
+      d.next_attempt_at = now + (res.reason === "relay_handler_missing" ? 0.5 : 6) * HOUR;
       out.skipped++; log.push({ id: d.id, outcome: "email_skipped", err: res.reason });
     } else {
       const attempts = (d.attempts ?? 0) + 1;
@@ -182,10 +205,26 @@ test("11. HTTP 200 + failure body is NOT sent (the false-success bug)", () => {
   assert.equal(interpretRelay(JSON.stringify({ ok: false })).rejected, true);
   assert.equal(interpretRelay(JSON.stringify({ success: false, error: "x" })).rejected, true);
 });
-test("11b. opaque/non-JSON body trusts HTTP 2xx (working custody-style relay not broken)", () => {
-  assert.equal(interpretRelay("").rejected, false);
-  assert.equal(interpretRelay("<html>ok</html>").rejected, false);
-  assert.equal(interpretRelay(JSON.stringify({ ok: true, id: "m1" })).providerId, "m1");
+test("11b. BATCH 11: opaque/non-JSON 2xx is NOT delivery (un-patched Apps Script)", () => {
+  // The regression that hid the outage: these bodies used to be treated as 'sent'.
+  for (const body of ["", "<html>ok</html>", "The script completed but did not return anything."]) {
+    const c = interpretRelay(body);
+    assert.equal(c.handlerPresent, false, `no positive ack for: ${body.slice(0, 20)}`);
+    assert.deepEqual(relayToResult(c), { sent: false, reason: "relay_handler_missing" }, "never a false success");
+  }
+});
+test("11c. BATCH 11: the patched handler's ack IS delivery (and 0-sent is not)", () => {
+  const okAck = interpretRelay(JSON.stringify({ ok: true, handler: "portal_notify", sent: 2, messageId: "m1" }));
+  assert.equal(okAck.handlerPresent, true);
+  assert.equal(okAck.sentCount, 2);
+  assert.deepEqual(relayToResult(okAck), { sent: true, providerId: "m1" });
+  // handler present but it mailed nobody → honest rejection, not success.
+  const zero = interpretRelay(JSON.stringify({ ok: false, handler: "portal_notify", sent: 0, error: "no_valid_recipients" }));
+  assert.equal(zero.rejected, true);
+  assert.equal(relayToResult(zero).sent, false);
+  // LIVE-PROBE FACT: the deployed Web App answers {"ok":true,"message":"...forms API is
+  // live"} — a health banner. Treating that as delivery is the false success itself.
+  assert.equal(relayToResult(interpretRelay(JSON.stringify({ ok: true, message: "Kian Media forms API is live" }))).sent, false);
 });
 test("12. missing endpoint → kept pending (config gap, not a burned attempt)", () => {
   const q = [row()];

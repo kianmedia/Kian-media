@@ -18,9 +18,10 @@
 // decision was saved (never 502); 4xx/5xx only when the decision itself failed.
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
-import { authGetUserId, rpcAsUser, rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { authGetUserId, rpcAsUser, rpcAsService, selectAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { projectEmailEnabled } from "@/lib/server/projectNotify";
 import { processQueue } from "@/lib/server/notifyWorker";
+import { emitEventEmail } from "@/lib/server/notifyEvent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +29,30 @@ const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.st
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
 interface EnqueueResult { ok?: boolean; correlation_id?: string; expected_recipients?: number; new_ids?: string[]; delivery_ids?: string[]; error?: string }
+
+/** Version → deliverable/project context from BASE tables (no Batch-10/9G RPC needed).
+ *  Used only by the SQL-independent fallback. Never throws. */
+async function reviewContext(versionId: string): Promise<{ deliverableId: string | null; projectId: string | null; title: string | null; projectName: string | null }> {
+  const empty = { deliverableId: null, projectId: null, title: null, projectName: null };
+  try {
+    const v = await selectAsService<{ deliverable_id: string | null }[]>(
+      `deliverable_versions?id=eq.${encodeURIComponent(versionId)}&select=deliverable_id&limit=1`);
+    const deliverableId = v.ok && v.data[0]?.deliverable_id ? v.data[0].deliverable_id : null;
+    if (!deliverableId) return empty;
+    const d = await selectAsService<{ project_id: string | null; title: string | null }[]>(
+      `deliverables?id=eq.${encodeURIComponent(deliverableId)}&select=project_id,title&limit=1`);
+    const projectId = d.ok && d.data[0]?.project_id ? d.data[0].project_id : null;
+    const title = d.ok ? (d.data[0]?.title ?? null) : null;
+    let projectName: string | null = null;
+    if (projectId) {
+      // The column is project_name — `name` does not exist on public.projects (42703).
+      const p = await selectAsService<{ project_name: string | null }[]>(
+        `projects?id=eq.${encodeURIComponent(projectId)}&select=project_name&limit=1`);
+      projectName = p.ok ? (p.data[0]?.project_name ?? null) : null;
+    }
+    return { deliverableId, projectId, title, projectName };
+  } catch { return empty; }
+}
 
 export async function POST(req: Request) {
   const t0 = Date.now();
@@ -69,6 +94,31 @@ export async function POST(req: Request) {
         notification.code = "EMAIL_ENQUEUE_FAILED";
         const dataErr = enq.ok && enq.data ? enq.data.error : undefined;
         notification.error = String((enq as { error?: string }).error ?? dataErr ?? "enqueue_failed").slice(0, 120);
+        // Batch 11 — the enqueue RPC is not deployed on this database yet. Do NOT lose the
+        // notification: resolve management + the project manager from base tables and send
+        // through the same single provider. This is why a client decision now emails
+        // management even with NO Batch-10/9G SQL applied.
+        if (!enq.ok && /PGRST202|could not find the function|does not exist|schema cache|HTTP 404/i.test(notification.error)) {
+          const ctx = await reviewContext(versionId);
+          const emit = await emitEventEmail({
+            event: "deliverable.client_reviewed",
+            entity_type: "deliverable",
+            entity_id: ctx.deliverableId,
+            project_id: ctx.projectId,
+            actor: uid,
+            subject: (decision === "approved" ? "اعتمد العميل مخرجًا: " : "طلب العميل تعديلًا: ") + (ctx.title ?? ""),
+            body: `المشروع: ${ctx.projectName ?? ""}\nالمخرَج: ${ctx.title ?? ""}\nقرار العميل: ${decision === "approved" ? "اعتماد" : "طلب تعديل"}`,
+            payload: { action_url: ctx.projectId ? `/client-portal/project-core/${ctx.projectId}?tab=deliverables` : "/client-portal/project-core" },
+          });
+          notification.ok = emit.ok;
+          notification.code = emit.code;
+          notification.expected = emit.expected;
+          notification.sent = emit.sent;
+          notification.claimed = emit.claimed;
+          notification.correlation_id = emit.correlation_id;
+          // Do not leave the stale "RPC not deployed" text on a successful fallback.
+          notification.error = emit.error ?? undefined;
+        }
       } else {
         const deliveryIds = Array.isArray(enq.data.delivery_ids) ? enq.data.delivery_ids : [];
         notification.correlation_id = enq.data.correlation_id ?? null;

@@ -13,6 +13,7 @@
 import { NextResponse } from "next/server";
 import { authGetUserId, selectAsService, authAdminEmails, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { emailEndpoint, emailEndpointHost, custodyEmailEnabled, runtimeEnv } from "@/lib/server/custodyNotify";
+import { interpretRelayResponse } from "@/lib/server/projectNotify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -152,7 +153,20 @@ export async function POST(req: Request) {
         Link: `${publicBase()}/client-portal/rentals`,
       }),
     });
-    if (res.ok || res.status === 302) { log("rental_email_success", { event, request_no: rr.request_number, http_status: res.status, recipient_count: to.length }); return NextResponse.json({ ok: true, sent: true, recipient_count: to.length }); }
+    if (res.ok || res.status === 302) {
+      // Batch 11 — a bare HTTP 2xx is not delivery: the relay answers 200 even when it
+      // silently drops a portal_notify payload. Require its tagged acknowledgment.
+      let bodyText = "";
+      try { bodyText = await res.text(); } catch { bodyText = ""; }
+      const conf = interpretRelayResponse(bodyText);
+      if (conf.rejected || !conf.handlerPresent) {
+        const reason = conf.rejected ? (conf.reason ?? "provider_rejected") : "relay_handler_missing";
+        log("rental_email_failed", { event, request_no: rr.request_number, reason });
+        return NextResponse.json({ ok: true, sent: false, reason });
+      }
+      log("rental_email_success", { event, request_no: rr.request_number, http_status: res.status, recipient_count: to.length, delivered: conf.sentCount ?? to.length });
+      return NextResponse.json({ ok: true, sent: true, recipient_count: to.length });
+    }
     log("rental_email_failed", { event, request_no: rr.request_number, http_status: res.status });
     return NextResponse.json({ ok: true, sent: false, http_status: res.status });
   } catch (e) {

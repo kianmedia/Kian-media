@@ -87,9 +87,15 @@ async function processRow(d: DeliveryRow, leaseIso: string, out: QueueResult, tr
     });
     out.sent++; trace.push(traceRow(d, "email_sent", null)); return "sent";
   }
-  if (res.reason === "disabled" || res.reason === "no_endpoint") {
+  // CHANNEL-level conditions: the message is fine, the channel is not. Defer the row
+  // (keep it pending, do NOT burn an attempt and do NOT dead-letter) so nothing is lost
+  // and no duplicate is risked. Batch 11 adds relay_handler_missing — the Apps Script has
+  // not been patched with the portal_notify handler, so NOTHING would be delivered; a
+  // shorter defer lets the whole queue self-heal soon after the handler is applied.
+  if (res.reason === "disabled" || res.reason === "no_endpoint" || res.reason === "relay_handler_missing") {
+    const deferMs = res.reason === "relay_handler_missing" ? 30 * 60_000 : 6 * 3600_000;
     await patchAsService(`email_deliveries?id=eq.${d.id}`, {
-      status: "pending", last_error: res.reason, next_attempt_at: new Date(Date.now() + 6 * 3600_000).toISOString(),
+      status: "pending", last_error: res.reason, next_attempt_at: new Date(Date.now() + deferMs).toISOString(),
     });
     out.skipped++; trace.push(traceRow(d, "email_skipped", res.reason)); return "channel_" + res.reason;
   }

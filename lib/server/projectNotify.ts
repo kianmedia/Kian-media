@@ -42,26 +42,62 @@ export interface ProjectEmailInput {
 export interface ProjectEmailResult { sent: boolean; reason?: string; providerId?: string }
 
 // Interpret the Apps Script relay response body (read AFTER following the /exec 302).
-// Batch 9E — we must NOT mark 'sent' merely because fetch didn't throw / HTTP was 2xx.
-// Contract: the relay returns JSON on a structured reply. If it is parseable JSON with
-// an explicit failure (ok/success/accepted === false, or a non-empty error), that is a
-// REJECTION even on HTTP 200. If the body is opaque/non-JSON/empty (the relay's normal
-// fire-and-forget shape that demonstrably delivers), we trust the 2xx and treat it as
-// sent — requiring a positive flag would break the working opaque-success path.
-export function interpretRelayResponse(text: string): { rejected: boolean; reason?: string; providerId?: string } {
+//
+// ★ BATCH 11 — THE ROOT CAUSE OF "NO PORTAL EMAIL EVER ARRIVES" ★
+// The Apps Script that owns the mail credentials historically contained:
+//     if (String(data._type || "") !== "quote") return;   // quotes only
+// Every portal notification posts _type:"portal_notify", so the script returned
+// IMMEDIATELY, sent nothing, and answered HTTP 200 with an opaque (HTML/text) body.
+// The previous contract here "trusted the 2xx" on an opaque body — so every portal
+// delivery was marked 'sent' while NOTHING was ever emailed. That silent false
+// success is why the queue/worker/resolver repairs could never fix delivery.
+//
+// NEW CONTRACT — positive acknowledgment is REQUIRED for portal_notify:
+//   • JSON with handler:"portal_notify"  → authoritative. ok/sent decide the verdict.
+//   • JSON with an explicit failure       → rejection (as before).
+//   • JSON that positively affirms (ok/success/accepted === true) → accepted, so a
+//     differently-written relay handler still works.
+//   • Opaque / non-JSON / empty body      → handlerPresent=false → NOT sent, reason
+//     "relay_handler_missing" (the un-patched script). Honest failure, never silent.
+// Apply docs/apps_script_portal_notify_HANDLER.gs to the Apps Script to satisfy this.
+export interface RelayVerdict {
+  rejected: boolean;        // relay explicitly refused
+  handlerPresent: boolean;  // relay positively acknowledged handling the payload
+  reason?: string;
+  providerId?: string;
+  sentCount?: number;
+}
+export function interpretRelayResponse(text: string): RelayVerdict {
   const t = (text ?? "").trim();
-  if (!t) return { rejected: false };
+  if (!t) return { rejected: false, handlerPresent: false, reason: "relay_handler_missing" };
   let obj: Record<string, unknown> | null = null;
   try { const p = JSON.parse(t); obj = p && typeof p === "object" ? (p as Record<string, unknown>) : null; } catch { obj = null; }
-  if (!obj) return { rejected: false };   // non-JSON body → trust the HTTP 2xx
+  // Non-JSON body = the un-patched Apps Script (it renders HTML/plain text). It did
+  // NOT handle a portal_notify payload — treat as undelivered, not as success.
+  if (!obj) return { rejected: false, handlerPresent: false, reason: "relay_handler_missing" };
+
   const pidRaw = obj.messageId ?? obj.message_id ?? obj.id ?? obj.provider_message_id;
   const providerId = typeof pidRaw === "string" && pidRaw ? pidRaw.slice(0, 120) : undefined;
-  const flag = obj.ok ?? obj.success ?? obj.accepted ?? obj.sent;
+  const flag = obj.ok ?? obj.success ?? obj.accepted;
   const errStr = typeof obj.error === "string" ? obj.error : (typeof obj.message === "string" && flag === false ? obj.message : "");
-  if (flag === false || (errStr && errStr.length > 0)) {
-    return { rejected: true, reason: ("provider_rejected:" + errStr).slice(0, 120), providerId };
+  const isPortalHandler = obj.handler === "portal_notify";
+  const sentCount = typeof obj.sent === "number" ? obj.sent : undefined;
+
+  if (flag === false || obj.sent === false || (errStr && errStr.length > 0)) {
+    return { rejected: true, handlerPresent: isPortalHandler, reason: ("provider_rejected:" + errStr).slice(0, 120), providerId, sentCount };
   }
-  return { rejected: false, providerId };
+  if (isPortalHandler) {
+    // Authoritative handler reply: delivered only when it actually mailed someone.
+    if (sentCount !== undefined && sentCount <= 0) {
+      return { rejected: true, handlerPresent: true, reason: "provider_rejected:no_recipients_sent", providerId, sentCount };
+    }
+    return { rejected: false, handlerPresent: true, providerId, sentCount };
+  }
+  // ★ A GENERIC {"ok":true} IS NOT PROOF OF DELIVERY. A live probe of the deployed Web
+  // App shows it answers {"ok":true,"message":"Kian Media forms API is live"} — a health
+  // banner, not a send receipt. Accepting any truthy `ok` would recreate the exact false
+  // success this batch exists to kill. ONLY the tagged handler reply counts.
+  return { rejected: false, handlerPresent: false, reason: "relay_handler_missing", providerId, sentCount };
 }
 
 /** إرسال بريد إشعار مشروع — لا يرمي أبدًا. يؤكّد القبول من ردّ المُرحِّل (لا HTTP 200 وحده). */
@@ -93,6 +129,14 @@ export async function sendProjectEmail(input: ProjectEmailInput): Promise<Projec
     try { bodyText = await res.text(); } catch { bodyText = ""; }
     const conf = interpretRelayResponse(bodyText);
     if (conf.rejected) { log("project_email_rejected", { reason: conf.reason }); return { sent: false, reason: conf.reason ?? "provider_rejected" }; }
+    // The relay must POSITIVELY acknowledge handling portal_notify. An opaque 200 from
+    // the un-patched Apps Script means the payload was silently dropped — reporting it
+    // as 'sent' is exactly the false success that hid this outage. Channel-level reason
+    // (the worker defers instead of burning attempts / dead-lettering).
+    if (!conf.handlerPresent) {
+      log("project_email_relay_handler_missing", { hint: "apply docs/apps_script_portal_notify_HANDLER.gs to the Apps Script" });
+      return { sent: false, reason: "relay_handler_missing" };
+    }
     return { sent: true, providerId: conf.providerId };
   } catch (e) {
     log("project_email_error", { error: String(e).slice(0, 150) });

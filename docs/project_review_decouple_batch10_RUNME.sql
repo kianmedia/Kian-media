@@ -104,7 +104,9 @@ begin
       'expected_recipients', 0, 'new_ids', '[]'::jsonb, 'delivery_ids', '[]'::jsonb);
   end if;
   begin select assignee_id into v_assignee from public.deliverables where id = v_deliverable; exception when others then v_assignee := null; end;
-  select name into v_proj from public.projects where id = v_project;
+  -- BATCH 11 — كان `select name` وهو عمود غير موجود: العمود الصحيح project_name.
+  -- الخطأ 42703 كان يُجهض الدالّة كلّها ⇒ لا يُنشَأ أيّ صفّ بريد لاعتماد العميل إطلاقًا.
+  select project_name into v_proj from public.projects where id = v_project;
 
   v_subject := case when p_decision = 'approved' then 'اعتمد العميل مخرجًا: ' else 'طلب العميل تعديلًا: ' end || coalesce(v_title, '');
   v_body := 'المشروع: ' || coalesce(v_proj, '') || E'\nالمخرَج: ' || coalesce(v_title, '') ||
