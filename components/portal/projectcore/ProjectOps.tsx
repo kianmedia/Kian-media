@@ -3,7 +3,7 @@
 // Project Core — لوحة تشغيل المشروع الواحد: دورة الحياة + الملخّص + المهام +
 // الاعتمادات + سجل النشاط. كل الكتابات عبر RPCs (projectCore.ts). staff فقط.
 // ════════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
@@ -37,6 +37,8 @@ import SubprojectsTab from "./SubprojectsTab";
 import ProgramTab from "./ProgramTab";
 import CreateProjectWizard from "./CreateProjectWizard";
 import { projectHierarchyContext, projectHierarchyPromoteToMaster, projectHierarchyDemoteToStandalone, hierErr, SCOPE_LABELS, SCOPE_COLOR, type HierarchyContext } from "@/lib/portal/projectHierarchy";
+import QuickProjectPanel from "./QuickProjectPanel";
+import { projectOperatingExperience, projectSetOperatingExperience, fastlaneErr, EXPERIENCE_AR, type OperatingExperience } from "@/lib/portal/fastlane";
 import { TrashTab } from "./ProjectTrash";
 import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
@@ -50,8 +52,12 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+type TabKey = "quick" | "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+// 8C: تبويبات المسار السريع — تظهر أولًا في تجربة «سريع»، وما عداها يبقى موجودًا
+// كاملًا خلف «إدارة متقدمة». لا تبويب يُحذف ولا وصول يُمنع؛ الترتيب والظهور فقط.
+const SIMPLE_TABS: TabKey[] = ["quick", "tasks", "shoots", "deliverables", "team", "closure"];
 const TABS: { k: TabKey; ar: string; en: string }[] = [
+  { k: "quick", ar: "نظرة سريعة", en: "Quick view" },
   { k: "execution", ar: "التنفيذ", en: "Execution" }, { k: "reports", ar: "التقارير", en: "Reports" },
   { k: "planning", ar: "المخطط الزمني", en: "Planner" },
   { k: "resources", ar: "الموارد", en: "Resources" },
@@ -90,7 +96,10 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     const r = await projectHierarchyPromoteToMaster(projectId, reason);
     if (!r.ok) { flash(hierErr(r.error)); return; }
     flash(t({ ar: "أصبح مشروعًا رئيسيًّا.", en: "Promoted to master." }));
+    // المُشغِّل trg_fastlane_scope_cleanup يمسح التفضيل عند مغادرة standalone،
+    // والمُحلِّل يعيد 'program' للرئيسي — فبلا إعادة القراءة تبقى الواجهة على قيمة ميتة.
     const c = await projectHierarchyContext(projectId); if (c.ok) setHier(c.data);
+    const e = await projectOperatingExperience(projectId); if (e.ok) { setExp(e.data); setShowAdvanced(false); setShowDetails(false); }
     onChanged?.();
   }
   async function demoteToStandalone() {
@@ -100,7 +109,23 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     if (!r.ok) { flash(hierErr(r.error)); return; }
     flash(t({ ar: "أصبح مشروعًا مستقلًّا.", en: "Demoted to standalone." }));
     const c = await projectHierarchyContext(projectId); if (c.ok) setHier(c.data);
+    // بعد الخفض يعود التفضيل المخزَّن (NULL ⇒ 'standard') — بلا هذه القراءة يبقى
+    // exp='program' فيظهر زرّ «تبسيط الإدارة» ولا يفعل شيئًا عند الضغط.
+    const e = await projectOperatingExperience(projectId); if (e.ok) setExp(e.data);
     onChanged?.();
+  }
+  // 8C: التبديل بين «سريع» و«قياسي» — تفضيل عرض فقط: لا مرحلة ولا تقدّم ولا بيانات تتغيّر.
+  async function toggleExperience() {
+    if (busy || !exp || exp === "program") return;
+    const next = exp === "simple" ? "standard" : "simple";
+    setBusy(true);
+    const r = await projectSetOperatingExperience(projectId, next);
+    setBusy(false);
+    if (!r.ok) { flash(fastlaneErr(r.error)); return; }
+    setExp(next); setShowAdvanced(false); setShowDetails(false);
+    flash(next === "simple"
+      ? t({ ar: "تم تبسيط العرض — كل الأدوات المتقدمة تبقى متاحة تحت «إدارة متقدمة».", en: "Simplified — advanced tools stay available." })
+      : t({ ar: "تم التحويل إلى الإدارة القياسية — لم تتغيّر أيّ بيانات.", en: "Switched to standard — no data changed." }));
   }
   // 7A: «حفظ كقالب» على الخادم — الالتقاط القديم كان يُجمَّع في المتصفّح فينتج قالبًا
   // ناقصًا صامتًا لمن لا يقرأ كل الصفوف، وبلا ذرّية.
@@ -118,8 +143,19 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
     flash(t({ ar: `حُفظ القالب (${c.tasks} مهمة، ${c.milestones} معلَم، ${c.deliverables} مخرَج، ${c.risks} مخاطرة).${warn}`,
               en: `Template saved (${c.tasks} tasks, ${c.milestones} milestones, ${c.deliverables} deliverables, ${c.risks} risks).${warn}` }));
   }
+  // 8C: تجربة التشغيل — مشتقّة للرئيسي/الفرعي ومخزّنة للمستقل. فشل القراءة (قبل
+  // تطبيق SQL) يبقي السلوك القياسي حرفيًّا كما كان: null ⇒ لا مسار سريع.
+  const [exp, setExp] = useState<OperatingExperience | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void projectOperatingExperience(projectId).then((r) => { if (alive && r.ok) setExp(r.data); });
+    return () => { alive = false; };
+  }, [projectId]);
+  const isSimple = exp === "simple";
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
-  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster));
+  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster) && (tb.k !== "quick" || isSimple));
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
@@ -129,6 +165,24 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   useEffect(() => { if (initialTab === "program" && isMaster) setTab("program"); }, [initialTab, isMaster]);
   // 6B: بعد «الخفض إلى مستقل» يختفي تبويب الفروع — بلا هذا السقوط تبقى منطقة المحتوى فارغة.
   useEffect(() => { if ((tab === "subprojects" || tab === "program") && !isMaster) setTab("tasks"); }, [tab, isMaster]);
+  // 8C: الهبوط على «نظرة سريعة» في تجربة «سريع» — مرّة واحدة، وبلا اختطاف تبويبٍ
+  // طلبه المستخدم في الرابط أو اختاره بنفسه قبل وصول التجربة.
+  const landedRef = useRef(false); const touchedRef = useRef(false);
+  useEffect(() => {
+    if (landedRef.current || !isSimple) return;
+    landedRef.current = true;
+    if (!touchedRef.current && (!initialTab || initialTab === "quick")) setTab("quick");
+  }, [isSimple, initialTab]);
+  // التحويل إلى «قياسي» يُخفي التبويب — بلا هذا السقوط تبقى منطقة المحتوى فارغة.
+  useEffect(() => { if (tab === "quick" && !isSimple) setTab("tasks"); }, [tab, isSimple]);
+  const pickTab = useCallback((k: TabKey) => { touchedRef.current = true; setTab(k); }, []);
+  // في «سريع» نعرض التبويبات الأساسية أوّلًا؛ الباقي خلف «إدارة متقدمة».
+  // الفتح التلقائي حين يكون التبويب النشط متقدّمًا يجب أن يضبط **الحالة** لا أن
+  // يُجبر المشتقّ: وإلّا صار الزرّ عاجزًا عن فعل شيء (يقلب حالة لا أثر لها) بينما
+  // نصّه وaria-expanded يقولان غير ذلك.
+  useEffect(() => { if (isSimple && !SIMPLE_TABS.includes(tab)) setShowAdvanced(true); }, [isSimple, tab]);
+  const collapseAdvanced = isSimple && !showAdvanced;
+  const shownTabs = collapseAdvanced ? visibleTabs.filter((tb) => SIMPLE_TABS.includes(tb.k)) : visibleTabs;
   const [busy, setBusy] = useState(false);
   const [rev, setRev] = useState(0);   // يُبدّل مفاتيح حقول الملخّص غير المتحكَّم بها لإرجاعها لقيمة core عند أي حفظ
   const [reqPrompt, setReqPrompt] = useState<{ stage: PcStage; items: StageReqItem[] } | null>(null);
@@ -258,6 +312,16 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
         </nav>
       )}
 
+      {/* 8C: في تجربة «سريع» تُطوى دورة الحياة والملخّص خلف زر واحد — تبقى محمّلة
+          في DOM (بلا إعادة جلب مزدوج) ويصلها المستخدم بنقرة. */}
+      {isSimple && tab === "quick" && (
+        <button onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}
+          className="w-full text-[11px] text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-2 text-right">
+          {showDetails ? `${t({ ar: "إخفاء دورة الحياة والتفاصيل", en: "Hide lifecycle & details" })} ▴`
+                       : `${t({ ar: "دورة الحياة وتفاصيل المشروع", en: "Lifecycle & project details" })} ▾`}
+        </button>
+      )}
+      <div className={isSimple && tab === "quick" && !showDetails ? "hidden" : "space-y-4"}>
       {/* دورة الحياة */}
       <section className={`${card} p-4`}>
         <div className="flex items-center justify-between mb-3 gap-2">
@@ -265,6 +329,12 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           <div className="flex gap-2 flex-wrap">
             {isMaster && canManage && <button onClick={() => setAddSub(true)} className={`${btnGhost} px-3 py-1.5 text-xs text-sky-300 border-sky-800`}>+ {t({ ar: "إضافة مشروع فرعي", en: "Add subproject" })}</button>}
             {isMaster && canManage && <button onClick={() => void demoteToStandalone()} className={`${btnGhost} px-3 py-1.5 text-xs text-stone-400`}>{t({ ar: "خفض إلى مستقل", en: "Demote" })}</button>}
+            {exp && <span className="text-[9px] px-1.5 py-1 rounded bg-stone-800 text-stone-400 self-center">{t({ ar: `العرض: ${EXPERIENCE_AR[exp]}`, en: `View: ${exp}` })}</span>}
+            {hier?.project_scope === "standalone" && canManage && exp && (
+              <button onClick={() => void toggleExperience()} disabled={busy} className={`${btnGhost} px-3 py-1.5 text-xs text-teal-300 border-teal-900`}>
+                {isSimple ? t({ ar: "الإدارة القياسية", en: "Standard view" }) : t({ ar: "تبسيط الإدارة", en: "Simplify" })}
+              </button>
+            )}
             {hier?.project_scope === "standalone" && canManage && hier.hierarchy_enabled && (
               <button onClick={() => void promoteToMaster()} className={`${btnGhost} px-3 py-1.5 text-xs text-violet-300 border-violet-800`}>{t({ ar: "ترقية إلى مشروع رئيسي", en: "Promote to master" })}</button>
             )}
@@ -314,15 +384,32 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
           )}
         </div>
       </section>
+      </div>
 
       {/* تبويبات */}
       <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-        {visibleTabs.map((tb) => (
-          <button key={tb.k} onClick={() => setTab(tb.k)} className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
+        {shownTabs.map((tb) => (
+          <button key={tb.k} onClick={() => pickTab(tb.k)} aria-current={tab === tb.k ? "page" : undefined}
+            className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap ${tab === tb.k ? "bg-red-600 text-white" : "bg-stone-800 border border-stone-700 text-stone-300"}`}>
             {t({ ar: tb.ar, en: tb.en })}
           </button>
         ))}
+        {isSimple && (
+          <button onClick={() => setShowAdvanced((v) => !v)} aria-expanded={!collapseAdvanced}
+            className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap bg-stone-900 border border-stone-700 text-stone-400 hover:text-white">
+            {collapseAdvanced
+              ? `${t({ ar: "إدارة متقدمة", en: "Advanced" })} (${visibleTabs.length - shownTabs.length}) ▾`
+              : `${t({ ar: "إخفاء المتقدمة", en: "Hide advanced" })} ▴`}
+          </button>
+        )}
       </div>
+
+      {tab === "quick" && isSimple && (
+        <QuickProjectPanel projectId={projectId} canManage={canManage} flash={flash}
+          onGoTab={(k) => { if (!visibleTabs.some((x) => x.k === k)) setShowAdvanced(true); pickTab(k as TabKey); }}
+          onOpenLifecycle={() => { setShowDetails(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+          onSwitchedToStandard={() => { setExp("standard"); setShowAdvanced(false); onChanged?.(); }} />
+      )}
 
       {tab === "schedule" && <ScheduleTab projectId={projectId} canManage={canManage} flash={flash} gotoTab={(k) => setTab(k as TabKey)} />}
       {tab === "execution" && <ProjectExecution projectId={projectId} canManage={canManage} flash={flash} />}

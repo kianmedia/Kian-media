@@ -21,6 +21,8 @@ import {
   type DashboardResponse, type DashFilter, type DashRow, type PcStage, type PcPriority, type PcHealth, type DeletedProject,
 } from "@/lib/portal/projectCore";
 import CreateProjectWizard from "./CreateProjectWizard";
+import FastCreateWizard from "./FastCreateWizard";
+import { fastlaneQuickProjectIds } from "@/lib/portal/fastlane";
 import { NotifyMonitor } from "./NotifyMonitor";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
@@ -37,6 +39,10 @@ export default function ProjectCoreDashboard() {
   const [filter, setFilter] = useState<DashFilter>("all");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [showFast, setShowFast] = useState(false);
+  // 8C: مجموعة المشاريع «السريعة» — قراءة واحدة (لا N+1)؛ فشلها يُخفي الشارة فقط.
+  const [quickIds, setQuickIds] = useState<Set<string> | null>(null);
+  const [onlyQuick, setOnlyQuick] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
   const [showNotify, setShowNotify] = useState(false);
   const [showPortfolio, setShowPortfolio] = useState(false);
@@ -55,10 +61,15 @@ export default function ProjectCoreDashboard() {
     const r = await pcDashboard({ filter: f, search: s || undefined, limit: 200 });
     if (!r.ok) { setErr(pcErr(r.error)); setPhase("error"); return; }
     setData(r.data); setPhase("ready");
+    const q = await fastlaneQuickProjectIds();
+    setQuickIds(q.ok ? new Set(q.data.map((x) => x.id)) : null);
   }, []);
   useEffect(() => { void load(filter, search); }, [load, filter]);   // البحث عبر زر/Enter
 
   const c = data?.counters;
+  const rows: DashRow[] = data?.rows ?? [];
+  // فلترة «السريعة» تُطبَّق على الصفحة المحمّلة فقط — الفلترة الأساسية خادمية.
+  const shownRows = onlyQuick && quickIds ? rows.filter((x) => quickIds.has(x.id)) : rows;
   // بطاقات العدّادات — كلها فلاتر فعلية (k مطابق لتعريف الخادم).
   const cards: { k: DashFilter; ar: string; en: string; n: number | null; cls?: string }[] = c ? [
     { k: "all", ar: "إجمالي", en: "Total", n: c.total, cls: "text-white" },
@@ -109,6 +120,7 @@ export default function ProjectCoreDashboard() {
           {caps.isAdminArea && <button onClick={() => setShowNotify((v) => !v)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "مراقبة الإشعارات", en: "Notify Monitor" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowDeleted(true)} className="text-xs text-stone-400 hover:text-white border border-stone-800 rounded-lg px-3 py-1.5">{t({ ar: "المحذوفة/المؤرشفة", en: "Deleted/Archived" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowTplLib(true)} className="text-xs text-stone-200 hover:text-white border border-amber-800/70 bg-amber-950/20 rounded-lg px-3 py-1.5">{t({ ar: "من قالب", en: "From template" })}</button>}
+          {caps.isAdminArea && <button onClick={() => setShowFast(true)} className="rounded-lg bg-teal-700 hover:bg-teal-600 text-white text-sm font-medium px-4 py-2">⚡ {t({ ar: "مشروع سريع", en: "Quick Project" })}</button>}
           {caps.isAdminArea && <button onClick={() => setShowCreate(true)} className="rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2">+ {t({ ar: "إنشاء مشروع", en: "Create Project" })}</button>}
         </div>
       </div>
@@ -156,6 +168,17 @@ export default function ProjectCoreDashboard() {
         </div>
       )}
 
+      {/* 8C: فلتر «السريعة» — يعمل على الصفحة المحمّلة حاليًّا (الفلترة الأساسية خادمية) */}
+      {quickIds && quickIds.size > 0 && (
+        <div className="flex items-center gap-2 text-xs">
+          <button onClick={() => setOnlyQuick((v) => !v)} aria-pressed={onlyQuick}
+            className={`px-2.5 py-1 rounded-lg border ${onlyQuick ? "bg-teal-700 border-teal-600 text-white" : "bg-stone-800 border-stone-700 text-stone-300"}`}>
+            ⚡ {t({ ar: "المشاريع السريعة", en: "Quick projects" })} ({rows.filter((x) => quickIds.has(x.id)).length})
+          </button>
+          {onlyQuick && <span className="text-[10px] text-stone-500">{t({ ar: "ضمن القائمة المعروضة", en: "within the loaded list" })}</span>}
+        </div>
+      )}
+
       {/* شريط الفلتر النشط */}
       {filter !== "all" && (
         <div className="flex items-center gap-2 text-xs">
@@ -174,10 +197,16 @@ export default function ProjectCoreDashboard() {
         </div>
       )}
       <div className="space-y-1.5">
-        {(data?.rows ?? []).map((p) => <ProjectRowCard key={p.id} p={p} canFin={caps.canSeeFinancials} />)}
+        {shownRows.map((p) => <ProjectRowCard key={p.id} p={p} canFin={caps.canSeeFinancials} isQuick={quickIds?.has(p.id) ?? false} />)}
       </div>
+      {onlyQuick && shownRows.length === 0 && (
+        <div className={`${card} p-6 text-center text-sm text-stone-400`}>{t({ ar: "لا مشاريع سريعة في القائمة المعروضة.", en: "No quick projects in the loaded list." })}</div>
+      )}
 
       {showCreate && <CreateProjectWizard onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(filter, search); }} />}
+      {/* 8C: onCreated يُحدّث القائمة فقط — إغلاق النافذة هنا كان يُفكّك المعالج
+          قبل أن تُرسم شاشة النجاح وتحذيرُها، فيتحوّل نجاح جزئيّ إلى نجاح تامّ صامت. */}
+      {showFast && <FastCreateWizard onClose={() => setShowFast(false)} onCreated={() => { void load(filter, search); }} />}
       {showDeleted && <DeletedProjectsModal canRestore={caps.isOwner} onClose={() => setShowDeleted(false)} onRestored={() => void load(filter, search)} />}
       {showExecutive && <ExecutiveDashboard onClose={() => setShowExecutive(false)} />}
       {showTree && <HierarchyTree onClose={() => setShowTree(false)} />}
@@ -240,7 +269,7 @@ function DeletedProjectsModal({ canRestore, onClose, onRestored }: { canRestore:
   );
 }
 
-function ProjectRowCard({ p, canFin }: { p: DashRow; canFin: boolean }) {
+function ProjectRowCard({ p, canFin, isQuick }: { p: DashRow; canFin: boolean; isQuick: boolean }) {
   const { t } = useI18n();
   const overdue = p.days_remaining != null && p.days_remaining < 0 && p.stage !== "closed" && p.stage !== "delivered";
   return (
@@ -251,6 +280,7 @@ function ProjectRowCard({ p, canFin }: { p: DashRow; canFin: boolean }) {
           <div className="text-[11px] text-stone-500 truncate">{p.client_name || t({ ar: "بلا عميل", en: "No client" })}{p.manager_name ? ` · ${t({ ar: "مدير", en: "PM" })}: ${p.manager_name}` : ` · ${t({ ar: "بلا مدير", en: "no PM" })}`}</div>
           <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px]">
             <span className="px-1.5 py-0.5 rounded bg-stone-800 text-stone-300">{t(PC_STAGE_LABELS[p.stage])}</span>
+            {isQuick && <span className="px-1.5 py-0.5 rounded bg-teal-900/50 text-teal-300">⚡ {t({ ar: "سريع", en: "Quick" })}</span>}
             <span className={PRIO_CLS[p.priority]}>{t(PRIORITY_LABELS[p.priority])}</span>
             <span className={HEALTH_CLS[p.health]}>● {t(HEALTH_LABELS[p.health])}</span>
             {p.due_date && <span className={overdue ? "text-red-400" : "text-stone-500"} dir="ltr">⏱ {p.due_date}{p.days_remaining != null ? ` (${p.days_remaining}${t({ ar: "ي", en: "d" })})` : ""}</span>}
