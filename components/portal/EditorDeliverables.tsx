@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { staffAddDeliverable, staffSetDeliverable } from "@/lib/portal/admin";
+import { emitProjectDeliverableEvent } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
 import DeliverableNotesPanel from "@/components/portal/DeliverableNotesPanel";
@@ -40,6 +41,9 @@ export default function EditorDeliverables({
     const r = await staffSetDeliverable({ deliverableId: d.id, status: status as never });
     setBusyId(null);
     if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked" : r.error) }); onChanged(); return; }
+    // Batch 9D: editors are the primary preview senders — fire the canonical
+    // producer so management/PM/assignee/actor + client are actually notified.
+    if (status === "client_review") void emitProjectDeliverableEvent(d.id, "deliverable.preview_sent");
     setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }) });
     onChanged();
   }
@@ -99,13 +103,13 @@ export default function EditorDeliverables({
         </div>
       )}
 
-      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); onChanged(); }} />}
+      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={(id, status) => { setShowAdd(false); if (status === "client_review" && id) void emitProjectDeliverableEvent(id, "deliverable.preview_sent"); onChanged(); }} />}
       {preview && <PreviewModal title={preview.title} url={preview.url} onClose={() => setPreview(null)} />}
     </div>
   );
 }
 
-function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: () => void }) {
+function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: (id: string, status: string) => void }) {
   const { t, isAr } = useI18n();
   const [title, setTitle] = useState("");
   const [type, setType] = useState<DeliverableType>("video");
@@ -123,7 +127,7 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
     const r = await staffAddDeliverable({ projectId, title: title.trim(), type, previewUrl: previewUrl.trim() || undefined, vimeoUrl: vimeoUrl.trim() || undefined, status });
     setAdding(false);
     if (!r.ok) { setErr(t({ ar: "تعذّر الإضافة: ", en: "Add failed: " }) + r.error); return; }
-    onAdded();
+    onAdded(typeof r.data === "string" ? r.data : "", status);
   }
 
   const input: React.CSSProperties = { width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "12px 14px", color: "#fff", fontSize: "14px", fontFamily: "var(--sans)", outline: "none", colorScheme: "dark" };

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { listVersionSummary, addDeliverableVersion, reviewVersion, setFinalVersion, uploadFinalMaster, type VersionSummary } from "@/lib/portal/deliverables";
+import { emitProjectDeliverableEvent } from "@/lib/portal/notifyEmail";
 import AnnotationViewer from "@/components/portal/AnnotationViewer";
 import { type WatermarkStamp } from "@/components/portal/PreviewWatermark";
 
@@ -72,6 +73,9 @@ export default function VersionHistory({
     });
     setBusy(false);
     if (!r.ok) { setMsg(t({ ar: "تعذّرت الإضافة.", en: "Failed." })); return; }
+    // Batch 9D: adding a version moves the deliverable back to client_review and
+    // sends it to the client — fire the canonical producer (revisions were silent).
+    void emitProjectDeliverableEvent(deliverable.id, "deliverable.preview_sent");
     setAdding(false); setAddForm({ preview_url: "", preview_type: "video", note: "" });
     await load(); onChanged?.();
   }

@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { adminAddDeliverable, adminSetDeliverable, adminSoftDeleteDeliverable, adminConfirmProjectPayment, adminRevokeProjectPayment, projectPaymentCleared, adminSetReleasePolicy, type ReleaseWindow } from "@/lib/portal/admin";
-import { notifyReviewReady, notifyFinalDelivered } from "@/lib/portal/notifyEmail";
+import { emitProjectDeliverableEvent } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
 import PreviewModal from "@/components/portal/PreviewModal";
 import VersionHistory from "@/components/portal/VersionHistory";
@@ -60,9 +60,11 @@ export default function AdminDeliverables({
     const r = await adminSetDeliverable({ deliverableId: d.id, status });
     setBusyId(null);
     if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked (workflow order)" : r.error) }); onChanged(); return; }
-    // Status-change emails (best-effort; never block the UI).
-    if (status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: d.title, clientEmail });
-    else if (status === "final_delivered") void notifyFinalDelivered({ projectId, projectName, deliverableTitle: d.title, clientEmail });
+    // Batch 9D: server-side canonical producer — resolves management + PM +
+    // assignee + actor + client, sends email immediately, writes the trace.
+    // (notifyReviewReady/notifyFinalDelivered were client-only no-cors no-ops.)
+    if (status === "client_review") void emitProjectDeliverableEvent(d.id, "deliverable.preview_sent");
+    else if (status === "final_delivered") void emitProjectDeliverableEvent(d.id, "deliverable.final_ready");
     setFlash({ id: d.id, kind: "ok", text: t({ ar: "تم تحديث الحالة ✓", en: "Status updated ✓" }) });
     onChanged();
   }
@@ -169,8 +171,9 @@ export default function AdminDeliverables({
 
       {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={(info) => {
         setShowAdd(false);
-        // Added straight into client_review → email the client it's ready to preview.
-        if (info.status === "client_review") void notifyReviewReady({ projectId, projectName, deliverableTitle: info.title, clientEmail });
+        // Added straight into client_review → fire the 9D canonical producer
+        // (staff+client portal via triggers; immediate email via the route).
+        if (info.status === "client_review" && info.id) void emitProjectDeliverableEvent(info.id, "deliverable.preview_sent");
         onChanged();
       }} />}
       {editing && <EditModal deliverable={editing} onClose={() => setEditing(null)} onSaved={() => {
@@ -183,7 +186,7 @@ export default function AdminDeliverables({
   );
 }
 
-function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: (info: { title: string; status: string }) => void }) {
+function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: (info: { id: string; title: string; status: string }) => void }) {
   const { t, isAr } = useI18n();
   const [title, setTitle] = useState("");
   const [type, setType] = useState<DeliverableType>("video");
@@ -206,7 +209,7 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
       setErr(t({ ar: "تعذّرت إضافة المعاينة. حدّث الصفحة وحاول مرة أخرى.", en: "Couldn't add the preview. Refresh and try again." }));
       return;
     }
-    onAdded({ title: title.trim(), status });
+    onAdded({ id: typeof r.data === "string" ? r.data : "", title: title.trim(), status });
   }
 
   const input: React.CSSProperties = { width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "3px", padding: "12px 14px", color: "#fff", fontSize: "14px", fontFamily: "var(--sans)", outline: "none", colorScheme: "dark" };

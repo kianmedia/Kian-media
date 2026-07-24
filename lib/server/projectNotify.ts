@@ -5,7 +5,11 @@
 // NO SMTP/provider keys in this repo — the Apps Script holds mail credentials.
 //
 // SAFETY:
-//   • DISABLED by default. Sends only when PROJECT_EMAIL_ALERTS_ENABLED === "true".
+//   • ENABLED BY DEFAULT (opt-out) — matching custody/HR on the SAME Apps Script
+//     endpoint. Set PROJECT_EMAIL_ALERTS_ENABLED=false to disable. Batch 9D fix:
+//     the previous opt-IN default left the ENTIRE project email channel dark
+//     (custody/HR were opt-OUT enabled on the identical endpoint), so project/
+//     preview emails never sent while custody emails did. No env change needed.
 //   • NEVER throws — email failure must not break the queue loop.
 //   • No secrets logged. WhatsApp delivery stays disabled (portal policy).
 // ════════════════════════════════════════════════════════════════════════
@@ -17,7 +21,7 @@ if (typeof window !== "undefined") {
 }
 
 export function projectEmailEnabled(): boolean {
-  return process.env.PROJECT_EMAIL_ALERTS_ENABLED === "true";
+  return (process.env.PROJECT_EMAIL_ALERTS_ENABLED ?? "").trim() !== "false";
 }
 function endpoint(): string {
   return process.env.PORTAL_NOTIFY_ENDPOINT || SHEETS_ENDPOINT || "";

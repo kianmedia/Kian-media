@@ -18,6 +18,35 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
+import { getValidSession } from "@/lib/portal/auth";
+
+/**
+ * Batch 9D — fire the SERVER-SIDE project/preview notification producer.
+ *
+ * Unlike postNotify() below (an unverifiable no-cors no-op that only ever
+ * reached the client), this calls the authenticated
+ * /api/integrations/project/notify route, which resolves the CANONICAL
+ * recipient set (management + project manager + the deliverable assignee +
+ * the actor as a confirmation + the authorized client), sends email
+ * immediately via the (now opt-out enabled) project relay, and records the
+ * delivery trace. Best-effort from the browser: the internal-staff portal rows
+ * are written server-side by the 9D trigger regardless, so a failed fetch here
+ * never loses the portal notification.
+ */
+export async function emitProjectDeliverableEvent(
+  deliverableId: string,
+  event: "deliverable.preview_sent" | "deliverable.final_ready" = "deliverable.preview_sent",
+): Promise<void> {
+  try {
+    const s = await getValidSession();
+    if (!s?.access_token) return;
+    await fetch("/api/integrations/project/notify", {
+      method: "POST", keepalive: true,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({ event, deliverable_id: deliverableId }),
+    });
+  } catch { /* best-effort: DB triggers still create the portal rows */ }
+}
 
 /** Best-effort POST to the Apps Script. Never throws; never blocks the caller. */
 async function postNotify(fields: Record<string, string>): Promise<void> {

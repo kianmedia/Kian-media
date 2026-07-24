@@ -7,8 +7,10 @@
 // الإدارة كبديل للموظف؛ إزالة تكرار. لا يُسجَّل بريد/JWT/مفاتيح.
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
-import { authGetUserId, selectAsUser, selectAsService, authAdminEmails, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { authGetUserId, selectAsUser, selectAsService, authAdminEmails, rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { sendHrEmail, hrEmailEndpoint, hrRuntimeEnv } from "@/lib/server/hrNotify";
+
+interface ResolvedRow { user_id: string; email: string | null; recipient_reason: string; email_allowed: boolean }
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +39,9 @@ const AUDIENCE_MANAGERS = new Set([
   "civ_self_issue", "civ_assignment_created", "civ_employee_confirmed", "civ_employee_rejected", "civ_return_requested",
   "civ_asset_created", "civ_stock_correction", "civ_audit_started", "civ_audit_approved",
   "civ_maintenance_opened", "civ_maintenance_closed",
+  // Batch 9D: return-outcome events the UI actually POSTs — management was excluded,
+  // so no manager/owner/custody-officer learned of an accepted/rejected return.
+  "civ_return_accepted", "civ_return_rejected",
 ]);
 const AUDIENCE_EMPLOYEE = new Set(["civ_self_issue", "civ_confirm_pending", "civ_return_accepted", "civ_return_rejected", "civ_assignment_created"]);
 
@@ -88,12 +93,28 @@ export async function POST(req: Request) {
     if (valid(e)) employeeEmails = [lc(e)];
   }
 
-  // بريد الإدارة/أمناء العهدة (لا يُستخدم كبديل للموظف).
+  // بريد الإدارة/أمناء العهدة — عبر المحلِّل المركزيّ (9D): يقرأ auth.users أوّلًا،
+  // فيُصلح فجوة «بريد الإدارة فارغ في profiles» التي كانت تُسقِط الإدارة صامتةً.
+  // fallback إلى الاستعلام القديم إن لم يُطبَّق 9D بعد (لا انحدار).
   let managerEmails: string[] = [];
   if (AUDIENCE_MANAGERS.has(event)) {
-    const st = await selectAsService<{ email: string | null }[]>(
-      `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,custody_officer))`);
-    if (st.ok) managerEmails = Array.from(new Set(st.data.map((x) => x.email).filter(valid).map(lc)));
+    const rr = await rpcAsService<ResolvedRow[]>("notification_resolve_recipients", {
+      p_event: "custody." + event, p_entity_type: "custody",
+      p_entity_id: assignmentId || null, p_project: null, p_actor: uid, p_payload: {},
+    });
+    if (rr.ok && Array.isArray(rr.data)) {
+      managerEmails = Array.from(new Set(rr.data
+        .filter((r) => r.recipient_reason !== "client" && r.recipient_reason !== "renter" && r.email_allowed)
+        .map((r) => (r.email ?? "").toLowerCase()).filter((e) => e.includes("@"))));
+    }
+    // Fallback to the direct query on RPC error OR an EMPTY resolver result, so a
+    // narrower/unapplied resolver can never silently suppress the previously-
+    // delivered management audience (includes staff_role='manager').
+    if (managerEmails.length === 0) {
+      const st = await selectAsService<{ email: string | null }[]>(
+        `profiles?select=email&account_status=eq.active&or=(account_type.eq.admin,staff_role.in.(super_admin,manager,custody_officer))`);
+      if (st.ok) managerEmails = Array.from(new Set(st.data.map((x) => x.email).filter(valid).map(lc)));
+    }
   }
   // إزالة التكرار: بريد الموظف له الأولوية، فلا يُكرَّر في قائمة الإدارة.
   managerEmails = managerEmails.filter((e) => !employeeEmails.includes(e));

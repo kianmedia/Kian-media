@@ -578,6 +578,36 @@ export interface NotifyMonitorV2 {
   generated_at: string;
 }
 export const pcNotifyMonitorV2 = (limit = 150) => prpc<NotifyMonitorV2>("pc_notify_monitor_v2", { p_limit: limit });
+
+// ─── Batch 9D: تتبّع التسليم لكل رحلة + أدوات إدارية آمنة ───
+export interface DeliveryTraceRow {
+  correlation_id: string; event_type: string; entity_type: string | null; entity_id: string | null;
+  project_id: string | null; actor_user_id: string | null;
+  recipient_id: string | null; recipient_role: string | null; recipient_reason: string | null;
+  channel: string; outcome: string; exclusion_reason: string | null; error_class: string | null; created_at: string;
+}
+export interface DeliveryTraceData { items: DeliveryTraceRow[]; generated_at: string }
+export const notificationDeliveryTrace = (opts: { event?: string; entity_id?: string; correlation?: string; limit?: number } = {}) =>
+  prpc<DeliveryTraceData>("notification_delivery_trace_list", {
+    p_event: opts.event?.trim() || null, p_entity_id: opts.entity_id?.trim() || null,
+    p_correlation: opts.correlation?.trim() || null, p_limit: opts.limit ?? 200,
+  });
+
+/** Admin-only diagnostics: self-test the portal+email chain, or drain the queue now. */
+export async function notificationAdminAction(
+  action: "self_test" | "process_now",
+): Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string }> {
+  try {
+    const s = await getValidSession();
+    if (!s?.access_token) return { ok: false, error: "not_authenticated" };
+    const res = await fetch("/api/integrations/project/notify-admin", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+      body: JSON.stringify({ action }),
+    });
+    const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return res.ok && j.ok === true ? { ok: true, data: j } : { ok: false, error: String(j.error ?? `http_${res.status}`) };
+  } catch (e) { return { ok: false, error: String(e).slice(0, 120) }; }
+}
 export const pcEmailRetry = (id: string) => prpc<boolean>("pc_email_retry", { p_id: id });
 export const pcEmailCancel = (id: string) => prpc<boolean>("pc_email_cancel", { p_id: id });
 export const EMAIL_STATUS_LABELS: Record<string, { ar: string; en: string }> = {

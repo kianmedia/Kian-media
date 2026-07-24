@@ -11,66 +11,13 @@
 // (n8n مثلًا) كل 15 دقيقة: GET /api/cron/notify-email?secret=CRON_SECRET.
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
-import { rpcAsService, selectAsService, patchAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
-import { sendProjectEmail, projectEmailEnabled } from "@/lib/server/projectNotify";
+import { rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { projectEmailEnabled } from "@/lib/server/projectNotify";
+import { processQueue } from "@/lib/server/notifyWorker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.stringify({ tag, ...extra }));
-
-interface DeliveryRow {
-  id: string; recipient_email: string | null; subject: string; body_text: string | null;
-  direct_url: string | null; attempts: number; status: string;
-  notification_events: { event_type: string | null; severity: string | null; direct_url: string | null } | null;
-}
-
-async function processQueue(): Promise<{ sent: number; failed: number; skipped: number }> {
-  const out = { sent: 0, failed: 0, skipped: 0 };
-  const nowIso = new Date().toISOString();
-  // Reaper: صف عالق في processing (انهيار الدالة قبل التعليم النهائي) يعود pending بعد ساعة.
-  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
-  await patchAsService(`email_deliveries?status=eq.processing&created_at=lt.${encodeURIComponent(hourAgo)}`, { status: "pending" });
-  const q = await selectAsService<DeliveryRow[]>(
-    `email_deliveries?select=id,recipient_email,subject,body_text,direct_url,attempts,status,notification_events(event_type,severity,direct_url)` +
-    `&status=eq.pending&attempts=lt.5&or=(next_attempt_at.is.null,next_attempt_at.lte.${encodeURIComponent(nowIso)})` +
-    `&order=created_at.asc&limit=30`);
-  if (!q.ok || !Array.isArray(q.data)) return out;
-  for (const d of q.data) {
-    // قفل تفاؤلي بسيط: علِّم processing فقط إن كانت ما تزال pending (منع سباق كرونين).
-    const lock = await patchAsService(`email_deliveries?id=eq.${d.id}&status=eq.pending`, { status: "processing" });
-    if (!lock.ok) continue;
-    if (!d.recipient_email || !d.recipient_email.includes("@")) {
-      await patchAsService(`email_deliveries?id=eq.${d.id}`, { status: "skipped", last_error: "no_email" });
-      out.skipped++; continue;
-    }
-    const res = await sendProjectEmail({
-      to: [d.recipient_email], subject: d.subject, body: d.body_text,
-      directUrl: d.direct_url ?? d.notification_events?.direct_url ?? null,
-      eventType: d.notification_events?.event_type ?? null,
-    });
-    if (res.sent) {
-      await patchAsService(`email_deliveries?id=eq.${d.id}`, { status: "sent", sent_at: new Date().toISOString(), last_error: null });
-      out.sent++;
-    } else if (res.reason === "disabled" || res.reason === "no_endpoint") {
-      // عائق تهيئة خارجي — لا نحرق المحاولات؛ تبقى pending لدورة لاحقة بعد التفعيل.
-      await patchAsService(`email_deliveries?id=eq.${d.id}`, {
-        status: "pending", last_error: res.reason,
-        next_attempt_at: new Date(Date.now() + 6 * 3600_000).toISOString(),
-      });
-      out.skipped++;
-    } else {
-      const attempts = (d.attempts ?? 0) + 1;
-      const backoffMin = 5 * Math.pow(2, attempts);   // 10م، 20م، 40م، 80م…
-      await patchAsService(`email_deliveries?id=eq.${d.id}`, {
-        status: attempts >= 5 ? "failed" : "pending",
-        attempts, last_error: (res.reason ?? "send_failed").slice(0, 200),
-        next_attempt_at: new Date(Date.now() + backoffMin * 60_000).toISOString(),
-      });
-      out.failed++;
-    }
-  }
-  return out;
-}
 
 async function run(req: Request) {
   const secret = process.env.CRON_SECRET ?? "";

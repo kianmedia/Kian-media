@@ -12,8 +12,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
   pcNotifyMonitorV2, pcNotifyMonitor, pcEmailRetry, pcEmailCancel, fmtDT, pcErr, EMAIL_STATUS_LABELS,
-  type EmailDeliveryRow, type NotifyMonitorV2,
+  notificationDeliveryTrace, notificationAdminAction,
+  type EmailDeliveryRow, type NotifyMonitorV2, type DeliveryTraceRow,
 } from "@/lib/portal/projectCore";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200 text-sm disabled:opacity-50";
@@ -31,6 +34,10 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [fStatus, setFStatus] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [trace, setTrace] = useState<DeliveryTraceRow[] | null>(null);
+  const [traceQ, setTraceQ] = useState("");
+  const [adminMsg, setAdminMsg] = useState<string | null>(null);
+  const [adminBusy, setAdminBusy] = useState(false);
 
   const load = useCallback(async () => {
     const r = await pcNotifyMonitorV2(150);
@@ -52,6 +59,29 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
     if (!r.ok) { flash(pcErr(r.error)); return; }
     flash(t(action === "retry" ? { ar: "أُعيد للطابور.", en: "Requeued." } : { ar: "أُلغي.", en: "Cancelled." }));
     void load();
+  }
+  async function runAdmin(action: "self_test" | "process_now") {
+    if (adminBusy) return; setAdminBusy(true); setAdminMsg(null);
+    const r = await notificationAdminAction(action);
+    setAdminBusy(false);
+    if (!r.ok) { setAdminMsg(t({ ar: "فشل: ", en: "Failed: " }) + (r.error ?? "")); return; }
+    if (action === "self_test") {
+      const em = r.data?.email as { sent?: boolean } | undefined;
+      const ch = r.data?.email_channel_enabled as boolean | undefined;
+      setAdminMsg(t({ ar: "أُرسل اختبار لحسابك — بوابة ✓ · بريد ", en: "Self-test sent — portal ✓ · email " })
+        + (em?.sent ? "✓" : t({ ar: "لم يُرسل", en: "not sent" })) + (ch === false ? t({ ar: " (القناة معطّلة)", en: " (channel off)" }) : ""));
+    } else {
+      const p = r.data?.processed as { sent?: number; failed?: number; skipped?: number } | undefined;
+      setAdminMsg(t({ ar: "عولج الطابور — أُرسل ", en: "Queue drained — sent " }) + (p?.sent ?? 0)
+        + " · " + t({ ar: "فشل ", en: "failed " }) + (p?.failed ?? 0) + " · " + t({ ar: "تُخطّي ", en: "skipped " }) + (p?.skipped ?? 0));
+    }
+    void load();
+  }
+  async function loadTrace() {
+    const q = traceQ.trim();
+    const r = await notificationDeliveryTrace(
+      !q ? { limit: 100 } : UUID_RE.test(q) ? { entity_id: q, limit: 100 } : { event: q, limit: 100 });
+    if (r.ok) setTrace(r.data.items); else setTrace([]);
   }
   const stCls: Record<string, string> = {
     sent: "bg-emerald-900/40 text-emerald-300", failed: "bg-red-900/40 text-red-300",
@@ -117,6 +147,42 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
             </div>
           ) : (
             <span>{t({ ar: "لا نبضة كرون مُسجَّلة بعد.", en: "No cron heartbeat yet." })}</span>
+          )}
+        </div>
+      )}
+
+      {/* أدوات إدارية (9D): اختبار السلسلة + معالجة الطابور + تتبّع رحلة التسليم */}
+      {!legacy && (
+        <div className={`${card} p-2.5 space-y-2`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-stone-300">{t({ ar: "أدوات", en: "Tools" })}:</span>
+            <button disabled={adminBusy} onClick={() => void runAdmin("self_test")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "اختبار إشعار لحسابي", en: "Self-test" })}</button>
+            <button disabled={adminBusy} onClick={() => void runAdmin("process_now")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "معالجة الطابور الآن", en: "Process now" })}</button>
+            {adminMsg && <span className="text-[10px] text-stone-400">{adminMsg}</span>}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input value={traceQ} onChange={(e) => setTraceQ(e.target.value)}
+              placeholder={t({ ar: "تتبّع التسليم: نوع الحدث أو معرّف الكيان", en: "Trace: event type or entity id" })}
+              className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-[11px] text-stone-200 flex-1 min-w-0" dir="ltr" />
+            <button onClick={() => void loadTrace()} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "تتبّع", en: "Trace" })}</button>
+          </div>
+          {trace && (
+            <div className="max-h-52 overflow-y-auto space-y-1">
+              {trace.length === 0 && <p className="text-[10px] text-stone-500">{t({ ar: "لا سجلّات تسليم مطابقة.", en: "No matching delivery records." })}</p>}
+              {trace.map((r, i) => (
+                <div key={i} className="text-[10px] text-stone-400 flex gap-2 flex-wrap border-b border-stone-800/70 pb-0.5">
+                  <span dir="ltr" className="text-stone-300">{r.event_type}</span>
+                  <span dir="ltr">{r.recipient_reason ?? r.recipient_role ?? "—"}</span>
+                  <span dir="ltr" className={
+                    r.outcome.includes("fail") || r.outcome === "excluded" ? "text-red-400"
+                      : r.outcome === "email_sent" || r.outcome === "portal_created" ? "text-emerald-400" : "text-stone-400"}>
+                    {r.outcome}{r.exclusion_reason ? ` (${r.exclusion_reason})` : ""}{r.error_class ? ` (${r.error_class})` : ""}
+                  </span>
+                  <span dir="ltr" className="text-stone-600">{r.channel}</span>
+                  <span dir="ltr" className="text-stone-600">{fmtDT(r.created_at)}</span>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

@@ -42,6 +42,9 @@ const RENTER_EVENTS = new Set([
   "rental_request_created", "rental_approved", "rental_rejected", "rental_revision_requested",
   "rental_handover_scheduled", "rental_activated", "rental_due_soon", "rental_overdue",
   "rental_return_inspection_required", "rental_charges_pending", "rental_closed",
+  // Batch 9D: a staff-initiated return request must tell the renter to bring the
+  // equipment back — the renter was previously excluded from this event.
+  "rental_return_requested",
 ]);
 // أحداث تشمل المالية.
 const FINANCE_EVENTS = new Set(["rental_charges_pending", "rental_deposit_release_pending"]);

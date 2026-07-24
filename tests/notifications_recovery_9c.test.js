@@ -180,12 +180,15 @@ test("cron wiring: resource + governance + sla scans invoked, heartbeat recorded
   assert.ok(ROUTE.includes("p_stats: stats"), "heartbeat carries run stats");
 });
 
-test("cron wiring: email gate untouched — no real email is enabled by 9C", () => {
-  // بوابة البريد الحقيقية ما تزال هي projectEmailEnabled()+sendProjectEmail (لم تُلغَ).
-  assert.ok(ROUTE.includes("projectEmailEnabled") && ROUTE.includes("sendProjectEmail"), "delivery still gated");
-  // 9C لا تُجبر التفعيل ولا تكتب أسرارًا/متغيّرات بيئة.
+test("cron wiring: email gate present — no secret/env forcing in 9C", () => {
+  // Batch 9D refactor: the queue drain (sendProjectEmail) moved into the shared
+  // lib/server/notifyWorker; the cron still reports the gate via projectEmailEnabled.
+  // (9D deliberately flips that gate to opt-out — a code change, not an env change.)
+  assert.ok(ROUTE.includes("projectEmailEnabled"), "cron reports the email-channel gate");
+  assert.ok(ROUTE.includes("notifyWorker") || ROUTE.includes("processQueue"), "queue drained via the shared worker");
+  // 9C never force-enables via env or writes secrets/env vars.
   assert.ok(!/PROJECT_EMAIL_ALERTS_ENABLED\s*=\s*["']true["']/.test(ROUTE), "does not force-enable email");
-  assert.ok(!SQL.includes("PROJECT_EMAIL_ALERTS_ENABLED"), "SQL never touches env");
+  assert.ok(!SQL.includes("PROJECT_EMAIL_ALERTS_ENABLED"), "9C SQL never touches env");
 });
 
 // ─── 10. الواجهة: مراقب v2 مع تراجُع، وشرائح الرحلة، مع إبقاء إعادة/إلغاء ───
