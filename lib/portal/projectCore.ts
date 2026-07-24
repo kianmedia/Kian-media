@@ -595,14 +595,15 @@ export const notificationDeliveryTrace = (opts: { event?: string; entity_id?: st
 
 /** Admin-only diagnostics: self-test, drain now, backlog preview, or expire old backlog. */
 export async function notificationAdminAction(
-  action: "self_test" | "process_now" | "backlog_preview" | "expire_backlog",
+  action: "self_test" | "process_now" | "backlog_preview" | "backlog_classify" | "retry_one" | "expire_backlog",
+  extra?: Record<string, unknown>,
 ): Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string }> {
   try {
     const s = await getValidSession();
     if (!s?.access_token) return { ok: false, error: "not_authenticated" };
     const res = await fetch("/api/integrations/project/notify-admin", {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, ...(extra ?? {}) }),
     });
     const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return res.ok && j.ok === true ? { ok: true, data: j } : { ok: false, error: String(j.error ?? `http_${res.status}`) };

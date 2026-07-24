@@ -14,7 +14,13 @@ import { authGetUserId, rpcAsUser, rpcAsService, selectAsService, patchAsService
 import { sendProjectEmail, projectEmailEnabled } from "@/lib/server/projectNotify";
 import { processQueue, pendingBacklog } from "@/lib/server/notifyWorker";
 
-const BACKLOG_HOURS = 24;
+const BACKLOG_HOURS = 24;   // older than this = expired backlog (never auto-sent)
+const RECENT_HOURS = 2;     // Batch 10 · Phase 10 — "recent" eligibility window
+// Critical events worth a manual one-off retry when recent (never a mass send).
+const CRITICAL_EVENTS = new Set([
+  "client_deliverable_approved", "client_revision_requested", "deliverable_final_ready",
+  "deliverable_preview_sent", "project_delivery_recorded",
+]);
 const mask = (e: string | null | undefined) => {
   const s = (e ?? "").trim(); const at = s.indexOf("@");
   if (at < 1) return "—";
@@ -37,7 +43,7 @@ export async function POST(req: Request) {
   let b: Record<string, unknown>;
   try { b = (await req.json()) as Record<string, unknown>; } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
   const action = typeof b.action === "string" ? b.action : "";
-  const ACTIONS = new Set(["self_test", "process_now", "backlog_preview", "expire_backlog"]);
+  const ACTIONS = new Set(["self_test", "process_now", "backlog_preview", "backlog_classify", "retry_one", "expire_backlog"]);
   if (!ACTIONS.has(action)) return NextResponse.json({ ok: false, error: "invalid_action" }, { status: 400 });
 
   const uid = await authGetUserId(bearer);
@@ -115,6 +121,76 @@ export async function POST(req: Request) {
     if (n > 0) await patchAsService(`email_deliveries?status=eq.pending&created_at=lt.${encodeURIComponent(cutoffIso)}`, { status: "skipped", last_error: "backlog_expired" });
     log("NOTIFY_ADMIN_EXPIRE_BACKLOG", { expired: n });
     return NextResponse.json({ ok: true, expired: n, window_hours: BACKLOG_HOURS });
+  }
+
+  if (action === "backlog_classify") {
+    // Batch 10 · Phase 10 — READ-ONLY classification of the pending queue into the
+    // four control buckets. No sending, no mutation. Guides the admin on what to do:
+    //   eligible_recent   — pending, < RECENT_HOURS, not a duplicate → safe to send.
+    //   expired_old       — pending, > BACKLOG_HOURS → should be expired, never sent.
+    //   duplicate         — a newer pending row already superseded by an equal one.
+    //   critical_recent   — recent pending for a critical event → manual retry ids.
+    const rows = await selectAsService<{ id: string; recipient_email: string | null; subject: string | null; created_at: string; idempotency_key: string | null; notification_events: { event_type: string | null } | null }[]>(
+      `email_deliveries?select=id,recipient_email,subject,created_at,idempotency_key,notification_events(event_type)&status=eq.pending&order=created_at.asc&limit=1000`);
+    const nowMs = Date.now();
+    const recentCut = nowMs - RECENT_HOURS * 3600_000;
+    const oldCut = nowMs - BACKLOG_HOURS * 3600_000;
+    const buckets = { eligible_recent: 0, mid_pending: 0, expired_old: 0, duplicate: 0, critical_recent: 0, total: 0 };
+    const seen = new Set<string>();               // dedupe signature → first (kept) row
+    const criticalIds: { id: string; to: string; type: string; created_at: string }[] = [];
+    if (rows.ok && Array.isArray(rows.data)) {
+      for (const r of rows.data) {
+        buckets.total++;
+        const t = new Date(r.created_at).getTime();
+        const type = r.notification_events?.event_type ?? "(untyped)";
+        const sig = r.idempotency_key && r.idempotency_key.trim()
+          ? `k:${r.idempotency_key}`
+          : `p:${(r.recipient_email ?? "").toLowerCase()}|${r.subject ?? ""}`;
+        const isDup = seen.has(sig);
+        if (!isDup) seen.add(sig);
+        if (isDup) { buckets.duplicate++; continue; }   // a duplicate is neither eligible nor critical
+        if (t < oldCut) { buckets.expired_old++; continue; }
+        if (t >= recentCut) {
+          buckets.eligible_recent++;
+          if (CRITICAL_EVENTS.has(type)) {
+            buckets.critical_recent++;
+            if (criticalIds.length < 25) criticalIds.push({ id: r.id, to: mask(r.recipient_email), type, created_at: r.created_at });
+          }
+        } else {
+          buckets.mid_pending++;
+        }
+      }
+    }
+    return NextResponse.json({
+      ok: true, recent_hours: RECENT_HOURS, expire_hours: BACKLOG_HOURS,
+      buckets, critical_retry_candidates: criticalIds, email_channel_enabled: projectEmailEnabled(),
+    });
+  }
+
+  if (action === "retry_one") {
+    // Batch 10 · Phase 10 — manual retry of ONE recent row by id. NEVER a mass send:
+    // exactly one delivery id, and only if it is still pending/failed AND recent (older
+    // rows must be expired, not resurrected). Processes via the shared exact-ID worker.
+    const id = typeof b.delivery_id === "string" ? b.delivery_id.trim() : "";
+    if (!/^[0-9a-fA-F-]{36}$/.test(id)) return NextResponse.json({ ok: false, error: "bad_delivery_id" }, { status: 400 });
+    const row = await selectAsService<{ id: string; status: string; created_at: string }[]>(
+      `email_deliveries?id=eq.${encodeURIComponent(id)}&select=id,status,created_at&limit=1`);
+    const r = row.ok ? row.data[0] : null;
+    if (!r) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (r.status !== "pending" && r.status !== "failed")
+      return NextResponse.json({ ok: false, error: `not_retryable_status:${r.status}` }, { status: 409 });
+    if (new Date(r.created_at).getTime() < Date.now() - BACKLOG_HOURS * 3600_000)
+      return NextResponse.json({ ok: false, error: "too_old_expire_instead" }, { status: 409 });
+    // Make the ONE row due & retryable: clear any backoff; if it dead-lettered
+    // (status=failed ⇒ attempts>=MAX), revive it to pending with fresh attempts so
+    // exact-ID processing actually re-attempts it instead of returning already_failed.
+    const patch: Record<string, unknown> = { next_attempt_at: null };
+    if (r.status === "failed") { patch.status = "pending"; patch.attempts = 0; }
+    await patchAsService(`email_deliveries?id=eq.${encodeURIComponent(id)}`, patch);
+    const result = await processQueue(1, { deliveryIds: [id] });
+    const outcome = result.perId?.[id] ?? "unknown";
+    log("NOTIFY_ADMIN_RETRY_ONE", { id, outcome, sent: result.sent });
+    return NextResponse.json({ ok: true, delivery_id: id, outcome, processed: result, email_channel_enabled: projectEmailEnabled() });
   }
 
   // action === "process_now" — bounded drain via the shared worker, with honesty:

@@ -61,13 +61,34 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
     flash(t(action === "retry" ? { ar: "أُعيد للطابور.", en: "Requeued." } : { ar: "أُلغي.", en: "Cancelled." }));
     void load();
   }
-  async function runAdmin(action: "self_test" | "process_now" | "backlog_preview" | "expire_backlog") {
+  async function retryCritical(id: string) {
+    if (adminBusy) return;
+    setAdminBusy(true); setAdminMsg(null);
+    const r = await notificationAdminAction("retry_one", { delivery_id: id });
+    setAdminBusy(false);
+    setAdminMsg(r.ok
+      ? t({ ar: "إعادة إرسال — النتيجة: ", en: "Retried — outcome: " }) + String((r.data?.outcome as string) ?? "?")
+      : t({ ar: "تعذّرت الإعادة: ", en: "Retry failed: " }) + (r.error ?? ""));
+    void load();
+  }
+  async function runAdmin(action: "self_test" | "process_now" | "backlog_preview" | "backlog_classify" | "expire_backlog") {
     if (adminBusy) return;
     if (action === "expire_backlog" && !window.confirm(t({ ar: "تعليم رسائل الـBacklog القديمة (أقدم من 24 ساعة) كمتجاهَلة؟ لن تُرسَل.", en: "Mark old backlog (>24h) as skipped? They will NOT be sent." }))) return;
     setAdminBusy(true); setAdminMsg(null);
     const r = await notificationAdminAction(action);
     setAdminBusy(false);
     if (!r.ok) { setAdminMsg(t({ ar: "فشل: ", en: "Failed: " }) + (r.error ?? "")); return; }
+    if (action === "backlog_classify") {
+      setBacklog(r.data ?? null);
+      const bk = r.data?.buckets as { eligible_recent?: number; expired_old?: number; duplicate?: number; critical_recent?: number; total?: number } | undefined;
+      setAdminMsg(t({ ar: "تصنيف المتراكم — إجمالي ", en: "Classified — total " }) + (bk?.total ?? 0)
+        + " · " + t({ ar: "قابل ", en: "eligible " }) + (bk?.eligible_recent ?? 0)
+        + " · " + t({ ar: "منتهٍ ", en: "expired " }) + (bk?.expired_old ?? 0)
+        + " · " + t({ ar: "مكرّر ", en: "dup " }) + (bk?.duplicate ?? 0)
+        + " · " + t({ ar: "حرِج ", en: "critical " }) + (bk?.critical_recent ?? 0));
+      void load();
+      return;
+    }
     if (action === "self_test") {
       const em = r.data?.email as { sent?: boolean } | undefined;
       const ch = r.data?.email_channel_enabled as boolean | undefined;
@@ -173,10 +194,34 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
             <button disabled={adminBusy} onClick={() => void runAdmin("self_test")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "اختبار إشعار لحسابي", en: "Self-test" })}</button>
             <button disabled={adminBusy} onClick={() => void runAdmin("process_now")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "معالجة الطابور الآن", en: "Process now" })}</button>
             <button disabled={adminBusy} onClick={() => void runAdmin("backlog_preview")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "معاينة المتراكم", en: "Backlog" })}</button>
+            <button disabled={adminBusy} onClick={() => void runAdmin("backlog_classify")} className={`${btnGhost} px-2 py-1 text-[10px]`}>{t({ ar: "تصنيف المتراكم", en: "Classify" })}</button>
             <button disabled={adminBusy} onClick={() => void runAdmin("expire_backlog")} className={`${btnGhost} px-2 py-1 text-[10px] hover:text-red-400`}>{t({ ar: "تجاهُل القديم", en: "Expire old" })}</button>
             {adminMsg && <span className="text-[10px] text-stone-400">{adminMsg}</span>}
           </div>
-          {backlog && (
+          {backlog?.buckets ? (
+            <div className="text-[10px] text-stone-400 border-t border-stone-800/70 pt-1.5 space-y-1">
+              <div className="flex gap-3 flex-wrap" dir="ltr">
+                <span className="text-emerald-400">{t({ ar: "قابل للإرسال", en: "eligible" })} {String((backlog.buckets as Record<string, number>).eligible_recent ?? 0)}</span>
+                <span className="text-stone-300">{t({ ar: "معلّق متوسط", en: "mid" })} {String((backlog.buckets as Record<string, number>).mid_pending ?? 0)}</span>
+                <span className="text-amber-400">{t({ ar: "منتهٍ (تجاهُل)", en: "expired" })} {String((backlog.buckets as Record<string, number>).expired_old ?? 0)}</span>
+                <span className="text-sky-400">{t({ ar: "مكرّر", en: "duplicate" })} {String((backlog.buckets as Record<string, number>).duplicate ?? 0)}</span>
+                <span className="text-red-400">{t({ ar: "حرِج", en: "critical" })} {String((backlog.buckets as Record<string, number>).critical_recent ?? 0)}</span>
+              </div>
+              {Array.isArray(backlog.critical_retry_candidates) && (backlog.critical_retry_candidates as unknown[]).length > 0 && (
+                <div className="space-y-0.5">
+                  <p className="text-stone-500">{t({ ar: "إعادة إرسال يدويّة لحدث حرِج (واحدًا واحدًا):", en: "Manual retry of a critical event (one at a time):" })}</p>
+                  {(backlog.critical_retry_candidates as { id: string; to: string; type: string }[]).slice(0, 10).map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 flex-wrap">
+                      <span dir="ltr" className="text-stone-300">{c.type}</span>
+                      <span dir="ltr">{c.to}</span>
+                      <button disabled={adminBusy} onClick={() => void retryCritical(c.id)} className={`${btnGhost} px-1.5 py-0.5 text-[9px]`}>{t({ ar: "إعادة", en: "retry" })}</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
+          {backlog && !backlog.buckets && (
             <div className="text-[10px] text-stone-400 border-t border-stone-800/70 pt-1.5 space-y-1">
               <div className="flex gap-3 flex-wrap">
                 <span dir="ltr">{t({ ar: "نافذة", en: "window" })} {String((backlog.window_hours as number) ?? 24)}h</span>
