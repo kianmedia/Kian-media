@@ -126,9 +126,12 @@ test("9G worker: exact-ID mode (deliveryIds) with per-id outcomes, no created_at
   for (const o of ["not_found", "already_sent", "not_due", "claim_conflict"]) assert.ok(WORKER.includes(`"${o}"`), `reports ${o}`);
   assert.ok(WORKER.includes("perId"), "returns a per-id outcome map");
 });
-test("9G routes: review + preview are event-bound and reject false success", () => {
-  assert.ok(REVIEW.includes("client_review_and_enqueue_notifications") && REVIEW.includes("{ deliveryIds }"), "review: RPC + exact-ID process");
-  assert.ok(REVIEW.includes("EMAIL_ROWS_NOT_CLAIMED") && REVIEW.includes("502"), "review: 502 when expected>0 & claimed=0");
+test("9G/10.0 routes: preview is event-bound; review is decoupled + event-bound", () => {
+  // Batch 10 Phase 0: review now SAVES the decision first, then enqueues best-effort
+  // (no combined mutation RPC, no 502 once saved). Preview is unchanged (event-bound).
+  assert.ok(REVIEW.includes("review_enqueue_notifications") && REVIEW.includes("{ deliveryIds }"), "review: enqueue-only RPC + exact-ID process");
+  assert.ok(!/status:\s*502/.test(REVIEW), "review: never returns HTTP 502 once the decision is saved (decoupled)");
+  assert.ok(REVIEW.includes("EMAIL_ROWS_NOT_CLAIMED"), "review: still honest when expected>0 & nothing sent (notification code)");
   assert.ok(PREVIEW.includes("deliverable_preview_enqueue_notifications") && PREVIEW.includes("{ deliveryIds }"), "preview: RPC + exact-ID process");
   assert.ok(PREVIEW.includes("EMAIL_ROWS_NOT_CLAIMED"), "preview: no false success");
   assert.ok(!REVIEW.includes("recentMinutes") && !PREVIEW.includes("recentMinutes"), "no generic recent-window scan on these paths");
@@ -137,10 +140,10 @@ test("9G preview: single queue source (bridge duplicates suppressed, no direct-s
   assert.ok(!PREVIEW.includes("sendProjectEmail"), "no direct-send (one queue source)");
   assert.ok(PREVIEW.includes("superseded_event_bound") && PREVIEW.includes("idempotency_key=is.null"), "bridge rows suppressed; event-bound rows authoritative");
 });
-test("9G UI: honest — recorded, recorded+sent, or recorded-but-email-could-not-start", () => {
-  assert.ok(VERSIONS.includes("EMAIL_ROWS_NOT_CLAIMED") || /could not start|تعذّر بدء/.test(VERSIONS), "distinguishes email-not-started");
+test("10.0 UI: honest — recorded, recorded+sent, or recorded-but-email-failed", () => {
+  assert.ok(VERSIONS.includes("تعذّر إرسال إشعار البريد"), "distinguishes recorded-but-email-failed");
   assert.ok(/sent > 0/.test(VERSIONS), "only claims 'sent' when sent>0");
-  assert.ok(/correlation_id/.test(VERSIONS), "shows the trace id");
+  assert.ok(!VERSIONS.includes("correlation_id"), "the correlation id is NOT shown to the client (admin-only per Phase 0.5)");
 });
 test("9G safety: static only (no DB/network/real email)", () => {
   const self = R("tests/event_bound_email_9g.test.js");

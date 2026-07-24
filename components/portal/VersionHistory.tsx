@@ -60,17 +60,20 @@ export default function VersionHistory({
     setBusy(true); setMsg(null);
     const r = await reviewVersion(v.id, decision, note);
     setBusy(false);
-    if (!r.ok) { setMsg(t({ ar: "تعذّر تسجيل قرارك.", en: "Failed to record your decision." })); return; }
-    // Batch 9G: honest, event-bound result. r.ok means the DECISION was saved; the
-    // payload says whether the email actually went out (sent>0) or not.
-    const d = r.data ?? {};
-    const sent = d.sent ?? 0; const failed = d.failed ?? 0; const track = d.correlation_id ? ` (${d.correlation_id})` : "";
+    // Batch 10 · Phase 0: three distinct states. The decision (r.ok) is independent
+    // of the email; a notification failure never reads as a failed decision.
+    if (!r.ok) { setMsg(t({ ar: "تعذّر تسجيل قرارك. يرجى المحاولة مرة أخرى.", en: "Couldn't record your decision. Please try again." })); return; }
+    const n = r.data?.notification ?? {};
+    const sent = n.sent ?? 0;
+    // n.ok === true means "nothing left to send" — either something was sent OR
+    // there were genuinely no recipients. ANY real failure (enqueue error, rows
+    // not claimed, channel misconfigured) leaves n.ok false, so it surfaces the
+    // "email couldn't be sent — management notified" line instead of a bare
+    // "recorded" that would hide the problem. The decision is safe either way.
     setMsg(
-      sent > 0 && failed === 0 ? t({ ar: "تم تسجيل قرارك وإرسال الإشعار.", en: "Recorded and notification sent." })
-        : sent > 0 && failed > 0 ? t({ ar: "تم تسجيل القرار، ووصل البريد إلى بعض المستلمين فقط.", en: "Recorded; email reached only some recipients." }) + track
-        : d.code === "EMAIL_ROWS_NOT_CLAIMED" || d.email_channel_enabled === false
-          ? t({ ar: "تم تسجيل قرارك، لكن تعذّر بدء إرسال البريد. رقم التتبع:", en: "Recorded, but email could not start. Trace:" }) + track
-          : t({ ar: "تم تسجيل قرارك.", en: "Your decision was recorded." }));
+      sent > 0 ? t({ ar: "تم تسجيل قرارك وإرسال الإشعار.", en: "Your decision was recorded and the notification was sent." })
+        : n.ok === true ? t({ ar: "تم تسجيل قرارك.", en: "Your decision was recorded." })
+        : t({ ar: "تم تسجيل قرارك بنجاح، لكن تعذّر إرسال إشعار البريد. تم إبلاغ الإدارة بالمشكلة.", en: "Your decision was recorded, but the email notification could not be sent. Management has been notified." }));
     setReviseFor(null); setReviseNote("");
     await load(); onChanged?.();
   }

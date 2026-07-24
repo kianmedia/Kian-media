@@ -177,17 +177,14 @@ export function listVersionSummary(deliverableId: string): Promise<Result<Versio
 export function addDeliverableVersion(deliverableId: string, data: Record<string, unknown>): Promise<Result<string>> {
   return prpc<string>("admin_add_deliverable_version", { p_deliverable: deliverableId, p_data: data });
 }
-export interface ReviewOutcome {
-  correlation_id?: string; sent?: number; failed?: number; claimed?: number;
-  expected_recipients?: number; code?: string; email_channel_enabled?: boolean;
-}
+export interface ReviewNotification { ok?: boolean; code?: string; correlation_id?: string | null; expected?: number; sent?: number; claimed?: number }
+export interface ReviewOutcome { action_saved?: boolean; decision?: string; notification?: ReviewNotification }
 export async function reviewVersion(
   versionId: string, decision: "approved" | "revision_requested", comments?: string,
 ): Promise<Result<ReviewOutcome>> {
-  // Batch 9G — EVENT-BOUND. One server call runs the mutation (client_review_version,
-  // RLS-enforced) AND enqueues the exact recipients and processes their delivery IDs
-  // in the same request. r.ok = the DECISION was saved (persisted by the RPC even if
-  // email couldn't be sent — a 502 EMAIL_ROWS_NOT_CLAIMED still carries decision_saved).
+  // Batch 10 · Phase 0 — the client DECISION is decoupled from notifications.
+  // r.ok = the decision was SAVED (action_saved). Email is a separate best-effort
+  // step reported under `notification`; its failure never fails the decision.
   try {
     const s = await getValidSession();
     if (!s?.access_token) return { ok: false, error: "not_authenticated" };
@@ -197,8 +194,7 @@ export async function reviewVersion(
       body: JSON.stringify({ version_id: versionId, decision, comments: comments ?? null }),
     });
     const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const decisionSaved = j.ok === true || j.decision_saved === true;
-    if (decisionSaved) return { ok: true, data: j as ReviewOutcome };
+    if (res.ok && j.action_saved === true) return { ok: true, data: j as ReviewOutcome };
     return { ok: false, error: String(j.error ?? `http_${res.status}`) };
   } catch (e) {
     return { ok: false, error: String(e).slice(0, 120) };

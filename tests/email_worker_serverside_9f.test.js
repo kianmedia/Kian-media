@@ -84,11 +84,15 @@ test("9F-6: claimed=0 while a recent pending row exists is detectable as failure
 });
 
 // ─── (B) STRUCTURAL PINS — real routes are server-authoritative ───
-test("9F/9G PIN: review route runs the mutation AND processes exact IDs in-request", () => {
-  assert.ok(REVIEW.includes("client_review_and_enqueue_notifications") && REVIEW.includes("rpcAsUser"), "event-bound RPC (mutation + enqueue) as the user");
+test("10.0 PIN: review SAVES the decision first, THEN processes exact IDs best-effort", () => {
+  // Batch 10 Phase 0 decoupled the decision from notifications.
+  assert.ok(REVIEW.includes('rpcAsUser<boolean>("client_review_version"'), "STEP A: decision saved via the stable RPC as the user (its own committed step)");
+  assert.ok(REVIEW.includes('rpcAsService<EnqueueResult>("review_enqueue_notifications"'), "STEP B: notifications via an enqueue-ONLY RPC (no mutation)");
   assert.ok(REVIEW.includes("processQueue(deliveryIds.length, { deliveryIds })"), "processes EXACTLY the event's delivery IDs (no time window)");
   assert.ok(REVIEW.includes('from "@/lib/server/notifyWorker"'), "imports the shared worker (no internal HTTP hop)");
-  assert.ok(REVIEW.includes("EMAIL_ROWS_NOT_CLAIMED"), "no false success when expected>0 and claimed=0");
+  assert.ok(REVIEW.includes("action_saved: true") && REVIEW.includes("status: 200"), "HTTP 200 whenever the decision was saved");
+  assert.ok(!/status:\s*502/.test(REVIEW), "never returns HTTP 502 once the decision is saved (decision is decoupled)");
+  assert.ok(REVIEW.includes("EMAIL_ROWS_NOT_CLAIMED"), "still reports honestly when expected>0 and nothing sent (as a notification code, not a failure)");
 });
 test("9F PIN: browser reviewVersion posts to the server route; no browser drain kick", () => {
   assert.ok(DELIVERABLES.includes("/api/integrations/project/review"), "browser calls the server-authoritative route");
@@ -106,9 +110,12 @@ test("9F/9G PIN: preview is event-bound (exact IDs); admin process-now is recent
 test("9F PIN: worker supports recentMinutes windowing", () => {
   assert.ok(WORKER.includes("recentMinutes") && WORKER.includes("ProcessOpts"), "processQueue accepts a recent window");
 });
-test("9F/9G PIN: honest user-facing result (no blanket success when nothing sent)", () => {
-  assert.ok(VERSIONS.includes("email_channel_enabled") && VERSIONS.includes("EMAIL_ROWS_NOT_CLAIMED"), "surfaces the real send outcome + not-claimed code");
-  assert.ok(/could not start|تعذّر بدء إرسال البريد/.test(VERSIONS), "distinguishes recorded-but-email-failed");
+test("10.0 PIN: honest user-facing result (3 distinct states, decision never reads as failed email)", () => {
+  assert.ok(VERSIONS.includes("notification") && VERSIONS.includes("n.sent") && VERSIONS.includes("n.ok === true"), "reads the real send outcome (sent + ok) from the notification block");
+  assert.ok(VERSIONS.includes("تم تسجيل قرارك وإرسال الإشعار"), "state 1: decision recorded + email sent");
+  assert.ok(VERSIONS.includes("تعذّر إرسال إشعار البريد") && VERSIONS.includes("تم إبلاغ الإدارة"), "state 2: decision recorded but email failed → management notified");
+  assert.ok(VERSIONS.includes("تعذّر تسجيل قرارك"), "state 3: only shown when the DECISION itself failed (r.ok===false)");
+  assert.ok(!VERSIONS.includes("correlation_id"), "the correlation id is never shown to the client (admin-only log)");
 });
 test("9F safety: static only (no DB/network/real email)", () => {
   const self = R("tests/email_worker_serverside_9f.test.js");
