@@ -161,7 +161,7 @@ export async function POST(req: Request) {
     let employees: Rec[] = [], admins: Rec[] = [], supervisors: Rec[] = [];
     const rec = await rpcAsUser<{ employees: Rec[]; admins: Rec[]; supervisors: Rec[] }>(
       "hr_task_assignment_recipients", { p_task: entityId }, bearer);
-    if (rec.ok && rec.data) {
+    if (rec.ok) {   // rec.data is a required object in the ok branch; `&& rec.data` was redundant and blocked narrowing of rec.error in else
       employees = rec.data.employees || []; admins = rec.data.admins || []; supervisors = rec.data.supervisors || [];
     } else {
       // fallback: الإدارة عبر استعلام الأدوار + الموظفون عبر employee_user_ids من الواجهة

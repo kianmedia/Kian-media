@@ -39,7 +39,7 @@ export async function dispatchTaskAssignmentEmail(input: {
   let employees: Rec[] = [], admins: Rec[] = [], supervisors: Rec[] = [];
   const rec = await rpcAsUser<{ employees: Rec[]; admins: Rec[]; supervisors: Rec[] }>(
     "hr_task_assignment_recipients", { p_task: taskId }, bearer);
-  if (rec.ok && rec.data) {
+  if (rec.ok) {   // rec.data is a required object in the ok branch; `&& rec.data` was redundant and blocked narrowing of rec.error in else
     employees = rec.data.employees || []; admins = rec.data.admins || []; supervisors = rec.data.supervisors || [];
   } else if (adminConfigured()) {
     // fallback: أعِد قراءة المسندين مباشرة (service role) + الإدارة بالأدوار.

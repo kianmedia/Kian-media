@@ -85,8 +85,11 @@ export async function GET(req: Request) {
 
   // 4) المشرف الميداني للموظف (إن وُجد جدول الروابط).
   let supervisorName: string | null = null;
+  const myEmpLookup = assignments[0]?.employee_id
+    ? null
+    : await selectAsService<{ id: string }[]>(`hr_employee_profiles?user_id=eq.${enc(uid)}&is_deleted=eq.false&select=id&limit=1`);
   const myEmp = assignments[0]?.employee_id
-    ?? (await selectAsService<{ id: string }[]>(`hr_employee_profiles?user_id=eq.${enc(uid)}&is_deleted=eq.false&select=id&limit=1`)).data?.[0]?.id;
+    ?? (myEmpLookup?.ok ? myEmpLookup.data[0]?.id : undefined);
   if (myEmp) {
     const links = await selectAsService<{ supervisor_employee_id: string }[]>(
       `hr_employee_supervisor_links?employee_id=eq.${enc(myEmp)}&is_active=eq.true&select=supervisor_employee_id&limit=1`);

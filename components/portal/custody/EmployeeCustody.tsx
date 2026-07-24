@@ -90,7 +90,7 @@ export default function EmployeeCustody() {
   async function doReturn(record: CustodyRecord, afters: Map<string, File[]>, overallFiles: File[], shortage: boolean, note: string) {
     setBusy(true);
     const after: { item_id: string; photos: string[] }[] = [];
-    for (const [itemId, files] of afters) {
+    for (const [itemId, files] of Array.from(afters)) {   // Array.from: Map iteration needs es2015 target; avoid touching global tsconfig
       const paths: string[] = [];
       for (let j = 0; j < files.length; j++) {
         const p = evidencePath(uid, record.id, "after", `item-${itemId}-${j}`);
