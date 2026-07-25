@@ -109,22 +109,13 @@ export function listReviewsForDeliverables(ids: string[]): Promise<Result<Delive
   );
 }
 
-export async function submitReview(
-  deliverableId: string, decision: ReviewDecision, comments?: string
-): Promise<Result<DeliverableReview>> {
-  const uid = currentUserId();
-  if (!uid) return { ok: false, error: "not_authenticated", status: 401 };
-  const r = await ppost<DeliverableReview[]>(`deliverable_reviews`, {
-    deliverable_id: deliverableId,
-    reviewer_id: uid,
-    decision,
-    comments: comments ?? null,
-  });
-  if (!r.ok) return r;
-  return r.data[0]
-    ? { ok: true, data: r.data[0] }
-    : { ok: false, error: "insert returned no row" };
-}
+// REMOVED — submitReview() inserted straight into deliverable_reviews. That path let
+// trg_review_created set deliverables.status='approved' WITHOUT setting
+// deliverable_versions.decision, after which admin_set_final_version raises
+// 'version_not_approved' forever and the deliverable can never be delivered. It had no
+// call sites (reviewVersion → /api/integrations/project/review → client_review_version
+// is the only review path, and that RPC sets BOTH consistently). The direct-insert
+// policy and grant are revoked in docs/project_platform_authz_hardening2_RUNME.sql.
 
 // ─── Gated final download ───
 // The gate now requires status='final_delivered' AND the project's dues are
