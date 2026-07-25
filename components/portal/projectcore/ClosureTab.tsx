@@ -10,8 +10,10 @@ import {
   projectClosureDashboard, projectClosureRequestCreate, projectClosureSubmit, projectClosureReview,
   projectFinalAcceptanceRequest, projectLessonUpsert, projectFinalClose, projectReopenRequestCreate,
   projectReopenApprove, projectArchiveCreate, closureErr, CLOSURE_STATUS, LESSON_CATEGORIES, REOPEN_STAGES,
+  pcClosureSettingsGet,
   type ClosureDashboard, type ClosureBlocker,
 } from "@/lib/portal/projectClosure";
+import ClosurePolicyPanel from "./ClosurePolicyPanel";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const sevColor = (s?: string) => s === "critical" ? "#dc2626" : s === "major" ? "#d97706" : s === "minor" ? "#0891b2" : "#78716c";
@@ -23,8 +25,18 @@ export default function ClosureTab({ projectId, canManage, flash }: { projectId:
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const reqSeq = useRef(0); const mountedRef = useRef(true);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // Closure policy lives on the existing project_governance_settings row. Read-only here;
+  // a missing row simply means "all defaults" and the panel writes it on first save.
+  const loadSettings = useCallback(async () => {
+    const r = await pcClosureSettingsGet(projectId);
+    if (!mountedRef.current) return;
+    setSettings(r.ok ? (r.data[0] ?? null) : null);
+  }, [projectId]);
+  useEffect(() => { void loadSettings(); }, [loadSettings]);
 
   const load = useCallback(async () => {
     const my = ++reqSeq.current; setPhase("loading"); setErr("");
@@ -109,6 +121,16 @@ export default function ClosureTab({ projectId, canManage, flash }: { projectId:
 
   return (
     <div className="space-y-4" dir="rtl">
+      {/* V1 CLOSURE — سياسة الإقفال صارت قابلة للضبط. قبل ذلك كان pc_closure_settings_upsert
+          بلا أي مستدعٍ، فشرط «لا يُغلق الرئيسي قبل فروعه» لا يمكن تفعيله إطلاقًا. */}
+      <ClosurePolicyPanel
+        projectId={projectId}
+        settings={settings}
+        canManage={canManage}
+        flash={flash}
+        onSaved={() => { void loadSettings(); void load(); }}
+      />
+
       {/* حالة الإغلاق + الجاهزية */}
       <section className={`${card} p-3 space-y-2`}>
         <div className="flex items-center justify-between flex-wrap gap-2">

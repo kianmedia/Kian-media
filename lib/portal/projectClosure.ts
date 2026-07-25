@@ -3,7 +3,7 @@
 // المستفادة، مراجعة ما بعد المشروع، إعادة الفتح، الأرشفة المؤسسية. أغلفة RPC + أنواع.
 // الكتابة عبر RPCs ذرّية فقط. القراءة معزولة (closure_can/pc_can_read_project).
 // ════════════════════════════════════════════════════════════════════════════
-import { prpc } from "./client";
+import { prpc, pget, enc } from "./client";
 
 export type ClosureStatus =
   | "closure_not_started" | "closure_in_progress" | "closure_blocked" | "awaiting_client_acceptance"
@@ -57,6 +57,23 @@ export const archiveRegister = (filters: Dict = {}) => prpc<{ archives: Dict[] }
 
 // ─── كتابة (RPCs ذرّية) ───
 export const pcClosureSettingsUpsert = (projectId: string, data: Dict) => prpc<Dict>("pc_closure_settings_upsert", { p_project: projectId, p_data: data });
+/** V1 CLOSURE — the client's own pending final acceptances. The pfa_read policy already
+ *  exposes client_final rows to is_client_owner, and project_final_acceptance_decide
+ *  already permits the client owner and stamps accepted_by = auth.uid(). The ONLY thing
+ *  missing was a client-facing surface — without it, staff signed on the client's behalf
+ *  and the printed handover record carried a staff uid where the client's acceptance
+ *  should be. Read-only; every decision still goes through the RPC. */
+export const clientMyAcceptances = (projectId: string) =>
+  pget<Dict[]>(
+    `project_final_acceptances?project_id=eq.${enc(projectId)}&acceptance_type=eq.client_final` +
+    `&status=in.(pending,changes_requested)&is_deleted=eq.false&select=*&order=created_at.desc`
+  );
+
+/** V1 CLOSURE — the missing READ side of the closure policy. The upsert RPC merges
+ *  (coalesce against the existing value) and already returns the row, so this is only
+ *  needed to hydrate the settings panel before the first save. RLS scopes the row. */
+export const pcClosureSettingsGet = (projectId: string) =>
+  pget<Dict[]>(`project_governance_settings?project_id=eq.${enc(projectId)}&select=*&limit=1`);
 export const projectClosureRequestCreate = (projectId: string, summary: string, plannedDate?: string | null, expectedProjectVersion?: number | null) =>
   prpc<ClosureRequest>("project_closure_request_create", { p_project: projectId, p_closure_summary: summary, p_planned_closure_date: plannedDate ?? null, p_expected_project_version: expectedProjectVersion ?? null });
 export const projectClosureSubmit = (requestId: string, expectedVersion?: number | null) => prpc<ClosureRequest>("project_closure_submit", { p_request: requestId, p_expected_version: expectedVersion ?? null });

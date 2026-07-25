@@ -19,6 +19,7 @@ import { lifecycleLabel } from "@/lib/project-core/lifecycle";
 import ProjectSnapshot from "@/components/portal/ProjectSnapshot";
 import { PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import DeliverableReview from "@/components/portal/DeliverableReview";
+import ClientFinalAcceptance from "@/components/portal/ClientFinalAcceptance";
 import AdminDeliverables from "@/components/portal/AdminDeliverables";
 import TimelineView from "@/components/portal/TimelineView";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
@@ -149,6 +150,11 @@ export default function ProjectDetailPage() {
       <Section title={t({ ar: "مرحلة المشروع", en: "Project Stage" })}>
         <ProjectSnapshot projectId={id} onCurrentStage={setCoreStage} />
       </Section>
+
+      {/* V1 CLOSURE — the client signs their OWN final acceptance. Previously only staff
+          could click Accept, so the printed handover record carried a staff uid where the
+          client's acceptance belongs. Renders nothing when there is nothing pending. */}
+      <ClientFinalAcceptance projectId={id} />
 
       {/* Admin-only: read-only stage mirror (stage is set via the Project Core lifecycle) */}
       {isAdmin && (

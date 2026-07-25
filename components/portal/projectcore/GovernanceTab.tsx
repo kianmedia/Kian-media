@@ -7,10 +7,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  projectGovernanceDashboard, pcApprovalDecide, pcRiskUpsert, pcRiskToIssue, pcIssueUpsert, pcDecisionUpsert,
-  pcChangeRequestUpsert, govErr, GOV_HEALTH, RISK_SEV,
+  projectGovernanceDashboard, pcApprovalDecide, pcRiskUpsert, pcRiskToIssue,
+  govErr, GOV_HEALTH, RISK_SEV,
   type GovernanceDashboard, type GovRisk,
 } from "@/lib/portal/projectGovernance";
+import GovernanceItemDrawer, { type GovKind } from "./GovernanceItemDrawer";
 
 export default function GovernanceTab({ projectId, canManage, flash }: { projectId: string; canManage: boolean; flash: (m: string) => void }) {
   const { t } = useI18n();
@@ -20,6 +21,7 @@ export default function GovernanceTab({ projectId, canManage, flash }: { project
   const [busy, setBusy] = useState(false);
   const [matrixCell, setMatrixCell] = useState<string | null>(null);
   const [showRiskForm, setShowRiskForm] = useState(false);
+  const [drawer, setDrawer] = useState<{ kind: GovKind; item: Record<string, unknown> | null } | null>(null);
   const reqSeq = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -51,11 +53,11 @@ export default function GovernanceTab({ projectId, canManage, flash }: { project
     const r = await pcRiskToIssue(id); if (!r.ok) { flash(govErr(r.error)); return; }
     flash(t({ ar: "أُنشئت مشكلة من المخاطرة.", en: "Issue created." })); await load();
   }
-  async function quickAdd(kind: "issue" | "decision" | "change") {
-    const title = window.prompt(t({ ar: "العنوان:", en: "Title:" })); if (!title || !title.trim()) return;
-    const fn = kind === "issue" ? pcIssueUpsert : kind === "decision" ? pcDecisionUpsert : pcChangeRequestUpsert;
-    const r = await fn(projectId, { title }); if (!r.ok) { flash(govErr(r.error)); return; }
-    flash(t({ ar: "أُضيف.", en: "Added." })); await load();
+  // V1 CLOSURE — the one-line prompt is replaced by a full drawer so an item can also be
+  // UPDATED, RESOLVED and CLOSED (with a mandatory reason), and a change request can walk
+  // its whole lifecycle. Same RPCs, same registers — no new entity.
+  function openItem(kind: GovKind, raw: Record<string, unknown> | null) {
+    setDrawer({ kind, item: raw });
   }
 
   if (phase === "loading") return <p className="text-xs text-stone-500 py-6 text-center">{t({ ar: "جارٍ تحميل الحوكمة…", en: "Loading governance…" })}</p>;
@@ -144,23 +146,49 @@ export default function GovernanceTab({ projectId, canManage, flash }: { project
 
       {/* المشكلات / القرارات / التغييرات — قوائم مضغوطة + إضافة سريعة */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Register title={t({ ar: "المشكلات", en: "Issues" })} items={d.issues.map((i) => ({ id: i.id, label: i.title, sub: `${RISK_SEV[i.severity]?.ar ?? i.severity} · ${i.status}` }))} canAdd={canManage} onAdd={() => void quickAdd("issue")} />
-        <Register title={t({ ar: "القرارات", en: "Decisions" })} items={d.decisions.map((x) => ({ id: x.id, label: x.title, sub: x.status }))} canAdd={canManage} onAdd={() => void quickAdd("decision")} />
-        <Register title={t({ ar: "طلبات التغيير", en: "Changes" })} items={d.change_requests.map((c) => ({ id: c.id, label: `${c.request_no ?? ""} ${c.title}`, sub: `${c.change_type} · ${c.status}` }))} canAdd={canManage} onAdd={() => void quickAdd("change")} />
+        <Register title={t({ ar: "المشكلات", en: "Issues" })} items={d.issues.map((i) => ({ id: i.id, label: i.title, sub: `${RISK_SEV[i.severity]?.ar ?? i.severity} · ${i.status}`, raw: i as unknown as Record<string, unknown> }))} canAdd={canManage} onAdd={() => openItem("issue", null)} onOpen={(raw) => openItem("issue", raw)} />
+        <Register title={t({ ar: "القرارات", en: "Decisions" })} items={d.decisions.map((x) => ({ id: x.id, label: x.title, sub: x.status, raw: x as unknown as Record<string, unknown> }))} canAdd={canManage} onAdd={() => openItem("decision", null)} onOpen={(raw) => openItem("decision", raw)} />
+        <Register title={t({ ar: "طلبات التغيير", en: "Changes" })} items={d.change_requests.map((c) => ({ id: c.id, label: `${c.request_no ?? ""} ${c.title}`, sub: `${c.change_type} · ${c.status}`, raw: c as unknown as Record<string, unknown> }))} canAdd={canManage} onAdd={() => openItem("change", null)} onOpen={(raw) => openItem("change", raw)} />
       </div>
       <p className="text-[9px] text-stone-600">{t({ ar: "بيانات حية عبر project_governance_dashboard. العميل لا يرى الحوكمة الداخلية.", en: "Live governance data; client sees nothing internal." })}</p>
+
+      {drawer && (
+        <GovernanceItemDrawer
+          projectId={projectId}
+          kind={drawer.kind}
+          item={drawer.item}
+          canManage={canManage}
+          flash={flash}
+          onClose={() => setDrawer(null)}
+          onSaved={() => void load()}
+        />
+      )}
     </div>
   );
 }
 
-function Register({ title, items, canAdd, onAdd }: { title: string; items: { id: string; label: string; sub: string }[]; canAdd: boolean; onAdd: () => void }) {
+// V1 CLOSURE: rows are now OPENABLE. Previously the register could only append a
+// title-only row — an issue could never be resolved and a change request could never
+// leave 'draft', which meant a stray draft blocked project closure permanently.
+function Register({ title, items, canAdd, onAdd, onOpen }: {
+  title: string;
+  items: { id: string; label: string; sub: string; raw: Record<string, unknown> }[];
+  canAdd: boolean; onAdd: () => void; onOpen: (raw: Record<string, unknown>) => void;
+}) {
   const { t } = useI18n();
   return (
     <section className="border border-stone-800 rounded-xl p-2 bg-stone-950 space-y-1">
       <div className="flex items-center justify-between"><h5 className="text-[11px] font-semibold text-stone-300">{title} ({items.length})</h5>
         {canAdd && <button onClick={onAdd} className="text-[10px] text-sky-400 hover:text-sky-300">+ {t({ ar: "إضافة", en: "Add" })}</button>}</div>
       {items.length === 0 && <p className="text-[10px] text-stone-600">{t({ ar: "لا عناصر.", en: "None." })}</p>}
-      {items.slice(0, 8).map((i) => <div key={i.id} className="text-[10px] border-b border-stone-900 py-0.5"><span className="text-stone-300 block truncate" dir="auto">{i.label}</span><span className="text-stone-600">{i.sub}</span></div>)}
+      {items.slice(0, 8).map((i) => (
+        <button key={i.id} type="button" onClick={() => onOpen(i.raw)}
+          className="w-full text-start text-[10px] border-b border-stone-900 py-0.5 hover:bg-stone-900/60 rounded-sm"
+          title={t({ ar: "فتح للتعديل والإغلاق", en: "Open to edit / close" })}>
+          <span className="text-stone-300 block truncate" dir="auto">{i.label}</span>
+          <span className="text-stone-600">{i.sub}</span>
+        </button>
+      ))}
     </section>
   );
 }
