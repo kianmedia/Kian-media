@@ -141,6 +141,22 @@ test("C5: additive, idempotent, self-tested, with verification and rollback", ()
   assert.ok(/run project_platform_authz_hardening_RUNME\.sql first/.test(GUARD), "ordering enforced");
 });
 
+// ─── self-review findings (both were real defects in the new code) ───
+test("R1: the policy panel re-seeds when the async settings row lands, without clobbering edits", () => {
+  assert.ok(/dirtyRef/.test(POLICY), "tracks whether the user has started editing");
+  assert.ok(/if \(dirtyRef\.current \|\| !settings\) return;/.test(POLICY), "never overwrites in-progress edits");
+  assert.ok(/setDraft\(\{ \.\.\.settings \}\)/.test(POLICY), "re-seeds from the real row");
+  assert.ok(/dirtyRef\.current = false;/.test(POLICY), "reset after a successful save");
+  // without this a save would have written the pre-load blanks over the real policy
+  assert.ok(!/onChange=\{\(e\) => setDraft\(/.test(POLICY), "every edit goes through the dirty tracker");
+});
+test("R2: empty form values are stripped, never sent as '' into a ::int/::date cast", () => {
+  assert.ok(/if \(v === "" \|\| v === undefined\) continue;/.test(DRAWER), "empty strings dropped");
+  assert.ok(/22P02/.test(DRAWER), "the failure mode is documented");
+  assert.ok(/e\.target\.value === "" \? null : Number/.test(DRAWER), "the numeric field yields null, not ''");
+  assert.ok(/coalesce against it/.test(DRAWER), "omitting a key preserves the stored value");
+});
+
 test("SAFE: static only (no DB/network)", () => {
   const self = R("tests/v1_operational_gaps.test.js");
   const reqs = [...self.matchAll(/require\(["']([^"']+)["']\)/g)].map((m) => m[1]);

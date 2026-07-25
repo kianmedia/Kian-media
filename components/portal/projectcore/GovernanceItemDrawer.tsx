@@ -81,8 +81,15 @@ export default function GovernanceItemDrawer({
       flash(t({ ar: "سبب الرفض إلزامي.", en: "A rejection reason is required." })); return;
     }
     setBusy(true);
+    // Strip empty strings: the upsert RPCs cast several fields (dates, ints) and "" raises
+    // 22P02. An omitted key keeps the existing value (the RPCs coalesce against it).
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(payload)) {
+      if (v === "" || v === undefined) continue;
+      clean[k] = v;
+    }
     const fn = kind === "issue" ? pcIssueUpsert : kind === "decision" ? pcDecisionUpsert : pcChangeRequestUpsert;
-    const r = await fn(projectId, payload);
+    const r = await fn(projectId, clean);
     setBusy(false);
     if (!r.ok) { flash(govErr(r.error)); return; }
     flash(t({ ar: "حُفظ.", en: "Saved." }));
@@ -203,8 +210,11 @@ export default function GovernanceItemDrawer({
               <select className={inp} value={s("change_type") || "scope"} onChange={(e) => set("change_type", e.target.value)}>
                 {["scope", "schedule", "cost", "quality", "resource"].map((v) => <option key={v} value={v}>{v}</option>)}
               </select></label>
+            {/* NULL, never "" — the RPC casts this with ::int and an empty string raises 22P02. */}
             <label className="block text-[10px] text-stone-500">{t({ ar: "أيام إضافية", en: "Extra days" })}
-              <input type="number" className={inp} value={s("schedule_impact_days")} onChange={(e) => set("schedule_impact_days", e.target.value === "" ? "" : Number(e.target.value))} /></label>
+              <input type="number" className={inp}
+                value={typeof f.schedule_impact_days === "number" ? String(f.schedule_impact_days) : ""}
+                onChange={(e) => set("schedule_impact_days", e.target.value === "" ? null : Number(e.target.value))} /></label>
           </div>
           <label className="block text-[10px] text-stone-500">{t({ ar: "أثر النطاق", en: "Scope impact" })}
             <input className={inp} value={s("scope_impact")} onChange={(e) => set("scope_impact", e.target.value)} dir="auto" /></label>

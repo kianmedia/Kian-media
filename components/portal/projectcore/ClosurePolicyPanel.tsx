@@ -15,7 +15,7 @@
 // Authorization: management only (the caller is gated here AND server-side inside
 // pc_closure_settings_upsert). Every change is written by the RPC, which audit-logs it.
 // ════════════════════════════════════════════════════════════════════════════
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { pcClosureSettingsUpsert, closureErr } from "@/lib/portal/projectClosure";
 
@@ -59,8 +59,18 @@ export default function ClosurePolicyPanel({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...(settings ?? {}) }));
+  // The settings row arrives ASYNCHRONOUSLY. useState's initializer runs once, so without
+  // this the panel would keep rendering the empty pre-load state and a save would then
+  // write those blanks over the real policy. Re-seed whenever a fresh row lands, but never
+  // clobber edits the user has already started (dirtyRef).
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    if (dirtyRef.current || !settings) return;
+    setDraft({ ...settings });
+  }, [settings]);
   const on = (k: string) => draft[k] === true;
-  const toggle = (k: string) => setDraft((p) => ({ ...p, [k]: !(p[k] === true) }));
+  const edit = (fn: (p: Record<string, unknown>) => Record<string, unknown>) => { dirtyRef.current = true; setDraft(fn); };
+  const toggle = (k: string) => edit((p) => ({ ...p, [k]: !(p[k] === true) }));
 
   async function save() {
     if (busy || !canManage) return;
@@ -68,6 +78,7 @@ export default function ClosurePolicyPanel({
     const r = await pcClosureSettingsUpsert(projectId, draft);
     setBusy(false);
     if (!r.ok) { flash(closureErr(r.error)); return; }
+    dirtyRef.current = false;
     flash(t({ ar: "حُفظت سياسة الإقفال.", en: "Closure policy saved." }));
     onSaved();
   }
@@ -113,7 +124,7 @@ export default function ClosurePolicyPanel({
               className="w-full bg-stone-900 border border-stone-700 rounded px-2 py-1 text-[11px] text-stone-200"
               value={typeof draft.closure_approval_mode === "string" ? draft.closure_approval_mode : "single"}
               disabled={!canManage}
-              onChange={(e) => setDraft((p) => ({ ...p, closure_approval_mode: e.target.value }))}
+              onChange={(e) => edit((p) => ({ ...p, closure_approval_mode: e.target.value }))}
             >
               {APPROVAL_MODES.map((m) => <option key={m.k} value={m.k}>{t({ ar: m.ar, en: m.en })}</option>)}
             </select>
@@ -125,7 +136,7 @@ export default function ClosurePolicyPanel({
               className="w-full bg-stone-900 border border-stone-700 rounded px-2 py-1 text-[11px] text-stone-200"
               value={typeof draft.archive_after_days === "number" ? draft.archive_after_days : ""}
               disabled={!canManage}
-              onChange={(e) => setDraft((p) => ({ ...p, archive_after_days: e.target.value === "" ? null : Number(e.target.value) }))} />
+              onChange={(e) => edit((p) => ({ ...p, archive_after_days: e.target.value === "" ? null : Number(e.target.value) }))} />
           </label>
 
           <div className="flex items-center gap-2 pt-1">
