@@ -100,8 +100,16 @@ async function run(req: Request) {
   // path is immediate bounded processing via the drain kick after each action).
   const t0 = Date.now();
   const runId = globalThis.crypto?.randomUUID?.() ?? String(t0);
-  const backlog = await pendingBacklog();
-  const queue = await processQueue();
+  // V1 CLOSURE — the recovery window must be WIDER than the cron interval, or rows are
+  // orphaned forever. processQueue()'s default backlog cutoff is 24h while this cron runs
+  // once a day, so anything queued shortly before a run — and EVERYTHING queued during a
+  // run that is delayed, skipped or failing — was already older than 24h at the next run
+  // and could never be claimed again. Widen the fallback lookback to 7 days; the cutoff
+  // still exists (no unbounded blast of ancient mail), and the deliberate "expire old
+  // backlog" admin tool remains the way to retire genuinely stale rows.
+  const RECOVERY_WINDOW_HOURS = 168;
+  const backlog = await pendingBacklog(RECOVERY_WINDOW_HOURS);
+  const queue = await processQueue(30, { maxAgeHours: RECOVERY_WINDOW_HOURS });
   const stats = {
     cron_run_id: runId,
     deployment: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) ?? "local",

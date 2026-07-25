@@ -10,6 +10,7 @@ import { PROJECT_STAFF_ROLES, STAFF_ROLE_LABELS } from "@/lib/portal/roles";
 import { CallSheetManager } from "./CallSheet";
 import VersionHistory from "@/components/portal/VersionHistory";
 import DeliverableNotesPanel from "@/components/portal/DeliverableNotesPanel";
+import { emitProjectDeliverableEvent } from "@/lib/portal/notifyEmail";
 import {
   pcListMembers, pcMemberAdd, pcMemberRemove, pcListStaff, pcListDeliverables,
   pcListCosts, pcCostAdd, pcListRisks, pcRiskUpsert, pcEntityDelete, type TrashEntity,
@@ -208,6 +209,13 @@ function DeliverableVersions({ d, canManage, flash, onChanged }: { d: Deliverabl
     }
     setBusy(false);
     if (!r.ok) { flash(pcErr(r.error)); return; }
+    // V1 CLOSURE — the two client-facing deliverable events were emitted ONLY from the
+    // legacy AdminDeliverables screen, so sending a preview or marking a final from this
+    // (main) project workspace produced no email at all. Same helper, same route, same
+    // queue — no new producer. Best-effort and AFTER the action succeeded, so a
+    // notification failure can never undo the review.
+    if (action === "send_client") void emitProjectDeliverableEvent(v.deliverable_id, "deliverable.preview_sent");
+    else if (action === "final") void emitProjectDeliverableEvent(v.deliverable_id, "deliverable.final_ready");
     await load(); await onChanged();
   }
   async function addComment() {
