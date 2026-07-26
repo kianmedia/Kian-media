@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField } from "@/components/forms/Field";
-import { submitToSheets, makeRef, isValidMobile } from "@/lib/submitForm";
+import { submitToSheets, makeRef, isValidMobile, captureIntake } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -71,6 +71,24 @@ function Form() {
       "How did you hear about us": leadLabel,
       "Lead Source": leadLabel,
       "Language": isAr ? "AR" : "EN",
+    });
+    // Phase 2 — DURABLE MIRROR. submitToSheets posts with mode:"no-cors", so the response
+    // is opaque: the browser cannot read the status and the call reports success as long as
+    // the network request did not throw. If the relay is down or silently drops the payload,
+    // the booking would vanish with no trace anywhere while the visitor is shown a success
+    // card. quote-request already mirrored into public_intake; meetings did not. Best-effort
+    // and non-blocking — it can never turn a successful booking into a visible error.
+    await captureIntake({
+      type: "meeting",
+      email: f["Email"],
+      phone: f["Mobile"],
+      name: f["Name"],
+      company: f["Company"],
+      reference: ref,
+      details: f["Notes"],
+      preferred_date: f["Preferred Date"],
+      preferred_contact: meetingTypeLabel,
+      source: "book-meeting",
     });
     setSending(false);
     setReference(ref);

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea } from "@/components/forms/Field";
-import { submitToSheets, makeRef, isValidMobile, isValidEmail } from "@/lib/submitForm";
+import { submitToSheets, makeRef, isValidMobile, isValidEmail, captureIntake } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -38,6 +38,24 @@ function Form() {
     setSending(true);
     const ref = makeRef("upload");
     await submitToSheets("upload", { ...f, "Reference": ref, "Language": isAr ? "AR" : "EN" });
+    // Phase 2 — DURABLE MIRROR (same reason as book-meeting): the sheets POST is no-cors,
+    // so its result is unreadable and a dropped payload would lose the delivery links with
+    // no record anywhere. Best-effort; never blocks or fails the visible submission.
+    await captureIntake({
+      type: "files",
+      email: f["Email"],
+      phone: f["Mobile"],
+      name: f["Client Name"],
+      company: f["Company"],
+      reference: ref,
+      details: [f["Project Name"], f["Notes"]].filter(Boolean).join(" — "),
+      source: "upload-files",
+      files: [
+        { label: "Google Drive", url: f["Google Drive Link"] },
+        { label: "WeTransfer", url: f["WeTransfer Link"] },
+        { label: "Dropbox", url: f["Dropbox Link"] },
+      ].filter((x) => x.url),
+    });
     setSending(false);
     setReference(ref);
     setSent(true);
