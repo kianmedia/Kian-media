@@ -57,17 +57,46 @@ test("G1: the create-only prompt is gone; items open in a full editor", () => {
   assert.ok(/GovernanceItemDrawer/.test(GOVTAB), "drawer wired");
   assert.ok(/onOpen=\{\(raw\) => openItem/.test(GOVTAB), "existing rows are openable");
 });
-test("G2: the change request walks its real lifecycle, one legal step at a time", () => {
+// ⚠️ These pins exist because I originally shipped INVENTED status keys
+// ('internal_review', 'client_pending', 'in_progress'). They are outside the DB's CHECK
+// constraints, so every save would have been rejected by Postgres at runtime. The values
+// below are the real vocabulary from docs/project_governance_batch5a_RUNME.sql.
+const GOV_SQL = R("docs/project_governance_batch5a_RUNME.sql");
+test("G2: the CR lifecycle uses the DATABASE's real status values, not invented ones", () => {
   assert.ok(/CR_NEXT/.test(DRAWER), "explicit transition map");
-  for (const s of ["draft", "internal_review", "client_pending", "approved", "rejected", "cancelled", "implemented"]) {
-    assert.ok(DRAWER.includes(`${s}:`) || DRAWER.includes(`"${s}"`), `${s} present`);
+  const real = ["draft", "submitted", "impact_analysis", "pending_approval", "approved",
+    "rejected", "implementing", "implemented", "verified", "closed", "cancelled"];
+  for (const s of real) assert.ok(DRAWER.includes(`"${s}"`) || DRAWER.includes(`${s}:`), `${s} present`);
+  // and every one of them must actually exist in the DB CHECK constraint
+  const chk = /status\s+text not null default 'draft' check \(status in \(([^)]*)\)\)/.exec(GOV_SQL);
+  assert.ok(chk, "found the change-request CHECK constraint");
+  for (const s of real) assert.ok(chk[1].includes(`'${s}'`), `${s} is a legal DB value`);
+  // the invented keys must be gone
+  for (const bad of ["internal_review", "client_pending"]) {
+    assert.ok(!new RegExp(`CR_NEXT[\\s\\S]{0,400}"${bad}"`).test(DRAWER), `invented key ${bad} removed`);
   }
   assert.ok(/CR_NEXT\[status\]\?\.includes\(to\)/.test(DRAWER), "an illegal jump is refused");
+});
+test("G2b: issue and decision statuses are also the DB's real vocabulary", () => {
+  for (const s of ["investigating", "action_required", "resolving", "monitoring"]) {
+    assert.ok(DRAWER.includes(`"${s}"`), `issue status ${s}`);
+  }
+  assert.ok(!/ISSUE_STATUS[\s\S]{0,200}"in_progress"/.test(DRAWER), "invented 'in_progress' removed");
+  for (const s of ["superseded", "reversed", "archived"]) {
+    assert.ok(DRAWER.includes(`"${s}"`), `decision status ${s}`);
+  }
+});
+test("G2c: stored values stay English; Arabic is a display layer only", () => {
+  for (const map of ["ISSUE_LABEL", "DECISION_LABEL", "SEVERITY_LABEL", "CHANGE_TYPE_LABEL", "CR_LABEL"]) {
+    assert.ok(DRAWER.includes(map), `${map} exists`);
+  }
+  // no dropdown renders the raw key any more
+  assert.ok(!/<option key=\{v\} value=\{v\}>\{v\}<\/option>/.test(DRAWER), "no raw English key is displayed");
 });
 test("G3: rejecting a change request demands a reason; sending to the client is confirmed", () => {
   assert.ok(/سبب الرفض \(إلزامي\)/.test(DRAWER), "reason prompt");
   assert.ok(/Reason required|سبب الرفض إلزامي/.test(DRAWER), "empty reason rejected");
-  assert.ok(/client_pending[\s\S]{0,200}window\.confirm/.test(DRAWER), "sending to the client is explicit");
+  assert.ok(/pending_approval[\s\S]{0,200}window\.confirm/.test(DRAWER), "sending for client approval is explicit");
 });
 test("G4: applying an approved change request surfaces the server's own note (idempotent)", () => {
   assert.ok(/projectChangeRequestApply/.test(DRAWER), "uses the existing apply RPC");

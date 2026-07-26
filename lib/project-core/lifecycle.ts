@@ -29,6 +29,27 @@ export const LIFECYCLE_STAGES = [
 
 export type LifecycleStageKey = (typeof LIFECYCLE_STAGES)[number]["key"];
 
+/** ADMINISTRATIVE states — NOT steps on the timeline.
+ *  `on_hold` and `cancelled` are operational decisions taken with a mandatory reason via
+ *  project_core_hold_action, not positions in the linear flow. They are deliberately kept
+ *  OUT of LIFECYCLE_ORDER so the stepper stays 13 steps and no code can "advance" into
+ *  them — but they ARE resolved by lifecycleLabel so every surface shows Arabic, never a
+ *  raw key. */
+export const ADMIN_STATES = [
+  { key: "on_hold",   ar: "معلّق",  en: "On hold",   color: "#d97706" },
+  { key: "cancelled", ar: "ملغى",   en: "Cancelled", color: "#dc2626" },
+] as const;
+export type AdminStateKey = (typeof ADMIN_STATES)[number]["key"];
+
+/** True when the project is in an administrative state rather than on the timeline. */
+export function isAdminState(coreStage: string | null | undefined): coreStage is AdminStateKey {
+  return ADMIN_STATES.some((s) => s.key === coreStage);
+}
+/** Colour for an administrative state badge (null for normal stages). */
+export function adminStateColor(coreStage: string | null | undefined): string | null {
+  return ADMIN_STATES.find((s) => s.key === coreStage)?.color ?? null;
+}
+
 /** Canonical stage order (keys only) — the same order the DB state machine uses. */
 export const LIFECYCLE_ORDER = LIFECYCLE_STAGES.map((s) => s.key) as readonly LifecycleStageKey[];
 
@@ -44,7 +65,11 @@ export interface LifecycleStep {
 /** The label for a stage key (falls back to the raw key if unknown). */
 export function lifecycleLabel(coreStage: string | null | undefined): { ar: string; en: string } {
   const s = LIFECYCLE_STAGES.find((x) => x.key === coreStage);
-  return s ? { ar: s.ar, en: s.en } : { ar: coreStage ?? "—", en: coreStage ?? "—" };
+  if (s) return { ar: s.ar, en: s.en };
+  // Administrative states resolve here too, so no surface can ever print a raw key.
+  const a = ADMIN_STATES.find((x) => x.key === coreStage);
+  if (a) return { ar: a.ar, en: a.en };
+  return { ar: coreStage ?? "—", en: coreStage ?? "—" };
 }
 
 /** The current position (0-based) of core_stage in the lifecycle, or -1 if unknown. */

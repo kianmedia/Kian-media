@@ -14,8 +14,9 @@
 // Rules enforced here AND server-side:
 //   • resolving/closing an issue requires a resolution summary;
 //   • rejecting a change request requires a reason;
-//   • a change request advances draft → internal_review → client_pending →
-//     approved/rejected → implemented, one legal step at a time;
+//   • a change request advances one legal step at a time through the DATABASE's own
+//     status vocabulary (draft → submitted → impact_analysis → pending_approval →
+//     approved → implementing → implemented), shown to the user in Arabic;
 //   • applying an approved change request is idempotent (the server returns
 //     already_applied on a retry — we surface its note verbatim).
 // ════════════════════════════════════════════════════════════════════════════
@@ -29,27 +30,70 @@ import {
 export type GovKind = "issue" | "decision" | "change";
 export interface GovItemSeed { id?: string; [k: string]: unknown }
 
-const ISSUE_STATUS = ["open", "in_progress", "resolved", "closed", "rejected"] as const;
-const DECISION_STATUS = ["proposed", "approved", "rejected", "superseded"] as const;
-/** The change-request lifecycle, as legal next-steps per current status. */
+// ⚠️ THESE VALUES ARE THE DATABASE'S OWN CHECK-CONSTRAINT VOCABULARY, verified against
+// docs/project_governance_batch5a_RUNME.sql. Do NOT invent friendlier keys — a value
+// outside the CHECK is rejected by Postgres and the save fails. Arabic labels below are a
+// DISPLAY layer only; the stored values stay English exactly as the DB defines them.
+const ISSUE_STATUS = ["open", "investigating", "action_required", "resolving", "monitoring", "resolved", "closed", "rejected"] as const;
+const DECISION_STATUS = ["proposed", "approved", "superseded", "reversed", "archived"] as const;
+
+/** The change-request lifecycle, expressed in the DB's real status values.
+ *  Business flow ⇄ stored value:
+ *    مسودة=draft · مراجعة داخلية=submitted→impact_analysis · بانتظار العميل=pending_approval
+ *    معتمد=approved · مرفوض=rejected · ملغى=cancelled · التطبيق=implementing→implemented */
 export const CR_NEXT: Record<string, string[]> = {
-  draft: ["internal_review", "cancelled"],
-  internal_review: ["client_pending", "rejected", "cancelled"],
-  client_pending: ["approved", "rejected", "cancelled"],
-  approved: ["implemented"],
-  rejected: [], cancelled: [], implemented: [],
+  draft: ["submitted", "cancelled"],
+  submitted: ["impact_analysis", "rejected", "cancelled"],
+  impact_analysis: ["pending_approval", "rejected", "cancelled"],
+  pending_approval: ["approved", "rejected", "cancelled"],
+  approved: ["implementing", "cancelled"],
+  implementing: ["implemented"],
+  implemented: ["verified", "closed"],
+  verified: ["closed"],
+  rejected: [], cancelled: [], closed: [],
 };
 const CR_LABEL: Record<string, { ar: string; en: string }> = {
   draft: { ar: "مسودة", en: "Draft" },
-  internal_review: { ar: "مراجعة داخلية", en: "Internal review" },
-  client_pending: { ar: "بانتظار العميل", en: "Client pending" },
+  submitted: { ar: "مُرسل للمراجعة الداخلية", en: "Submitted (internal review)" },
+  impact_analysis: { ar: "تحليل الأثر", en: "Impact analysis" },
+  pending_approval: { ar: "بانتظار اعتماد العميل", en: "Pending client approval" },
   approved: { ar: "معتمد", en: "Approved" },
   rejected: { ar: "مرفوض", en: "Rejected" },
   cancelled: { ar: "ملغى", en: "Cancelled" },
-  implemented: { ar: "مُنفَّذ", en: "Implemented" },
+  implementing: { ar: "قيد التطبيق", en: "Implementing" },
+  implemented: { ar: "تم التطبيق", en: "Implemented" },
+  verified: { ar: "مُتحقَّق منه", en: "Verified" },
+  closed: { ar: "مغلق", en: "Closed" },
 };
-/** A status that ends the issue — the server demands a resolution summary for these. */
+/** Statuses that END an issue — the server demands a resolution summary for these. */
 const ISSUE_TERMINAL = new Set(["resolved", "closed", "rejected"]);
+/** Arabic display for the stored English values (DB values are never translated away). */
+const ISSUE_LABEL: Record<string, { ar: string; en: string }> = {
+  open: { ar: "مفتوحة", en: "Open" },
+  investigating: { ar: "قيد الفحص", en: "Investigating" },
+  action_required: { ar: "تتطلّب إجراءً", en: "Action required" },
+  resolving: { ar: "قيد المعالجة", en: "Resolving" },
+  monitoring: { ar: "تحت المتابعة", en: "Monitoring" },
+  resolved: { ar: "محلولة", en: "Resolved" },
+  closed: { ar: "مغلقة", en: "Closed" },
+  rejected: { ar: "مرفوضة", en: "Rejected" },
+};
+const DECISION_LABEL: Record<string, { ar: string; en: string }> = {
+  proposed: { ar: "مقترح", en: "Proposed" },
+  approved: { ar: "معتمد", en: "Approved" },
+  superseded: { ar: "مُستبدَل", en: "Superseded" },
+  reversed: { ar: "معكوس", en: "Reversed" },
+  archived: { ar: "مؤرشف", en: "Archived" },
+};
+const SEVERITY_LABEL: Record<string, { ar: string; en: string }> = {
+  low: { ar: "منخفضة", en: "Low" }, medium: { ar: "متوسطة", en: "Medium" },
+  high: { ar: "عالية", en: "High" }, critical: { ar: "حرجة", en: "Critical" },
+};
+const CHANGE_TYPE_LABEL: Record<string, { ar: string; en: string }> = {
+  scope: { ar: "تغيير نطاق", en: "Scope" }, schedule: { ar: "تغيير جدول", en: "Schedule" },
+  cost: { ar: "تغيير تكلفة", en: "Cost" }, quality: { ar: "تغيير جودة", en: "Quality" },
+  resource: { ar: "تغيير موارد", en: "Resource" },
+};
 
 const inp = "w-full bg-stone-900 border border-stone-700 rounded px-2 py-1 text-[11px] text-stone-200";
 const btn = "text-[10px] rounded px-2 py-1 border";
@@ -106,7 +150,7 @@ export default function GovernanceItemDrawer({
       if (!p.trim()) { flash(t({ ar: "سبب الرفض إلزامي.", en: "Reason required." })); return; }
       reason = p.trim();
     }
-    if (to === "client_pending" && !window.confirm(t({
+    if (to === "pending_approval" && !window.confirm(t({
       ar: "إرسال طلب التغيير إلى العميل؟ سيراه في بوابته.",
       en: "Send this change request to the client? It becomes visible to them.",
     }))) return;
@@ -158,7 +202,7 @@ export default function GovernanceItemDrawer({
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-[10px] text-stone-500">{t({ ar: "الخطورة", en: "Severity" })}
               <select className={inp} value={s("severity") || "medium"} onChange={(e) => set("severity", e.target.value)}>
-                {["low", "medium", "high", "critical"].map((v) => <option key={v} value={v}>{v}</option>)}
+                {["low", "medium", "high", "critical"].map((v) => <option key={v} value={v}>{t(SEVERITY_LABEL[v] ?? { ar: v, en: v })}</option>)}
               </select></label>
             <label className="block text-[10px] text-stone-500">{t({ ar: "الموعد", en: "Due date" })}
               <input type="date" className={inp} value={s("due_date")} onChange={(e) => set("due_date", e.target.value)} /></label>
@@ -169,7 +213,7 @@ export default function GovernanceItemDrawer({
             <input className={inp} value={s("resolution_plan")} onChange={(e) => set("resolution_plan", e.target.value)} dir="auto" /></label>
           <label className="block text-[10px] text-stone-500">{t({ ar: "الحالة", en: "Status" })}
             <select className={inp} value={status} onChange={(e) => set("status", e.target.value)}>
-              {ISSUE_STATUS.map((v) => <option key={v} value={v}>{v}</option>)}
+              {ISSUE_STATUS.map((v) => <option key={v} value={v}>{t(ISSUE_LABEL[v] ?? { ar: v, en: v })}</option>)}
             </select></label>
           {ISSUE_TERMINAL.has(status) && (
             <label className="block text-[10px] text-amber-400">{t({ ar: "سبب الإغلاق / ملخّص الحل * (إلزامي)", en: "Resolution summary * (required)" })}
@@ -189,7 +233,7 @@ export default function GovernanceItemDrawer({
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-[10px] text-stone-500">{t({ ar: "الحالة", en: "Status" })}
               <select className={inp} value={status} onChange={(e) => set("status", e.target.value)}>
-                {DECISION_STATUS.map((v) => <option key={v} value={v}>{v}</option>)}
+                {DECISION_STATUS.map((v) => <option key={v} value={v}>{t(DECISION_LABEL[v] ?? { ar: v, en: v })}</option>)}
               </select></label>
             <label className="block text-[10px] text-stone-500">{t({ ar: "تاريخ المراجعة", en: "Review date" })}
               <input type="date" className={inp} value={s("review_date")} onChange={(e) => set("review_date", e.target.value)} /></label>
@@ -208,7 +252,7 @@ export default function GovernanceItemDrawer({
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-[10px] text-stone-500">{t({ ar: "النوع", en: "Type" })}
               <select className={inp} value={s("change_type") || "scope"} onChange={(e) => set("change_type", e.target.value)}>
-                {["scope", "schedule", "cost", "quality", "resource"].map((v) => <option key={v} value={v}>{v}</option>)}
+                {["scope", "schedule", "cost", "quality", "resource"].map((v) => <option key={v} value={v}>{t(CHANGE_TYPE_LABEL[v] ?? { ar: v, en: v })}</option>)}
               </select></label>
             {/* NULL, never "" — the RPC casts this with ::int and an empty string raises 22P02. */}
             <label className="block text-[10px] text-stone-500">{t({ ar: "أيام إضافية", en: "Extra days" })}
@@ -236,7 +280,7 @@ export default function GovernanceItemDrawer({
                 {t(CR_LABEL[to] ?? { ar: to, en: to })}
               </button>
             ))}
-            {status === "approved" && (
+            {(status === "approved" || status === "implementing") && (
               <button disabled={busy || !canManage} onClick={() => void apply()} className={`${btn} border-amber-700 text-amber-300 hover:bg-amber-950`}>
                 {t({ ar: "تطبيق على المشروع", en: "Apply to project" })}</button>
             )}

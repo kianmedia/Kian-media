@@ -33,6 +33,7 @@ import ProjectGantt from "./ProjectGantt";
 import ProjectResources from "./ProjectResources";
 import GovernanceTab from "./GovernanceTab";
 import ClosureTab from "./ClosureTab";
+import ProjectActionsMenu, { stageBarLocked } from "./ProjectActionsMenu";
 import SubprojectsTab from "./SubprojectsTab";
 import ProgramTab from "./ProgramTab";
 import ProgramSlaTab from "./ProgramSlaTab";
@@ -320,6 +321,8 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   }
 
   const stageIdx = core ? PC_STAGES.indexOf(core.core_stage) : -1;
+  // on_hold / cancelled / closed suspend the linear bar (the server enforces it too).
+  const barLocked = stageBarLocked(core?.core_stage);
 
   return (
     <div className="space-y-4">
@@ -386,11 +389,31 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
         </div>
         <div className="flex flex-wrap gap-1.5">
           {PC_STAGES.map((s, i) => (
-            <button key={s} disabled={busy || !canManage} onClick={() => void setStage(s)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] border transition ${i === stageIdx ? "bg-red-600 border-red-600 text-white" : i < stageIdx ? "bg-emerald-900/30 border-emerald-800 text-emerald-300" : "bg-stone-800 border-stone-700 text-stone-400"} ${!canManage ? "cursor-default" : "hover:border-stone-500"}`}>
+            <button key={s} disabled={busy || !canManage || barLocked} onClick={() => void setStage(s)}
+              title={barLocked ? t({ ar: "المراحل موقوفة — استأنف المشروع أو أعد فتحه أولًا.", en: "Stages are locked — resume or reopen the project first." }) : undefined}
+              className={`px-2.5 py-1 rounded-lg text-[11px] border transition ${i === stageIdx ? "bg-red-600 border-red-600 text-white" : i < stageIdx ? "bg-emerald-900/30 border-emerald-800 text-emerald-300" : "bg-stone-800 border-stone-700 text-stone-400"} ${barLocked ? "opacity-40 cursor-not-allowed" : !canManage ? "cursor-default" : "hover:border-stone-500"}`}>
               {t(PC_STAGE_LABELS[s])}
             </button>
           ))}
+        </div>
+
+        {/* الإجراءات الإدارية: تعليق/استئناف/إلغاء/إعادة فتح — بجانب الشريط لا داخله. */}
+        <div className="mt-3 pt-3 border-t border-stone-800">
+          <ProjectActionsMenu
+            projectId={projectId}
+            coreStage={core?.core_stage}
+            canManage={canManage}
+            isOwner={caps.isOwner}
+            flash={flash}
+            onChanged={() => { void loadCore(); void loadProg(); router.refresh(); onChanged?.(); }}
+          />
+          {barLocked && (
+            <p className="text-[10px] text-amber-500 mt-1.5">
+              {core?.core_stage === "closed"
+                ? t({ ar: "المشروع مغلق — التعديل ممنوع حتى إعادة الفتح باعتماد المالك.", en: "Closed — edits are blocked until an owner-approved reopen." })
+                : t({ ar: "انتقال المراحل موقوف في هذه الحالة الإدارية.", en: "Stage transitions are suspended in this administrative state." })}
+            </p>
+          )}
         </div>
       </section>
 

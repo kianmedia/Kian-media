@@ -258,6 +258,16 @@ export const DEP_TYPE_LABELS: Record<DependencyType, { ar: string; en: string }>
 };
 export const pcStageAdvance = (projectId: string, target: string, note?: string | null, overrideReason?: string | null) =>
   prpc<ProjectCore>("project_stage_advance", { p_project: projectId, p_target: target, p_note: note ?? null, p_override_reason: overrideReason ?? null });
+
+/** ADMINISTRATIVE lifecycle action — hold / resume / cancel.
+ *  Deliberately separate from pcStageAdvance: these are not steps on the timeline, and
+ *  project_core_set_stage rejects them with 'bad_stage' by design. The reason is MANDATORY
+ *  (the RPC raises reason_required), authorization is management-only server-side, and
+ *  'resume' restores the pre-hold stage by reading project_status_history — so the UI never
+ *  has to guess which stage to return to. */
+export type PcHoldAction = "hold" | "resume" | "cancel";
+export const pcHoldAction = (projectId: string, action: PcHoldAction, reason: string) =>
+  prpc<ProjectCore>("project_core_hold_action", { p_project: projectId, p_action: action, p_reason: reason });
 export interface EmployeeExec {
   due_today: number; overdue: number; due_24h: number; due_3d: number; in_progress: number; blocked: number;
   needs_my_review: number; est_hours_week: number; logged_hours_week: number;
