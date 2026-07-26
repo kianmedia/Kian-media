@@ -22,12 +22,21 @@ const nextConfig = {
           { key: "Referrer-Policy",                   value: "strict-origin-when-cross-origin" },
 
           // ── Phase 2 hardening ──────────────────────────────────────────────
-          // Deny hardware/identity APIs the site never uses. Cheap and cannot break
-          // rendering, but it stops an injected script (or an embedded third party)
-          // from silently reaching the camera, microphone or location.
+          // Deny the hardware APIs this app provably does not use, so an injected script
+          // or an embedded third party cannot reach them.
+          //
+          // ⚠️ geolocation is `(self)`, NOT `()`. An empty allowlist blocks the document's
+          // OWN origin too, and HR attendance depends on the browser geolocation API:
+          // lib/portal/hr.ts getPositionOnce() feeds check-in, check-out, start-task and
+          // complete-task, and every caller in components/portal/hr/EmployeeHome.tsx
+          // ABORTS when it fails (no degraded path). Shipping `geolocation=()` would have
+          // stopped every employee from clocking in or out, with only a toast and no
+          // server-side error to alert anyone. `(self)` keeps first-party access while
+          // still denying every embedded third party.
+          // camera/microphone verified unused (no getUserMedia / mediaDevices anywhere).
           {
             key: "Permissions-Policy",
-            value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), interest-cohort=()",
+            value: "camera=(), microphone=(), payment=(), usb=(), magnetometer=(), gyroscope=(), browsing-topics=(), geolocation=(self)",
           },
 
           // The ENFORCED half of the CSP: ONLY directives that cannot break a working

@@ -75,9 +75,30 @@ test("C3: the strict policy ships as Report-Only so violations are measured, not
 test("C4: Permissions-Policy denies hardware the site never uses", async () => {
   const hs = await headerGroups();
   const pp = valueOf(groupFor(hs, "/(.*)"), "Permissions-Policy");
-  for (const f of ["camera=()", "microphone=()", "geolocation=()", "payment=()"]) {
+  for (const f of ["camera=()", "microphone=()", "payment=()", "usb=()"]) {
     assert.ok(pp.includes(f), `${f} denied`);
   }
+});
+
+test("C4b: geolocation is (self), NOT () — an empty list would break HR attendance", async () => {
+  // This assertion exists because the first version of this header shipped `geolocation=()`,
+  // which blocks the document's OWN origin. HR check-in/out and task start/complete call
+  // navigator.geolocation and ABORT on failure, so that header would have stopped every
+  // employee from clocking in — with only a toast and no server-side error.
+  // Assert on the EMITTED header value, not the file text — the file also contains the
+  // explanatory comment, which would make a text-level negative assertion self-defeating.
+  const hs = await headerGroups();
+  const pp = valueOf(groupFor(hs, "/(.*)"), "Permissions-Policy");
+  const HR = R("lib/portal/hr.ts");
+  const HOME = R("components/portal/hr/EmployeeHome.tsx");
+  assert.ok(/geolocation=\(self\)/.test(pp), "first-party geolocation preserved");
+  assert.ok(!/geolocation=\(\)/.test(pp), "the breaking empty allowlist must never return");
+  // and the dependency this protects is real, not assumed
+  assert.ok(/navigator\.geolocation/.test(HR), "the app really uses geolocation");
+  // Line-based on purpose: the abort line embeds `{ ar: …, en: … }`, so a brace-counting
+  // regex would stop at the first nested `}` and silently find nothing.
+  const aborts = HOME.split("\n").filter((l) => l.includes("if (!pos.ok)") && l.includes("return;")).length;
+  assert.ok(aborts >= 3, `callers abort on failure — there is no degraded path (found ${aborts} abort sites)`);
 });
 
 // ─── caching / indexing of private surfaces ───
@@ -134,4 +155,65 @@ test("SAFE: static only (no DB/network)", () => {
     assert.ok(["node:test", "node:assert", "node:fs", "node:path"].includes(r) || r.includes("next.config"),
       `static (got ${r})`);
   }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Abuse controls on the PUBLIC write endpoint (it had none at all).
+// ════════════════════════════════════════════════════════════════════════════
+const RL = R("lib/server/rateLimit.ts");
+const INTAKE = R("app/api/public/intake/route.ts");
+
+/** Faithful model of the fixed-window counter in lib/server/rateLimit.ts. */
+function makeLimiter() {
+  const m = new Map();
+  return (key, limit, windowMs, now = Date.now()) => {
+    const b = m.get(key);
+    if (!b || b.resetAt <= now) { m.set(key, { count: 1, resetAt: now + windowMs }); return true; }
+    if (b.count >= limit) return false;
+    b.count++; return true;
+  };
+}
+
+test("RL1: the window allows exactly `limit` calls, then refuses", () => {
+  const rl = makeLimiter();
+  const out = [];
+  for (let i = 0; i < 5; i++) out.push(rl("k", 3, 60_000, 1_000));
+  assert.deepEqual(out, [true, true, true, false, false]);
+});
+
+test("RL2: the window resets, so a legitimate visitor is never locked out forever", () => {
+  const rl = makeLimiter();
+  assert.equal(rl("k", 1, 60_000, 1_000), true);
+  assert.equal(rl("k", 1, 60_000, 1_500), false, "still inside the window");
+  assert.equal(rl("k", 1, 60_000, 62_000), true, "window elapsed → allowed again");
+});
+
+test("RL3: separate keys keep separate budgets (IP and email cannot starve each other)", () => {
+  const rl = makeLimiter();
+  assert.equal(rl("intake:ip:1.1.1.1", 1, 60_000, 0), true);
+  assert.equal(rl("intake:ip:1.1.1.1", 1, 60_000, 0), false);
+  assert.equal(rl("intake:email:a@b.c", 1, 60_000, 0), true, "a different key is unaffected");
+});
+
+test("RL4: the helper is honest about being per-instance, not real protection", () => {
+  assert.ok(/per-instance memory/.test(RL), "the limitation is documented, not hidden");
+  assert.ok(/NOT a security control/.test(RL), "stated plainly");
+  assert.ok(/MAX_KEYS/.test(RL), "bounded — the map cannot grow without limit");
+  assert.ok(/Array\.from\(buckets/.test(RL), "no Map iteration (the build gate rejects it)");
+});
+
+test("RL5: /api/public/intake now brakes by IP and by email, and caps the payload", () => {
+  assert.ok(/rateLimit\(`intake:ip:/.test(INTAKE), "per-IP brake");
+  assert.ok(/rateLimit\(`intake:email:/.test(INTAKE), "per-email brake");
+  assert.ok(/MAX_BODY_BYTES/.test(INTAKE) && /payload_too_large/.test(INTAKE), "body size guard");
+  assert.ok(/content-length/.test(INTAKE), "checked BEFORE parsing");
+  assert.ok(/cap\(asStr\(b\.details\), CAP\.long\)/.test(INTAKE), "long text capped");
+  assert.ok(/b\.files\.slice\(0, CAP\.files\)/.test(INTAKE), "file list capped");
+});
+
+test("RL6: rate limiting keeps the route's 'never show a technical error' contract", () => {
+  // The public form helper discards the body; a 4xx here would surface as a broken form.
+  const hits = [...INTAKE.matchAll(/error: "rate_limited" \}, \{ status: (\d+) \}/g)].map((m) => m[1]);
+  assert.ok(hits.length >= 2, "both brakes return a response");
+  for (const s of hits) assert.equal(s, "200", "rate limiting must not turn into a visible form error");
 });
