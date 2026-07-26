@@ -1,23 +1,97 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Don't fail build on ESLint warnings
-  eslint: { ignoreDuringBuilds: true },
-  // Don't fail build on TypeScript warnings
-  typescript: { ignoreBuildErrors: true },
+  // Phase 2: the build used to IGNORE TypeScript and ESLint errors, so a real type error
+  // or lint error would ship to production silently — the deploy would go green while the
+  // defect was live. Both gates are now enforced. Verified safe at the time of the change:
+  // `tsc --noEmit` reports 0 errors and `eslint .` reports 0 errors (41 pre-existing
+  // <img> warnings, which do not fail a build).
+  eslint: { ignoreDuringBuilds: false },
+  typescript: { ignoreBuildErrors: false },
   images: {
     formats: ["image/avif", "image/webp"],
     unoptimized: true,
   },
   async headers() {
-    return [{
-      source: "/(.*)",
-      headers: [
-        { key: "X-Content-Type-Options",            value: "nosniff" },
-        { key: "X-Frame-Options",                   value: "SAMEORIGIN" },
-        { key: "X-XSS-Protection",                  value: "1; mode=block" },
-        { key: "Referrer-Policy",                   value: "strict-origin-when-cross-origin" },
-      ],
-    }];
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "X-Content-Type-Options",            value: "nosniff" },
+          { key: "X-Frame-Options",                   value: "SAMEORIGIN" },
+          { key: "X-XSS-Protection",                  value: "1; mode=block" },
+          { key: "Referrer-Policy",                   value: "strict-origin-when-cross-origin" },
+
+          // ── Phase 2 hardening ──────────────────────────────────────────────
+          // Deny hardware/identity APIs the site never uses. Cheap and cannot break
+          // rendering, but it stops an injected script (or an embedded third party)
+          // from silently reaching the camera, microphone or location.
+          {
+            key: "Permissions-Policy",
+            value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), interest-cohort=()",
+          },
+
+          // The ENFORCED half of the CSP: ONLY directives that cannot break a working
+          // Next.js page. frame-ancestors is the modern, stronger form of X-Frame-Options
+          // (kept above for old browsers); base-uri blocks <base> injection from rewriting
+          // every relative URL on the page; form-action stops an injected form from POSTing
+          // to an attacker's origin; object-src kills legacy plugin embedding.
+          //
+          // ⚠️ NO `default-src` here, deliberately. default-src CASCADES to script-src,
+          // style-src, connect-src and img-src — so `default-src 'self'` would block Next's
+          // inline bootstrap script, the inline styles this app uses throughout, and every
+          // browser call to Supabase. That would white-screen the portal. Locking those down
+          // needs a nonce pipeline; until then they are only MEASURED, in Report-Only below.
+          {
+            key: "Content-Security-Policy",
+            value: [
+              "frame-ancestors 'self'",
+              "base-uri 'self'",
+              "form-action 'self' https://script.google.com",
+              "object-src 'none'",
+              "upgrade-insecure-requests",
+            ].join("; "),
+          },
+
+          // Report-Only: the stricter policy we would LIKE to enforce. Browsers do not block
+          // anything from this header — they only log violations to the console — so it is
+          // safe to ship and gives real data on what a future enforced policy must allow
+          // before anyone turns it on. Nothing here can break the site.
+          {
+            key: "Content-Security-Policy-Report-Only",
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data: blob: https:",
+              "font-src 'self' data:",
+              "connect-src 'self' https://*.supabase.co https://script.google.com",
+              "media-src 'self' blob: https:",
+              "frame-ancestors 'self'",
+              "base-uri 'self'",
+              "object-src 'none'",
+            ].join("; "),
+          },
+        ],
+      },
+      {
+        // API responses must never be cached by the CDN or a shared proxy: several of
+        // them are user-scoped, and a cached response is exactly how one user's data
+        // reaches another. Vercel will not cache a no-store response.
+        source: "/api/(.*)",
+        headers: [
+          { key: "Cache-Control", value: "no-store, no-cache, must-revalidate, max-age=0" },
+          { key: "X-Robots-Tag",  value: "noindex, nofollow" },
+        ],
+      },
+      {
+        // The authenticated portal must never be indexed or cached by an intermediary.
+        source: "/client-portal/:path*",
+        headers: [
+          { key: "X-Robots-Tag",  value: "noindex, nofollow" },
+          { key: "Cache-Control", value: "private, no-store" },
+        ],
+      },
+    ];
   },
 };
 
