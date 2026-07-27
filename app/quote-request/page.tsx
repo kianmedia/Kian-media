@@ -64,6 +64,9 @@ const PRIORITIES = [
 function Form() {
   const { t, isAr } = useI18n();
   const [sent, setSent] = useState(false);
+  // P1.6: whether the durable server-side mirror actually recorded this. The Apps Script
+  // leg is no-cors and unreadable, so this is the only honest success signal we have.
+  const [confirmed, setConfirmed] = useState(true);
   const [sending, setSending] = useState(false);
   const [reference, setReference] = useState("");
 
@@ -156,7 +159,7 @@ function Form() {
     });
 
     // Mirror into the portal (public_intake) so a same-email signup sees this request.
-    void captureIntake({
+    const mirror = await captureIntake({
       type: "quote", email: f["Email"], phone: f["Mobile"], name: f["Full Name"], company: f["Company"],
       city: f["City"], reference: ref, services, details: f["Description"], preferred_date: f["Delivery Date"],
       source: "quote-request",
@@ -195,12 +198,13 @@ function Form() {
       }
     } catch { /* ignore */ }
 
+    setConfirmed(mirror.ok);
     setSending(false);
     setReference(ref);
     setSent(true);
   }
 
-  if (sent) return <SuccessCard reference={reference} />;
+  if (sent) return <SuccessCard reference={reference} confirmed={confirmed} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>

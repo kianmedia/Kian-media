@@ -9,6 +9,9 @@ import { useI18n } from "@/lib/i18n";
 function Form() {
   const { t, isAr } = useI18n();
   const [sent, setSent] = useState(false);
+  // P1.6: whether the durable server-side mirror actually recorded this. The Apps Script
+  // leg is no-cors and unreadable, so this is the only honest success signal we have.
+  const [confirmed, setConfirmed] = useState(true);
   const [sending, setSending] = useState(false);
   const [reference, setReference] = useState("");
   const [f, setF] = useState({
@@ -26,8 +29,13 @@ function Form() {
       alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
       return;
     }
-    if (f["Email"] && !isValidEmail(f["Email"])) {
-      alert(isAr ? "البريد الإلكتروني غير صحيح" : "Invalid email address");
+    // P1.6: email is now REQUIRED. The durable mirror is email-keyed (captureIntake
+    // returns early without one, and public_intake's read policy is email-keyed), so an
+    // emailless submission left no record anywhere on our side while the visitor was
+    // shown a confident reference number. Requiring it is what makes the honest success
+    // gate below meaningful.
+    if (!f["Email"] || !isValidEmail(f["Email"])) {
+      alert(isAr ? "البريد الإلكتروني مطلوب وصحيح" : "A valid email address is required");
       return;
     }
     const hasLink = f["Google Drive Link"] || f["WeTransfer Link"] || f["Dropbox Link"];
@@ -41,7 +49,7 @@ function Form() {
     // Phase 2 — DURABLE MIRROR (same reason as book-meeting): the sheets POST is no-cors,
     // so its result is unreadable and a dropped payload would lose the delivery links with
     // no record anywhere. Best-effort; never blocks or fails the visible submission.
-    await captureIntake({
+    const mirror = await captureIntake({
       type: "files",
       email: f["Email"],
       phone: f["Mobile"],
@@ -56,12 +64,13 @@ function Form() {
         { label: "Dropbox", url: f["Dropbox Link"] },
       ].filter((x) => x.url),
     });
+    setConfirmed(mirror.ok);
     setSending(false);
     setReference(ref);
     setSent(true);
   }
 
-  if (sent) return <SuccessCard reference={reference} />;
+  if (sent) return <SuccessCard reference={reference} confirmed={confirmed} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -71,7 +80,7 @@ function Form() {
       </div>
       <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div><Label htmlFor="mo" required>{t({ ar: "رقم الجوال", en: "Mobile Number" })}</Label><TextField id="mo" type="tel" dir="ltr" value={f["Mobile"]} onChange={(v) => set("Mobile", v)} required /></div>
-        <div><Label htmlFor="em">{t({ ar: "البريد الإلكتروني", en: "Email Address" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} /></div>
+        <div><Label htmlFor="em" required>{t({ ar: "البريد الإلكتروني", en: "Email Address" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} required /></div>
       </div>
       <div><Label htmlFor="pn">{t({ ar: "اسم المشروع", en: "Project Name" })}</Label><TextField id="pn" value={f["Project Name"]} onChange={(v) => set("Project Name", v)} /></div>
 

@@ -10,7 +10,14 @@ import { useI18n } from "@/lib/i18n";
  * - Shows the reference number prominently.
  * - Includes a clear "Contact via WhatsApp" CTA button.
  */
-export default function SuccessCard({ reference }: { reference: string }) {
+/** `confirmed` distinguishes "we hold a durable record of this" from "we could not
+ *  confirm it". The Apps Script leg is posted no-cors, so its response is opaque by
+ *  construction and can never be read — the only thing we can honestly assert is whether
+ *  the server-side mirror wrote a row. When it did not, the submission may still have
+ *  arrived, so this must NOT read as a hard failure: the visitor keeps their reference
+ *  and is given a route that definitely works. Defaults to true so any caller not yet
+ *  passing the flag behaves exactly as before. */
+export default function SuccessCard({ reference, confirmed = true }: { reference: string; confirmed?: boolean }) {
   const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   const WA_DISPLAY = "+966503422999";
@@ -30,9 +37,16 @@ export default function SuccessCard({ reference }: { reference: string }) {
         <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#E31E24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
       </div>
 
-      <h3 className="editorial text-white" style={{ fontSize: "26px", marginBottom: "10px" }}>{t({ ar: "شكراً لك", en: "Thank You" })}</h3>
+      <h3 className="editorial text-white" style={{ fontSize: "26px", marginBottom: "10px" }}>
+        {confirmed ? t({ ar: "شكراً لك", en: "Thank You" }) : t({ ar: "تم الإرسال", en: "Submitted" })}
+      </h3>
       <p className="text-white/65" style={{ fontSize: "15px", lineHeight: 1.7, maxWidth: "440px", margin: "0 auto 22px" }}>
-        {t({ ar: "تم استلام طلبك بنجاح.", en: "Your request has been received successfully." })}
+        {confirmed
+          ? t({ ar: "تم استلام طلبك بنجاح.", en: "Your request has been received successfully." })
+          : t({
+              ar: "أُرسل طلبك، لكن لم نتمكّن من تأكيد تسجيله لدينا. للاطمئنان، أرسل لنا رقم الطلب عبر واتساب وسنؤكّده فورًا.",
+              en: "Your request was submitted, but we could not confirm it was recorded on our side. To be safe, send us the reference on WhatsApp and we will confirm it right away.",
+            })}
       </p>
 
       {/* Reference number */}

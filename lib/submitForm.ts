@@ -57,16 +57,30 @@ export interface IntakeInput {
   preferred_contact?: string; source?: string; files?: { label?: string; url: string }[];
   bearer?: string;
 }
-export async function captureIntake(input: IntakeInput): Promise<void> {
+/** Outcome of the durable mirror. This used to be Promise<void>, so callers had no way
+ *  to know whether anything had actually been recorded — and every public form showed a
+ *  confident success card regardless. `ok` means a row exists in public_intake that staff
+ *  can act on; anything else means we genuinely do not know, because the Apps Script leg
+ *  is posted no-cors and its response is opaque by construction. */
+export interface IntakeResult { ok: boolean; id?: string; error?: string }
+
+export async function captureIntake(input: IntakeInput): Promise<IntakeResult> {
   try {
-    if (!input.email || !input.email.includes("@")) return;
+    if (!input.email || !input.email.includes("@")) return { ok: false, error: "no_email" };
     const { bearer, ...body } = input;
-    await fetch("/api/public/intake", {
+    const res = await fetch("/api/public/intake", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
       body: JSON.stringify(body),
     });
-  } catch { /* never block the form */ }
+    // The route answers HTTP 200 on every outcome by design (a public form must never
+    // surface a technical error), so res.ok tells us nothing — only the body does.
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; id?: string; error?: string } | null;
+    if (!data) return { ok: false, error: "unreadable_response" };
+    return { ok: data.ok === true, id: data.id, error: data.error };
+  } catch {
+    return { ok: false, error: "network" };   // still never throws into the form
+  }
 }
 
 export async function submitToSheets(

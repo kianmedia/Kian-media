@@ -2,7 +2,7 @@
 import { useState } from "react";
 import FormShell from "@/components/forms/FormShell";
 import { Label, TextField, TextArea, SelectField } from "@/components/forms/Field";
-import { submitToSheets, makeRef, isValidMobile, captureIntake } from "@/lib/submitForm";
+import { submitToSheets, makeRef, isValidMobile, isValidEmail, captureIntake } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
 
@@ -29,6 +29,9 @@ const LEAD_SOURCES = [
 function Form() {
   const { t, isAr } = useI18n();
   const [sent, setSent] = useState(false);
+  // P1.6: whether the durable server-side mirror actually recorded this. The Apps Script
+  // leg is no-cors and unreadable, so this is the only honest success signal we have.
+  const [confirmed, setConfirmed] = useState(true);
   const [sending, setSending] = useState(false);
   const [reference, setReference] = useState("");
   const [f, setF] = useState({
@@ -44,6 +47,15 @@ function Form() {
     }
     if (!isValidMobile(f["Mobile"])) {
       alert(isAr ? "رقم الجوال غير صحيح" : "Invalid mobile number");
+      return;
+    }
+    // P1.6: email is now REQUIRED. The durable mirror is email-keyed (captureIntake
+    // returns early without one, and public_intake's read policy is email-keyed), so a
+    // booking submitted without an email left no record anywhere on our side while the
+    // visitor was shown a confident reference number. Requiring it is what makes the
+    // honest success gate below meaningful.
+    if (!f["Email"] || !isValidEmail(f["Email"])) {
+      alert(isAr ? "البريد الإلكتروني مطلوب وصحيح" : "A valid email address is required");
       return;
     }
     setSending(true);
@@ -78,7 +90,7 @@ function Form() {
     // the booking would vanish with no trace anywhere while the visitor is shown a success
     // card. quote-request already mirrored into public_intake; meetings did not. Best-effort
     // and non-blocking — it can never turn a successful booking into a visible error.
-    await captureIntake({
+    const mirror = await captureIntake({
       type: "meeting",
       email: f["Email"],
       phone: f["Mobile"],
@@ -90,6 +102,7 @@ function Form() {
       preferred_contact: meetingTypeLabel,
       source: "book-meeting",
     });
+    setConfirmed(mirror.ok);
     setSending(false);
     setReference(ref);
     setSent(true);
@@ -100,7 +113,7 @@ function Form() {
     : "Hello, I'd like to book a meeting with Kian Media");
   const waLink = `https://wa.me/${WA_NUMBER}?text=${waText}`;
 
-  if (sent) return <SuccessCard reference={reference} />;
+  if (sent) return <SuccessCard reference={reference} confirmed={confirmed} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -110,7 +123,7 @@ function Form() {
       </div>
       <div className="form-row" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div><Label htmlFor="mo" required>{t({ ar: "الجوال", en: "Mobile" })}</Label><TextField id="mo" type="tel" dir="ltr" value={f["Mobile"]} onChange={(v) => set("Mobile", v)} required /></div>
-        <div><Label htmlFor="em">{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} /></div>
+        <div><Label htmlFor="em" required>{t({ ar: "البريد الإلكتروني", en: "Email" })}</Label><TextField id="em" type="email" dir="ltr" value={f["Email"]} onChange={(v) => set("Email", v)} required /></div>
       </div>
       <div><Label htmlFor="mt" required>{t({ ar: "نوع الاجتماع", en: "Meeting Type" })}</Label>
         <SelectField id="mt" value={f["Meeting Type"]} onChange={(v) => set("Meeting Type", v)} options={MEETING_TYPES.map((m) => ({ value: m.en, label: isAr ? m.ar : m.en }))} required /></div>
