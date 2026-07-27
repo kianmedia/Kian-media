@@ -51,13 +51,20 @@ export function TextArea({ id, value, onChange, placeholder, rows = 4, required 
   );
 }
 
-export function SelectField({ id, value, onChange, options, required }:
-  { id: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; required?: boolean }) {
+// FIX: this rendered as a BLANK BOX. `appearance: none` removed the native chevron and no
+// replacement arrow was supplied, while the placeholder <option> had no text — so on a dark
+// background the Budget / Priority / Lead-Source selects were three identical empty
+// rectangles, indistinguishable from text inputs. Budget is a REQUIRED field, so a visitor
+// would submit, get an Arabic alert, and have no visual cue which blank box to open.
+// Dropping `appearance: none` restores the native arrow (correctly placed in both LTR and
+// RTL), and the placeholder now carries real text. OpportunityForm already did it this way.
+export function SelectField({ id, value, onChange, options, required, placeholder }:
+  { id: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; required?: boolean; placeholder?: string }) {
   return (
     <select id={id} value={value} required={required}
       onChange={(e) => onChange(e.target.value)} onFocus={focusOn} onBlur={focusOff}
-      style={{ ...baseInput, cursor: "pointer", appearance: "none" }}>
-      <option value="" style={{ background: "#0a0a0a" }}></option>
+      style={{ ...baseInput, cursor: "pointer" }}>
+      <option value="" style={{ background: "#0a0a0a" }}>{placeholder ?? "— اختر / Select —"}</option>
       {options.map((o) => (
         <option key={o.value} value={o.value} style={{ background: "#0a0a0a" }}>{o.label}</option>
       ))}

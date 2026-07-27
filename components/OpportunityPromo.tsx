@@ -37,7 +37,7 @@ export default function OpportunityPromo() {
     <div
       role="dialog" aria-label={isAr ? "مركز الفرص" : "Opportunities Center"}
       style={{
-        position: "fixed", zIndex: 90, bottom: "20px", insetInlineEnd: "20px",
+        position: "fixed", zIndex: 91, bottom: "96px", insetInlineEnd: "20px",
         width: "calc(100vw - 40px)", maxWidth: "340px",
         background: "#0c0c0c", border: "1px solid rgba(227,30,36,0.4)", borderRadius: "10px",
         boxShadow: "0 18px 50px rgba(0,0,0,0.6), 0 0 0 1px rgba(227,30,36,0.12)",

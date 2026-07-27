@@ -96,9 +96,19 @@ const nextConfig = {
         // The authenticated portal must never be indexed or cached by an intermediary.
         source: "/client-portal/:path*",
         headers: [
-          { key: "X-Robots-Tag",  value: "noindex, nofollow" },
-          { key: "Cache-Control", value: "private, no-store" },
+          // noindex only. An earlier version also set `Cache-Control: private, no-store`
+          // here — that was a pure CDN regression with no security benefit: every page
+          // under /client-portal is a client component and the SSR shell carries NO user
+          // data (all user data travels over /api/*, which IS no-store above). Forcing
+          // no-store turned a cached shell into an origin round-trip on every portal
+          // navigation for every user, protecting a document with nothing in it.
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
         ],
+      },
+      {
+        // /admin is equally authenticated and equally a data-free shell — noindex it too.
+        source: "/admin/:path*",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
       },
     ];
   },

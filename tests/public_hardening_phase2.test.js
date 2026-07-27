@@ -110,12 +110,18 @@ test("C5: API responses are never cached by a shared cache, and are noindex", as
   assert.ok(/noindex/.test(valueOf(api, "X-Robots-Tag")), "noindex");
 });
 
-test("C6: the authenticated portal is noindex and privately cached", async () => {
+test("C6: authenticated areas are noindex — without a needless CDN regression", async () => {
   const hs = await headerGroups();
   const portal = groupFor(hs, "/client-portal/:path*");
   assert.ok(portal, "a portal header group exists");
   assert.ok(/noindex/.test(valueOf(portal, "X-Robots-Tag")));
-  assert.ok(/private|no-store/.test(valueOf(portal, "Cache-Control")));
+  // Deliberately NOT no-store. The portal shell is a client component carrying no user
+  // data; all user data travels over /api/* which IS no-store. Forcing no-store here was
+  // a pure CDN regression (an origin round-trip per navigation) protecting an empty
+  // document — measured live as x-vercel-cache: HIT before the change.
+  assert.equal(valueOf(portal, "Cache-Control"), "", "no Cache-Control override on the data-free shell");
+  const admin = groupFor(hs, "/admin/:path*");
+  assert.ok(admin && /noindex/.test(valueOf(admin, "X-Robots-Tag")), "/admin is noindex too");
 });
 
 // ─── SEO assets that did not exist at all ───
@@ -291,4 +297,64 @@ test("OPP8: the SQL is additive and reversible", () => {
   assert.ok(/create table if not exists/.test(code) && /create or replace function/.test(code), "re-runnable");
   assert.ok(/RL FAIL/.test(RLSQL) && /RL SELF-TEST PASSED/.test(RLSQL), "self-tested");
   assert.ok(/VERIFICATION/.test(RLSQL) && /ROLLBACK/.test(RLSQL), "verification + rollback documented");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Unverified-JWT injection on the PUBLIC intake endpoint.
+// jwtSub() base64-decoded the JWT payload and returned its `sub` WITHOUT verifying the
+// signature. That value became p_user → public_intake.user_id, and the read policy is
+// `user_id = auth.uid() OR …` — so forging `header.{"sub":"<victim>"}.x` as a Bearer on a
+// PUBLIC endpoint injected an arbitrary row into any victim's portal. No auth required.
+// ════════════════════════════════════════════════════════════════════════════
+const INTAKE2 = R("app/api/public/intake/route.ts");
+
+test("JWT1: the unverified decoder is gone", () => {
+  assert.ok(!/function jwtSub/.test(INTAKE2), "jwtSub removed");
+  assert.ok(!/Buffer\.from\(p\.replace/.test(INTAKE2), "no hand-rolled base64 payload decode");
+  assert.ok(/REMOVED — jwtSub/.test(INTAKE2), "and why is recorded");
+});
+
+test("JWT2: attribution now uses the VERIFIED lookup the rest of the repo uses", () => {
+  assert.ok(/authGetUserId/.test(INTAKE2), "imported");
+  assert.ok(/await authGetUserId\(bearer\)/.test(INTAKE2), "awaited — it validates against GoTrue");
+  assert.ok(/forged bearer resolves to null/.test(INTAKE2), "fail-closed behaviour documented");
+});
+
+test("JWT3: forging a token can no longer claim another user's row", () => {
+  // Model the two behaviours. The old one trusted any well-formed payload.
+  const forged = (sub) => `hdr.${Buffer.from(JSON.stringify({ sub })).toString("base64")}.sig`;
+  const oldDecode = (b) => { try { return JSON.parse(Buffer.from(b.split(".")[1], "base64").toString()).sub; } catch { return null; } };
+  assert.equal(oldDecode(forged("victim-uuid")), "victim-uuid", "the old path accepted a forged sub");
+  // The new path asks the auth server; an unverifiable token yields null (unattributed row).
+  const verifiedLookup = (b) => (b === "genuine" ? "real-uuid" : null);
+  assert.equal(verifiedLookup(forged("victim-uuid")), null, "a forged token attributes to nobody");
+});
+
+test("JWT4: the endpoint no longer hands PostgREST internals to anonymous callers", () => {
+  assert.ok(/error: "capture_failed"/.test(INTAKE2), "coarse code returned");
+  assert.ok(!/\{ ok: false, error: r\.error \}/.test(INTAKE2), "raw error no longer returned");
+  assert.ok(/PUBLIC_INTAKE_FAILED/.test(INTAKE2), "the real error is logged server-side instead");
+});
+
+// ─── public-surface UX defects found live at 375px ───
+test("UX1: the promo card no longer covers the WhatsApp button", () => {
+  const promo = R("components/OpportunityPromo.tsx");
+  const wa = R("components/WaFloat.tsx");
+  assert.ok(/bottom: "96px"/.test(promo), "lifted above the FAB (56px button + 24px offset + gap)");
+  assert.ok(/zIndex: 91/.test(promo), "explicit stacking rather than DOM-order luck");
+  assert.ok(/bottom: "24px"/.test(wa), "the FAB itself is unchanged");
+});
+
+test("UX2: form selects are no longer blank boxes", () => {
+  const F = R("components/forms/Field.tsx");
+  const sel = F.slice(F.indexOf("export function SelectField"));
+  assert.ok(!/appearance: "none"/.test(sel), "native chevron restored");
+  assert.ok(/placeholder \?\? "— اختر \/ Select —"/.test(sel), "placeholder has real text");
+  assert.ok(/BLANK BOX/.test(F), "the defect is documented so it is not 'tidied' back");
+});
+
+test("UX3: the mobile hamburger meets a usable tap target", () => {
+  const N = R("components/Navbar.tsx");
+  assert.ok(/w-11 h-11/.test(N), "44x44 instead of 32x14.5");
+  assert.ok(/-me-2/.test(N), "logical margin — correct in both RTL and LTR");
 });

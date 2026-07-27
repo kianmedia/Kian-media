@@ -160,7 +160,7 @@ export default function Navbar() {
         {/* Mobile: lang + hamburger */}
         <div className="md:hidden flex items-center gap-3">
           <LangSwitch compact />
-          <button className="flex flex-col gap-[5px] w-8 z-50" onClick={() => setOpen((o) => !o)} aria-label="menu">
+          <button className="flex flex-col justify-center items-end gap-[5px] w-11 h-11 -me-2 z-50" onClick={() => setOpen((o) => !o)} aria-label="menu">
             {[0, 1, 2].map((i) => (
               <motion.span
                 key={i}
