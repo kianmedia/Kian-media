@@ -32,7 +32,7 @@
 | phase_id | phase_name | status | current_subtask | last_completed_action | next_action | last_commit | pushed | prod_verified | tests | blockers | updated_at |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **P0** | إغلاق Public Portal Hardening Phase 2 | `DONE` | — | إغلاق توثيقي + إصلاح `favicon.ico` 404؛ tsc نظيف · 767/767 · build exit 0 | — (مُغلقة) | `604d218` | ⏸️ `M-000` | ✅ 13/15 | 767/767 | `M-001` حضور · `M-004` سجلات | 2026-07-27 |
-| **P1** | العمود الفقري: البريد والإشعارات | `IN_PROGRESS` | P1.0 استطلاع | إطلاق استطلاع 8 محاور + تحقّق عدائي؛ تثبّتُ مستقلًّا أن Idempotency والعامل والمُرسِل الصادق موجودة فعلًا | استلام خطة الاستطلاع وتقسيمها إلى P1.1..P1.n | — | — | — | — | `M-002` نشر Apps Script | 2026-07-27 |
+| **P1** | العمود الفقري: البريد والإشعارات | `IN_PROGRESS` | **P1.2 صحّة تسليم العامل** | P1.0 ✅ `2910c10` · P1.1 ✅ `75fa3b5` (إغلاق ثغرة حقن الطابور) | نفّذ P1.2: احتساب المحاولة عند الحجز + Reaper للمسارين + مهلة قصوى للطلب | `75fa3b5` | ⏸️ `M-000` | ❌ لم يُطبَّق SQL | 795/795 | `M-005` تشغيل SQL · `M-002` نشر Apps Script | 2026-07-27 |
 | **P2** | Privileged Account MFA (TOTP) | `TODO` | — | — | فحص مسارات Login/Session/Role Guards | — | — | — | — | تسجيل المالك يدوي | — |
 | **P3** | Production Operations V1 | `TODO` | — | — | جرد ما هو موجود قبل إنشاء أي جدول | — | — | — | — | — | — |
 | **P3.1** | Call Sheets | `TODO` | — | — | فحص `shoot_sessions` وأي بنية Call Sheet قائمة | — | — | — | — | — | — |

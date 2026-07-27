@@ -31,7 +31,27 @@
 | Commit | الوصف | المرحلة |
 |---|---|---|
 | `604d218` | `docs(hardening): close public portal hardening phase 2` | P0 |
-| `<التالي>` | تصحيح Commit hash في ملفات الحالة | P0 |
+| `cc19672` | `docs(state): correct the P0 commit hash in the state files` | P0 |
+| `2910c10` | `fix(email): P1.0 — correct shipped artifacts that misdescribed the email channel` | P1.0 |
+| `75fa3b5` | `fix(security): P1.1 — close the email-queue injection hole` | P1.1 |
+
+### 🔴 M-005 — تشغيل `docs/email_backbone_phase1_enqueue_RUNME.sql` على Production
+- **المرحلة:** P1.1 · **أمني — الأولوية القصوى بعد الدفع**
+- **الثغرة:** `nt_enqueue_email` دالّة `security definer` ممنوحة لـ`authenticated`، وتأخذ
+  المستلِم والموضوع والنصّ كمعاملات يتحكّم بها المتصل، ثم تُدرجها في طابور الإرسال.
+  والتسجيل في البوابة مفتوح ⇒ **أيّ شخص ينشئ حسابًا** يستطيع إرسال بريد عشوائي
+  **من هوية كيان الابتكار**، أو استنفاد حصّة Gmail (~100/يوم) فيُظلم كامل نظام الإشعارات.
+- **تحقُّق حيّ:** anon محجوب (42501) ✅ · `authenticated` **يملك EXECUTE** ❌.
+- **الملف:** `docs/email_backbone_phase1_enqueue_RUNME.sql` — إضافي و idempotent، بلا `DROP`،
+  ويرفض الالتزام ذاتيًا إن لم تُغلق الثغرة فعلًا.
+- **التحقّق بعد التشغيل:**
+  ```sql
+  select has_function_privilege('authenticated',
+         'public.nt_enqueue_email(text,text,text,text)', 'execute');
+  -- ⇒ يجب أن تكون false
+  ```
+- **لا يكسر شيئًا:** تحقّقتُ أن مواضع الاستدعاء السبعة كلّها داخل دوال `security definer`
+  (تُنفَّذ بصلاحية المالك)، ولا يوجد أيّ مستدعٍ من TypeScript.
 
 ### 🟡 M-001 — اختبار تسجيل حضور موظف من الجوال
 - **المرحلة:** P0
