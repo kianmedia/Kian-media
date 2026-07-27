@@ -1,6 +1,18 @@
 # التقرير النهائي — تقوية وإغلاق بوابة كيان العامة
 
-> # ✅ `Public Portal Hardening Phase 2: READY FOR FINAL ACCEPTANCE`
+> # 🔒 `Public Portal Hardening Phase 2: CLOSED`
+>
+> **أُغلقت في 2026-07-27** — لا ثغرة أمنية حرجة مثبتة مفتوحة.
+> إغلاق توثيقي فقط: لم تُضَف أي ميزة. الإصلاح الوحيد المصاحب كان `app/favicon.ico`
+> (كان `/favicon.ico` يردّ 404؛ وسوم `<link rel=icon>` كانت تعمل، فالأثر تجميلي/زواحف فقط).
+>
+> **بندان لم أتحقّق منهما ولا أدّعي نجاحهما:** `M-001` تسجيل حضور موظف (لا بيانات دخول)
+> و`M-004` سجلات Vercel/Supabase (لا صلاحية). كلاهما في `docs/MANUAL_ACTIONS_QUEUE.md`.
+>
+> ---
+>
+> ### الحكم السابق (محفوظ للسجل)
+> `Public Portal Hardening Phase 2: READY FOR FINAL ACCEPTANCE`
 >
 > **التحقّق بعد النشر (2026-07-27) — نفّذتُه بنفسي على الإنتاج الحيّ:**
 >
