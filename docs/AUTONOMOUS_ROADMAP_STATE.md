@@ -31,7 +31,7 @@
 
 | phase_id | phase_name | status | current_subtask | last_completed_action | next_action | last_commit | pushed | prod_verified | tests | blockers | updated_at |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| **P0** | إغلاق Public Portal Hardening Phase 2 | `DONE` | — | إغلاق توثيقي + إصلاح `favicon.ico` 404؛ tsc نظيف · 767/767 · build exit 0 | — (مُغلقة) | `2ee18e1` | ⏸️ `M-000` | ✅ 13/15 | 767/767 | `M-001` حضور · `M-004` سجلات | 2026-07-27 |
+| **P0** | إغلاق Public Portal Hardening Phase 2 | `DONE` | — | إغلاق توثيقي + إصلاح `favicon.ico` 404؛ tsc نظيف · 767/767 · build exit 0 | — (مُغلقة) | `604d218` | ⏸️ `M-000` | ✅ 13/15 | 767/767 | `M-001` حضور · `M-004` سجلات | 2026-07-27 |
 | **P1** | العمود الفقري: البريد والإشعارات | `IN_PROGRESS` | P1.0 استطلاع | إطلاق استطلاع 8 محاور + تحقّق عدائي؛ تثبّتُ مستقلًّا أن Idempotency والعامل والمُرسِل الصادق موجودة فعلًا | استلام خطة الاستطلاع وتقسيمها إلى P1.1..P1.n | — | — | — | — | `M-002` نشر Apps Script | 2026-07-27 |
 | **P2** | Privileged Account MFA (TOTP) | `TODO` | — | — | فحص مسارات Login/Session/Role Guards | — | — | — | — | تسجيل المالك يدوي | — |
 | **P3** | Production Operations V1 | `TODO` | — | — | جرد ما هو موجود قبل إنشاء أي جدول | — | — | — | — | — | — |
