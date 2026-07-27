@@ -28,21 +28,9 @@
 
 #### Commits محلية بانتظار الدفع
 
-| Commit | الوصف | المرحلة |
-|---|---|---|
-| `604d218` | `docs(hardening): close public portal hardening phase 2` | P0 |
-| `cc19672` | `docs(state): correct the P0 commit hash in the state files` | P0 |
-| `2910c10` | `fix(email): P1.0 — correct shipped artifacts that misdescribed the email channel` | P1.0 |
-| `75fa3b5` | `fix(security): P1.1 — close the email-queue injection hole` | P1.1 |
-| ✅ | *(ما فوق مدفوع ومُطبَّق)* | — |
-| `dfe1f34` | `fix(email): P1.2 — bounded at-least-once delivery` | P1.2 |
-| `814c4b4` | `fix(email): P1.3 — stop the monitor reporting green during a blackout` | P1.3 |
-| `f23c54b` | `docs(state): record P1.2/P1.3` | — |
-| `d2e279e` | `feat(email): P1.4 — rental queue capability behind a flag (OFF)` | P1.4 |
-| `0a53579` | `fix(public): P1.6 — honest success in the public forms` | P1.6 |
-| `084654f` | `fix(email): P1.5 — restore event attribution in the trace` | P1.5 |
+_(لا شيء — كل الـCommits حتى `8d8a794` مدفوعة.)_
 
-### 🔴 M-005 — تشغيل `docs/email_backbone_phase1_enqueue_RUNME.sql` على Production
+### ✅ M-005 (مُنجَز) — تشغيل `docs/email_backbone_phase1_enqueue_RUNME.sql` على Production
 - **المرحلة:** P1.1 · **أمني — الأولوية القصوى بعد الدفع**
 - **الثغرة:** `nt_enqueue_email` دالّة `security definer` ممنوحة لـ`authenticated`، وتأخذ
   المستلِم والموضوع والنصّ كمعاملات يتحكّم بها المتصل، ثم تُدرجها في طابور الإرسال.
@@ -60,7 +48,7 @@
 - **لا يكسر شيئًا:** تحقّقتُ أن مواضع الاستدعاء السبعة كلّها داخل دوال `security definer`
   (تُنفَّذ بصلاحية المالك)، ولا يوجد أيّ مستدعٍ من TypeScript.
 
-### 🟠 M-006 — تشغيل `docs/email_backbone_phase1_monitor_RUNME.sql` على Production
+### ✅ M-006 (مُنجَز — غير مُتحقَّق منه) — تشغيل `docs/email_backbone_phase1_monitor_RUNME.sql` على Production
 - **المرحلة:** P1.3 · **تشغيلي — يجعل الانقطاع مرئيًا**
 - **ما يُصلحه:** لوحة المراقبة تعرض اليوم **الشريط الأخضر «قناة البريد نشطة» أثناء انقطاع كامل**.
   السبب: صفوف `relay_handler_missing` تبقى `pending` بلا احتساب محاولة وتُعدّ `skipped`،
@@ -72,7 +60,7 @@
   كل مفاتيح الخرج القائمة محفوظة (لا يحتاج أيّ كود تعديلًا) · يرفض الالتزام إن وُجدت صيغة ثانية.
 - **ملاحظة:** حتى قبل تشغيله لا شيء يُكسر — الحقل `relay_pending` اختياري في نوع TypeScript.
 
-### 🟠 M-007 — تشغيل `docs/email_backbone_phase1_rental_RUNME.sql` على Production
+### ✅ M-007 (مُنجَز — الراية OFF ومُثبَتة) — تشغيل `docs/email_backbone_phase1_rental_RUNME.sql` على Production
 - **المرحلة:** P1.4 · **آمن تمامًا — لا يُغيّر أي سلوك اليوم**
 - **ما يفعله:** يبني قدرة مرور بريد التأجير عبر الطابور، **والراية مُطفأة**.
   المسار المباشر الحالي يعمل كما هو حرفيًا. الملف **يرفض الالتزام إن لم تكن الراية OFF**.
@@ -120,3 +108,6 @@
 | ✅ | تشغيل `docs/public_portal_rate_limit_RUNME.sql` | 2026-07-27 | `public_rate_limits` و `rl_consume` يردّان `42501` |
 | ✅ | تشغيل SQL تقوية صلاحيات منصة المشاريع (4 ملفات) | 2026-07-26 | التسريب مُغلق؛ مسح 372 دالة نظيف |
 | ✅ | Push + Deploy لـ Phase 2 | 2026-07-27 | الترويسات الجديدة حيّة على الإنتاج |
+| ✅ | `email_backbone_phase1_enqueue_RUNME.sql` (M-005) | 2026-07-27 | `nt_enqueue_email_idem` موجودة ⇒ المعاملة التزمت ⇒ السحب نجح |
+| ✅ | `email_backbone_phase1_monitor_RUNME.sql` (M-006) | 2026-07-27 | ⚠️ **لم أستطع التحقّق** — لا كائن جديد يمكن قياسه |
+| ✅ | `email_backbone_phase1_rental_RUNME.sql` (M-007) | 2026-07-27 | الدوال الثلاث تردّ 42501 ⇒ الفحص الذاتي مرّ ⇒ **الراية OFF** |
