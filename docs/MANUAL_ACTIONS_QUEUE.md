@@ -34,6 +34,13 @@
 | `cc19672` | `docs(state): correct the P0 commit hash in the state files` | P0 |
 | `2910c10` | `fix(email): P1.0 — correct shipped artifacts that misdescribed the email channel` | P1.0 |
 | `75fa3b5` | `fix(security): P1.1 — close the email-queue injection hole` | P1.1 |
+| ✅ | *(ما فوق مدفوع ومُطبَّق)* | — |
+| `dfe1f34` | `fix(email): P1.2 — bounded at-least-once delivery` | P1.2 |
+| `814c4b4` | `fix(email): P1.3 — stop the monitor reporting green during a blackout` | P1.3 |
+| `f23c54b` | `docs(state): record P1.2/P1.3` | — |
+| `d2e279e` | `feat(email): P1.4 — rental queue capability behind a flag (OFF)` | P1.4 |
+| `0a53579` | `fix(public): P1.6 — honest success in the public forms` | P1.6 |
+| `084654f` | `fix(email): P1.5 — restore event attribution in the trace` | P1.5 |
 
 ### 🔴 M-005 — تشغيل `docs/email_backbone_phase1_enqueue_RUNME.sql` على Production
 - **المرحلة:** P1.1 · **أمني — الأولوية القصوى بعد الدفع**
@@ -64,6 +71,17 @@
 - **آمن:** `create or replace` لدالّة قراءة فقط · لا DDL · لا تغيير بيانات ·
   كل مفاتيح الخرج القائمة محفوظة (لا يحتاج أيّ كود تعديلًا) · يرفض الالتزام إن وُجدت صيغة ثانية.
 - **ملاحظة:** حتى قبل تشغيله لا شيء يُكسر — الحقل `relay_pending` اختياري في نوع TypeScript.
+
+### 🟠 M-007 — تشغيل `docs/email_backbone_phase1_rental_RUNME.sql` على Production
+- **المرحلة:** P1.4 · **آمن تمامًا — لا يُغيّر أي سلوك اليوم**
+- **ما يفعله:** يبني قدرة مرور بريد التأجير عبر الطابور، **والراية مُطفأة**.
+  المسار المباشر الحالي يعمل كما هو حرفيًا. الملف **يرفض الالتزام إن لم تكن الراية OFF**.
+- **لا تُفعّل الراية الآن.** التفعيل خطوة مستقلّة بعد نشر `portal_notify` وإثبات إشعار
+  حقيقي بحالة `sent`. أمر التفعيل لاحقًا:
+  ```sql
+  update public.custody_inventory_settings set rental_email_queue_enabled = true where id = 1;
+  ```
+  والتراجع الفوري: نفس الأمر بـ`false`.
 
 ### 🟡 M-001 — اختبار تسجيل حضور موظف من الجوال
 - **المرحلة:** P0
