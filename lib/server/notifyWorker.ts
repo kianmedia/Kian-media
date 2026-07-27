@@ -35,6 +35,7 @@ interface DeliveryRow {
   id: string; recipient_email: string | null; recipient_id: string | null;
   subject: string; body_text: string | null; direct_url: string | null;
   attempts: number; status: string; created_at: string; next_attempt_at: string | null; event_id: string | null;
+  correlation_id: string | null; idempotency_key: string | null;
   notification_events: { event_type: string | null; entity_id: string | null; project_id: string | null; severity: string | null; direct_url: string | null } | null;
 }
 
@@ -58,10 +59,26 @@ export async function pendingBacklog(maxAgeHours = DEFAULT_MAX_AGE_HOURS): Promi
 
 export interface ProcessOpts { maxAgeHours?: number; recentMinutes?: number; deliveryIds?: string[] }
 
-const SELECT_COLS = `id,recipient_email,recipient_id,subject,body_text,direct_url,attempts,status,created_at,next_attempt_at,event_id,notification_events(event_type,entity_id,project_id,severity,direct_url)`;
+// P1.5: correlation_id was NOT selected, so traceRow fell back to event_id — which the
+// canonical Batch-10 emitter never writes. The trace call therefore received undefined and
+// notification_trace stamped a fresh gen_random_uuid() on every email leg, breaking
+// correlation end to end: the enqueue's correlation_id and the delivery's trace row could
+// never be joined. The value was already on disk; it simply was not being read.
+const SELECT_COLS = `id,recipient_email,recipient_id,subject,body_text,direct_url,attempts,status,created_at,next_attempt_at,event_id,correlation_id,idempotency_key,notification_events(event_type,entity_id,project_id,severity,direct_url)`;
+
+/** Recover the event name from the idempotency key when the notification_events join is
+ *  empty. Canonical rows key as `<event>:<entity>:<user>` and rental as `rental:<event>:…`,
+ *  so the name IS on disk for every queued row — it was simply never read, and every one of
+ *  them was being attributed to the meaningless literal "email_delivery". */
+const eventFromKey = (key: string | null): string | null => {
+  const head = (key ?? "").split(":")[0]?.trim();
+  return head && head !== "evt" ? head : null;
+};
+
 const traceRow = (d: DeliveryRow, outcome: "email_sent" | "email_failed" | "email_skipped", errorClass: string | null, lifecycle?: string) => ({
-  correlation_id: d.event_id ?? undefined,
-  event_type: d.notification_events?.event_type ?? "email_delivery",
+  // Prefer the real correlation id; fall back to event_id for legacy pc_event_emit rows.
+  correlation_id: d.correlation_id ?? d.event_id ?? undefined,
+  event_type: d.notification_events?.event_type ?? eventFromKey(d.idempotency_key) ?? "email_delivery",
   entity_type: "email_delivery", entity_id: d.notification_events?.entity_id ?? null,
   project_id: d.notification_events?.project_id ?? null,
   recipient_id: d.recipient_id ?? null, recipient_reason: null,

@@ -259,3 +259,25 @@ test("P1.2 the confirm dialog quotes the horizon that actually applies", () => {
     "the dialog must not promise a 24h cut while the action uses a different window",
   );
 });
+
+// ─── (J) P1.5 · event attribution in the trace ──────────────────────────────
+
+test("P1.5 correlation_id is actually selected, not inferred from a column nobody writes", () => {
+  assert.match(WORKER, /SELECT_COLS = `[^`]*correlation_id[^`]*`/, "it must be read from the row");
+  assert.match(
+    WORKER,
+    /correlation_id:\s*d\.correlation_id\s*\?\?\s*d\.event_id/,
+    "the canonical Batch-10 emitter never writes event_id, so the old fallback was always " +
+      "undefined and notification_trace stamped a fresh uuid on every email leg",
+  );
+});
+
+test("P1.5 the event name is recovered from the idempotency key", () => {
+  assert.match(WORKER, /SELECT_COLS = `[^`]*idempotency_key[^`]*`/);
+  assert.match(WORKER, /const eventFromKey/);
+  assert.match(
+    WORKER,
+    /event_type:\s*d\.notification_events\?\.event_type\s*\?\?\s*eventFromKey\(d\.idempotency_key\)/,
+    "every queued row carries the event in its key; attributing them all to 'email_delivery' discarded it",
+  );
+});
