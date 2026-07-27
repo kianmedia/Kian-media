@@ -8,6 +8,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { getValidSession, getMyProfile, logout } from "@/lib/portal/auth";
+import { mfaMyAssurance } from "@/lib/portal/mfa";
+import MfaLoginChallenge from "@/components/portal/MfaLoginChallenge";
 import { updateMyProfile, type EditableProfileFields } from "@/lib/portal/account";
 import { unreadCount } from "@/lib/portal/notifications";
 import type { Profile } from "@/lib/portal/types";
@@ -48,7 +50,15 @@ export function usePortal(): PortalCtx {
   return c;
 }
 
-type Phase = "loading" | "auth" | "blocked" | "error" | "ready";
+// S3.5: "mfa_challenge" is shown INSTEAD of the portal when a privileged account holds
+// a verified TOTP factor but the session is still aal1. It is added here, rather than as
+// a route, precisely because every portal page mounts this shell — so a pasted deep link
+// during an aal1 session lands on the challenge instead of the page.
+//
+// It is safe to put in this union ONLY because entry is conditional on the user having
+// their OWN verified factor. An admin with no factor never reaches this phase, so
+// enrollment mode cannot lock anyone out of their own account.
+type Phase = "loading" | "auth" | "blocked" | "error" | "mfa_challenge" | "ready";
 
 export default function PortalShell({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
   const { t, isAr } = useI18n();
@@ -92,6 +102,29 @@ export default function PortalShell({ children, wide = false }: { children: Reac
     } catch {}
 
     setProfile(p);
+
+    // ─── S3.5 · privileged login MFA challenge ──────────────────────────────
+    // Only owner / super_admin / admin. Employees and clients are untouched.
+    //
+    // The gate is `has_verified_factor`, not "is privileged": an admin who has not
+    // enrolled passes straight through and can enrol whenever they like. That is the
+    // structural reason enrollment mode cannot lock anyone out — you can only be
+    // challenged by a factor you personally hold.
+    //
+    // Best-effort by construction: if the assurance RPC is unavailable (S3 SQL not
+    // applied, network blip), we fall through to the portal rather than stranding a
+    // legitimate admin on a screen we cannot resolve. A read failure must never deny.
+    const privileged = p.account_type === "admin" || p.staff_role === "super_admin";
+    if (privileged) {
+      try {
+        const a = await mfaMyAssurance();
+        if (a.ok && a.data.has_verified_factor && !a.data.is_aal2) {
+          setPhase("mfa_challenge");
+          return;
+        }
+      } catch { /* fall through to ready — never strand an admin */ }
+    }
+
     setPhase("ready");
 
     // Applicant tab: show "طلباتي" only if this email matches ≥1 opportunity
@@ -148,6 +181,18 @@ export default function PortalShell({ children, wide = false }: { children: Reac
   }
   if (phase === "auth") return <AuthTabs onAuthed={() => void bootstrap()} />;
   if (phase === "blocked") return <BlockedScreen />;
+  // Re-running bootstrap() after a successful verify re-reads assurance from Postgres
+  // rather than trusting the modal's own word for it, and lands the user on whatever
+  // route they originally requested — the shell never navigated away from it.
+  if (phase === "mfa_challenge") {
+    return (
+      <MfaLoginChallenge
+        email={profile?.email ?? ""}
+        onVerified={() => void bootstrap()}
+        onSignOut={() => void signOut()}
+      />
+    );
+  }
   if (phase === "error") {
     return (
       <div className="text-center" style={{ padding: "120px 24px" }}>
