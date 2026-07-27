@@ -583,7 +583,14 @@ export interface NotifyMonitorV2 {
   by_channel: { email: number; portal_7d: number };
   portal_inbox: { last7d: number; unread_30d: number };
   queued_nowhere: number; dead_letter: number; retrying: number; disabled_pending: number;
-  channel_state: "active" | "disabled" | "failing" | "unknown";
+  // P1.3: rows deferred because the Apps Script portal_notify handler is not deployed.
+  // Counted separately from disabled_pending so "switched off on purpose" (amber) and
+  // "the relay is broken" (red) stay distinguishable. Optional — the field is absent
+  // until docs/email_backbone_phase1_monitor_RUNME.sql is applied.
+  relay_pending?: number;
+  // "relay_missing" and "stale" are new in P1.3. Before it, a total blackout rendered
+  // as "active": every health counter reads zero when nothing is being delivered at all.
+  channel_state: "active" | "disabled" | "failing" | "unknown" | "relay_missing" | "stale";
   last_run: NotifyCronRun | null;
   generated_at: string;
 }

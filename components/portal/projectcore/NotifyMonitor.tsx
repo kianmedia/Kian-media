@@ -154,7 +154,24 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
   const s = (lr?.stats ?? {}) as Record<string, unknown>;
   const num = (k: string) => (typeof s[k] === "number" ? (s[k] as number) : 0);
   const chBanner =
-    data.channel_state === "disabled"
+    // P1.3 — the state that used to render EMERALD. When the Apps Script portal_notify
+    // handler is not deployed, every row defers with relay_handler_missing WITHOUT
+    // burning an attempt, so dead_letter / retrying / disabled_pending / last_failed all
+    // read zero and the old CASE fell through to "active": a green banner during a total
+    // blackout. It is now its own red state that names the file that fixes it.
+    data.channel_state === "relay_missing"
+      ? { cls: "bg-red-950/60 border-red-800 text-red-300",
+          msg: t({
+            ar: "لا يصل أي بريد: معالج Apps Script غير منشور. الرسائل محفوظة في الطابور ولم يضع شيء — الصق docs/apps_script_portal_notify_HANDLER.gs وانشر نسخة جديدة.",
+            en: "No email is being delivered: the Apps Script handler is not deployed. Nothing is lost — messages are held in the queue. Paste docs/apps_script_portal_notify_HANDLER.gs and deploy a NEW version.",
+          }) }
+      : data.channel_state === "stale"
+      ? { cls: "bg-amber-950/60 border-amber-800 text-amber-300",
+          msg: t({
+            ar: "لم تُسجَّل نبضة كرون منذ أكثر من 36 ساعة — الكرون نفسه متوقّف. آخر حالة معروفة قديمة ولا تعبّر عن الوضع الآن.",
+            en: "No cron heartbeat for over 36 hours — the cron itself has stopped. The last known state is stale and no longer reflects reality.",
+          }) }
+      : data.channel_state === "disabled"
       ? { cls: "bg-amber-950/60 border-amber-800 text-amber-300",
           msg: t({ ar: "قناة البريد معطّلة على الخادم — الرسائل تتراكم بانتظار تفعيل PROJECT_EMAIL_ALERTS_ENABLED. إشعارات البوابة تعمل.", en: "Email channel disabled on server — messages queue until PROJECT_EMAIL_ALERTS_ENABLED is on. Portal notifications still work." }) }
       : data.channel_state === "failing"

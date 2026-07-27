@@ -34,12 +34,17 @@ async function run(req: Request) {
   if (provided !== secret) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminConfigured()) return NextResponse.json({ ok: false, error: "server_not_configured" }, { status: 500 });
 
+  // P1.3: real failures observed during this run. Drives the heartbeat's ok flag and
+  // error text, which were previously hardcoded true/null. "*_SKIPPED" branches are NOT
+  // errors - they mean an optional module is not installed - so only genuine failures
+  // and thrown exceptions are collected here.
+  const errors: string[] = [];
   let reminders = 0;
   try {
     const r = await rpcAsService<{ ok: boolean; reminders: number }>("pc_reminders_scan", {});
     if (r.ok) reminders = r.data?.reminders ?? 0;
-    else log("REMINDERS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("REMINDERS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+    else { errors.push("REMINDERS_SCAN"); log("REMINDERS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) }); }
+  } catch (e) { errors.push("REMINDERS_SCAN"); log("REMINDERS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 3C: task/project operational alerts (blocked-too-long, review-stuck, project
   // heavily overdue). Idempotent via reminder_tracking; reuses this same daily cron.
@@ -47,8 +52,8 @@ async function run(req: Request) {
   try {
     const r = await rpcAsService<{ ok: boolean; emitted: number }>("pc_task_alerts_scan", {});
     if (r.ok) taskAlerts = r.data?.emitted ?? 0;
-    else log("TASK_ALERTS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("TASK_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+    else { errors.push("TASK_ALERTS_SCAN"); log("TASK_ALERTS_SCAN_FAILED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) }); }
+  } catch (e) { errors.push("TASK_ALERTS_SCAN"); log("TASK_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 5B: executive portfolio alerts (project became critical) — idempotent via
   // reminder_tracking + notification_events idem key. Reuses this same daily cron (no new cron).
@@ -58,7 +63,7 @@ async function run(req: Request) {
     const r = await rpcAsService<{ ok: boolean; emitted: number }>("executive_alerts_scan", {});
     if (r.ok) execAlerts = r.data?.emitted ?? 0;
     else log("EXEC_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("EXEC_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+  } catch (e) { errors.push("EXEC_ALERTS_SCAN"); log("EXEC_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 5B: capture a weekly KPI snapshot (idempotent per ISO period) — foundation for trends.
   try { await rpcAsService<{ ok: boolean }>("executive_snapshot_capture", { p_period: "weekly" }); }
@@ -71,7 +76,7 @@ async function run(req: Request) {
     const r = await rpcAsService<{ ok: boolean; emitted: number }>("closure_alerts_scan", {});
     if (r.ok) closureAlerts = r.data?.emitted ?? 0;
     else log("CLOSURE_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("CLOSURE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+  } catch (e) { errors.push("CLOSURE_ALERTS_SCAN"); log("CLOSURE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 9C: resource/planning conflict alerts. The producer resource_alerts_scan was
   // fully built (4D) but NEVER invoked by any cron — a confirmed break (conflicts/
@@ -82,7 +87,7 @@ async function run(req: Request) {
     const r = await rpcAsService<{ ok: boolean; alerts_emitted: number }>("resource_alerts_scan", {});
     if (r.ok) resourceAlerts = r.data?.alerts_emitted ?? 0;
     else log("RESOURCE_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("RESOURCE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+  } catch (e) { errors.push("RESOURCE_ALERTS_SCAN"); log("RESOURCE_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 9C: governance critical alerts — a critical risk/issue was raised but no event
   // was ever emitted (confirmed break). Idempotent via reminder_tracking; guarded if absent.
@@ -91,7 +96,7 @@ async function run(req: Request) {
     const r = await rpcAsService<{ ok: boolean; emitted: number }>("pc_governance_alerts_scan", {});
     if (r.ok) govAlerts = r.data?.emitted ?? 0;
     else log("GOV_ALERTS_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("GOV_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+  } catch (e) { errors.push("GOV_ALERTS_SCAN"); log("GOV_ALERTS_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 9C: program SLA breach alerts (8D). The RPC self-guards (returns skipped) if 8D
   // isn't installed, so this block is safe regardless of environment.
@@ -100,7 +105,7 @@ async function run(req: Request) {
     const r = await rpcAsService<{ ok: boolean; emitted: number }>("pc_program_sla_scan", {});
     if (r.ok) slaAlerts = r.data?.emitted ?? 0;
     else log("SLA_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
-  } catch (e) { log("SLA_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
+  } catch (e) { errors.push("SLA_SCAN"); log("SLA_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
   // Batch 9E: structured drain telemetry (cron is the FALLBACK path; the primary
   // path is immediate bounded processing via the drain kick after each action).
@@ -130,9 +135,19 @@ async function run(req: Request) {
   log("NOTIFY_EMAIL_RUN", stats);
   // Batch 9C: persist a cron heartbeat so the monitor can distinguish a dead cron / disabled
   // channel from a quiet-but-healthy queue. Best-effort — a telemetry failure never fails the run.
-  try { await rpcAsService("pc_notify_cron_record", { p_job: "notify-email", p_ok: true, p_stats: stats, p_error: null }); }
-  catch (e) { log("CRON_HEARTBEAT_ERROR", { error: String(e).slice(0, 200) }); }
-  return NextResponse.json({ ok: true, ...stats });
+  //
+  // P1.3: p_ok was hardcoded `true`, so notification_cron_runs.ok was a constant, not a
+  // signal — a run in which every scan failed and every send died still recorded ok=true,
+  // and the monitor read it as healthy. It is now derived from what actually happened:
+  // any scan error, or a run where sends were attempted and none succeeded.
+  const runOk = errors.length === 0 && !(queue.claimed > 0 && queue.sent === 0);
+  try {
+    await rpcAsService("pc_notify_cron_record", {
+      p_job: "notify-email", p_ok: runOk, p_stats: stats,
+      p_error: errors.length > 0 ? errors.join("; ").slice(0, 300) : null,
+    });
+  } catch (e) { log("CRON_HEARTBEAT_ERROR", { error: String(e).slice(0, 200) }); }
+  return NextResponse.json({ ok: true, run_ok: runOk, ...stats });
 }
 
 export async function GET(req: Request) { return run(req); }
