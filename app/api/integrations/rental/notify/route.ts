@@ -11,7 +11,8 @@
 //        ثم يحلّ المستلمين ويرسل. الفشل لا يكسر الإجراء لكنه يُسجَّل دائمًا.
 // ════════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
-import { authGetUserId, selectAsService, authAdminEmails, adminConfigured } from "@/lib/server/supabaseAdmin";
+import { authGetUserId, selectAsService, authAdminEmails, adminConfigured, rpcAsService } from "@/lib/server/supabaseAdmin";
+import { processQueue } from "@/lib/server/notifyWorker";
 import { emailEndpoint, emailEndpointHost, custodyEmailEnabled, runtimeEnv } from "@/lib/server/custodyNotify";
 import { interpretRelayResponse } from "@/lib/server/projectNotify";
 
@@ -131,6 +132,49 @@ export async function POST(req: Request) {
   }
 
   const to = Array.from(recipients);
+
+  // ─── P1.4 · QUEUED PATH (feature-flagged, default OFF) ────────────────────
+  // Rental is the last email path that leaves without a queue row, because civ_notify
+  // deliberately excludes rental_% (custody_notification_matrix_RUNME.sql:51) — rental
+  // bodies carry money. Consequence: no idempotency key, no retry, no dead-letter, and
+  // invisible to the notification monitor.
+  //
+  // This is a SWITCH, not an addition. Running both would double-send every rental
+  // notification, so exactly one path executes. The flag lives in
+  // custody_inventory_settings.rental_email_queue_enabled and ships FALSE, so today the
+  // direct path below runs byte-for-byte as before and this block is inert.
+  //
+  // Do NOT flip the flag before the Apps Script portal_notify handler is deployed and a
+  // real notification has been observed reaching status 'sent'. Until then the queue
+  // would hold rental mail as relay_handler_missing instead of delivering it — the
+  // direct path is currently the one that works.
+  //
+  // The body is composed in SQL (civ_rental_email_body), not here, so this route cannot
+  // leak a forbidden field even if it is edited carelessly later: internal cost, margin,
+  // supplier pricing and payment/bank details are excluded at the source. Recipient
+  // linkage to the rental is verified server-side in civ_rental_email_recipient_allowed —
+  // an address that is neither the renter nor authorised staff is refused, not queued.
+  const flag = await rpcAsService<boolean>("civ_rental_email_queue_enabled", {});
+  if (flag.ok && flag.data === true) {
+    const ids: string[] = [];
+    const outcomes: Record<string, number> = {};
+    for (const email of to) {
+      const q = await rpcAsService<{ outcome?: string; delivery_id?: string | null }>(
+        "civ_rental_enqueue_email", {
+          p_event: event, p_rental: rr.id, p_recipient_email: email,
+          p_subject: SUBJECTS[event], p_url: "/client-portal/rentals", p_recipient_id: null,
+        });
+      const outcome = q.ok && q.data && typeof q.data.outcome === "string" ? q.data.outcome : "error";
+      outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
+      if (q.ok && q.data?.delivery_id) ids.push(q.data.delivery_id);
+    }
+    // Recipient addresses and amounts are never logged — counts and outcomes only.
+    log("rental_email_queued", { event, request_no: rr.request_number, recipient_count: to.length, outcomes });
+    const drained = ids.length > 0 ? await processQueue(ids.length, { deliveryIds: ids }) : null;
+    return NextResponse.json({ ok: true, queued: true, recipient_count: to.length, outcomes, sent: drained?.sent ?? 0 });
+  }
+
+  // ─── DIRECT PATH (current production behaviour — unchanged) ───────────────
   const url = emailEndpoint();
   if (!custodyEmailEnabled() || !url.startsWith("https://")) {
     log("rental_email_skipped", { reason: !custodyEmailEnabled() ? "disabled" : "no_endpoint", event, request_no: rr.request_number, recipient_count: to.length });
