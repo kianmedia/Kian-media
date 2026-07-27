@@ -23,9 +23,10 @@ import { useCallback, useEffect, useState } from "react";
 import { getValidSession } from "@/lib/portalAuth";
 import { qrSvg } from "@/lib/qr/qr";
 import { useI18n } from "@/lib/i18n";
+import MfaStepUp from "@/components/portal/MfaStepUp";
 import {
   mfaListFactors, mfaEnrollTotp, mfaChallenge, mfaVerify, mfaUnenroll,
-  mfaErrorText, type MfaFactor,
+  mfaMyAssurance, mfaErrorText, type MfaFactor, type MfaAssurance,
 } from "@/lib/portal/mfa";
 
 type Stage = "idle" | "loading" | "showing_qr" | "verifying";
@@ -43,6 +44,10 @@ export default function MfaEnrollment() {
   const [qr, setQr] = useState("");
   const [code, setCode] = useState("");
 
+  // S3 — current assurance, read from Postgres (never by decoding the JWT here).
+  const [assurance, setAssurance] = useState<MfaAssurance | null>(null);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+
   const clearEnrollment = useCallback(() => {
     setFactorId(""); setSecret(""); setQr(""); setCode("");
   }, []);
@@ -54,6 +59,10 @@ export default function MfaEnrollment() {
     const r = await mfaListFactors(s.access_token);
     if (!r.ok) { setErr(mfaErrorText(r.error, isAr)); setStage("idle"); return; }
     setFactors(r.data.filter((f) => f.factor_type === "totp"));
+    // Assurance is best-effort: if the S3 SQL is not applied yet this simply stays
+    // null and the badge is hidden. It must never block the factor list from showing.
+    const a = await mfaMyAssurance();
+    setAssurance(a.ok ? a.data : null);
     setStage("idle");
   }, [isAr, t]);
 
@@ -123,6 +132,40 @@ export default function MfaEnrollment() {
 
       {err && <p style={{ color: "#ff6b6b", fontSize: 13.5, marginBottom: 12 }}>{err}</p>}
       {notice && <p style={{ color: "#6ee7b7", fontSize: 13.5, marginBottom: 12 }}>{notice}</p>}
+
+      {/* Current assurance. Shown only when a factor exists — telling someone with no
+          authenticator that they are at "level 1" is noise, not information. */}
+      {assurance?.has_verified_factor && stage === "idle" && (
+        <div className="f-sans" style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          padding: "10px 13px", borderRadius: 4, marginBottom: 14, fontSize: 12.5,
+          background: assurance.is_aal2 ? "rgba(16,185,129,0.08)" : "rgba(255,255,255,0.03)",
+          border: `1px solid ${assurance.is_aal2 ? "rgba(16,185,129,0.28)" : "rgba(255,255,255,0.1)"}`,
+          color: assurance.is_aal2 ? "#6ee7b7" : "rgba(255,255,255,0.6)",
+        }}>
+          <span>
+            {assurance.is_aal2
+              ? t({ ar: "هذه الجلسة مُتحقَّق منها بخطوتين.", en: "This session is verified with two steps." })
+              : t({ ar: "هذه الجلسة بكلمة المرور فقط.", en: "This session is password-only." })}
+          </span>
+          {!assurance.is_aal2 && (
+            <button onClick={() => setStepUpOpen(true)}
+              style={{ fontSize: 12.5, color: "#fff", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}>
+              {t({ ar: "تأكيد الآن", en: "Verify now" })}
+            </button>
+          )}
+        </div>
+      )}
+
+      <MfaStepUp
+        open={stepUpOpen}
+        onCancel={() => setStepUpOpen(false)}
+        onVerified={() => {
+          setStepUpOpen(false);
+          setNotice(t({ ar: "تم تأكيد الهوية لهذه الجلسة.", en: "Identity confirmed for this session." }));
+          void refresh();
+        }}
+      />
 
       {/* ── existing factors ── */}
       {stage !== "showing_qr" && stage !== "verifying" && (

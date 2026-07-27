@@ -236,3 +236,61 @@ export function mfaErrorText(e: MfaError, isAr: boolean): string {
   const [ar, en] = m[e] ?? m.failed;
   return isAr ? ar : en;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// S3 — ASSURANCE STATE (read-only; enforces nothing)
+// ════════════════════════════════════════════════════════════════════════════
+
+/** What the UI is allowed to know about the caller's own assurance. Deliberately the
+ *  minimum: no sub, no session_id, no claim list. The temporary diagnostic that
+ *  exposed those was removed once M-009 was answered, and must not return by a side door. */
+export interface MfaAssurance {
+  authenticated: boolean;
+  /** 'aal1' | 'aal2' | null (null = the claim could not be read) */
+  aal: string | null;
+  is_aal2: boolean;
+  /** THE lock-out-prevention invariant: only a user who HAS a factor can ever be
+   *  challenged by one. Someone with no factor always passes. */
+  has_verified_factor: boolean;
+  /** 'off' | 'enrollment'. 'enforced' is not a legal value in the DB constraint. */
+  enforcement_mode: string;
+}
+
+/**
+ * Read the caller's assurance from Postgres.
+ *
+ * Deliberately NOT computed by decoding the JWT in JavaScript. Two routes in this repo
+ * base64-decode a token payload without verifying the signature; both are safe only
+ * because their output is re-validated downstream. Assurance is a security decision, so
+ * a forgeable source is unacceptable — one edited base64 segment would claim aal2.
+ * PostgREST verifies the signature before Postgres ever sees request.jwt.claims, which
+ * makes the database the only trustworthy reader. Confirmed live by M-009.
+ */
+export async function mfaMyAssurance(): Promise<MfaResult<MfaAssurance>> {
+  const { prpc } = await import("@/lib/portal/client");
+  const r = await prpc<MfaAssurance>("mfa_my_assurance", {});
+  if (!r.ok) {
+    // A missing function means the S3 SQL is not applied yet. Treat as "unknown",
+    // never as "denied" — this is a display helper and must not darken a UI.
+    return fail(/PGRST202|not find|does not exist/i.test(String(r.error)) ? "not_found" : "failed");
+  }
+  return { ok: true, data: r.data };
+}
+
+/**
+ * Raise the current session from aal1 to aal2 using an existing verified factor.
+ *
+ * This is the step-up path, distinct from enrollment: the factor already exists, so it
+ * challenges and verifies against it and stores the upgraded token.
+ */
+export async function mfaStepUp(session: Session, code: string): Promise<MfaResult<{ session: Session }>> {
+  const list = await mfaListFactors(session.access_token);
+  if (!list.ok) return fail(list.error);
+  const factor = list.data.find((f) => f.status === "verified" && f.factor_type === "totp");
+  if (!factor) return fail("not_found");
+  const ch = await mfaChallenge(session.access_token, factor.id);
+  if (!ch.ok) return fail(ch.error);
+  const v = await mfaVerify(session, factor.id, ch.data.challengeId, code);
+  if (!v.ok) return fail(v.error);
+  return { ok: true, data: { session: v.data.session } };
+}
