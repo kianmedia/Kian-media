@@ -282,8 +282,17 @@ test("PIN worker: query handles NULL next_attempt_at + backlog cutoff + attempts
   assert.ok(WORKER.includes("attempts=lt.") && WORKER.includes("MAX_ATTEMPTS"), "attempts cap");
 });
 test("PIN MAJOR-2: reaper leases on next_attempt_at (dwell-in-processing); claim stamps the lease", () => {
-  assert.ok(WORKER.includes("leaseIso") && /status: "processing", next_attempt_at: leaseIso/.test(WORKER), "claim stamps a processing lease");
-  assert.ok(WORKER.includes("status=eq.processing&next_attempt_at=lt."), "reaper reclaims by lease deadline, not row age");
+  // Phase 1 (P1.2) added `attempts` to the claim PATCH, so the lease and the status are
+  // no longer adjacent. Both must still be stamped together at claim time.
+  assert.ok(
+    WORKER.includes("leaseIso") && /status: "processing",[\s\S]{0,80}?next_attempt_at: leaseIso/.test(WORKER),
+    "claim stamps a processing lease",
+  );
+  // The bulk PATCH was replaced by reapStuck(), which selects by expired lease and can
+  // TERMINATE a row rather than only re-queueing it — the old version made a row whose
+  // send kept dying immortal.
+  assert.ok(/status=eq\.processing[\s\S]{0,120}?next_attempt_at\.lt\./.test(WORKER), "reaper reclaims by lease deadline, not row age");
+  assert.ok(/async function reapStuck/.test(WORKER), "reclamation is a named, bounded routine");
 });
 test("PIN MAJOR-3: trace outcomes stay within the delivery-log CHECK vocabulary", () => {
   assert.ok(!/traceRow\([^;]*"email_dead_letter"/.test(WORKER) && !/traceRow\([^;]*"email_retry_scheduled"/.test(WORKER), "no out-of-CHECK outcome literal reaches the log");

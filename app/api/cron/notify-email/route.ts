@@ -13,7 +13,7 @@
 import { NextResponse } from "next/server";
 import { rpcAsService, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { projectEmailEnabled } from "@/lib/server/projectNotify";
-import { processQueue, pendingBacklog } from "@/lib/server/notifyWorker";
+import { processQueue, pendingBacklog, RECOVERY_WINDOW_HOURS } from "@/lib/server/notifyWorker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -113,7 +113,9 @@ async function run(req: Request) {
   // and could never be claimed again. Widen the fallback lookback to 7 days; the cutoff
   // still exists (no unbounded blast of ancient mail), and the deliberate "expire old
   // backlog" admin tool remains the way to retire genuinely stale rows.
-  const RECOVERY_WINDOW_HOURS = 168;
+  //
+  // Phase 1: the value now lives in notifyWorker.ts and is imported, so the admin
+  // "expire old backlog" control discards on this exact horizon instead of its own 24h.
   const backlog = await pendingBacklog(RECOVERY_WINDOW_HOURS);
   const queue = await processQueue(30, { maxAgeHours: RECOVERY_WINDOW_HOURS });
   const stats = {

@@ -114,6 +114,11 @@ export async function sendProjectEmail(input: ProjectEmailInput): Promise<Projec
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       cache: "no-store",
       redirect: "follow",   // Apps Script /exec answers with a 302 to the real body
+      // Hard ceiling per send. Without it one hung Apps Script redirect could consume the
+      // whole function budget, cutting the run off with rows still claimed as 'processing'.
+      // A timeout throws, and the catch below maps it to network_error — a normal, burnable
+      // attempt, which is the correct classification for "the relay did not answer".
+      signal: AbortSignal.timeout(20_000),
       body: JSON.stringify({
         _type: "portal_notify",
         To: to.join(","),

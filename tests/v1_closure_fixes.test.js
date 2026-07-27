@@ -45,8 +45,17 @@ test("Q1: the defect is real — the recovery window was narrower than the cron 
 });
 
 test("Q2: the cron now looks back further than its own interval", () => {
-  const win = Number(/RECOVERY_WINDOW_HOURS = (\d+)/.exec(CRON)?.[1]);
+  // Phase 1 moved this constant into notifyWorker.ts and exported it, so the admin
+  // "expire old backlog" control discards on the SAME horizon (it previously used its
+  // own 24h and destroyed six days of deliverable mail). The cron imports it rather
+  // than declaring a local copy that could silently diverge.
+  const win = Number(/export const RECOVERY_WINDOW_HOURS = (\d+)/.exec(WORKER)?.[1]);
   assert.equal(win, 168, "7-day recovery window");
+  assert.ok(
+    /import\s*\{[^}]*RECOVERY_WINDOW_HOURS[^}]*\}\s*from\s*"@\/lib\/server\/notifyWorker"/.test(CRON),
+    "the cron must import the shared constant",
+  );
+  assert.ok(!/const\s+RECOVERY_WINDOW_HOURS\s*=/.test(CRON), "and must not shadow it locally");
   assert.ok(win > 24, "strictly wider than the daily interval — nothing can slip through");
   assert.ok(/processQueue\(30, \{ maxAgeHours: RECOVERY_WINDOW_HOURS \}\)/.test(CRON), "passed to the worker");
   assert.ok(/pendingBacklog\(RECOVERY_WINDOW_HOURS\)/.test(CRON), "telemetry measures the same window");

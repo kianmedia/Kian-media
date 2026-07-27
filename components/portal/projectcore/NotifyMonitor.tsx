@@ -73,7 +73,16 @@ export function NotifyMonitor({ flash }: { flash: (m: string) => void }) {
   }
   async function runAdmin(action: "self_test" | "process_now" | "backlog_preview" | "backlog_classify" | "expire_backlog") {
     if (adminBusy) return;
-    if (action === "expire_backlog" && !window.confirm(t({ ar: "تعليم رسائل الـBacklog القديمة (أقدم من 24 ساعة) كمتجاهَلة؟ لن تُرسَل.", en: "Mark old backlog (>24h) as skipped? They will NOT be sent." }))) return;
+    // The horizon comes from the server (RECOVERY_WINDOW_HOURS), not a literal here: the
+    // dialog used to promise ">24h" while the action expired on a different window, so an
+    // admin could be told they were discarding a day of mail and discard a week's.
+    // expire_after_hours, NOT window_hours: the latter is the 24h preview lens.
+    const expireH = Number(backlog?.expire_after_hours ?? 0);
+    const expireLabel = expireH > 0 ? String(expireH) : "?";
+    if (action === "expire_backlog" && !window.confirm(t({
+      ar: `تعليم رسائل الـBacklog الأقدم من ${expireLabel} ساعة كمتجاهَلة؟ لن تُرسَل.`,
+      en: `Mark backlog older than ${expireLabel}h as skipped? They will NOT be sent.`,
+    }))) return;
     setAdminBusy(true); setAdminMsg(null);
     const r = await notificationAdminAction(action);
     setAdminBusy(false);

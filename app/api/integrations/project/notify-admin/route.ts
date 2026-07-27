@@ -12,9 +12,14 @@
 import { NextResponse } from "next/server";
 import { authGetUserId, rpcAsUser, rpcAsService, selectAsService, patchAsService, authAdminEmails, adminConfigured } from "@/lib/server/supabaseAdmin";
 import { sendProjectEmail, projectEmailEnabled } from "@/lib/server/projectNotify";
-import { processQueue, pendingBacklog } from "@/lib/server/notifyWorker";
+import { processQueue, pendingBacklog, RECOVERY_WINDOW_HOURS } from "@/lib/server/notifyWorker";
 
-const BACKLOG_HOURS = 24;   // older than this = expired backlog (never auto-sent)
+const BACKLOG_HOURS = 24;   // older than this = "old backlog" for preview/classify purposes
+// The EXPIRE action must use the cron's own horizon, not BACKLOG_HOURS. The cron looks
+// back RECOVERY_WINDOW_HOURS (168h), so expiring at 24h was discarding six days of mail
+// the cron would still have delivered — an admin clicking "expire old backlog" silently
+// destroyed deliverable messages. Preview/classify keep the narrower 24h lens.
+const EXPIRE_AFTER_HOURS = RECOVERY_WINDOW_HOURS;
 const RECENT_HOURS = 2;     // Batch 10 · Phase 10 — "recent" eligibility window
 // Critical events worth a manual one-off retry when recent (never a mass send).
 const CRITICAL_EVENTS = new Set([
@@ -110,6 +115,10 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({
       ok: true, window_hours: BACKLOG_HOURS,
+      // The preview lens (24h) and the horizon the EXPIRE action actually uses (168h) are
+      // different numbers. Both are returned so the confirm dialog can quote the one that
+      // governs what will really be discarded, instead of a literal that no longer matches.
+      expire_after_hours: EXPIRE_AFTER_HOURS,
       pending: backlog, would_send: backlog.recent, would_defer: backlog.old,
       by_type: byType, sample, email_channel_enabled: projectEmailEnabled(),
     });
@@ -123,12 +132,12 @@ export async function POST(req: Request) {
     const me = prof.ok ? prof.data[0] : null;
     const isOwner = !!me && me.account_status === "active" && (me.account_type === "admin" || me.staff_role === "super_admin");
     if (!isOwner) return NextResponse.json({ ok: false, error: "forbidden_owner_only" }, { status: 403 });
-    const cutoffIso = new Date(Date.now() - BACKLOG_HOURS * 3600_000).toISOString();
+    const cutoffIso = new Date(Date.now() - EXPIRE_AFTER_HOURS * 3600_000).toISOString();
     const before = await selectAsService<{ id: string }[]>(`email_deliveries?select=id&status=eq.pending&created_at=lt.${encodeURIComponent(cutoffIso)}&limit=5000`);
     const n = before.ok && Array.isArray(before.data) ? before.data.length : 0;
     if (n > 0) await patchAsService(`email_deliveries?status=eq.pending&created_at=lt.${encodeURIComponent(cutoffIso)}`, { status: "skipped", last_error: "backlog_expired" });
-    log("NOTIFY_ADMIN_EXPIRE_BACKLOG", { expired: n });
-    return NextResponse.json({ ok: true, expired: n, window_hours: BACKLOG_HOURS });
+    log("NOTIFY_ADMIN_EXPIRE_BACKLOG", { expired: n, window_hours: EXPIRE_AFTER_HOURS });
+    return NextResponse.json({ ok: true, expired: n, window_hours: EXPIRE_AFTER_HOURS });
   }
 
   if (action === "backlog_classify") {

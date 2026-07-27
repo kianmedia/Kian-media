@@ -108,10 +108,25 @@ test("11.3 handler is additive and safe (never breaks the working quote path)", 
 // ─── (D) channel-level handling: no attempt burn, no dead-letter, no duplicates ───
 test("11.4 relay_handler_missing is treated as a CHANNEL condition in the worker", () => {
   assert.ok(/res\.reason === "relay_handler_missing"/.test(WORKER), "recognized alongside disabled/no_endpoint");
-  const i = WORKER.indexOf('relay_handler_missing');
-  const block = WORKER.slice(i - 400, i + 500);
+  // Locate the channel-condition branch itself (not the first textual mention).
+  const i = WORKER.indexOf('if (res.reason === "disabled"');
+  assert.ok(i > 0, "the channel-condition branch must exist");
+  // Slice to the branch's own closing statement rather than a fixed character count —
+  // a fixed window silently stops covering the branch as soon as a comment is added.
+  const end = WORKER.indexOf('return "channel_"', i);
+  assert.ok(end > i, "the branch must end by returning a channel_ outcome");
+  const block = WORKER.slice(i, end);
   assert.ok(/status:\s*"pending"/.test(block), "row stays pending (nothing lost)");
-  assert.ok(!/attempts:/.test(block), "no attempt is burned → cannot dead-letter into oblivion");
+  // Phase 1 (P1.2) burns the attempt at CLAIM time so a crashed send can terminate.
+  // That made this branch's obligation explicit rather than implicit: it must HAND THE
+  // ATTEMPT BACK. Asserting the restore is strictly stronger than the old check for the
+  // absence of `attempts:`, which would now pass even if the branch burned one.
+  assert.ok(
+    /attempts:\s*d\.attempts\s*\?\?\s*0/.test(block),
+    "a channel outage must restore the pre-claim attempt count, or an undeployed handler " +
+      "would dead-letter the whole queue in MAX_ATTEMPTS runs",
+  );
+  assert.ok(!/attempts:\s*claimedAttempts/.test(block), "it must NOT keep the claimed increment");
   assert.ok(/30 \* 60_000/.test(block), "short defer so the queue self-heals after the handler is applied");
 });
 test("11.4 both senders return the channel reason instead of a false success", () => {
