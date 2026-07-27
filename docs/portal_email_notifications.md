@@ -61,7 +61,29 @@ recipient (client/staff/applicant); an event WITHOUT a `To` goes to `KIAN_ADMIN_
 
 ---
 
-## Step 2 — REQUIRED Apps Script handler (owner action)
+## Step 2 — ⛔ SUPERSEDED Apps Script handler (do not paste the snippet below)
+
+> **Use instead:** [`docs/apps_script_portal_notify_HANDLER.gs`](apps_script_portal_notify_HANDLER.gs),
+> deployed per [`docs/APPS_SCRIPT_DEPLOYMENT_RUNBOOK.md`](APPS_SCRIPT_DEPLOYMENT_RUNBOOK.md).
+>
+> **Why the snippet below is harmful, not merely outdated.** It ends with
+> `return ContentService.createTextOutput("ok")` — a plain-text body, not JSON.
+> `lib/server/projectNotify.ts:77` treats any non-JSON reply as `relay_handler_missing`,
+> deliberately: the deployed Web App answers with a health banner, so trusting a bare
+> "ok" would recreate exactly the false success that hid the original outage.
+>
+> The failure mode is worse than no email at all:
+> 1. `MailApp.sendEmail` **does** deliver the message.
+> 2. Our side cannot recognise the reply → classifies it `relay_handler_missing`.
+> 3. `lib/server/notifyWorker.ts:95-100` keeps the row `pending` and **does not burn an attempt**.
+> 4. The next cron run sends it **again** — repeating daily until the 7-day window lapses.
+>
+> ⇒ roughly **7 duplicate emails per notification**, silently. The supported handler
+> replies `{"ok":true,"handler":"portal_notify","sent":N}`, so the row is marked sent
+> the first time. The payload-key documentation above this section is still accurate
+> and is unchanged.
+
+### Historical snippet (kept for reference only — superseded)
 
 Add this branch to the existing `doPost(e)` in the Apps Script project, set
 `KIAN_ADMIN_EMAIL`, then **Deploy → Manage deployments → edit → new version**

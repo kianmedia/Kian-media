@@ -9,7 +9,8 @@
 //   • Atomic claim: pending → processing only if still pending (no double-send).
 //   • Provider confirmation: 'sent' ONLY when the relay body confirms acceptance
 //     (sendProjectEmail reads the Apps Script response) — not on bare HTTP 200.
-//   • Backoff 10m·2^attempts; attempts>=MAX → terminal 'failed' (dead-letter).
+//   • Backoff 5m·2^attempts → 10m, 20m, 40m, 80m; attempts>=MAX → terminal 'failed'
+//     (dead-letter). The formula is at :104 and matches NOTIFICATION_EVENT_CONTRACT.md:175.
 //   • disabled/no_endpoint keep the row 'pending' (config gap, not a burned try).
 //   • Every row's email lifecycle is written to notification_delivery_log.
 // Never throws in a way that breaks the caller. No secrets/full emails logged.

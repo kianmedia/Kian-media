@@ -1,18 +1,27 @@
 // ════════════════════════════════════════════════════════════════════════
 // POST /api/integrations/notify/drain   (SERVER-ONLY, immediate bounded drain)
 //
-// Batch 9E — the PRIMARY (immediate) email path. DB-trigger producers
-// (pc_event_emit, e.g. client_deliverable_approved) enqueue email_deliveries
-// rows but cannot call an HTTP worker; the daily cron was the only drainer, so
-// queued mail sat pending for up to a day. Any authenticated action that just
-// caused an enqueue (client approve/revision, preview send, …) fires this
-// endpoint fire-and-forget; it runs a BOUNDED batch of the SAME shared worker,
-// so mail goes out within seconds. The daily cron remains the fallback for
-// retries, stale rows, and anything missed.
+// WHAT THIS IS TODAY: an ADMIN-ONLY manual escape hatch. It has NO automatic
+// caller — grep for "integrations/notify" returns only this header and two test
+// string-pins. Do not describe it as part of the normal send path.
 //
-// Batch 9F: ADMIN-ONLY (can_manage_projects). Regular users can no longer drain
-// the general queue — event-scoped draining now happens server-authoritatively
-// inside the review/preview routes. Recent-only + bounded; no secret exposed.
+// The immediate path is now event-bound and lives inside the routes that cause
+// the enqueue: they receive the exact delivery IDs back from the enqueue RPC and
+// drain precisely those rows in the same request —
+//   lib/server/notifyEvent.ts:178-180
+//   app/api/integrations/project/notify/route.ts:91-92
+//   app/api/integrations/project/review/route.ts:128
+// The daily cron (/api/cron/notify-email) remains the fallback for retries,
+// stale rows, and anything the in-request drain missed.
+//
+// HISTORY (why the code looks like this): Batch 9E introduced this endpoint as
+// the primary immediate path, fired fire-and-forget by any authenticated action
+// that had just enqueued. Batch 9F then restricted it to can_manage_projects and
+// moved event-scoped draining server-authoritatively into the review/preview
+// routes, which left this endpoint with no caller. The Batch 9E description
+// survived here unchanged until Phase 1 and contradicted the Batch 9F note
+// directly below it — that stale paragraph is what this comment replaces.
+// Recent-only + bounded; no secret exposed.
 // ════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
 import { authGetUserId, rpcAsUser, adminConfigured } from "@/lib/server/supabaseAdmin";

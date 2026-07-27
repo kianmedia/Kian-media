@@ -17,6 +17,12 @@ import { processQueue, pendingBacklog } from "@/lib/server/notifyWorker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// This route runs 7 governance/SLA scans and then drains up to 30 queue rows, each of
+// which makes an outbound call to the Apps Script relay. On the default budget a slow
+// relay can cut the run off midway, leaving rows claimed as 'processing' that only the
+// next day's reaper releases. Mirrors app/api/cron/zoho-sync/route.ts. Raising a ceiling
+// is the only runtime effect — it cannot shorten anything.
+export const maxDuration = 120;
 const log = (tag: string, extra: Record<string, unknown>) => console.log(JSON.stringify({ tag, ...extra }));
 
 async function run(req: Request) {

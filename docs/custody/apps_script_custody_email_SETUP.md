@@ -1,4 +1,27 @@
-# تفعيل إيميلات العهدة والتأجير — معالج Apps Script (لصق جاهز)
+> # ⛔ متجاوَز — لا تلصق هذا المقطع
+>
+> **استخدم بدلًا منه:** [`docs/apps_script_portal_notify_HANDLER.gs`](../apps_script_portal_notify_HANDLER.gs)
+> وخطواته في [`docs/APPS_SCRIPT_DEPLOYMENT_RUNBOOK.md`](../APPS_SCRIPT_DEPLOYMENT_RUNBOOK.md).
+>
+> **لماذا هذا المقطع خطر:** يُرسل البريد فعلًا (`MailApp.sendEmail` أدناه) لكنّه يردّ
+> `{"ok":true}` **بلا حقل `handler`**. و`lib/server/projectNotify.ts:100` — عن قصد —
+> لا يعتبر `ok:true` وحده إثباتًا للتسليم (رابط الـWeb App المنشور يردّ
+> `{"ok":true,"message":"…forms API is live"}` كلافتة صحّة، لا كإيصال إرسال).
+>
+> والنتيجة سلسلة أسوأ من عدم الإرسال:
+> 1. البريد **يُرسَل** إلى المستلِم.
+> 2. الموقع يقرأ الرد فلا يجد `handler` ⇒ يُصنّفه `relay_handler_missing`.
+> 3. `lib/server/notifyWorker.ts:95-100` يُبقي الصفّ `pending` **دون احتساب محاولة**.
+> 4. التشغيل التالي للـCron يُرسل **مرّة أخرى**… ويتكرّر يوميًا حتى تنتهي نافذة الـ7 أيام.
+>
+> ⇒ **نحو 7 رسائل مكرّرة لكل إشعار واحد، بصمت.** المعالج المعتمَد يردّ
+> `{"ok":true,"handler":"portal_notify","sent":N}` فيُعلَّم الصفّ «أُرسل» من أوّل مرّة.
+>
+> يبقى الملف للسجل التاريخي فقط.
+
+---
+
+# تفعيل إيميلات العهدة والتأجير — معالج Apps Script (لصق جاهز) — ⛔ متجاوَز
 
 البوابة تُرسل الآن تلقائيًا حمولة `_type: "portal_notify"` إلى **نفس Google Apps Script
 الموجود** (الذي يستقبل نماذج الموقع — `SHEETS_ENDPOINT` / `PORTAL_NOTIFY_ENDPOINT`).
