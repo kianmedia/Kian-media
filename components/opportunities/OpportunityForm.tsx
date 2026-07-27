@@ -63,7 +63,20 @@ export default function OpportunityForm({ type, onBack }: { type: OppType; onBac
       details, consent: true,
     });
     setBusy(false);
-    if (!r.ok) { setErr(t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " }) + r.error); return; }
+    if (!r.ok) {
+      // The server-side rate limit (docs/public_portal_rate_limit_RUNME.sql) raises a
+      // Postgres exception. Show the visitor a human sentence instead of raw SQL text —
+      // and never leak the internal message. Every other failure keeps its detail, which
+      // is genuinely useful when a real validation rule rejects the submission.
+      const raw = String(r.error ?? "");
+      setErr(/rate limited/i.test(raw)
+        ? t({
+            ar: "أرسلتَ عدّة طلبات خلال وقت قصير. انتظر قليلًا ثم حاول مجددًا — طلبك السابق وصلنا.",
+            en: "You've sent several requests in a short time. Please wait a moment and try again — your earlier request did reach us.",
+          })
+        : t({ ar: "تعذّر إرسال الطلب: ", en: "Couldn't submit: " }) + raw);
+      return;
+    }
     const num = r.data || "";
     // Fire-and-forget emails (Kian + applicant). Never block the success state.
     void notifyOpportunityNew({ type: isAr ? type.ar : type.en, fullName: (values.full_name || "").trim(), email: values.email, phone: values.phone, city: values.city, message: values.message, requestNumber: num });

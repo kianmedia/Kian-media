@@ -217,3 +217,78 @@ test("RL6: rate limiting keeps the route's 'never show a technical error' contra
   assert.ok(hits.length >= 2, "both brakes return a response");
   for (const s of hits) assert.equal(s, "200", "rate limiting must not turn into a visible form error");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// The proven anon-exposure hole: submit_opportunity_request.
+// LIVE PROOF (public anon key, no auth): the call returns
+//   {"code":"P0001","message":"invalid opportunity type"}
+// — an exception raised from INSIDE the function body, so anon holds EXECUTE and the
+// function ran. Control: capture_public_intake returns PGRST202 (invisible to anon).
+// Anyone could POST directly, bypassing the honeypot and every UI validation, inserting
+// rows and firing notifications without limit.
+//
+// The grant CANNOT be revoked — the public opportunities form calls this RPC straight from
+// the browser with the anon key. So the protection has to live INSIDE the function.
+// ════════════════════════════════════════════════════════════════════════════
+const RLSQL = R("docs/public_portal_rate_limit_RUNME.sql");
+const OPPFORM = R("components/opportunities/OpportunityForm.tsx");
+
+test("OPP1: the public form keeps working — anon EXECUTE is preserved, not revoked", () => {
+  assert.ok(/grant\s+execute on function public\.submit_opportunity_request\([^)]*\) to anon, authenticated/.test(RLSQL),
+    "revoking this would kill the public opportunities form");
+  assert.ok(/the public opportunities form would be dead \(anon lost EXECUTE\)/.test(RLSQL),
+    "the self-test refuses to leave the form broken");
+});
+
+test("OPP2: protection is INSIDE the function, not in the UI", () => {
+  const fn = RLSQL.slice(RLSQL.indexOf("create or replace function public.submit_opportunity_request"));
+  assert.ok(/rl_consume\('opp:email:'/.test(fn), "per-email cap inside the RPC");
+  assert.ok(/rl_consume\('opp:anon:'/.test(fn), "shared cap when no email is supplied");
+  assert.ok(/raise exception 'rate limited/.test(fn), "refuses over the cap");
+  assert.ok(/length\(v_name\) > 200/.test(fn) && /length\(coalesce\(p_message,''\)\) > 5000/.test(fn),
+    "size limits enforced server-side — the UI maxLength is bypassable by a direct POST");
+});
+
+test("OPP3: a double submit returns the SAME request number instead of a second row", () => {
+  const fn = RLSQL.slice(RLSQL.indexOf("create or replace function public.submit_opportunity_request"));
+  assert.ok(/interval '10 minutes'/.test(fn), "dedupe window");
+  assert.ok(/if v_dupe is not null then return v_dupe; end if/.test(fn), "returns the original number");
+  assert.ok(/lower\(o\.email\) = v_email[\s\S]{0,120}opportunity_type = p_type/.test(fn),
+    "scoped to the same email AND type, so a different opportunity is never blocked");
+});
+
+test("OPP4: the counter is durable and shared, unlike the in-memory limiter", () => {
+  assert.ok(/create table if not exists public\.public_rate_limits/.test(RLSQL), "persisted");
+  assert.ok(/on conflict \(bucket\) do update/.test(RLSQL), "atomic upsert — safe under concurrency");
+  assert.ok(/Shared across all serverless instances/.test(RLSQL), "the reason is documented");
+  assert.ok(/rl_prune/.test(RLSQL), "old windows are pruned without adding a cron");
+});
+
+test("OPP5: the counters are not reachable by anon", () => {
+  assert.ok(/revoke all on table public\.public_rate_limits from public/.test(RLSQL));
+  assert.ok(/rl_consume must not be anon-callable/.test(RLSQL), "self-test asserts it");
+  assert.ok(/counters must not be readable by anon/.test(RLSQL));
+});
+
+test("OPP6: the frozen notification logic is preserved byte-for-byte", () => {
+  const fn = RLSQL.slice(RLSQL.indexOf("create or replace function public.submit_opportunity_request"));
+  assert.ok(/perform public\.notify\(null, 'admin', 'opportunity_new', 'opportunity', v_id, v_ar, v_en\)/.test(fn),
+    "admin broadcast unchanged");
+  assert.ok(/staff_role = 'super_admin'/.test(fn) && /staff_role = 'hr'/.test(fn) && /staff_role = 'manager'/.test(fn),
+    "the routing rules are untouched");
+});
+
+test("OPP7: the visitor sees a human message, never raw Postgres text", () => {
+  assert.ok(/rate limited\/i\.test\(raw\)/.test(OPPFORM), "detects the server refusal");
+  assert.ok(/أرسلتَ عدّة طلبات خلال وقت قصير/.test(OPPFORM), "Arabic copy");
+  assert.ok(/طلبك السابق وصلنا/.test(OPPFORM), "reassures that the earlier submission was received");
+});
+
+test("OPP8: the SQL is additive and reversible", () => {
+  const code = RLSQL.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+  assert.ok(!/\bdrop\s+table\b/i.test(code), "no DROP TABLE");
+  assert.ok(!/delete\s+from\s+public\.opportunity_requests/i.test(code), "never deletes business data");
+  assert.ok(/create table if not exists/.test(code) && /create or replace function/.test(code), "re-runnable");
+  assert.ok(/RL FAIL/.test(RLSQL) && /RL SELF-TEST PASSED/.test(RLSQL), "self-tested");
+  assert.ok(/VERIFICATION/.test(RLSQL) && /ROLLBACK/.test(RLSQL), "verification + rollback documented");
+});
