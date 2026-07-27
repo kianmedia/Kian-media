@@ -11,6 +11,7 @@ import { usePortal } from "@/components/portal/PortalShell";
 import { Label, TextField } from "@/components/forms/Field";
 import { updateMyProfile, getMyPrefs, updateMyPrefs } from "@/lib/portal/account";
 import { isValidMobile } from "@/lib/submitForm";
+import MfaEnrollment from "@/components/portal/MfaEnrollment";
 import type { NotificationPreferences, PreferredLang } from "@/lib/portal/types";
 
 const LEVEL_LABEL = {
@@ -175,6 +176,12 @@ export default function ProfileSettings() {
         style={{ justifyContent: "center", opacity: saving || readOnly ? 0.6 : 1, cursor: saving || readOnly ? "default" : "pointer" }}>
         <span>{saving ? "..." : t({ ar: "حفظ التغييرات", en: "Save Changes" })}</span>
       </button>
+
+      {/* P2 · S2 — TOTP enrollment. Voluntary at this stage: the enforcement mode ships
+          'off', and 'enforced' is not even a legal value in the database constraint.
+          It sits below the save button because it manages its own state and must not be
+          entangled with the profile form's save cycle. */}
+      <MfaEnrollment />
 
       <p className="f-sans" style={{ marginTop: "22px", fontSize: "11px", color: "rgba(255,255,255,0.4)" }}>
         <a href="/privacy-policy" target="_blank" rel="noopener noreferrer" style={{ color: "rgba(255,255,255,0.55)", textDecoration: "none" }}>{t({ ar: "سياسة الخصوصية", en: "Privacy Policy" })}</a>

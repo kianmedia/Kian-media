@@ -214,11 +214,15 @@ test("S1 stores no TOTP secret, code or token", () => {
   }
 });
 
-// ─── (H) S1b · the probe must be callable from a REAL session, not the SQL editor ──
+// ─── (H) S1b · the probe reports the claims, and runs under a real session ────
+//
+// The route and page that exercised this shipped only long enough to answer the
+// question. M-009 came back PASS (aal=aal1, sub, session_id and amr all present from
+// an authenticated owner session), so both were removed: a permanent surface that can
+// print JWT claims is not something to leave in production for a one-time answer.
+// The SQL function remains, owner-gated and unreferenced by any UI.
 
 const S1B = R("docs/mfa_probe_claims_s1b_RUNME.sql");
-const ROUTE = R("app/api/admin/mfa-probe/route.ts");
-const PAGE = R("app/client-portal/mfa-diagnostics/page.tsx");
 const s1b = S1B.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
 
 test("S1b the probe reports the four claims the owner asked to see", () => {
@@ -244,31 +248,9 @@ test("S1b is read-only and leaks no claim content in errors", () => {
   assert.match(s1b, /'probe_error', sqlstate/, "errors surface a SQLSTATE, never the payload");
 });
 
-test("S1b the diagnostic route is owner-only and verifies identity properly", () => {
-  assert.match(ROUTE, /authGetUserId\(bearer\)/, "identity comes from GoTrue, not from decoding the token");
-  assert.ok(!/atob|Buffer\.from\([^)]*base64/.test(ROUTE),
-    "decoding a JWT payload without verifying the signature is forgeable and must never gate access");
-  assert.match(ROUTE, /rpcAsUser<boolean>\("is_owner", \{\}, bearer\)/);
-  assert.match(ROUTE, /owner\.data !== true/, "a NULL or missing result must not pass");
-  assert.match(ROUTE, /forbidden_owner_only/);
-});
-
-test("S1b the probe runs under the caller's own JWT — the entire point", () => {
-  assert.match(ROUTE, /rpcAsUser<Record<string, unknown>>\("mfa_claim_probe", \{\}, bearer\)/,
-    "rpcAsService would run as service_role and carry no session claims, answering the wrong question");
-});
-
-test("S1b neither the route nor the page logs a token or claim payload", () => {
-  const logged = [...ROUTE.matchAll(/log\("[A-Z_]+",\s*\{([^}]*)\}/g)].map((m) => m[1]).join(" ");
-  for (const f of ["sub", "session_id", "bearer", "access_token", "claims:", "probe.data"]) {
-    assert.ok(!new RegExp(f.replace(/[.:]/g, "\\$&")).test(logged), `'${f}' must not be logged`);
+test("S1b the temporary diagnostic surface is gone from the app", () => {
+  for (const f of ["app/api/admin/mfa-probe/route.ts", "app/client-portal/mfa-diagnostics/page.tsx"]) {
+    assert.ok(!fs.existsSync(path.join(root, f)),
+      `${f} answered M-009 and was removed; it must not ship to production`);
   }
-  assert.match(logged, /aal/, "only the assurance level and a boolean are logged");
-  assert.ok(!/console\.(log|error)/.test(PAGE), "the page must not log anything");
-  assert.ok(!/access_token/.test(PAGE.replace(/Authorization: `Bearer \$\{s\.access_token\}`/, "")),
-    "the token is used for the request and never rendered or stored");
-});
-
-test("S1b the route is uncacheable", () => {
-  assert.match(ROUTE, /no-store/);
 });
