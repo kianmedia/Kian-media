@@ -84,8 +84,11 @@
 --   لا يغيّر أيّ صيغة · لا يُصدر أيّ grant/revoke (create or replace يحافظ عليها)
 --   · لا يمسّ is_owner()/is_admin()/can_manage_projects()/can_manage_staff()/
 --     mfa_admin_set_mode · لا سياسة SELECT · لا DROP · لا DELETE/TRUNCATE على المستوى
---     الأعلى · idempotent · لا يمسّ admin_copy_profession_permissions ولا
---     admin_apply_profession_template ولا admin_bulk_set_profession_permissions
+--     الأعلى · idempotent.
+--     ⚠️ admin_copy_profession_permissions و admin_apply_profession_template **مشمولتان**
+--     (أُضيفتا بعد مراجعة عدائية أثبتت أنهما تكتبان نفس صفوف profession_permissions،
+--     فكانتا تجاوزًا كاملًا للبوّابة). admin_bulk_set_profession_permissions تبقى خارجها
+--     لأنها بلا تفويض خاصّ بها وتفوّض للدالّة الداخلية المبوَّبة، فترث البوّابة.
 --     (خارج القائمة السبعة عمدًا).
 --
 -- ★ أثر تشغيلي ★  enforcement_mode = 'enrollment' اليوم. البوّابة لا تمنع إلّا
@@ -623,4 +626,55 @@ notify pgrst, 'reload schema';
 -- زرّ الطوارئ (غير مبوَّب عمدًا — يعمل حتى لو فَقَد المالك جهاز المصادقة):
 --   update public.mfa_settings set enforcement_mode = 'off' where id = 1;
 -- التراجع الكامل: docs/mfa_write_gate_s4b_bind_ROLLBACK.sql
--- ════════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ─── admin_copy_profession_permissions ───
+-- ★ أُضيفت بعد مراجعة عدائية: كانت مستثناة، وهي تكتب **نفس** صفوف
+-- profession_permissions التي تكتبها admin_set_profession_permission المبوّبة.
+-- مالك عند aal1 ممنوع من الأولى كان يبلغ **نفس النتيجة** عبر إحداهما — تجاوز تامّ للبوّابة.
+-- الجسم منقول حرفيًا من Fix B (لا من الأصل) + سطر البوّابة فقط.
+create or replace function public.admin_copy_profession_permissions(p_from uuid, p_to uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not coalesce(public.can_manage_identity(), false) then
+    raise exception 'authorization_denied' using errcode = 'P0003',
+      hint = 'نسخ صلاحيات المهن للمالك فقط / copying profession permissions is owner-only';
+  end if;
+  perform public.mfa_require_aal2('admin_copy_profession_permissions');
+  -- copies non-sensitive grants always; sensitive only if the caller is owner.
+  insert into public.profession_permissions (profession_id, permission_id, granted, updated_by)
+  select p_to, pp.permission_id, pp.granted, auth.uid()
+  from public.profession_permissions pp
+  join public.permissions p on p.id = pp.permission_id
+  where pp.profession_id = p_from and pp.granted
+    and (p.sensitivity = 'normal' or public.is_owner())
+  on conflict (profession_id, permission_id) do update set granted = excluded.granted, updated_at = now(), updated_by = auth.uid();
+  perform public.log_activity(auth.uid(), public.staff_role(), 'profession.permissions_copied', 'profession', p_to,
+    jsonb_build_object('from', p_from));
+end $$;
+
+-- ─── admin_apply_profession_template ───
+-- ★ أُضيفت بعد مراجعة عدائية: كانت مستثناة، وهي تكتب **نفس** صفوف
+-- profession_permissions التي تكتبها admin_set_profession_permission المبوّبة.
+-- مالك عند aal1 ممنوع من الأولى كان يبلغ **نفس النتيجة** عبر إحداهما — تجاوز تامّ للبوّابة.
+-- الجسم منقول حرفيًا من Fix B (لا من الأصل) + سطر البوّابة فقط.
+create or replace function public.admin_apply_profession_template(p_profession uuid, p_template text)
+returns void language plpgsql security definer set search_path = public as $$
+declare keys text[];
+begin
+  if not coalesce(public.can_manage_identity(), false) then
+    raise exception 'authorization_denied' using errcode = 'P0003',
+      hint = 'تطبيق قوالب الصلاحيات للمالك فقط / applying permission templates is owner-only';
+  end if;
+  perform public.mfa_require_aal2('admin_apply_profession_template');
+  keys := public.permission_template_keys(p_template);
+  if array_length(keys,1) is null then raise exception 'قالب غير معروف: %', p_template; end if;
+  insert into public.profession_permissions (profession_id, permission_id, granted, updated_by)
+  select p_profession, p.id, true, auth.uid() from public.permissions p
+  where p.key = any(keys) and p.sensitivity <> 'system_only'
+    and (p.sensitivity = 'normal' or public.is_owner())
+  on conflict (profession_id, permission_id) do update set granted = true, updated_at = now(), updated_by = auth.uid();
+  perform public.log_activity(auth.uid(), public.staff_role(), 'profession.template_applied', 'profession', p_profession,
+    jsonb_build_object('template', p_template));
+end $$;
+
+═

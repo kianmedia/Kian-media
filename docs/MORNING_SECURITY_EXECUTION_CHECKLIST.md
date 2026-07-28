@@ -145,7 +145,28 @@
 
 ---
 
-## Phase 6 — S4a ثم S4b
+## ⛔⛔ Phase 6 — موقوفة · حاجز مؤكَّد بمراجعة عدائية
+
+> # لا تُشغّل `mfa_write_gate_s4b_RUNME.sql` صباحًا.
+>
+> **السبب (مؤكَّد لا مُفترَض):** `components/portal/useSensitiveWrite.tsx` — وهو المسار
+> الوحيد الذي يلتقط `mfa_required` ويفتح نافذة التحقّق — **لا يستورده أيّ ملفّ**.
+> `grep` عبر `app/` و`components/` و`lib/` يُعيد تعريفه فقط.
+>
+> **الأثر لو طُبِّق S4b الآن:** حسابك — وهو الوحيد الذي يحمل عامل TOTP — سيُمنع من كل
+> عملية إدارية حسّاسة، وسيرى النصّ الخام `mfa_required` بلا أيّ نافذة تحقّق.
+> `AdminStaff.tsx:57` و`AdminProfessions.tsx:74` يعرضان `r.error` مباشرة، و
+> `client.ts:33` يُرجع حقل `message` حرفيًّا. **المخرج الوحيد وقتها زرّ الطوارئ SQL.**
+>
+> **ما يرفع الحاجز:** ربط `useSensitiveWrite` في `AdminStaff.tsx` و`AdminAccounts.tsx`
+> و`AdminProfessions.tsx` و`ProfessionPicker.tsx`، ثم اختبار الدورة. عمل واجهة لا SQL.
+>
+> **Phases 0–4 غير متأثّرة إطلاقًا** — إصلاحات A و B و C مستقلّة عن MFA ولا تحتاج هذا الربط.
+> نفّذها صباحًا كالمخطّط.
+
+---
+
+## Phase 6 — S4a ثم S4b (بعد رفع الحاجز أعلاه)
 
 ### 6-أ · فحص مسبق
 

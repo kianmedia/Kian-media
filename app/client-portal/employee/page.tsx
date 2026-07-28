@@ -19,7 +19,12 @@ export default function EmployeePortalPage() {
   const { t } = useI18n();
   const { profile, caps } = usePortal();
   const isHrAdmin = caps.isOwner || caps.view === "manager" || caps.view === "hr";
-  const canManageProfessions = caps.isOwner || caps.view === "manager";
+  // Fix B gates all five profession/permission RPCs on can_manage_identity() =
+  // coalesce(is_owner(), false), which EXCLUDES managers. Leaving "manager" here would
+  // keep showing them a tab whose every save fails with authorization_denied - a button
+  // that is guaranteed to error is worse than no button. Matches roles.ts:66, which
+  // already narrows canManageStaff the same way.
+  const canManageProfessions = caps.isOwner;
   const isEmployee = !!profile.staff_role || profile.account_type === "admin";
   const [tab, setTab] = useState<Tab>(isHrAdmin ? "hr" : "me");
 

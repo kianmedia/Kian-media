@@ -20,18 +20,28 @@ const HOOK = R("components/portal/useSensitiveWrite.tsx");
 const nc = (s) => s.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
 const run = nc(RUN), rb = nc(RB), pre = nc(PRE), post = nc(POST);
 
+// NINE, not seven. An adversarial review found admin_copy_profession_permissions and
+// admin_apply_profession_template write the SAME profession_permissions rows as the
+// gated admin_set_profession_permission, and both are browser-callable. An owner at
+// aal1 denied on the gated RPC could achieve the identical rewrite through either -
+// a complete bypass of the gate. Both are now gated.
+// admin_bulk_set_profession_permissions stays OUT: it has no authorization of its own
+// and delegates in a loop to the gated inner function, so it inherits both gates.
 const SEVEN = ["admin_set_staff_role", "admin_set_account", "admin_set_employee_professions",
                "admin_set_employee_override", "admin_set_profession_permission",
-               "admin_upsert_profession", "admin_delete_profession"];
+               "admin_upsert_profession", "admin_delete_profession",
+               "admin_copy_profession_permissions", "admin_apply_profession_template"];
 
-test("S4b gates exactly the seven, and nothing else", () => {
+test("S4b gates exactly the nine, and nothing else", () => {
   for (const fn of SEVEN) {
     const at = run.indexOf(`function public.${fn}`);
     assert.ok(at > 0, `${fn} must be rebuilt`);
     assert.match(run.slice(at, run.indexOf("$$;", at)), /mfa_require_aal2\(/, `${fn} lacks the gate`);
   }
   const gated = (run.match(/create or replace function public\.(\w+)/g) ?? []).length;
-  assert.equal(gated, 7, `expected exactly 7 rebuilt functions, found ${gated}`);
+  assert.equal(gated, 9, `expected exactly 9 rebuilt functions, found ${gated}`);
+  assert.ok(!/create or replace function public\.admin_bulk_set_profession_permissions/.test(run),
+    "the bulk wrapper inherits the gate via delegation; rebuilding it would be churn");
 });
 
 test("S4b does NOT revert Fix A - the granted-role check survives", () => {
@@ -147,5 +157,35 @@ test("S4b acceptance script covers the emergency off test", () => {
   for (const [en, ar] of [["aal1", "aal1"], ["aal2", "aal2"],
                           ["refresh", "تحديث"], ["cancel", "إلغاء"]]) {
     assert.ok(new RegExp(en, "i").test(ACC) || ACC.includes(ar), `acceptance missing: ${en}`);
+  }
+});
+
+
+test("S4b closes the bulk-write bypass", () => {
+  // Both write profession_permissions directly - they do NOT delegate - so they needed
+  // their own gate. Composed from Fix B's bodies, so Fix B's authorization survives.
+  for (const fn of ["admin_copy_profession_permissions", "admin_apply_profession_template"]) {
+    const at = run.indexOf(`function public.${fn}`);
+    const body = run.slice(at, run.indexOf("$$;", at));
+    assert.match(body, /can_manage_identity/, `${fn} lost Fix B's authorization`);
+    assert.ok(body.indexOf("can_manage_identity") < body.indexOf("mfa_require_aal2"),
+      `${fn}: the MFA gate must follow authorization, not precede it`);
+    assert.match(body, /insert into public\.profession_permissions/,
+      "if this no longer writes permissions, re-evaluate whether it needs the gate");
+  }
+});
+
+test("S4b the step-up hook is still unwired - Phase 6 must stay blocked", () => {
+  // Recorded as a test so the blocker cannot be forgotten. useSensitiveWrite is the only
+  // path that catches mfa_required and opens the modal; nothing imports it. Applying S4b
+  // before it is wired would leave the owner - the sole factor holder - seeing a raw
+  // "mfa_required" string with no way to step up, recoverable only via the SQL kill switch.
+  const wired = ["AdminStaff", "AdminAccounts", "AdminProfessions", "ProfessionPicker"]
+    .filter((c) => { try { return R(`components/portal/${c}.tsx`).includes("useSensitiveWrite"); }
+                     catch { return false; } });
+  const checklist = R("docs/MORNING_SECURITY_EXECUTION_CHECKLIST.md");
+  if (wired.length === 0) {
+    assert.match(checklist, /موقوفة · حاجز مؤكَّد/,
+      "while the hook is unwired, the checklist MUST block Phase 6");
   }
 });
