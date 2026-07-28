@@ -175,7 +175,7 @@ test("S3.5 the break-glass card in S1 makes 'off' primary and deletion secondary
 // ─── (D) the flow states the brief requires ─────────────────────────────────
 
 test("S3.5 a wrong code is distinguished from a missing factor", () => {
-  assert.match(screen, /r\.error === "not_found"/);
+  assert.match(screen, /r\.error === "mfa_factor_not_found"/);
   assert.match(screen, /mfaErrorText\(r\.error, isAr\)/);
 });
 

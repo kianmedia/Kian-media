@@ -109,8 +109,14 @@ test("S3 the step-up modal is documented as UX, not a boundary", () => {
 // ─── (D) step-up mechanics ──────────────────────────────────────────────────
 
 test("S3 step-up reuses an existing verified factor — no new secret", () => {
-  const f = mfaCode.slice(mfaCode.indexOf("export async function mfaStepUp"));
-  assert.match(f, /f\.status === "verified" && f\.factor_type === "totp"/);
+  // Bound the slice to mfaStepUp itself; slicing to end-of-file swept in later
+  // functions and made this assert something other than what it claims.
+  const at = mfaCode.indexOf("export async function mfaStepUp");
+  const f = mfaCode.slice(at, mfaCode.indexOf("\n}", at) + 2);
+  // Filtering now lives in mfaSelectFactors (shared with the UI's chooser) rather than
+  // inline here — assert the delegation, and that the shared filter is still correct.
+  assert.match(f, /mfaSelectFactors\(list\.data, "totp"\)/);
+  assert.match(mfaCode, /f\.status === "verified" && f\.factor_type === type/);
   assert.match(f, /mfaChallenge\(/);
   assert.match(f, /mfaVerify\(/);
   assert.ok(!/mfaEnrollTotp|secret|qr/i.test(f), "step-up must never mint a new secret");
@@ -123,8 +129,8 @@ test("S3 step-up stores the upgraded token via the same single session store", (
 
 test("S3 an absent factor is reported distinctly, not as a wrong code", () => {
   const f = mfaCode.slice(mfaCode.indexOf("export async function mfaStepUp"));
-  assert.match(f, /if \(!factor\) return fail\("not_found"\)/);
-  assert.match(stepCode, /r\.error === "not_found"/, "and the modal says so specifically");
+  assert.match(f, /return fail\("mfa_factor_not_found"\)/);
+  assert.match(stepCode, /r\.error === "mfa_factor_not_found"/, "and the modal says so specifically");
 });
 
 // ─── (E) session expiry is handled, not blamed on the user ─────────────────
@@ -150,8 +156,10 @@ test("S3 assurance is shown only to users who actually have a factor", () => {
 
 test("S3 a missing S3 SQL install hides the badge instead of breaking the page", () => {
   assert.match(enrollCode, /setAssurance\(a\.ok \? a\.data : null\)/);
-  const f = mfaCode.slice(mfaCode.indexOf("export async function mfaMyAssurance"));
-  assert.match(f, /PGRST202|not find|does not exist/, "an unapplied function is 'unknown', not 'denied'");
+  const at2 = mfaCode.indexOf("export async function mfaMyAssurance");
+  const f = mfaCode.slice(at2, mfaCode.indexOf("\n}", at2) + 2);
+  assert.match(f, /mfa_assurance_unavailable/,
+    "an unreadable assurance is its own named state — 'unknown', never 'denied'");
 });
 
 test("S3 both surfaces are bilingual and direction-aware", () => {

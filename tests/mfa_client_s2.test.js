@@ -53,10 +53,16 @@ test("S2 it does not widen the shared unauthenticated gotrue() helper", () => {
 
 // ─── (B) the secret never leaves the browser ────────────────────────────────
 
-test("S2 nothing in the MFA client logs, at all", () => {
-  assert.ok(!/console\./.test(mfaCode),
-    "a GoTrue error body can echo request content; no console call may exist on any path");
-  assert.ok(!/console\./.test(uiCode), "the enrollment UI must not log either");
+test("S2 the MFA client logs stages only — never provider content", () => {
+  // The original rule was "no logging at all". The production failure proved that wrong:
+  // the flow died silently and the outage could not be diagnosed from the outside. The
+  // module now emits stage/status/safe-code/correlation-id and nothing else.
+  assert.ok(!/console\./.test(uiCode), "the enrollment UI still must not log");
+  const calls = [...MFA.matchAll(/console\.\w+\(([\s\S]{0,240}?)\)\);/g)].map((m) => m[1]).join(" ");
+  assert.match(calls, /MFA_FLOW/, "stage telemetry must exist");
+  for (const banned of ["access_token", "refresh_token", "secret", "clean", "factorId", "email"]) {
+    assert.ok(!calls.includes(banned), `'${banned}' must never be logged`);
+  }
 });
 
 test("S2 the secret is never persisted or transmitted anywhere", () => {
@@ -118,9 +124,8 @@ test("S2 provider error text never reaches the UI", () => {
 });
 
 test("S2 the most likely first-run failure is named specifically", () => {
-  assert.match(mfaCode, /"totp_disabled"/,
-    "POST /auth/v1/factors returns 422 until TOTP is enabled in the Supabase dashboard; " +
-      "a generic failure here would send the owner hunting in the wrong place");
+  assert.match(mfaCode, /"mfa_totp_verify_not_enabled"/,
+    "TOTP disabled in project settings must be named, not folded into a generic failure");
   assert.match(mfaCode, /غير مفعَّل|not enabled/, "and says so in both languages");
 });
 

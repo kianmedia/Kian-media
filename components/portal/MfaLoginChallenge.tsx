@@ -25,10 +25,10 @@
 //
 // Nothing here is logged — no code, no token, no GoTrue response body.
 // ════════════════════════════════════════════════════════════════════════════
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getValidSession } from "@/lib/portalAuth";
 import { useI18n } from "@/lib/i18n";
-import { mfaStepUp, mfaErrorText } from "@/lib/portal/mfa";
+import { mfaStepUp, mfaUsableFactors, mfaErrorText, type MfaFactor } from "@/lib/portal/mfa";
 
 export default function MfaLoginChallenge({
   email, onVerified, onSignOut,
@@ -42,13 +42,40 @@ export default function MfaLoginChallenge({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [attempts, setAttempts] = useState(0);
+  const [factors, setFactors] = useState<MfaFactor[]>([]);
+  const [chosen, setChosen] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  // Guards a double-submit: without it, auto-submit-on-6-digits plus an Enter press or
+  // a fast second click would fire two challenge/verify round-trips for one code.
+  const inFlight = useRef(false);
+
+  // Load the selectable factors once. The list is ALSO re-fetched inside mfaStepUp on
+  // every attempt, so a factor removed mid-session can never be used from here.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const s = await getValidSession();
+      if (!s || !alive) return;
+      const r = await mfaUsableFactors(s.access_token);
+      if (!alive || !r.ok) return;
+      setFactors(r.data);
+      if (r.data.length === 1) setChosen(r.data[0].id);
+    })();
+    return () => { alive = false; };
+  }, []);
 
   // Autofocus so the flow is one action: open app, type code.
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 80); }, []);
 
-  async function submit() {
-    if (code.length !== 6 || busy) return;
+  const submit = useCallback(async function submit(value?: string) {
+    const entered = (value ?? code).replace(/\D/g, "").slice(0, 6);
+    if (entered.length !== 6 || inFlight.current) return;
+    // With several factors the user must pick one — never guess on their behalf.
+    if (!chosen) {
+      setErr(t({ ar: "اختر تطبيق المصادقة أولًا.", en: "Choose an authenticator first." }));
+      return;
+    }
+    inFlight.current = true;
     setBusy(true); setErr("");
     // Refresh first: a page reload or a slow authenticator lookup can outlive the
     // access token, and "your code is wrong" would be a lie in that case.
@@ -59,23 +86,26 @@ export default function MfaLoginChallenge({
         en: "Your session expired during verification. Please sign in again.",
       }));
       setBusy(false);
+      inFlight.current = false;
       return;
     }
-    // mfaStepUp issues a FRESH challenge on every attempt, so an expired challenge
-    // resolves itself by retrying — there is no stale challenge id to get stuck on.
-    const r = await mfaStepUp(s, code);
+    // mfaStepUp re-lists factors and issues a FRESH challenge on every attempt, so an
+    // expired challenge or a factor changed since page load resolves itself by retrying —
+    // there is no stale id to get stuck on.
+    const r = await mfaStepUp(s, entered, chosen);
     setBusy(false);
+    inFlight.current = false;
     setCode("");
     if (!r.ok) {
       setAttempts((n) => n + 1);
-      setErr(r.error === "not_found"
+      setErr(r.error === "mfa_factor_not_found"
         ? t({ ar: "لم نجد تطبيق مصادقة مُفعَّلًا على حسابك.", en: "No verified authenticator was found on your account." })
         : mfaErrorText(r.error, isAr));
       inputRef.current?.focus();
       return;
     }
     onVerified();
-  }
+  }, [code, chosen, isAr, t, onVerified]);
 
   return (
     <div dir={isAr ? "rtl" : "ltr"} style={{ minHeight: "70vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -104,17 +134,46 @@ export default function MfaLoginChallenge({
           </div>
         )}
 
+        {factors.length > 1 && (
+          <div style={{ marginBottom: 14 }}>
+            <div className="f-sans" style={{ fontSize: 12.5, color: "rgba(255,255,255,0.7)", marginBottom: 7 }}>
+              {t({ ar: "اختر تطبيق المصادقة", en: "Choose an authenticator" })}
+            </div>
+            {/* friendly_name only — the factor id is never rendered. */}
+            {factors.map((f, i) => (
+              <button key={f.id} type="button" onClick={() => setChosen(f.id)} className="f-sans"
+                style={{ display: "block", width: "100%", textAlign: isAr ? "right" : "left", marginBottom: 6,
+                  padding: "10px 13px", fontSize: 13.5, borderRadius: 3, cursor: "pointer",
+                  background: chosen === f.id ? "rgba(227,30,36,0.12)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${chosen === f.id ? "rgba(227,30,36,0.45)" : "rgba(255,255,255,0.1)"}`,
+                  color: chosen === f.id ? "#fff" : "rgba(255,255,255,0.6)" }}>
+                {f.friendly_name || t({ ar: `تطبيق ${i + 1}`, en: `Authenticator ${i + 1}` })}
+              </button>
+            ))}
+          </div>
+        )}
+
         <label htmlFor="mfa-login-code" className="f-sans" style={{ display: "block", fontSize: 12.5, color: "rgba(255,255,255,0.7)", marginBottom: 7 }}>
           {t({ ar: "الرمز (6 أرقام)", en: "Code (6 digits)" })}
         </label>
         <input id="mfa-login-code" ref={inputRef} dir="ltr" inputMode="numeric" autoComplete="one-time-code"
           maxLength={6} value={code} disabled={busy}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          onChange={(e) => {
+            const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+            setCode(v);
+            // Auto-submit on the 6th digit (covers pasting a code too). Safe because
+            // inFlight guards re-entry and the field is disabled while busy.
+            if (v.length === 6) void submit(v);
+          }}
+          onPaste={(e) => {
+            const v = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 6);
+            if (v.length === 6) { e.preventDefault(); setCode(v); void submit(v); }
+          }}
           onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
           aria-label={t({ ar: "رمز التحقق", en: "Verification code" })}
           style={{ width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 3, padding: "13px 15px", color: "#fff", fontSize: 22, letterSpacing: 8, textAlign: "center", outline: "none", opacity: busy ? 0.6 : 1 }} />
 
-        <button onClick={submit} disabled={code.length !== 6 || busy} className="btn-red"
+        <button onClick={() => void submit()} disabled={code.length !== 6 || busy} className="btn-red"
           style={{ width: "100%", justifyContent: "center", marginTop: 16, opacity: code.length !== 6 || busy ? 0.55 : 1 }}>
           <span>{busy ? "…" : t({ ar: "تأكيد ومتابعة", en: "Verify and continue" })}</span>
         </button>

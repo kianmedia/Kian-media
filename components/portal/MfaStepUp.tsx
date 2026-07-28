@@ -52,7 +52,7 @@ export default function MfaStepUp({
     const r = await mfaStepUp(s, code);
     setBusy(false);
     if (!r.ok) {
-      setErr(r.error === "not_found"
+      setErr(r.error === "mfa_factor_not_found"
         ? t({ ar: "لا يوجد تطبيق مصادقة مُفعَّل على حسابك.", en: "No authenticator is enabled on your account." })
         : mfaErrorText(r.error, isAr));
       setCode("");
