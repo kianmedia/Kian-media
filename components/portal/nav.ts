@@ -36,6 +36,12 @@ const REG: Record<string, TabDef> = {
 const SETS: Record<ViewRole, string[]> = {
   admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
+  // a bundle of powers: its capabilities are granted one at a time through the
+  // permission engine after a trial account is tested. Giving it manager-like tabs here
+  // would hand it broad reach the moment anyone is assigned the role, which is exactly
+  // what the owner ruled out. Widen this list only with explicit approval.
+  org_admin:   ["employee", "notifications", "profile"],
   manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
   sales:       ["employee", "quotes", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],

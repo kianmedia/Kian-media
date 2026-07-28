@@ -12,7 +12,12 @@ export type PreferredLang  = "ar" | "en";
 /** Staff tiers (profiles.staff_role; NULL = not staff). DB-enforced via RLS/RPCs
  *  added in docs/staff_roles_task_assignment_RUNME.sql. */
 export type StaffRole =
-  | "super_admin" | "manager" | "support" | "editor" | "sales" | "hr" | "readonly" | "finance"
+  // org_admin (مسؤول إداري) sits between super_admin and manager. Adding it here WIDENS
+  // ViewRole in roles.ts, which is deliberate: it forces Record<ViewRole,…> in nav.ts to
+  // fail compilation until a tab set is assigned. Naming it "admin" would have added NO
+  // union member (a union is a set, and "admin" is already in ViewRole), silently
+  // granting owner-grade UI with a green build. That is why the name matters.
+  | "super_admin" | "org_admin" | "manager" | "support" | "editor" | "sales" | "hr" | "readonly" | "finance"
   | "photographer" | "lighting_tech" | "camera_assistant" | "custody_officer";
 
 export type ProjectMemberRole =

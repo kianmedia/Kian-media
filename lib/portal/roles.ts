@@ -43,6 +43,10 @@ export interface Caps {
 
 export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
   const view = viewRole(p);
+  // org_admin is deliberately absent from BOTH. It is an identity tier with no inherent
+  // powers on day one; anything it may do arrives via the permission engine. Adding it
+  // here would grant ten owner-grade flags at once, which is the failure mode that ruled
+  // out naming it "admin" in the first place.
   const isOwner = view === "admin" || view === "super_admin";
   const isAdminArea = isOwner || view === "manager";
   const isStaff = !["admin", "client", "lead"].includes(view);
@@ -78,6 +82,7 @@ export function caps(p: Pick<Profile, "account_type" | "staff_role">): Caps {
  *  already-assigned finance user renders correctly). */
 export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
   super_admin:      { ar: "مالك", en: "Super Admin" },
+  org_admin:        { ar: "مسؤول إداري", en: "Org Admin" },
   manager:          { ar: "مدير", en: "Manager" },
   support:          { ar: "دعم العملاء", en: "Support" },
   editor:           { ar: "مونتير", en: "Editor" },
@@ -97,8 +102,18 @@ export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
  * roles (photographer/lighting_tech/camera_assistant/custody_officer) require
  * docs/portal_custody_v2_claims_photos_roles_PATCH_RUNME.sql to be live.
  */
+/** Feature flag, default OFF. org_admin is intentionally NOT selectable until
+ *  docs/org_admin_migration_RUNME.sql has been applied. Offering it sooner would let an
+ *  owner pick a value the DB CHECK constraint rejects, turning a deploy-order mistake
+ *  into a confusing failure in the staff screen. This makes the code safe to ship BEFORE
+ *  the SQL, in either order. */
+export const ORG_ADMIN_ROLE_ENABLED =
+  (process.env.NEXT_PUBLIC_ORG_ADMIN_ROLE_ENABLED ?? "false").trim().toLowerCase() === "true";
+
 export const STAFF_ROLE_OPTIONS: StaffRole[] =
-  ["super_admin", "manager", "support", "editor", "sales", "hr", "readonly", "finance",
+  ["super_admin",
+   ...(ORG_ADMIN_ROLE_ENABLED ? (["org_admin"] as StaffRole[]) : []),
+   "manager", "support", "editor", "sales", "hr", "readonly", "finance",
    "photographer", "lighting_tech", "camera_assistant", "custody_officer"];
 
 /**
