@@ -8,7 +8,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { getValidSession, getMyProfile, logout } from "@/lib/portal/auth";
-import { mfaMyAssurance } from "@/lib/portal/mfa";
+import { mfaMyAssurance, shouldChallengeMfa, mfaRoleOf } from "@/lib/portal/mfa";
 import MfaLoginChallenge from "@/components/portal/MfaLoginChallenge";
 import { updateMyProfile, type EditableProfileFields } from "@/lib/portal/account";
 import { unreadCount } from "@/lib/portal/notifications";
@@ -104,25 +104,39 @@ export default function PortalShell({ children, wide = false }: { children: Reac
     setProfile(p);
 
     // ─── S3.5 · privileged login MFA challenge ──────────────────────────────
-    // Only owner / super_admin / admin. Employees and clients are untouched.
+    // The whole decision lives in shouldChallengeMfa() — a pure function in
+    // lib/portal/mfa.ts with a full truth-table test. It requires ALL of:
+    //   enforcement_mode = 'enrollment'  AND  role ∈ {owner, super_admin, admin}
+    //   AND has_verified_factor          AND  aal1
     //
-    // The gate is `has_verified_factor`, not "is privileged": an admin who has not
-    // enrolled passes straight through and can enrol whenever they like. That is the
-    // structural reason enrollment mode cannot lock anyone out — you can only be
-    // challenged by a factor you personally hold.
+    // enforcement_mode is checked FIRST, which makes
+    //     update public.mfa_settings set enforcement_mode = 'off' where id = 1;
+    // a real kill switch: one UPDATE from the Supabase SQL editor — a credential path a
+    // portal lockout cannot touch — and this screen is gone on the next load. An earlier
+    // version of this block ignored the mode entirely, so that lever silently did
+    // nothing; keeping the decision inline is what let that slip through unnoticed.
     //
-    // Best-effort by construction: if the assurance RPC is unavailable (S3 SQL not
-    // applied, network blip), we fall through to the portal rather than stranding a
-    // legitimate admin on a screen we cannot resolve. A read failure must never deny.
-    const privileged = p.account_type === "admin" || p.staff_role === "super_admin";
-    if (privileged) {
-      try {
-        const a = await mfaMyAssurance();
-        if (a.ok && a.data.has_verified_factor && !a.data.is_aal2) {
+    // A FAILED read is never treated as "protected". We log a non-identifying marker and
+    // fall through, because stranding a legitimate admin on a screen we cannot resolve is
+    // the worse failure — but the log makes the degraded state visible rather than silent.
+    try {
+      const a = await mfaMyAssurance();
+      if (a.ok) {
+        if (shouldChallengeMfa({
+          role: mfaRoleOf(p),
+          enforcementMode: a.data.enforcement_mode,
+          hasVerifiedFactor: a.data.has_verified_factor,
+          isAal2: a.data.is_aal2,
+        })) {
           setPhase("mfa_challenge");
           return;
         }
-      } catch { /* fall through to ready — never strand an admin */ }
+      } else {
+        // No user id, no email, no token, no claim — just the failure code.
+        console.warn(JSON.stringify({ tag: "MFA_ASSURANCE_UNAVAILABLE", reason: a.error }));
+      }
+    } catch {
+      console.warn(JSON.stringify({ tag: "MFA_ASSURANCE_UNAVAILABLE", reason: "exception" }));
     }
 
     setPhase("ready");

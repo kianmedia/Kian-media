@@ -12,7 +12,10 @@
 //   • An admin with NO verified factor is never routed here at all — they go
 //     straight in and can enrol at their own pace. Enrollment mode must not lock
 //     anyone out of their own account.
-//   • The lost-device recovery path is named on screen.
+//   • The real emergency lever is named on screen: the owner sets enforcement_mode
+//     to 'off' in the Supabase SQL editor and this screen is gone on the next load.
+//     Deleting a factor row is NOT the escape hatch — that is a formal, audited
+//     administrative action for a genuinely lost device.
 //
 // HONEST SCOPE: this gates the login FLOW, not the data. It is a client-side
 // decision and a determined caller could bypass it by talking to PostgREST directly
@@ -135,8 +138,8 @@ export default function MfaLoginChallenge({
 
         <p className="text-white/40" style={{ fontSize: 12, marginTop: 12, lineHeight: 1.75 }}>
           {t({
-            ar: "فقدت جهازك؟ يمكن إزالة العامل من لوحة Supabase مباشرة — مسار مستقل عن البوابة لا يمنعه هذا التحقّق.",
-            en: "Lost your device? The factor can be removed directly from the Supabase dashboard — a path independent of the portal that this screen cannot block.",
+            ar: "تعذّر عليك المتابعة؟ يستطيع مالك النظام إيقاف هذا التحقّق فورًا من لوحة Supabase — مسار مستقل عن البوابة لا تمنعه هذه الشاشة. أمّا إعادة تسجيل جهاز مفقود فإجراء إداري منفصل.",
+            en: "Stuck? The system owner can switch this check off immediately from the Supabase dashboard — a path independent of the portal that this screen cannot block. Re-registering a lost device is a separate administrative step.",
           })}
         </p>
       </div>

@@ -294,3 +294,66 @@ export async function mfaStepUp(session: Session, code: string): Promise<MfaResu
   if (!v.ok) return fail(v.error);
   return { ok: true, data: { session: v.data.session } };
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// S3.5 — THE CHALLENGE DECISION
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Roles that may ever be challenged. Employees and clients are out of scope for this
+ *  phase and stay out even if they enrol a factor of their own accord. */
+export type MfaRole = "owner" | "super_admin" | "admin" | "employee" | "client";
+
+export interface MfaChallengeInput {
+  role: MfaRole;
+  /** 'off' | 'enrollment'. 'enforced' is not a legal value in the DB constraint. */
+  enforcementMode: string;
+  hasVerifiedFactor: boolean;
+  isAal2: boolean;
+}
+
+/** Exactly the four conditions, all required:
+ *
+ *      enforcementMode === 'enrollment'
+ *   && role ∈ { owner, super_admin, admin }
+ *   && hasVerifiedFactor
+ *   && !isAal2
+ *
+ * A PURE function on purpose. The decision was previously inline in PortalShell where
+ * it could only be verified by reading it; here every combination is testable, which is
+ * how the two defects this replaces were found.
+ *
+ * ── Defect 1 it fixes: the break-glass lever did not work. ──
+ * The mode was not consulted at all, so
+ *     update public.mfa_settings set enforcement_mode = 'off' where id = 1;
+ * did NOT bypass the challenge, even though S1 documents it as the emergency lever.
+ * Mode is now checked FIRST, so 'off' is a true kill switch: one UPDATE in the Supabase
+ * SQL editor — a credential path independent of the portal — and the screen is gone on
+ * the next page load. Deleting a row from auth.mfa_factors is NOT the primary exit; it
+ * is a formal, audited administrative action for a genuinely lost device.
+ *
+ * ── Defect 2 it fixes: the role condition was implicit. ──
+ * It relied on hasVerifiedFactor plus a role expression tangled into the shell. The
+ * role is now an explicit allow-list, so an employee or client who enrols a factor is
+ * never challenged.
+ */
+export function shouldChallengeMfa(i: MfaChallengeInput): boolean {
+  // 1. Break-glass first. Nothing else can override an operator turning this off.
+  if (i.enforcementMode !== "enrollment") return false;
+  // 2. Privileged roles only.
+  if (i.role !== "owner" && i.role !== "super_admin" && i.role !== "admin") return false;
+  // 3. Only a factor the user personally holds can challenge them — this is what makes
+  //    enabling enrollment mode incapable of locking out anyone who has not enrolled.
+  if (!i.hasVerifiedFactor) return false;
+  // 4. Already elevated ⇒ nothing to ask for.
+  return !i.isAal2;
+}
+
+/** Map a portal profile onto the role vocabulary above. account_type 'admin' is the
+ *  owner/admin anchor (the two protected emails); staff_role 'super_admin' is explicit.
+ *  Everything else — manager, custody_officer, finance, client, lead — is out of scope. */
+export function mfaRoleOf(p: { account_type?: string | null; staff_role?: string | null }): MfaRole {
+  if (p.staff_role === "super_admin") return "super_admin";
+  if (p.account_type === "admin") return "admin";
+  if (p.staff_role) return "employee";
+  return "client";
+}
