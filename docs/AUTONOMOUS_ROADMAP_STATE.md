@@ -33,7 +33,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **P0** | إغلاق Public Portal Hardening Phase 2 | `DONE` | — | إغلاق توثيقي + إصلاح `favicon.ico` 404؛ tsc نظيف · 767/767 · build exit 0 | — (مُغلقة) | `604d218` | ⏸️ `M-000` | ✅ 13/15 | 767/767 | `M-001` حضور · `M-004` سجلات | 2026-07-27 |
 | **P1** | العمود الفقري: البريد والإشعارات | `BLOCKED_MANUAL` | — | كل المراحل الفرعية P1.0–P1.6 مكتملة ومدفوعة؛ 3 من 3 ملفات SQL مُطبَّقة | **لا شيء منّي** — بانتظار `M-002` نشر Apps Script | `084654f` | ✅ | ✅ SQL · ❌ التسليم | 872/872 | `M-002` نشر Apps Script | 2026-07-27 |
-| **P2** | Privileged Account MFA (TOTP) | `IN_PROGRESS` | **S4 بوّابات الكتابة الحسّاسة** | ✅ **S3.5: PASS — OWNER VERIFIED ON PRODUCTION** (23356a6): شاشة TOTP ← رمز مقبول ← دخول ← الجلسة صمدت بعد التحديث | S4: تدقيق الـRPCs الإدارية الحسّاسة الحقيقية ثم البوّابات | `3ed18a5` | ⏸️ `M-000` | ✅ **دورة الدخول كاملة مؤكَّدة يدويًا** | 989/989 | — | 2026-07-28 |
+| **P2** | Privileged Account MFA (TOTP) | `BLOCKED_MANUAL` | **S4: BLOCKED — ROLE MODEL DECISION REQUIRED** | S1/S1b/S2/S3/S3.5 ✅ (S3.5 مؤكَّدة على الإنتاج) · S4a + S4-pre مكتوبان **وغير مربوطين وغير مُطبَّقين** | **مراجعة معمارية فقط** — لا S4b ولا SQL قبل اعتماد نموذج الأدوار | `7b26bab` | ⏸️ `M-000` | S3.5 ✅ · S4 ❌ | 1012/1012 | **قرار المالك في نموذج الأدوار** | 2026-07-28 |
 | **P3** | Production Operations V1 | `TODO` | — | — | جرد ما هو موجود قبل إنشاء أي جدول | — | — | — | — | — | — |
 | **P3.1** | Call Sheets | `TODO` | — | — | فحص `shoot_sessions` وأي بنية Call Sheet قائمة | — | — | — | — | — | — |
 | **P3.2** | الجدولة والتعارضات | `TODO` | — | — | إعادة استخدام محرك تعارضات 4B الموجود | — | — | — | — | — | — |
@@ -104,6 +104,27 @@
 5. ⚠️ **`custody-alerts/route.ts:34` يحتاج قرارك:** `civ_notify` يستثني `rental_%` عمدًا
    (`custody_notification_matrix_RUNME.sql:51`) لأن نصوص التأجير تحوي مبالغ مالية.
    هذا **قرار سياسة لا قرار برمجة** — لا تُرحِّله دون سؤال المالك.
+
+---
+
+## ⛔ S4 موقوفة — قرار نموذج الأدوار مطلوب (2026-07-28)
+
+**`S4: BLOCKED — ROLE MODEL DECISION REQUIRED`**
+
+**ممنوع حتى اعتماد النموذج:**
+- ربط أيّ بوّابة MFA بالدوال الخمس (`admin_set_staff_role` · `admin_set_account` ·
+  `admin_set_employee_professions` · `admin_set_employee_override` ·
+  `admin_set_profession_permission`).
+- **تشغيل** `docs/mfa_write_gate_s4a_RUNME.sql` أو `docs/authz_identity_hardening_s4pre_RUNME.sql`
+  — كلاهما مكتوب ومختبر لكن **لا يُطبَّق الآن**.
+- بدء S4b أو المرحلة التالية أو SMS أو توسيع MFA للموظفين/العملاء.
+
+`enforcement_mode` يبقى `enrollment`.
+
+**السبب:** المخطّط يعرف طبقتين امتيازيتين لا ثلاثًا. `account_type='admin'` محصور في
+بريدَين ⇒ هو **المالك**، و`is_owner()` يعامل `super_admin` معاملة المالك. الهيكل التجاري
+المطلوب (Owner > Super Admin > Admin > Manager > Employee) لا يمكن التعبير عنه بلا قرار
+معماري. التقرير قيد الإعداد.
 
 ---
 
