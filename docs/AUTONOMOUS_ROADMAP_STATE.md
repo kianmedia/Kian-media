@@ -107,7 +107,33 @@
 
 ---
 
-## ⛔ S4 موقوفة — قرار نموذج الأدوار مطلوب (2026-07-28)
+## ✅ قرار نموذج الأدوار — معتمد مبدئيًا (2026-07-28)
+
+```
+ROLE MODEL DECISION:
+Option A Modified approved in principle.
+New role key: org_admin.
+Arabic label: مسؤول إداري.
+Existing super_admin accounts remain unchanged.
+Migration execution requires separate owner approval.
+```
+
+**التسلسل:** Owner > Super Admin > Org Admin > Manager > Employee > Client
+
+- ⛔ **ممنوع نهائيًا `staff_role='admin'`** — يُسقط اتحاد `ViewRole` فيمنح صلاحيات
+  مالك صامتة بلا خطأ ترجمة (`roles.ts:12,46` · `nav.ts:36`).
+- `org_admin` **لا يُنشأ في الإنتاج الآن**، ولا يأخذ أيّ صلاحية من اسمه — صلاحياته
+  عبر permission engine حصرًا.
+- حسابات `super_admin` الحالية **تبقى كما هي**. لا Backfill ولا تخفيض.
+- **MFA لا تشمل `org_admin`** — يحتاج موافقة صريحة منفصلة بعد إنشائه واختباره.
+- `is_owner()` **لا تُعاد تعريفها** — 99 موضع استدعاء، 68 منها يعتمد على شمول
+  super_admin. الانتقال بإضافة Predicates جديدة ونقل تدريجي.
+
+---
+
+## ⛔ S4 موقوفة — الترحيل غير معتمد (2026-07-28)
+
+**`S4: BLOCKED — ROLE MODEL MIGRATION NOT APPROVED`**
 
 **`S4: BLOCKED — ROLE MODEL DECISION REQUIRED`**
 
