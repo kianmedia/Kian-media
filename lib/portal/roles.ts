@@ -103,7 +103,9 @@ export const STAFF_ROLE_LABELS: Record<string, { ar: string; en: string }> = {
  * docs/portal_custody_v2_claims_photos_roles_PATCH_RUNME.sql to be live.
  */
 /** Feature flag, default OFF. org_admin is intentionally NOT selectable until
- *  docs/org_admin_migration_RUNME.sql has been applied. Offering it sooner would let an
+ *  docs/org_admin_migration_RUNME.sql has been applied AND admin_set_staff_role's own
+ *  hardcoded role array has been widened (it does NOT read the CHECK constraint, so the
+ *  migration alone leaves the RPC rejecting 'org_admin' with 'invalid staff role'). Offering it sooner would let an
  *  owner pick a value the DB CHECK constraint rejects, turning a deploy-order mistake
  *  into a confusing failure in the staff screen. This makes the code safe to ship BEFORE
  *  the SQL, in either order. */

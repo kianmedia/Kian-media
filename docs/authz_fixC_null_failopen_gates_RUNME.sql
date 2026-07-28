@@ -1,6 +1,6 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- KIAN — FIX C · انهيار NULL في ستّ بوّابات صلاحية (fail-open)
--- docs/authz_fixC_null_collapse_six_gates_RUNME.sql
+-- docs/authz_fixC_null_failopen_gates_RUNME.sql
 -- ════════════════════════════════════════════════════════════════════════════
 --
 -- ★ الثغرة ★  الشكل الحيّ للبوّابات الستّ:
@@ -50,7 +50,7 @@
 -- ★ ما لا يفعله ★  لا يمسّ is_owner / is_admin / can_manage_projects /
 --   can_manage_staff · لا يمسّ أيّ سياسة RLS · لا DROP · لا DELETE · لا تغيير منح.
 --
--- ★ التراجع ★  docs/authz_fixC_null_collapse_six_gates_ROLLBACK.sql
+-- ★ التراجع ★  docs/authz_fixC_null_failopen_gates_ROLLBACK.sql
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ─── PREFLIGHT (خارج المعاملة — لا يعدّل شيئًا) ──────────────────────────────

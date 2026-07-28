@@ -20,6 +20,17 @@
 --   أمّا `org_admin` فيوسّع الاتحاد فعلًا ⇒ `Record<ViewRole,…>` في `nav.ts:36`
 --   **يفشل في الترجمة** حتى تُسنَد له تبويبات. حوّلنا تصعيدًا صامتًا إلى خطأ بناء.
 --
+-- ⚠️ ★ هذا الملفّ **لا يجعل الدور قابلًا للإسناد** — حدّ مقصود ★
+--   `admin_set_staff_role` تحمل قائمة أدوار **خاصّة بها** مكتوبة نصًّا في جسمها
+--   (portal_custody_v2_claims_photos_roles_PATCH_RUNME.sql:45-49) لا تقرأ القيد.
+--   ⇒ بعد هذا الملفّ يقبل **القيد** القيمة، لكن **الـRPC ترفضها** بـ
+--     `invalid staff role: org_admin`.
+--   هذا **مقصود ومقبول الآن**: المالك قرّر ألّا يُنشأ أيّ org_admin على الإنتاج بعد.
+--   ولم أُوسّع القائمة هنا عمدًا لأن `admin_set_staff_role` تُعاد بناؤها أصلًا في
+--   Fix A ثم في S4b؛ فملفّ رابع يلمسها يجعل ترتيب التطبيق هشًّا بلا داعٍ.
+--   **عند الرغبة في إسناد الدور فعلًا:** يُوسَّع المصفوف داخل آخر ملفّ يُعيد بناء
+--   الدالّة (S4b)، بموافقة صريحة — وليس هنا.
+--
 -- ★ الترتيب مع الكود ★
 --   آمن أن يُنشر كود TypeScript **قبل** هذا الملفّ: القيمة تُعرَّف في الاتحاد لكن لا
 --   حساب يحملها، و`STAFF_ROLE_OPTIONS` يُخفيها خلف راية مُطفأة فلا يستطيع أحد إسنادها
@@ -37,14 +48,21 @@ begin;
 -- القيد الحيّ يُعرَّف في portal_custody_v2_claims_photos_roles_PATCH_RUNME.sql:33-37.
 -- نعيد بناءه بالقائمة نفسها + `org_admin`. لا قيمة تُحذف — الحذف كان سيُبطل صفوفًا قائمة.
 do $$
-declare v_con text;
+declare v_con text; v_cnt int;
 begin
+  -- ⚠️ كان `limit 1` بلا عدّ: لو وُجد أكثر من قيد على staff_role لاختار **واحدًا عشوائيًّا**
+  -- وأسقطه وترك الآخر، فيبدو الترحيل ناجحًا بينما القيد الآخر ما زال يرفض org_admin.
+  select count(*) into v_cnt from pg_constraint
+   where conrelid = 'public.profiles'::regclass and contype = 'c'
+     and pg_get_constraintdef(oid) ilike '%staff_role%';
+  if v_cnt > 1 then
+    raise exception 'يوجد % قيد على staff_role — توقّف وحدّد أيّها الحيّ قبل التوسيع', v_cnt;
+  end if;
   select conname into v_con
     from pg_constraint
    where conrelid = 'public.profiles'::regclass
      and contype = 'c'
-     and pg_get_constraintdef(oid) ilike '%staff_role%'
-   limit 1;
+     and pg_get_constraintdef(oid) ilike '%staff_role%';
 
   if v_con is null then
     raise notice 'لا يوجد قيد على staff_role — لا شيء يُوسَّع';

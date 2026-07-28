@@ -10,7 +10,7 @@
 begin;
 
 do $$
-declare v_n int; v_con text;
+declare v_n int; v_con text; v_cnt int;
 begin
   select count(*) into v_n from public.profiles where staff_role = 'org_admin';
   if v_n > 0 then

@@ -13,7 +13,8 @@
 | Fix B — فصل صلاحيات الهوية عن إدارة المشاريع | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
 | Fix C — البوّابات الستّ الفاشلة-مفتوحة | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
 | org_admin | `MIGRATION PACKAGE READY — NOT APPROVED FOR PRODUCTION` |
-| S4b — بوّابات الكتابة الحسّاسة | `PREDICATE READY — NOT BOUND` |
+| S4a — المُسنِد | `CODE READY — NOT APPLIED` |
+| S4b — ربط البوّابات بالسبع | `CODE READY — SQL APPLY AND OWNER ACCEPTANCE REQUIRED` |
 | MFA login (S3.5) | ✅ `PASS` — مؤكَّدة على الإنتاج بواسطة المالك |
 
 `enforcement_mode` = `enrollment` · لا تغيير.
@@ -110,6 +111,30 @@ NULL — يغلق الفشل-المفتوح دون لمس أيّ مسار عام
 **ملاحظة تمييزية:** سياسات RLS `using` **تفشل مغلقة** (NULL تُخفي صفوفًا ولا تمنح شيئًا).
 الخطر في حرّاس الدوالّ فقط.
 
+## 4d · S4b — ربط البوّابة بسبع عمليات
+
+**المحميّة:** `admin_set_staff_role` · `admin_set_account` · `admin_set_employee_professions`
+· `admin_set_employee_override` · `admin_set_profession_permission` ·
+`admin_upsert_profession` · `admin_delete_profession`
+
+**★ أخطر خاصّية في هذه المرحلة ★** — Fix A و Fix B يُعيدان بناء **نفس** بعض هذه الدوال.
+S4b يأتي **بعدهما**، فأجسامه مبنيّة على **الأجسام بعد الإصلاح** + البوّابة.
+لو بُنيت من التعريفات الأصلية لكان تطبيق S4b **يُلغي Fix A و Fix B بصمت** — فتُعاد فتح
+ثغرتَي إنشاء super_admin بلا حدّ وكتابة المدير للصلاحيات — **بينما فحص ذاتي أخضر يؤكّد
+وجود بوّابة MFA**. اختبار يمنع هذا: يتحقّق أن `role_change_denied` و`can_manage_identity`
+باقيان في الأجسام المُعاد بناؤها.
+
+**موضع السطر:** بعد فحوص التفويض لا قبلها — فالمتصل غير المخوّل يحصل على خطأ تفويض
+لا على مطالبة MFA بلا معنى.
+
+**غير مبوَّطة عمدًا:** `mfa_admin_set_mode` — وضع زرّ الطوارئ خلف القفل الذي يفتحه
+يترك مالكًا فقد جهازه بلا مخرج.
+
+**الملفّات:** `mfa_write_gate_s4b_RUNME.sql` · `_ROLLBACK.sql` (منفصل) · `_PREFLIGHT.sql`
+· `_POSTCHECK.sql` · `docs/MFA_S4B_MANUAL_ACCEPTANCE.md`
+**الواجهة:** `components/portal/useSensitiveWrite.tsx` — إعادة المحاولة **مرّة واحدة**،
+بلا حلقات، والإلغاء لا يُنفّذ العملية، وبقاء aal1 بعد التحقّق يُظهر `mfa_session_not_elevated`.
+
 ## 5 · جدول القرار
 
 | العنصر | التصنيف |
@@ -136,7 +161,12 @@ NULL — يغلق الفشل-المفتوح دون لمس أيّ مسار عام
 4. `authz_identity_hardening_s4pre_RUNME.sql` ← **ثم** `authz_fixB_identity_permissions_RUNME.sql`
    (B يستدعي `can_manage_identity()` التي يُنشئها s4pre — الترتيب إلزامي)
 5. `org_admin_migration_RUNME.sql` — مستقلّ تمامًا
-6. S4a + S4b — **آخر شيء**، وبعد اختبار المالك
+6. `mfa_write_gate_s4b_PREFLIGHT.sql` (قراءة فقط) ← يتحقّق أن A و B و s4pre و S4a مُطبَّقة
+7. `mfa_write_gate_s4a_RUNME.sql` ← ثم `mfa_write_gate_s4b_RUNME.sql`
+8. `mfa_write_gate_s4b_POSTCHECK.sql` (قراءة فقط)
+9. اختبار المالك اليدوي — `docs/MFA_S4B_MANUAL_ACCEPTANCE.md`
+
+⛔ **S4b يعتمد على تطبيق Fix A و Fix B أوّلًا.** الـPREFLIGHT يرفض غير ذلك.
 
 **زرّ الطوارئ في كل مرحلة:**
 ```sql
