@@ -10,8 +10,8 @@
 | العنصر | الحالة |
 |---|---|
 | Fix A — منع إنشاء Super Admin بلا حدّ | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
-| Fix B — فصل صلاحيات الهوية عن إدارة المشاريع | ⏳ قيد الإنتاج (تحليل التعريفات الحيّة) |
-| Fix C — البوّابات الستّ الفاشلة-مفتوحة | ⏳ قيد الإنتاج |
+| Fix B — فصل صلاحيات الهوية عن إدارة المشاريع | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
+| Fix C — البوّابات الستّ الفاشلة-مفتوحة | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
 | org_admin | `MIGRATION PACKAGE READY — NOT APPROVED FOR PRODUCTION` |
 | S4b — بوّابات الكتابة الحسّاسة | `PREDICATE READY — NOT BOUND` |
 | MFA login (S3.5) | ✅ `PASS` — مؤكَّدة على الإنتاج بواسطة المالك |
@@ -77,6 +77,39 @@ super_admin_non_owner         = 0
 
 ---
 
+## 4b · Fix B — فصل الهوية عن إدارة المشاريع
+
+**الثغرة:** سبع دوالّ كتابة مُبوَّبة على `is_admin() OR can_manage_projects()`،
+و`can_manage_projects()` تشمل `manager` ⇒ **أيّ مدير مشروع يُعيد كتابة صلاحيات أيّ موظف،
+ويُسند لنفسه مهنة محمّلة بصلاحيات حسّاسة** — تصعيد ذاتي دائم.
+
+**فخّ تعريف مهجور ثانٍ:** `admin_upsert_profession` لها تعريفان؛ الفائز
+`professions_grants_and_hardening_RUNME.sql:37` (2026-07-18) لا
+`employee_professions_RUNME.sql:241` (2026-07-17). إصلاح الثاني كان لا شيء.
+
+**دالّة ثامنة لم تكن في قائمتي:** `admin_delete_profession` — أرشفة مهنة **تسحب
+صلاحياتها فورًا من كل حاملها** (`emp_has_permission` يربط `pr.is_active`)، فهي تلاعب
+بالصلاحيات لا تنظيم كتالوج. أُضيفت.
+
+**تُركت عمدًا:** `admin_bulk_set_profession_permissions` — بلا شرط تفويض أصلًا، جسمها
+نداء متكرّر للدالّة الداخلية، فترث بوّابتها الجديدة. تعديلها تغيير بلا مبرّر.
+
+**⚠️ تصحيح لاستشهادي:** كنتُ أشرتُ إلى `permission_catalog_RUNME.sql:219/:258` كمواضع
+كتابة — وهما داخل `emp_has_permission`/`emp_can`، أي **قراءة**. صُحِّح في مكانه.
+
+## 4c · Fix C — البوّابات الستّ
+
+**الشكل:** `if not <pred>() then raise` مع `<pred>` قد تُعيد NULL ⇒ `not NULL` ليست TRUE
+⇒ **الاستثناء لا يُرفع والجسم يُنفَّذ متجاوزًا RLS**. `can_manage_hr` وحدها لها
+**48 حارسًا فاشلًا-مفتوحًا**.
+
+**قرار anon — المحافِظ عمدًا:** ثلاث دوالّ مكشوفة لـanon، و**لم يُسحب EXECUTE منها**.
+السحب الأعمى قد يكسر نموذج طلب عرض السعر العام؛ الإصلاح يجعلها تُعيد `false` صريحة بدل
+NULL — يغلق الفشل-المفتوح دون لمس أيّ مسار عام.
+
+**ملاحظة تمييزية:** سياسات RLS `using` **تفشل مغلقة** (NULL تُخفي صفوفًا ولا تمنح شيئًا).
+الخطر في حرّاس الدوالّ فقط.
+
 ## 5 · جدول القرار
 
 | العنصر | التصنيف |
@@ -84,6 +117,8 @@ super_admin_non_owner         = 0
 | كل الـCommits المحلية | **SAFE TO PUSH** |
 | `PREFLIGHT_P1_role_census.sql` | **SAFE TO APPLY** (قراءة فقط) |
 | `authz_fixA_super_admin_grant_RUNME.sql` | **REQUIRES OWNER APPROVAL** |
+| `authz_fixC_null_failopen_gates_RUNME.sql` | **REQUIRES OWNER APPROVAL** |
+| `authz_fixB_identity_permissions_RUNME.sql` | **REQUIRES OWNER APPROVAL** (يعتمد على s4pre) |
 | `org_admin_migration_RUNME.sql` | **REQUIRES OWNER APPROVAL** |
 | `mfa_write_gate_s4a_RUNME.sql` · `authz_identity_hardening_s4pre_RUNME.sql` | **REQUIRES OWNER APPROVAL** |
 | رفع `NEXT_PUBLIC_ORG_ADMIN_ROLE_ENABLED` | **REQUIRES OWNER APPROVAL** |
@@ -97,8 +132,9 @@ super_admin_non_owner         = 0
 
 1. `PREFLIGHT_P1_role_census.sql` — الاستعلام (3) المتبقّي · قراءة فقط
 2. `authz_fixA_super_admin_grant_RUNME.sql` — **مستقلّ، لا يعتمد على شيء**
-3. Fix C (عند اكتماله) — يسبق Fix B لأن ثلاث بوّابات مكشوفة لـanon
-4. Fix B (عند اكتماله) — يعتمد على `can_manage_identity()` في `authz_identity_hardening_s4pre`
+3. `authz_fixC_null_failopen_gates_RUNME.sql` — **يسبق B** (ثلاث بوّابات مكشوفة لـanon)
+4. `authz_identity_hardening_s4pre_RUNME.sql` ← **ثم** `authz_fixB_identity_permissions_RUNME.sql`
+   (B يستدعي `can_manage_identity()` التي يُنشئها s4pre — الترتيب إلزامي)
 5. `org_admin_migration_RUNME.sql` — مستقلّ تمامًا
 6. S4a + S4b — **آخر شيء**، وبعد اختبار المالك
 
