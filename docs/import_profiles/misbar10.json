@@ -1,0 +1,102 @@
+{
+  "$comment": [
+    "MAPPING PROFILE — DATA ONLY. Read by lib/portal/import/profiles.ts.",
+    "This file describes the COLUMN LAYOUT of one supplier's planning sheet.",
+    "It does NOT describe a project: no stage list, no deliverable count, no",
+    "client name, nothing the platform depends on. Copy this file, change the",
+    "id + synonyms, and any other sheet imports with zero code changes.",
+    "The id is the first segment of every external key this profile produces,",
+    "so it must never be renamed once a real import has run."
+  ],
+  "id": "misbar10",
+  "version": 1,
+  "label": "خطة محتوى (مراحل + مجموعات)",
+  "description": "ملف تعيين لجداول خطط المحتوى التي تحتوي أعمدة: المرحلة، المجموعة، المحتوى، نوع المحتوى، المنصات، تفاصيل التنفيذ، نص الوصف المقترح.",
+  "sheet": null,
+  "headerRow": null,
+  "levels": [
+    { "key": "stage", "label": "المرحلة", "field": "stage", "carryForward": true, "sectionRows": true, "required": false },
+    { "key": "subgroup", "label": "المجموعة", "field": "sub_group", "carryForward": true, "sectionRows": true, "required": false }
+  ],
+  "fields": {
+    "stage": {
+      "synonyms": ["المرحلة", "مرحلة", "المرحلة الإنتاجية", "مراحل العمل", "المرحله", "stage", "phase"]
+    },
+    "sub_group": {
+      "synonyms": ["المجموعة", "المجموعه", "المجموعة الفرعية", "القسم", "المحور", "التصنيف", "اليوم", "الأسبوع", "group", "subgroup", "section", "category"]
+    },
+    "title": {
+      "synonyms": ["المحتوى", "المحتوي", "العنوان", "اسم المحتوى", "البند", "المخرج", "اسم المخرج", "العمل المطلوب", "title", "content", "deliverable", "item"],
+      "required": true,
+      "maxLength": 500
+    },
+    "content_type": {
+      "synonyms": ["نوع المحتوى", "نوع المحتوي", "نوع المخرج", "النوع", "نوع", "content type", "type", "format"]
+    },
+    "platforms": {
+      "synonyms": ["المنصات", "المنصه", "المنصة", "منصات النشر", "قنوات النشر", "platforms", "platform", "channels"],
+      "multi": true
+    },
+    "execution_details": {
+      "synonyms": ["تفاصيل التنفيذ", "تفاصيل تنفيذ", "التنفيذ", "وصف التنفيذ", "ملاحظات التنفيذ", "execution details", "execution", "details"],
+      "maxLength": 4000
+    },
+    "proposed_caption": {
+      "synonyms": ["نص الوصف المقترح", "الوصف المقترح", "النص المقترح", "الكابشن", "كابشن", "caption", "proposed caption", "copy"],
+      "maxLength": 4000
+    },
+    "notes": {
+      "synonyms": ["ملاحظات", "ملحوظات", "notes", "remarks"],
+      "maxLength": 4000
+    },
+    "due_date": {
+      "synonyms": ["تاريخ التسليم", "موعد التسليم", "تاريخ النشر", "التاريخ", "due date", "deadline", "date"],
+      "date": true
+    },
+    "quantity": {
+      "synonyms": ["العدد", "الكمية", "quantity", "qty", "count"],
+      "number": true
+    },
+    "priority": {
+      "synonyms": ["الأولوية", "الاولوية", "priority"]
+    },
+    "assignee": {
+      "synonyms": ["المسؤول", "المكلف", "المنفذ", "assignee", "owner", "responsible"]
+    },
+    "external_key": {
+      "synonyms": ["المعرف", "الرقم المرجعي", "الرقم", "كود", "reference", "ref", "external key"]
+    }
+  },
+  "typeMap": {
+    "$comment": "Free text → the deliverables.type CHECK domain. The original wording is always kept in content_type_raw; this only decides which of the three allowed values is stored.",
+    "video": ["فيديو", "ڤيديو", "مقطع", "مقطع فيديو", "ريلز", "ريل", "reel", "reels", "video", "موشن", "موشن جرافيك", "motion", "فيلم", "تيزر", "teaser", "برومو", "promo", "إعلان مرئي", "تصوير فيديو", "شورت", "short"],
+    "photo": ["صورة", "صور", "تصوير", "تصوير فوتوغرافي", "فوتو", "photo", "photos", "photography", "image", "بورتريه", "portrait", "ألبوم صور"],
+    "other": ["تصميم", "جرافيك", "graphic", "design", "بوست", "post", "كاروسيل", "carousel", "إنفوجرافيك", "infographic", "مقال", "article", "نص", "copywriting", "استوري", "story", "ستوري"]
+  },
+  "contentTypeKeys": {
+    "$comment": "OPTIONAL. Used only when the database exposes the extensible deliverable_content_types catalog. Left of the colon = the catalog key OWNED BY THE DATABASE (never invented here); right = the words that mean it. Anything unmatched lands on the catalog's own 'custom' key and keeps its original wording.",
+    "video": ["فيديو", "ڤيديو", "مقطع", "مقطع فيديو", "ريلز", "ريل", "reel", "reels", "video", "موشن", "موشن جرافيك", "motion", "فيلم", "تيزر", "برومو", "شورت"],
+    "photography": ["صورة", "صور", "تصوير", "تصوير فوتوغرافي", "فوتو", "photo", "photography", "بورتريه", "ألبوم صور"],
+    "design": ["تصميم", "جرافيك", "design", "graphic", "بوست", "post", "كاروسيل", "carousel", "إنفوجرافيك", "infographic"],
+    "print": ["طباعة", "مطبوعات", "print", "بروشور", "فلاير"],
+    "live_stream": ["بث مباشر", "بث", "live", "live stream", "لايف"],
+    "event": ["فعالية", "حدث", "event", "مناسبة"],
+    "field_execution": ["تنفيذ ميداني", "ميداني", "field execution"],
+    "presentation": ["عرض تقديمي", "بريزنتيشن", "presentation", "deck"],
+    "gift": ["هدية", "هدايا", "gift"],
+    "report": ["تقرير", "تقارير", "report"],
+    "digital_content": ["محتوى رقمي", "استوري", "ستوري", "story", "digital content"],
+    "copywriting": ["كتابة محتوى", "نص", "مقال", "article", "copywriting", "كتابة"]
+  },
+  "priorityKeys": {
+    "$comment": "OPTIONAL. Database-owned priority values ⇐ the words used in sheets. An unmatched value is NOT sent (the column keeps its default) and the original stays in metadata.priority_raw.",
+    "low": ["منخفضة", "منخفض", "low", "أدنى"],
+    "normal": ["متوسطة", "متوسط", "عادية", "عادي", "normal", "medium"],
+    "high": ["عالية", "عالي", "مرتفعة", "high"],
+    "urgent": ["عاجلة", "عاجل", "urgent", "حرجة", "critical"]
+  },
+  "skipRowValues": ["الإجمالي", "الاجمالي", "المجموع", "الملخص", "إجمالي", "total", "totals", "summary"],
+  "keyStrategy": "identity",
+  "defaultScheduleStatus": "awaiting_schedule",
+  "defaultStatus": "draft"
+}
