@@ -1,10 +1,17 @@
 // ════════════════════════════════════════════════════════════════════════════
-// tests/misbar10_real_dataset.test.js — مجموعة القبول على البيانات الحقيقية.
+// tests/misbar10_real_dataset.test.js — مجموعة قبول محلّية على البيانات الحقيقية.
 //
-// This suite runs against the OWNER'S REAL WORKBOOK
-// (docs/input/MISBAR10_PLAN.xlsx) and the extraction produced from it
-// (docs/misbar10_import_payload.json). Nothing here is synthetic; the synthetic
-// counterpart lives in tests/misbar10_acceptance.test.js.
+// ⚠ OPTIONAL LOCAL ACCEPTANCE SUITE. It runs against the OWNER'S REAL WORKBOOK
+// and the extraction produced from it. Those files are CLIENT DATA: they live
+// outside git (docs/input/private/, docs/private-imports/ — historical in-repo
+// locations are still accepted as a fallback) and are resolved through
+// tests/misbar10_private_paths.js. When they are absent — CI, Vercel, a fresh
+// clone — every real-data test here SKIPS with a reason that names the missing
+// file. It never fails, and it never reports a pass it did not earn.
+//
+// The structural coverage that needs NO client data was moved to
+// tests/misbar10_acceptance.test.js, which runs the same engine over the fully
+// invented tests/fixtures/misbar10_sanitized.json and always executes.
 //
 // THREE INDEPENDENT WITNESSES, and every claim must satisfy all three:
 //   1. the FILE      — read through the repo's OWN reader (lib/portal/import),
@@ -25,15 +32,31 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { ROOT, TS_AVAILABLE, loadTs } = require("./import_engine_loader.js");
+const { localAcceptanceInputs } = require("./misbar10_private_paths.js");
 
-const XLSX_PATH = path.join(ROOT, "docs/input/MISBAR10_PLAN.xlsx");
-const PAYLOAD_PATH = path.join(ROOT, "docs/misbar10_import_payload.json");
-const FIXTURE_PATH = path.join(ROOT, "tests/fixtures/misbar10_real.json");
-const CSV_PATH = path.join(ROOT, "docs/misbar10_import_ready.csv");
+// ─── all four witnesses are CLIENT DATA and are git-ignored ─────────────────
+// Private locations first, historical in-repo locations as a fallback (see
+// tests/misbar10_private_paths.js). When any is absent every real-data test in
+// this file SKIPS with a reason that names it: this suite is a LOCAL acceptance
+// run, and CI / Vercel / a fresh clone must stay green without it.
+const REAL = localAcceptanceInputs("misbar10_real_dataset.test.js", ["workbook", "payload", "csv", "extract"]);
+const XLSX_PATH = REAL.paths.workbook;
+const PAYLOAD_PATH = REAL.paths.payload;
+const FIXTURE_PATH = REAL.paths.extract;
+const CSV_PATH = REAL.paths.csv;
+
+// The mapping profile is NOT client data: it describes a column layout and is
+// tracked in the repository, so it is always available.
 const PROFILE_PATH = path.join(ROOT, "docs/import_profiles/misbar10.json");
-
-const PAYLOAD = JSON.parse(fs.readFileSync(PAYLOAD_PATH, "utf8"));
 const PROFILE_JSON = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf8"));
+
+/** true only when the client files AND the TypeScript loader are both usable. */
+const RUN = REAL.present && TS_AVAILABLE;
+const opts = RUN
+  ? {}
+  : REAL.present
+    ? { skip: "sucrase غير متاح — لا يمكن تنفيذ محرّك الاستيراد الحقيقي" }
+    : REAL.opts;
 
 // ─── the owner's independently verified numbers ─────────────────────────────
 const EXPECT = {
@@ -47,7 +70,9 @@ const EXPECT = {
   rows_missing_external_key: 0,
 };
 
-const SHEET_MAIN = "الخطة الإعلامية الكاملة";
+// The plan sheet's real name is CLIENT CONTENT and must never be written into
+// Git. It is derived at run time from the private payload instead (`ورقة1` is
+// Excel's own default sheet name, not client content).
 const SHEET_SCRATCH = "ورقة1";
 
 // Column layout of the real sheet. B is the title column; a row with B set and
@@ -65,18 +90,21 @@ if (!TS_AVAILABLE) {
   });
 }
 
-const parse = loadTs("lib/portal/import/parse.ts");
-const preview = loadTs("lib/portal/import/preview.ts");
-const profiles = loadTs("lib/portal/import/profiles.ts");
-const keys = loadTs("lib/portal/import/keys.ts");
-const textUtil = loadTs("lib/portal/import/text.ts");
-const mappingUtil = loadTs("lib/portal/import/mapping.ts");
+const parse = TS_AVAILABLE ? loadTs("lib/portal/import/parse.ts") : null;
+const preview = TS_AVAILABLE ? loadTs("lib/portal/import/preview.ts") : null;
+const profiles = TS_AVAILABLE ? loadTs("lib/portal/import/profiles.ts") : null;
+const keys = TS_AVAILABLE ? loadTs("lib/portal/import/keys.ts") : null;
+const textUtil = TS_AVAILABLE ? loadTs("lib/portal/import/text.ts") : null;
+const mappingUtil = TS_AVAILABLE ? loadTs("lib/portal/import/mapping.ts") : null;
 
-const XLSX_BYTES = new Uint8Array(fs.readFileSync(XLSX_PATH));
+const PAYLOAD = RUN ? JSON.parse(fs.readFileSync(PAYLOAD_PATH, "utf8")) : null;
+const XLSX_BYTES = RUN ? new Uint8Array(fs.readFileSync(XLSX_PATH)) : null;
 /** THE workbook as the platform itself reads it. */
-const WB = parse.parseWorkbook(XLSX_BYTES, "MISBAR10_PLAN.xlsx");
-const SHEET1 = WB.sheets.find((s) => s.name === SHEET_MAIN);
-const SHEET2 = WB.sheets.find((s) => s.name === SHEET_SCRATCH);
+const WB = RUN ? parse.parseWorkbook(XLSX_BYTES, "MISBAR10_PLAN.xlsx") : null;
+/** Derived, never hard-coded: the plan sheet name is client content. */
+const SHEET_MAIN = RUN ? PAYLOAD.source.sheet : null;
+const SHEET1 = RUN ? WB.sheets.find((s) => s.name === SHEET_MAIN) : null;
+const SHEET2 = RUN ? WB.sheets.find((s) => s.name === SHEET_SCRATCH) : null;
 
 /** Raw cell, byte-for-byte as the reader returned it; "" ⇒ null. */
 function cell(row, i) {
@@ -118,12 +146,12 @@ function classifySheet1() {
   }
   return { banners, rows, headers, empties };
 }
-const FILE = classifySheet1();
+const FILE = RUN ? classifySheet1() : null;
 
 // ─── witness 3: the engine, executed over witness 1 ─────────────────────────
-const PROFILE = profiles.resolveProfile(PROFILE_JSON);
-const PROJECT_KEY = PAYLOAD.project.external_key.split(":")[1];
-const PROJECT_TITLE = PAYLOAD.project.title;
+const PROFILE = TS_AVAILABLE ? profiles.resolveProfile(PROFILE_JSON) : null;
+const PROJECT_KEY = RUN ? PAYLOAD.project.external_key.split(":")[1] : null;
+const PROJECT_TITLE = RUN ? PAYLOAD.project.title : null;
 
 function planFromXlsx(context) {
   const picked = parse.pickSheet(WB, SHEET_MAIN);
@@ -135,12 +163,33 @@ function planFromXlsx(context) {
     fileName: "MISBAR10_PLAN.xlsx",
   });
 }
-const PLAN = planFromXlsx();
+const PLAN = RUN ? planFromXlsx() : null;
 
 // ════════════════════════════════════════════════════════════════════════════
-// 0) الشهود موجودون فعلًا
+// 0) الشهود موجودون فعلًا — أو التخطّي معلَن بصوت عالٍ
 // ════════════════════════════════════════════════════════════════════════════
-test("witnesses_present — الملف الحقيقي والحمولة والقارئ كلّها حاضرة", () => {
+
+// ALWAYS RUNS. Without it an absent workbook would leave this file as nothing
+// but SKIP lines, and a suite that never ran must never be mistaken for a suite
+// that passed. Either the four witnesses were found and used, or a reason
+// exists and names exactly what is missing.
+test("local_acceptance_status — حالة المدخلات معلَنة لا مفترَضة", () => {
+  if (RUN) {
+    assert.deepEqual(REAL.missing, [], "شاهد ناقص رغم أنّ المجموعة تعمل");
+    assert.ok(PLAN !== null && PAYLOAD !== null, "المدخلات حاضرة ولم تُبنَ الخطّة");
+    assert.deepEqual(opts, {}, "المجموعة تعمل ومع ذلك عليها سبب تخطٍّ");
+    return;
+  }
+  assert.equal(PLAN, null, "لا مدخلات حقيقية ومع ذلك وُجدت خطّة — شيء ما اختُلق");
+  assert.equal(typeof opts.skip, "string", "المدخلات غائبة وبلا سبب تخطٍّ مكتوب");
+  assert.ok(opts.skip.length > 40, "سبب التخطّي أقصر من أن يُفهم");
+  if (!REAL.present) {
+    assert.ok(REAL.missing.length > 0, "غياب معلَن بلا ملفّ مفقود مسمّى");
+    assert.match(opts.skip, /SKIPPED/, "سبب التخطّي لا يقول إنّه تخطٍّ");
+  }
+});
+
+test("witnesses_present — الملف الحقيقي والحمولة والقارئ كلّها حاضرة", opts, () => {
   assert.ok(fs.existsSync(XLSX_PATH), "ملف المالك الحقيقي غير موجود في المستودع");
   assert.ok(XLSX_BYTES.length > 0, "ملف المالك فارغ");
   assert.equal(WB.format, "xlsx", "قُرئ الملف بغير صيغة xlsx");
@@ -154,7 +203,7 @@ test("witnesses_present — الملف الحقيقي والحمولة والق�
 // ════════════════════════════════════════════════════════════════════════════
 // 1) الأرقام الثمانية المطلوبة — كل واحد تأكيد مستقلّ باسمه
 // ════════════════════════════════════════════════════════════════════════════
-test("parent_project_count = 1", () => {
+test("parent_project_count = 1", opts, () => {
   assert.ok(PAYLOAD.project && typeof PAYLOAD.project === "object", "لا مشروع أب في الحمولة");
   assert.equal(Array.isArray(PAYLOAD.project), false, "المشروع الأب مصفوفة — يجب أن يكون واحدًا");
   assert.equal(PAYLOAD.project.title, "مسبار 10");
@@ -166,7 +215,7 @@ test("parent_project_count = 1", () => {
   assert.equal(PLAN.counts.parentProjectsToCreate, EXPECT.parent_project_count);
 });
 
-test("operational_block_count = 11", () => {
+test("operational_block_count = 11", opts, () => {
   assert.equal(FILE.banners.length, EXPECT.operational_block_count, "عدد الكتل المقروء من الملف ليس 11");
   assert.equal(PAYLOAD.blocks.length, EXPECT.operational_block_count, "عدد الكتل في الحمولة ليس 11");
   assert.equal(PAYLOAD.counts.blocks, EXPECT.operational_block_count, "عدّاد الحمولة المعلن ليس 11");
@@ -174,7 +223,7 @@ test("operational_block_count = 11", () => {
   assert.equal(PLAN.counts.stagesToCreate, EXPECT.operational_block_count);
 });
 
-test("deliverable_count = 79", () => {
+test("deliverable_count = 79", opts, () => {
   assert.equal(FILE.rows.length, EXPECT.deliverable_count, "عدد أسطر المحتوى المقروء من الملف ليس 79");
   assert.equal(PAYLOAD.deliverables.length, EXPECT.deliverable_count, "عدد المخرجات في الحمولة ليس 79");
   assert.equal(PAYLOAD.counts.deliverables, EXPECT.deliverable_count, "عدّاد الحمولة المعلن ليس 79");
@@ -184,7 +233,7 @@ test("deliverable_count = 79", () => {
   assert.equal(PLAN.duplicateRows.length, 0, "المحرّك استبعد أسطرًا كمكرّرة — لا يوجد مكرّر حقيقي");
 });
 
-test("distribution = [7,5,8,4,3,4,9,7,16,10,6]", () => {
+test("distribution = [7,5,8,4,3,4,9,7,16,10,6]", opts, () => {
   // من الملف: عدّ الأسطر تحت كلّ لافتة.
   const fromFile = [];
   for (const r of SHEET1.rows) {
@@ -204,7 +253,7 @@ test("distribution = [7,5,8,4,3,4,9,7,16,10,6]", () => {
   assert.equal(EXPECT.distribution.reduce((a, n) => a + n, 0), EXPECT.deliverable_count);
 });
 
-test("duplicate_external_keys = 0", () => {
+test("duplicate_external_keys = 0", opts, () => {
   const all = PAYLOAD.deliverables.map((d) => d.external_key).concat(
     PAYLOAD.blocks.map((b) => b.external_key),
     [PAYLOAD.project.external_key],
@@ -221,7 +270,7 @@ test("duplicate_external_keys = 0", () => {
   assert.equal(PLAN.counts.duplicate, EXPECT.duplicate_external_keys);
 });
 
-test("rows_with_fake_dates = 0", () => {
+test("rows_with_fake_dates = 0", opts, () => {
   const DATE_FIELDS = ["planned_start_date", "due_date", "start_date", "end_date", "date", "scheduled_at"];
   let offenders = [];
   const scan = (obj, where) => {
@@ -251,7 +300,7 @@ test("rows_with_fake_dates = 0", () => {
     "قارئ التواريخ لا يقرأ تاريخًا صحيحًا — الاختبار أعلاه يمرّ فارغًا");
 });
 
-test("rows_missing_source_row = 0", () => {
+test("rows_missing_source_row = 0", opts, () => {
   const missing = PAYLOAD.deliverables.filter((d) => !Number.isInteger(d.source_row_number) || d.source_row_number < 1);
   assert.deepEqual(missing.map((d) => d.title), [], "مخرجات بلا رقم سطر مصدر");
   assert.equal(missing.length, EXPECT.rows_missing_source_row);
@@ -264,7 +313,7 @@ test("rows_missing_source_row = 0", () => {
   for (const b of PAYLOAD.blocks) assert.ok(real.has(b.source_row_number), `سطر الكتلة ${b.source_row_number} غير موجود`);
 });
 
-test("rows_missing_external_key = 0", () => {
+test("rows_missing_external_key = 0", opts, () => {
   const bad = PAYLOAD.deliverables.filter((d) => typeof d.external_key !== "string" || d.external_key.trim() === "");
   assert.deepEqual(bad.map((d) => d.source_row_number), [], "مخرجات بلا مفتاح خارجي");
   assert.equal(bad.length, EXPECT.rows_missing_external_key);
@@ -283,7 +332,7 @@ test("rows_missing_external_key = 0", () => {
 // ════════════════════════════════════════════════════════════════════════════
 // 2) قارئ المستودع نفسه هو الحَكَم — لا محلّل خاصّ بالاختبار
 // ════════════════════════════════════════════════════════════════════════════
-test("repo_reader_is_the_witness — القراءة تمرّ عبر lib/portal/import لا عبر محلّل محلّي", () => {
+test("repo_reader_is_the_witness — القراءة تمرّ عبر lib/portal/import لا عبر محلّل محلّي", opts, () => {
   // القارئ الحقيقي أنتج الأوراق والأسطر التي بُنيت عليها كل التأكيدات أعلاه.
   assert.equal(typeof parse.parseWorkbook, "function");
   assert.equal(typeof preview.buildPlan, "function");
@@ -302,7 +351,7 @@ test("repo_reader_is_the_witness — القراءة تمرّ عبر lib/portal/i
   }
 });
 
-test("reader_vs_payload_cell_exact — كل خلية في الحمولة تطابق ما قرأه المحرّك حرفًا بحرف", () => {
+test("reader_vs_payload_cell_exact — كل خلية في الحمولة تطابق ما قرأه المحرّك حرفًا بحرف", opts, () => {
   const byRow = new Map(SHEET1.rows.map((r) => [r.rowNumber, r]));
   const diffs = [];
   for (const d of PAYLOAD.deliverables) {
@@ -321,7 +370,7 @@ test("reader_vs_payload_cell_exact — كل خلية في الحمولة تطا�
     "لا قيمة تحمل مسافة طرفية — لُمِّعت البيانات، وفخّ المسافات لم يُختبر");
 });
 
-test("engine_reproduces_the_payload — buildPlan فوق ملف xlsx الحقيقي يعيد إنتاج كل مفتاح", () => {
+test("engine_reproduces_the_payload — buildPlan فوق ملف xlsx الحقيقي يعيد إنتاج كل مفتاح", opts, () => {
   assert.equal(PLAN.ok, true, `المحرّك فشل: ${PLAN.fatalMessage}`);
   assert.deepEqual(PLAN.deliverables.map((d) => d.external_key), PAYLOAD.deliverables.map((d) => d.external_key),
     "مفاتيح المخرجات التي يولّدها المحرّك تختلف عن الحمولة");
@@ -355,7 +404,7 @@ test("engine_reproduces_the_payload — buildPlan فوق ملف xlsx الحقي�
   assert.deepEqual(diffs, [], `المحرّك والحمولة يختلفان:\n${diffs.join("\n")}`);
 });
 
-test("csv_artifact_matches_the_xlsx — ملف CSV الوسيط ليس نسخة محرَّرة يدويًّا", () => {
+test("csv_artifact_matches_the_xlsx — ملف CSV الوسيط ليس نسخة محرَّرة يدويًّا", opts, () => {
   const csv = fs.readFileSync(CSV_PATH, "utf8");
   const csvWb = parse.parseWorkbook(csv, "misbar10_import_ready.csv");
   const picked = parse.pickSheet(csvWb, null);
@@ -374,7 +423,7 @@ test("csv_artifact_matches_the_xlsx — ملف CSV الوسيط ليس نسخة 
   assert.equal(csvPlan.deliverables.filter((d) => d.due_date !== null).length, 0);
 });
 
-test("test_fixture_equals_the_payload — نسخة الاختبار ليست فرعًا منفصلًا يتعفّن", () => {
+test("test_fixture_equals_the_payload — نسخة الاختبار ليست فرعًا منفصلًا يتعفّن", opts, () => {
   const F = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
   assert.match(F._WARNING_EN, /REAL OWNER DATA/i, "نسخة الاختبار غير موسومة كبيانات حقيقية");
   assert.match(F._WARNING_EN, /do NOT import into production/i, "لا تحذير من الاستيراد إلى الإنتاج");
@@ -389,7 +438,7 @@ test("test_fixture_equals_the_payload — نسخة الاختبار ليست ف�
 // ════════════════════════════════════════════════════════════════════════════
 const ARABIC = /[؀-ۿ]/;
 
-test("arabic_integrity — لا تشويه ترميز ولا تطبيع مدمِّر", () => {
+test("arabic_integrity — لا تشويه ترميز ولا تطبيع مدمِّر", opts, () => {
   const texts = [];
   texts.push(PAYLOAD.project.title);
   for (const b of PAYLOAD.blocks) texts.push(b.title);
@@ -414,7 +463,7 @@ test("arabic_integrity — لا تشويه ترميز ولا تطبيع مدمِ
   assert.doesNotMatch(raw, /\\u06[0-9a-f]{2}/i, "الملف يحوي هروبًا يونيكوديًّا بدل النصّ العربي");
 });
 
-test("source_typo_is_preserved — الخطأ الإملائي «المسسجلين» باقٍ كما كتبه المالك", () => {
+test("source_typo_is_preserved — الخطأ الإملائي «المسسجلين» باقٍ كما كتبه المالك", opts, () => {
   const TYPO = "المسسجلين";
   const CORRECT = "المسجلين";
   const inFile = SHEET1.rows.filter((r) => r.cells.join(" ").includes(TYPO)).map((r) => r.rowNumber);
@@ -429,7 +478,7 @@ test("source_typo_is_preserved — الخطأ الإملائي «المسسجل�
   }
 });
 
-test("en_dash_survives_storage — الشرطة «–» محفوظة في الأصل ومفهومة عند التقسيم", () => {
+test("en_dash_survives_storage — الشرطة «–» محفوظة في الأصل ومفهومة عند التقسيم", opts, () => {
   const EN_DASH = "–";
   const withDash = PAYLOAD.deliverables.filter((d) => (d.metadata.source_platforms || "").includes(EN_DASH));
   assert.ok(withDash.length >= 10, `عدد الأسطر ذات الشرطة «–» ${withDash.length} — أقلّ من المتوقّع، الفخّ غير مغطّى`);
@@ -444,7 +493,7 @@ test("en_dash_survives_storage — الشرطة «–» محفوظة في الأ
     "splitMulti لا يقسّم على الشرطة «–» — المحرّك سيخالف الحمولة عند إعادة الاستيراد");
 });
 
-test("unicode_lookalikes_stay_distinct — «تصميم» و«مطبوع» بنسختيهما محفوظتان بالبايت", () => {
+test("unicode_lookalikes_stay_distinct — «تصميم» و«مطبوع» بنسختيهما محفوظتان بالبايت", opts, () => {
   const ctVariants = new Set(PAYLOAD.deliverables.map((d) => d.metadata.source_content_type));
   const tasmim = [...ctVariants].filter((s) => textUtil.normalizeForMatch(s) === "تصميم");
   assert.equal(tasmim.length, 2, `«تصميم» ظهرت ${tasmim.length} مرّة كصيغة متمايزة — المتوقّع نسختان مختلفتان بالبايت`);
@@ -464,7 +513,7 @@ test("unicode_lookalikes_stay_distinct — «تصميم» و«مطبوع» بن�
 // ════════════════════════════════════════════════════════════════════════════
 // 4) لا سطر ضاع، ولا سطران دُمِجا
 // ════════════════════════════════════════════════════════════════════════════
-test("no_content_row_is_lost — كل سطر محتوى في الورقة يظهر مرّة واحدة بالضبط", () => {
+test("no_content_row_is_lost — كل سطر محتوى في الورقة يظهر مرّة واحدة بالضبط", opts, () => {
   const fromFile = FILE.rows.map((r) => r.rowNumber).sort((a, b) => a - b);
   const inPayload = PAYLOAD.deliverables.map((d) => d.source_row_number).sort((a, b) => a - b);
   assert.deepEqual(inPayload, fromFile, "مجموعة أسطر الحمولة لا تساوي أسطر المحتوى في الملف");
@@ -492,19 +541,27 @@ test("no_content_row_is_lost — كل سطر محتوى في الورقة يظه
   }
 });
 
-test("the_two_announcement_rows_stay_two — «إعلان المقبولين» سطران لا سطر", () => {
+test("the_two_announcement_rows_stay_two — الصفّان 20 و21 يبقيان سطرين لا سطرًا", opts, () => {
   const pair = PAYLOAD.deliverables.filter((d) => d.source_row_number === 20 || d.source_row_number === 21);
-  assert.equal(pair.length, 2, "أحد سطري «إعلان المقبولين» ضاع أو دُمج");
+  assert.equal(pair.length, 2, "أحد صفّي 20/21 ضاع أو دُمج");
   const [a, b] = pair.sort((x, y) => x.source_row_number - y.source_row_number);
-  assert.equal(a.title, "إعلان المقبولين");
+  assert.ok(a.title && a.title.trim().length >= 4, "الصفّ 20 بلا عنوان");
   assert.equal(b.title, a.title, "العنوانان مختلفان — ليسا الحالة المقصودة");
   assert.equal(a.content_type, b.content_type);
   assert.equal(a.metadata.source_platforms, b.metadata.source_platforms);
   assert.equal(a.proposed_caption, b.proposed_caption);
   assert.notEqual(a.external_key, b.external_key, "السطران يحملان المفتاح نفسه — سيُدمجان عند الاستيراد");
   assert.notEqual(a.execution_details, b.execution_details, "تفاصيل التنفيذ متطابقة — أحد النصّين ضاع");
-  assert.ok(a.execution_details.endsWith("شعارات الجمعيات)"), `السطر 20 لا ينتهي بـ«شعارات الجمعيات»: ${a.execution_details}`);
-  assert.ok(b.execution_details.endsWith("شعارات الداعمين)"), `السطر 21 لا ينتهي بـ«شعارات الداعمين»: ${b.execution_details}`);
+  // القيم الحرفيّة محتوى عميل ولا تُكتب في Git. البنية المُختبَرة: النصّان
+  // متطابقان تمامًا عدا **الكلمة الأخيرة**، وكلتاهما محفوظة على جانبها.
+  const words = (s) => s.trim().replace(/\)\s*$/, "").split(/\s+/);
+  const [wa, wb] = [words(a.execution_details), words(b.execution_details)];
+  assert.equal(wa.length, wb.length, "طول النصّين مختلف — ليست حالة «تختلفان في كلمة واحدة»");
+  assert.ok(wa.length >= 3, "تفاصيل التنفيذ أقصر من أن تكون النصّ الحقيقي");
+  assert.deepEqual(wa.slice(0, -1), wb.slice(0, -1), "الاختلاف ليس محصورًا في الكلمة الأخيرة");
+  assert.notEqual(wa[wa.length - 1], wb[wb.length - 1], "الكلمة الأخيرة متطابقة — أحد النصّين ضاع");
+  assert.ok(a.execution_details.trim().endsWith(")"), "السطر 20 فقد قوس الإغلاق");
+  assert.ok(b.execution_details.trim().endsWith(")"), "السطر 21 فقد قوس الإغلاق");
   // والمحرّك أيضًا يبقيهما اثنين ولا يعدّ الثاني تكرارًا
   const engine = PLAN.deliverables.filter((d) => d.source_row_number === 20 || d.source_row_number === 21);
   assert.equal(engine.length, 2, "المحرّك أسقط أحد السطرين كتكرار");
@@ -513,7 +570,7 @@ test("the_two_announcement_rows_stay_two — «إعلان المقبولين» �
   assert.equal(PLAN.duplicateRows.filter((r) => r.rowNumber === 20 || r.rowNumber === 21).length, 0);
 });
 
-test("scratch_sheet_rows_are_excluded_but_reported — أسطر «ورقة1» الثلاثة معلنة لا مطموسة", () => {
+test("scratch_sheet_rows_are_excluded_but_reported — أسطر «ورقة1» الثلاثة معلنة لا مطموسة", opts, () => {
   assert.equal(SHEET2.rows.length, 3, "ورقة1 لا تحوي ثلاثة أسطر كما هو موصوف");
   assert.equal(PAYLOAD.excluded_rows.length, 3, "الحمولة لا تُبلغ عن ثلاثة أسطر مستبعَدة");
   assert.deepEqual(PAYLOAD.excluded_rows.map((r) => r.row).sort((a, b) => a - b), [14, 18, 24]);
@@ -534,7 +591,7 @@ test("scratch_sheet_rows_are_excluded_but_reported — أسطر «ورقة1» ا
 // ════════════════════════════════════════════════════════════════════════════
 // 5) الخلايا الفارغة null — لا "" ولا نصّ بديل
 // ════════════════════════════════════════════════════════════════════════════
-test("empty_cells_are_null_with_the_exact_census — 1 منصات، 2 تفاصيل، 23 وصف", () => {
+test("empty_cells_are_null_with_the_exact_census — 1 منصات، 2 تفاصيل، 23 وصف", opts, () => {
   const censusFile = { D: 0, E: 0, F: 0 };
   const byRow = new Map(SHEET1.rows.map((r) => [r.rowNumber, r]));
   for (const d of PAYLOAD.deliverables) {
@@ -578,7 +635,7 @@ test("empty_cells_are_null_with_the_exact_census — 1 منصات، 2 تفاصي
 /** المفاتيح الـ13 التي تملكها المنصّة — مقروءة من ملف التعيين، لا مكتوبة هنا. */
 const GENERIC_KEYS = Object.keys(PROFILE_JSON.contentTypeKeys).filter((k) => !k.startsWith("$")).concat(["custom"]);
 
-test("content_type_maps_into_the_13_platform_keys — والأصل العربي محفوظ", () => {
+test("content_type_maps_into_the_13_platform_keys — والأصل العربي محفوظ", opts, () => {
   assert.equal(GENERIC_KEYS.length, 13, `عدد المفاتيح العامّة ${GENERIC_KEYS.length} وليس 13`);
   for (const k of ["video", "photography", "design", "print", "live_stream", "event", "field_execution",
     "presentation", "gift", "report", "digital_content", "copywriting", "custom"]) {
@@ -611,7 +668,7 @@ test("content_type_maps_into_the_13_platform_keys — والأصل العربي 
 // ════════════════════════════════════════════════════════════════════════════
 // 7) المنصّات
 // ════════════════════════════════════════════════════════════════════════════
-test("platforms_split_correctly_and_keep_their_original", () => {
+test("platforms_split_correctly_and_keep_their_original", opts, () => {
   const byRow = new Map(SHEET1.rows.map((r) => [r.rowNumber, r]));
   let multi = 0;
   for (const d of PAYLOAD.deliverables) {
@@ -660,25 +717,27 @@ test("platforms_split_correctly_and_keep_their_original", () => {
  * القرار المتّخذ لكل مرشَّح من مرشّحي المسح بالكلمات المفتاحية، مع سببه.
  * كل ما عدا هذه الأسطر = none.
  */
+// النصوص الحرفيّة للصفوف محتوى عميل ولا تُكتب في Git. يُذكر هنا **رقم الصفّ
+// والقاعدة** فقط؛ النصّ الذي بُنيت عليه القاعدة يُقرأ من الملفّ المحلّي.
 const RECURRENCE_DECISIONS = {
-  3: { type: "daily", why: "«عد تنازلي يومي» — التنفيذ ينصّ على تسليم يوميّ (العد التنازلي اليومي)" },
-  16: { type: "weekly", why: "«تقارير أسبوعية (إحصائيات أسبوعية…)» — الإحصاءات الأسبوعية" },
-  34: { type: "none", why: "«لقطات من التفاعل اليومي» تصف مادّة المصدر لا وتيرة التسليم — مخرَج واحد" },
-  35: { type: "none", why: "«بالإستفادة من محتوى اللقاء الأسبوعي» — اللقاء أسبوعيّ، لا المخرَج" },
-  36: { type: "weekly", why: "«النشرة الأسبوعية»، ونوعها «صحيفة رقمية أسبوعية»" },
-  42: { type: "none", why: "«حصاد المرحلة الأولى» يستفيد من النشرة الأسبوعية — حصاد لمرّة واحدة" },
-  50: { type: "none", why: "نفس نصّ السطر 34: لقطات من التفاعل اليومي كمصدر — مخرَج واحد" },
-  51: { type: "weekly", why: "«النشرة الأسبوعية» مرّة ثانية في مرحلة أخرى — تكرار مشروع" },
-  77: { type: "daily", why: "نوع المحتوى نفسه «فيديو يومي» — الفيديو اليومي" },
-  82: { type: "none", why: "«عرض المشاريع اليومية» عرض واحد يلخّص، لا سلسلة" },
-  90: { type: "daily", why: "«النشرة اليومية»، ونوعها «صحيفة رقمية يومية»" },
+  3: { type: "daily", why: "التنفيذ ينصّ صراحةً على تسليم يوميّ متسلسل" },
+  16: { type: "weekly", why: "التنفيذ ينصّ صراحةً على وتيرة تسليم أسبوعيّة متسلسلة" },
+  34: { type: "none", why: "الوصف «اليوميّ» يصف مادّة المصدر لا وتيرة التسليم — مخرَج واحد" },
+  35: { type: "none", why: "الوصف «الأسبوعيّ» يعود على اللقاء المصدر لا على المخرَج" },
+  36: { type: "weekly", why: "العنوان ونوع المحتوى كلاهما يصرّح بوتيرة أسبوعية للتسليم" },
+  42: { type: "none", why: "مخرَج حصاد لمرّة واحدة يستفيد من مادّة أسبوعية — لا يتكرّر" },
+  50: { type: "none", why: "نفس نصّ السطر 34: وصف يوميّ للمصدر — مخرَج واحد" },
+  51: { type: "weekly", why: "الحالة الأسبوعية نفسها تتكرّر في كتلة أخرى — تكرار مشروع" },
+  77: { type: "daily", why: "نوع المحتوى نفسه يصرّح بوتيرة يومية للتسليم" },
+  82: { type: "none", why: "عرض واحد يلخّص مادّة يومية، لا سلسلة تسليمات" },
+  90: { type: "daily", why: "العنوان ونوع المحتوى كلاهما يصرّح بوتيرة يومية للتسليم" },
 };
 const RECURRING_ROWS = Object.keys(RECURRENCE_DECISIONS)
   .filter((n) => RECURRENCE_DECISIONS[n].type !== "none")
   .map(Number)
   .sort((a, b) => a - b);
 
-test("recurrence_matches_the_documented_decisions", () => {
+test("recurrence_matches_the_documented_decisions", opts, () => {
   const ALLOWED = ["none", "daily", "weekly", "monthly", "custom"];
   for (const d of PAYLOAD.deliverables) {
     assert.ok(ALLOWED.includes(d.recurrence_type), `السطر ${d.source_row_number}: نوع تكرار مجهول «${d.recurrence_type}»`);
@@ -687,23 +746,23 @@ test("recurrence_matches_the_documented_decisions", () => {
     const row = Number(rowStr);
     const d = PAYLOAD.deliverables.find((x) => x.source_row_number === row);
     assert.ok(d, `السطر المرشَّح ${row} غير موجود في الـ79`);
-    assert.equal(d.recurrence_type, decision.type, `السطر ${row} («${d.title}») — القرار الموثَّق: ${decision.why}`);
+    assert.equal(d.recurrence_type, decision.type, `السطر ${row} — القرار الموثَّق: ${decision.why}`);
   }
   const actual = PAYLOAD.deliverables.filter((d) => d.recurrence_type !== "none").map((d) => d.source_row_number).sort((a, b) => a - b);
   assert.deepEqual(actual, RECURRING_ROWS, "مجموعة الأسطر المتكرّرة تخالف القرارات الموثَّقة");
-  // الخمسة التي سمّاها المالك ممثَّلة (النشرة الأسبوعية تظهر مرّتين ⇒ 6 أسطر)
+  // الخمس الحالات التي سمّاها المالك ممثَّلة (إحداها تتكرّر في كتلتين ⇒ 6 أسطر)
   assert.equal(RECURRING_ROWS.length, 6);
   assert.equal(actual.filter((n) => PAYLOAD.deliverables.find((d) => d.source_row_number === n).recurrence_type === "daily").length, 3);
   assert.equal(actual.filter((n) => PAYLOAD.deliverables.find((d) => d.source_row_number === n).recurrence_type === "weekly").length, 3);
 });
 
-test("no_daily_instances_were_generated — التكرار وصف لا تفريخ", () => {
+test("no_daily_instances_were_generated — التكرار وصف لا تفريخ", opts, () => {
   assert.equal(PAYLOAD.deliverables.length, EXPECT.deliverable_count, "عدد المخرجات تغيّر — وُلِّدت نسخ");
   const titles = new Map();
   for (const d of PAYLOAD.deliverables) titles.set(d.title, (titles.get(d.title) || 0) + 1);
   for (const n of RECURRING_ROWS) {
     const d = PAYLOAD.deliverables.find((x) => x.source_row_number === n);
-    assert.ok(titles.get(d.title) <= 2, `«${d.title}» مكرّر ${titles.get(d.title)} مرّة — يبدو تفريخًا`);
+    assert.ok(titles.get(d.title) <= 2, `عنوان مكرّر ${titles.get(d.title)} مرّة (السطر ${d.source_row_number}) — يبدو تفريخًا`);
   }
   // العدد المتوقّع غير معروف ما دام لا جدول معتمَد — يبقى null، لا 30 ولا 1
   for (const d of PAYLOAD.deliverables) {
@@ -716,7 +775,7 @@ test("no_daily_instances_were_generated — التكرار وصف لا تفري�
 // ════════════════════════════════════════════════════════════════════════════
 // 9) عناوين الكتل حرفية، والتواريخ داخلها نصّ لا حقل
 // ════════════════════════════════════════════════════════════════════════════
-test("block_titles_are_verbatim_including_their_dates", () => {
+test("block_titles_are_verbatim_including_their_dates", opts, () => {
   const byRow = new Map(SHEET1.rows.map((r) => [r.rowNumber, r]));
   assert.equal(PAYLOAD.blocks.length, 11);
   PAYLOAD.blocks.forEach((b, i) => {
@@ -751,7 +810,7 @@ test("block_titles_are_verbatim_including_their_dates", () => {
 // ════════════════════════════════════════════════════════════════════════════
 // 10) الثبات وإعادة الاستيراد
 // ════════════════════════════════════════════════════════════════════════════
-test("key_derivation_is_deterministic — تشغيلان متتاليان ⇒ المفاتيح نفسها", () => {
+test("key_derivation_is_deterministic — تشغيلان متتاليان ⇒ المفاتيح نفسها", opts, () => {
   const again = planFromXlsx();
   assert.deepEqual(again.deliverables.map((d) => d.external_key), PLAN.deliverables.map((d) => d.external_key));
   assert.deepEqual(again.nodes.map((n) => n.key), PLAN.nodes.map((n) => n.key));
@@ -777,7 +836,7 @@ test("key_derivation_is_deterministic — تشغيلان متتاليان ⇒ ا
   assert.equal(mk(), sample.external_key, "keys.externalKey لا يعيد إنتاج مفتاح المحرّك");
 });
 
-test("re_import_is_idempotent — deliverablesToCreate = 0 عند إعادة تمرير الحمولة نفسها", () => {
+test("re_import_is_idempotent — deliverablesToCreate = 0 عند إعادة تمرير الحمولة نفسها", opts, () => {
   const existing = {};
   for (const d of PLAN.deliverables) existing[d.external_key] = { id: `row-${d.source_row_number}`, content_hash: d.content_hash };
   for (const n of PLAN.nodes) existing[n.key] = { id: `node-${n.sequence}`, content_hash: null };

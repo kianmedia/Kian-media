@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ImportPlan, ImportProfile } from "./types";
 import type { RpcCaller, RpcOutcome } from "./rpc";
-import { lookupExisting } from "./rpc";
+import { lookupExisting, lookupProjectRows } from "./rpc";
 import { parseWorkbook, pickSheet } from "./parse";
 import { registerProfile, resolveProfile } from "./profiles";
 import { buildPlan } from "./preview";
@@ -141,10 +141,16 @@ export interface ImportRequestInput {
   mode: "dry_run" | "commit";
   skipInvalidRows: boolean;
   includeUnchanged: boolean;
+  /** Explicit confirmation that stored records may be overwritten. */
+  applyUpdates: boolean;
+  /** Explicit answer for renamed-title conflicts; null = not answered ⇒ refuse. */
+  conflictResolution: "skip" | "create" | null;
   batchLabel: string | null;
 }
 
 const asBool = (v: unknown): boolean => v === true || v === "true" || v === "1";
+/** Only the two literal answers count. Anything else means "not answered". */
+const asConflictChoice = (v: unknown): "skip" | "create" | null => (v === "skip" ? "skip" : v === "create" ? "create" : null);
 /** A profile may be posted as an object (JSON body) or a JSON string (form). */
 const parseInlineProfile = (v: unknown): unknown => {
   if (v && typeof v === "object") return v;
@@ -193,6 +199,8 @@ export async function readImportRequest(req: Request): Promise<{ ok: true; input
           mode: g("mode") === "commit" ? "commit" : "dry_run",
           skipInvalidRows: asBool(g("skipInvalidRows")),
           includeUnchanged: asBool(g("includeUnchanged")),
+          applyUpdates: asBool(g("applyUpdates")),
+          conflictResolution: asConflictChoice(g("conflictResolution")),
           batchLabel: asStr(g("batchLabel")),
         },
       };
@@ -216,6 +224,8 @@ export async function readImportRequest(req: Request): Promise<{ ok: true; input
         mode: body.mode === "commit" ? "commit" : "dry_run",
         skipInvalidRows: asBool(body.skipInvalidRows),
         includeUnchanged: asBool(body.includeUnchanged),
+        applyUpdates: asBool(body.applyUpdates),
+        conflictResolution: asConflictChoice(body.conflictResolution),
         batchLabel: asStr(body.batchLabel),
       },
     };
@@ -264,11 +274,25 @@ export async function planFromInput(input: ImportRequestInput, call: RpcCaller |
   });
   if (!call || !dryPlan.ok) return { plan: dryPlan, profile, lookupReason: null };
 
-  const keys = [...dryPlan.deliverables.map((d) => d.external_key), ...dryPlan.nodes.map((n) => n.key)];
-  const found = await lookupExisting(call, { projectId: input.projectId, profileId: profile.id, keys });
-  if (!found.available) return { plan: dryPlan, profile, lookupReason: found.reason };
+  // Prefer the PROJECT-WIDE read: it is the only one that can see a record the
+  // file no longer mentions, or a record already sitting on this file row under
+  // a different key (the renamed-title conflict). When that RPC is not deployed
+  // yet we fall back to the key-scoped lookup — classification still works and
+  // the plan states which checks were impossible.
+  const wide = await lookupProjectRows(call, { projectId: input.projectId, profileId: profile.id });
+  let existing = wide.existing;
+  let existingSetComplete = wide.complete;
+  let lookupReason: string | null = wide.reason;
+  if (!wide.available) {
+    const keys = [...dryPlan.deliverables.map((d) => d.external_key), ...dryPlan.nodes.map((n) => n.key)];
+    const found = await lookupExisting(call, { projectId: input.projectId, profileId: profile.id, keys });
+    if (!found.available) return { plan: dryPlan, profile, lookupReason: found.reason ?? lookupReason };
+    existing = found.existing;
+    existingSetComplete = false;
+    lookupReason = null;
+  }
 
-  // Pass 2: same deterministic plan, now classified create / update / unchanged.
+  // Pass 2: same deterministic plan, now classified across all five outcomes.
   const plan = buildPlan({
     sheet: picked.sheet,
     profile,
@@ -276,11 +300,12 @@ export async function planFromInput(input: ImportRequestInput, call: RpcCaller |
       projectId: input.projectId,
       projectKey,
       parentProjectTitle: input.parentProjectTitle,
-      existing: found.existing,
+      existing,
       existingLookupAvailable: true,
+      existingSetComplete,
     },
     fileName: input.fileName,
     carriedWarnings: [...wb.warnings, ...picked.warnings],
   });
-  return { plan, profile, lookupReason: null };
+  return { plan, profile, lookupReason };
 }

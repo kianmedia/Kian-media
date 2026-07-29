@@ -6,6 +6,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 export type {
   CanonicalField,
+  ChangeDetection,
   FieldSpec,
   ImportContext,
   ImportPlan,
@@ -15,12 +16,15 @@ export type {
   InvalidRow,
   LevelSpec,
   MappedDeliverable,
+  MissingFromFile,
   ParsedWorkbook,
   PlannedDeliverable,
   PlannedNode,
   RowAction,
   Sheet,
   SheetRow,
+  SourceRowConflict,
+  UpdateCandidate,
 } from "./types";
 
 export { ImportParseError, parseWorkbook, pickSheet, sheetIsEmpty } from "./parse";
@@ -31,8 +35,37 @@ export { getProfile, hasProfile, listProfiles, registerProfile, resolveProfile, 
 export { buildMapping, detectHeaderRow, parseDateStrict, parseIntStrict, type ColumnMapping, type SheetMapping } from "./mapping";
 export { canonicalJson, contentHash, deriveProjectKey, externalKey, levelPathKey, nodeKey, parentProjectKey, rowKey, stableSlug, KEY_SEPARATOR, LEVEL_SEPARATOR } from "./keys";
 export { buildPlan, MAX_IMPORT_ROWS, type BuildPlanInput } from "./preview";
-export { buildExecutePayload, executeImport, normalizeExecuteResponse, type ExecuteCode, type ExecuteOptions, type ExecuteResult, type RowOutcome } from "./execute";
-export { classifyMissing, detectBackend, lookupExisting, IMPORT_RPC, MIGRATION_PENDING_AR, type BackendState, type ImportProtocol, type RpcCaller, type RpcOutcome } from "./rpc";
+export { buildExecutePayload, executeImport, gatePlanForWrite, normalizeExecuteResponse, type ExecuteCode, type ExecuteOptions, type ExecuteResult, type RowOutcome, type WriteGate } from "./execute";
+export {
+  buildExistingIndex,
+  classifyRow,
+  comparableFields,
+  comparableValue,
+  diffFields,
+  isStructuralKey,
+  COMPARABLE_FIELDS,
+  FIELD_LABEL_AR,
+  type ChangeOutcome,
+  type ExistingIndex,
+  type ExistingRowInfo,
+  type FieldChange,
+  type RowClassification,
+} from "./change";
+export {
+  classifyMissing,
+  detectBackend,
+  lookupExisting,
+  lookupProjectRows,
+  IMPORT_RPC,
+  PROJECT_ROWS_RPC,
+  MIGRATION_PENDING_AR,
+  type BackendState,
+  type ExistingRowMap,
+  type ImportProtocol,
+  type ProjectRowsResult,
+  type RpcCaller,
+  type RpcOutcome,
+} from "./rpc";
 export {
   BATCH_RPC,
   BATCH_ROW_LIMIT,

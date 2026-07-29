@@ -38,7 +38,9 @@ export type WarningCode =
   | "long_value"
   | "missing_optional"
   | "mixed_separators"
-  | "existing_unmatched";
+  | "existing_unmatched"
+  /** Conflict / missing detection could not run (lookup too limited). */
+  | "change_detection_unavailable";
 
 export interface ImportWarning {
   code: WarningCode;
@@ -195,13 +197,69 @@ export interface PlannedNode {
   deliverableCount: number;
 }
 
-export type RowAction = "create" | "update" | "unchanged";
+/**
+ * "update" and "source_row_conflict" are CANDIDATES, never decisions: neither is
+ * ever written without its own explicit confirmation (see execute.ts).
+ */
+export type RowAction = "create" | "update" | "unchanged" | "source_row_conflict";
 
 export interface PlannedDeliverable extends MappedDeliverable {
   parentKey: string | null;
   action: RowAction;
   /** Present when the row matched an existing imported record. */
   existingId?: string | null;
+  /** For "update": which fields differ (empty when the database sent no values). */
+  changedFields?: { field: string; label: string; from: string; to: string }[];
+  /** For "source_row_conflict": the stranded record this row would orphan. */
+  conflictWith?: { external_key: string; id: string | null; title: string | null; source_row_number: number | null } | null;
+  /** Arabic explanation for update / conflict rows. */
+  changeReason?: string | null;
+}
+
+/** One row whose key already exists but whose content differs. */
+export interface UpdateCandidate {
+  rowNumber: number;
+  external_key: string;
+  existingId: string | null;
+  title: string;
+  changes: { field: string; label: string; from: string; to: string }[];
+  reason: string;
+}
+
+/** One row that would have silently duplicated a renamed record. */
+export interface SourceRowConflict {
+  rowNumber: number;
+  /** The key this file row produces now. */
+  newKey: string;
+  newTitle: string;
+  /** The key already stored against this file row. */
+  existingKey: string;
+  existingTitle: string | null;
+  existingId: string | null;
+  reason: string;
+}
+
+/** One stored record no row in the new file claims. NOTHING is ever deleted. */
+export interface MissingFromFile {
+  external_key: string;
+  id: string | null;
+  title: string | null;
+  source_row_number: number | null;
+  reason: string;
+}
+
+/** What the engine could actually verify, stated instead of assumed. */
+export interface ChangeDetection {
+  /** Existing rows were fetched at all (create/update/unchanged classification). */
+  existingLookupAvailable: boolean;
+  /** The fetch covered EVERY record of the project ⇒ missingFromFile is exact. */
+  existingSetComplete: boolean;
+  /** Existing rows carry source_row_number ⇒ renamed-title conflicts detectable. */
+  sourceRowNumbersKnown: boolean;
+  /** Existing rows carry field values ⇒ "what changed" is per-field, not generic. */
+  fieldLevelDiffAvailable: boolean;
+  /** Arabic note when any of the above is false. */
+  note: string | null;
 }
 
 export interface ImportPlanCounts {
@@ -215,6 +273,19 @@ export interface ImportPlanCounts {
   skipped: number;
   duplicate: number;
   invalid: number;
+  // ── the seven first-class outcomes ──
+  /** Rows that will create a NEW deliverable. Never includes conflicts. */
+  toCreate: number;
+  /** Rows already stored with identical content. */
+  unchanged: number;
+  /** Rows stored under the same key with DIFFERENT content. Needs confirmation. */
+  updateCandidates: number;
+  /** Rows whose key changed at a known source row. Needs its own confirmation. */
+  sourceRowConflicts: number;
+  /** Stored records absent from the file. Reported only, never deleted. */
+  missingFromFile: number;
+  /** plan.warnings.length, surfaced as a first-class number. */
+  warnings: number;
 }
 
 export interface ImportPlan {
@@ -239,6 +310,13 @@ export interface ImportPlan {
   duplicateRows: { rowNumber: number; external_key: string; reason: string }[];
   invalidRows: InvalidRow[];
   warnings: ImportWarning[];
+  /** Rows that would change a stored record. NEVER applied without confirmation. */
+  updateCandidates: UpdateCandidate[];
+  /** Renamed-title rows. NEVER created without their own confirmation. */
+  sourceRowConflicts: SourceRowConflict[];
+  /** Stored records the file no longer contains. Reported only. */
+  missingFromFile: MissingFromFile[];
+  changeDetection: ChangeDetection;
   /** True when server-side matching was unavailable (SQL not applied yet). */
   existingLookupAvailable: boolean;
   generatedAt: string;
@@ -256,7 +334,21 @@ export interface ImportContext {
   projectKey: string;
   /** Optional parent project title declared by the operator or the file. */
   parentProjectTitle?: string | null;
-  /** Known existing rows: external_key → {id, content_hash}. */
-  existing?: Record<string, { id: string | null; content_hash: string | null }>;
+  /**
+   * Known existing rows: external_key → what the database could tell us.
+   * `{id, content_hash}` alone is still accepted (the legacy shape); the richer
+   * `source_row_number` / `title` / `fields` unlock conflict detection and
+   * per-field diffs, and their absence is REPORTED, never assumed away.
+   */
+  existing?: Record<
+    string,
+    { id: string | null; content_hash: string | null; source_row_number?: number | null; title?: string | null; fields?: Record<string, unknown> | null }
+  >;
   existingLookupAvailable?: boolean;
+  /**
+   * True only when `existing` covers EVERY record of the project. Required for
+   * missingFromFile; without it the engine says it cannot tell rather than
+   * reporting rows as missing because it simply never asked about them.
+   */
+  existingSetComplete?: boolean;
 }

@@ -187,14 +187,14 @@ function bannerSheetRows() {
   const item = (t, extra) => rows.push([t, "فيديو", "انستغرام", extra]);
   banner("المرحلة الأولى"); // ← ABOVE the header row, exactly as Excel users write it
   rows.push([...BANNER_HEADERS]);
-  item("العد التنازلي", "تفصيل أ");
-  item("النشرة الأسبوعية", "تفصيل مشترك");
+  item("مقطع تشويقي", "تفصيل أ");
+  item("بطاقة تعريفية", "تفصيل مشترك");
   banner("المرحلة الثانية");
   rows.push([...BANNER_HEADERS]); // the repeated column-header row mid-sheet
   item("لقاء تعريفي", "تفصيل ب");
   // same title AND same content as a row in the previous stage: a different
   // deliverable, not a copy-paste accident.
-  item("النشرة الأسبوعية", "تفصيل مشترك");
+  item("بطاقة تعريفية", "تفصيل مشترك");
   return rows;
 }
 const BANNER_PLAN = buildPlan({
@@ -221,7 +221,7 @@ test("a level written as a banner ROW builds the hierarchy instead of phantom ro
 });
 
 test("identical titles in DIFFERENT banner stages are two deliverables, not a duplicate", () => {
-  const twins = BANNER_PLAN.deliverables.filter((d) => d.title === "النشرة الأسبوعية");
+  const twins = BANNER_PLAN.deliverables.filter((d) => d.title === "بطاقة تعريفية");
   assert.equal(twins.length, 2, "a real deliverable was dropped as a false duplicate");
   assert.equal(BANNER_PLAN.counts.duplicate, 0);
   assert.notEqual(twins[0].external_key, twins[1].external_key);

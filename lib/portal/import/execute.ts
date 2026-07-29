@@ -32,6 +32,8 @@ export type ExecuteCode =
   | "REFUSED_INVALID_PLAN"
   | "REFUSED_INVALID_ROWS"
   | "REFUSED_DUPLICATES"
+  /** The file renames a row the database already has. The operator must decide. */
+  | "REFUSED_ROW_CONFLICTS"
   | "NOT_AUTHORIZED"
   | "ROLLED_BACK"
   | "PARTIAL_REPORTED"
@@ -74,13 +76,100 @@ export interface ExecuteOptions {
   /** Send rows whose action is "unchanged" too (default: skip them). */
   includeUnchanged?: boolean;
   /**
+   * Apply the rows the preview classified as "update". DEFAULT FALSE: a stored
+   * record is never overwritten because someone clicked the main button. The
+   * operator confirms updates on their own control, and when they do not, the
+   * skipped updates are stated in the result message — never swallowed.
+   */
+  applyUpdates?: boolean;
+  /**
+   * What to do with rows whose key changed at a known source row (the renamed
+   * title case). UNDEFINED IS NOT A DEFAULT: the execution is refused until the
+   * operator picks one, because both silent answers are wrong — creating makes a
+   * duplicate and stranding the original hides it.
+   *   "skip"   → import everything else, leave the conflicting rows alone.
+   *   "create" → the operator states these really are new deliverables.
+   */
+  conflictResolution?: "skip" | "create";
+  /**
    * The profile the plan was built with. Required by the staging-batch protocol
    * to translate free text onto the database's own vocabularies.
    */
   profile?: ImportProfile;
 }
 
-/** The exact JSON handed to project_import_execute. Pure ⇒ snapshot-testable. */
+// ─── the confirmation gate ─────────────────────────────────────────────────
+
+export interface WriteGate {
+  /** The plan with only the rows the operator actually authorised. */
+  plan: ImportPlan;
+  /** Update rows held back for want of a confirmation. */
+  heldUpdates: number;
+  /** Conflicting rows the operator chose to skip. */
+  skippedConflicts: number;
+  /** Conflicting rows the operator explicitly chose to create as new records. */
+  createdConflicts: number;
+  /** Arabic sentences appended to the result so nothing is silently omitted. */
+  notes: string[];
+}
+
+/**
+ * Decide WHICH planned rows may be written, given the operator's confirmations.
+ *
+ * This is the single choke point that makes the silent duplicate impossible: a
+ * row classified as "source_row_conflict" cannot reach the payload builders at
+ * all unless `conflictResolution === "create"` was passed, and an "update" row
+ * cannot reach them unless `applyUpdates === true`. Both payload builders read
+ * `plan.deliverables`, so filtering here covers every protocol — nothing has to
+ * remember to re-check downstream.
+ */
+export function gatePlanForWrite(plan: ImportPlan, opts: ExecuteOptions): { ok: true; gate: WriteGate } | { ok: false; code: ExecuteCode; message: string } {
+  const conflicts = plan.deliverables.filter((d) => d.action === "source_row_conflict");
+  const updates = plan.deliverables.filter((d) => d.action === "update");
+
+  if (conflicts.length > 0 && opts.conflictResolution === undefined) {
+    const sample = conflicts
+      .slice(0, 5)
+      .map((d) => `السطر ${d.source_row_number} («${d.title}»)`)
+      .join(" ، ");
+    return {
+      ok: false,
+      code: "REFUSED_ROW_CONFLICTS",
+      message:
+        `${conflicts.length} سطرًا يحمل الآن معرّفًا مختلفًا عمّا هو مسجَّل لنفس السطر في الملف السابق — غالبًا لأنّ العنوان عُدِّل. ` +
+        `التنفيذ متوقّف عمدًا: لو مضى لأنشأ نسخة ثانية وترك السجل الأصلي معلّقًا. ` +
+        `صحّح العنوان في الملف ليطابق المسجَّل، أو اختر صراحةً «تخطّي الأسطر المتعارضة» أو «إنشاؤها كسجلات جديدة». ` +
+        (sample ? `أمثلة: ${sample}.` : ""),
+    };
+  }
+
+  const allowConflicts = opts.conflictResolution === "create";
+  const allowUpdates = opts.applyUpdates === true;
+  const kept = plan.deliverables.filter((d) => {
+    if (d.action === "source_row_conflict") return allowConflicts;
+    if (d.action === "update") return allowUpdates;
+    return true;
+  });
+
+  const notes: string[] = [];
+  const heldUpdates = allowUpdates ? 0 : updates.length;
+  const skippedConflicts = allowConflicts ? 0 : conflicts.length;
+  const createdConflicts = allowConflicts ? conflicts.length : 0;
+  if (heldUpdates > 0) notes.push(`لم تُطبَّق ${heldUpdates} تعديلًا على سجلات موجودة لأنّها لم تُؤكَّد؛ السجلات المحفوظة بقيت كما هي.`);
+  if (skippedConflicts > 0) notes.push(`استُبعد ${skippedConflicts} سطرًا متعارضًا بطلبك؛ لم يُنشأ لها شيء ولم يُحذف السجل الأصلي.`);
+  if (createdConflicts > 0) notes.push(`أُنشئ ${createdConflicts} سطرًا متعارضًا كسجلات جديدة بتأكيدك؛ السجلات السابقة ما زالت موجودة ولم تُحذف.`);
+  if (plan.counts.missingFromFile > 0) {
+    notes.push(`${plan.counts.missingFromFile} سجلًّا محفوظًا لا يقابله سطر في هذا الملف. لم يُحذف أي منها — المراجعة يدوية.`);
+  }
+
+  return { ok: true, gate: { plan: { ...plan, deliverables: kept }, heldUpdates, skippedConflicts, createdConflicts, notes } };
+}
+
+/**
+ * The exact JSON handed to project_import_execute. Pure ⇒ snapshot-testable.
+ * MUST be fed a plan that already passed `gatePlanForWrite` — it writes whatever
+ * rows it is given and knows nothing about confirmations.
+ */
 export function buildExecutePayload(plan: ImportPlan, opts: ExecuteOptions): {
   payload: Record<string, unknown>;
   attempted: PlannedDeliverable[];
@@ -391,15 +480,22 @@ export async function executeImport(plan: ImportPlan, opts: ExecuteOptions, call
     );
   }
 
+  // The confirmation gate runs BEFORE the database is touched at all: an
+  // unanswered conflict must cost nothing, not a half-open batch.
+  const gated = gatePlanForWrite(plan, opts);
+  if (!gated.ok) return refusal(gated.code, gated.message, mode);
+  const { plan: writablePlan, notes: gateNotes } = gated.gate;
+  const withNotes = (r: ExecuteResult): ExecuteResult => (gateNotes.length === 0 ? r : { ...r, message: `${r.message} ${gateNotes.join(" ")}` });
+
   const backend = await detectBackend(call);
   if (!backend.available) {
     return refusal(backend.reason === MIGRATION_PENDING_AR ? "MIGRATION_PENDING" : "NOT_AUTHORIZED", backend.reason ?? MIGRATION_PENDING_AR, mode);
   }
-  if (backend.protocol === "batch") return executeViaBatch(plan, opts, call);
+  if (backend.protocol === "batch") return withNotes(await executeViaBatch(writablePlan, opts, call));
 
-  const { payload, attempted } = buildExecutePayload(plan, opts);
+  const { payload, attempted } = buildExecutePayload(writablePlan, opts);
   if (attempted.length === 0) {
-    return { ...refusal("NOTHING_TO_DO", "لا يوجد ما يُنفَّذ: كل الأسطر مطابقة لما هو مسجَّل بالفعل.", mode), ok: true };
+    return withNotes({ ...refusal("NOTHING_TO_DO", "لا يوجد ما يُنفَّذ: كل الأسطر مطابقة لما هو مسجَّل بالفعل.", mode), ok: true });
   }
 
   let res;
@@ -417,5 +513,5 @@ export async function executeImport(plan: ImportPlan, opts: ExecuteOptions, call
   if (raw && raw.ok === false && !Array.isArray(raw.results)) {
     return refusal("TRANSPORT_FAILED", `رفضت قاعدة البيانات الدفعة: ${raw.error ?? "سبب غير محدّد"}.`, mode);
   }
-  return normalizeExecuteResponse(raw, attempted, mode);
+  return withNotes(normalizeExecuteResponse(raw, attempted, mode));
 }

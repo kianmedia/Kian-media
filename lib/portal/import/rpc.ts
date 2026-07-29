@@ -59,6 +59,20 @@ export const IMPORT_RPC = {
   execute: "project_import_execute",
 } as const;
 
+/**
+ * project_import_project_rows(p_project uuid, p_profile text) → jsonb
+ *   { complete: bool, rows: [ { external_key, content_hash, id,
+ *                               source_row_number, title, fields:{…} } ] }
+ *
+ * Read-only, project-scoped, and OPTIONAL — deliberately declared OUTSIDE
+ * IMPORT_RPC, whose three names are the frozen v1 contract. It answers the two
+ * questions the key-scoped lookup structurally cannot: "what is already stored
+ * at this file row?" (the renamed-title conflict) and "what is stored that this
+ * file no longer contains?" (missing rows). When it is absent the engine falls
+ * back to the key-scoped lookup and REPORTS which checks it could not run.
+ */
+export const PROJECT_ROWS_RPC = "project_import_project_rows";
+
 export type MissingKind = "function" | "column" | "table" | null;
 
 /**
@@ -166,4 +180,73 @@ export async function lookupExisting(
     existing[row.external_key] = { id: row.id ?? null, content_hash: row.content_hash ?? null };
   }
   return { available: true, existing, reason: null };
+}
+
+/** What `existing` carries once the project-wide lookup is available. */
+export type ExistingRowMap = Record<
+  string,
+  { id: string | null; content_hash: string | null; source_row_number?: number | null; title?: string | null; fields?: Record<string, unknown> | null }
+>;
+
+export interface ProjectRowsResult {
+  available: boolean;
+  /** True only when the answer covers EVERY imported record of the project. */
+  complete: boolean;
+  existing: ExistingRowMap;
+  reason: string | null;
+}
+
+interface RawProjectRow {
+  external_key?: string;
+  content_hash?: string | null;
+  id?: string | null;
+  source_row_number?: number | string | null;
+  title?: string | null;
+  fields?: Record<string, unknown> | null;
+}
+
+const asRowNumber = (v: unknown): number | null => {
+  const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+};
+
+/**
+ * Fetch EVERY imported row of one project (key + source row + comparable
+ * fields), which is what change/conflict detection needs.
+ *
+ * Feature-detected exactly like the rest of the engine: a missing RPC is not an
+ * error, it is a reduced capability. The caller then falls back to the
+ * key-scoped `lookupExisting`, keeps create/update/unchanged classification, and
+ * the preview states plainly which checks it could not perform. Nothing here
+ * uses a service-role key: the injected caller is the operator's own token.
+ */
+export async function lookupProjectRows(call: RpcCaller, args: { projectId: string | null; profileId: string }): Promise<ProjectRowsResult> {
+  const none = (reason: string | null): ProjectRowsResult => ({ available: false, complete: false, existing: {}, reason });
+  // Without a target project the RPC has nothing to scope to, and a project-wide
+  // answer for "no project" would be a lie.
+  if (!args.projectId) return none(null);
+  let res: RpcOutcome<{ rows?: RawProjectRow[]; complete?: boolean }>;
+  try {
+    res = await call(PROJECT_ROWS_RPC, { p_project: args.projectId, p_profile: args.profileId });
+  } catch (e) {
+    return none(`تعذّر الاتصال بقاعدة البيانات (${String(e)}).`);
+  }
+  if (!res.ok) {
+    const kind = classifyMissing(res.error, res.status);
+    return none(kind ? null : `تعذّر جلب سجلات المشروع السابقة: ${res.error}`);
+  }
+  const existing: ExistingRowMap = {};
+  for (const row of res.data?.rows ?? []) {
+    if (!row?.external_key) continue;
+    existing[row.external_key] = {
+      id: row.id ?? null,
+      content_hash: row.content_hash ?? null,
+      source_row_number: asRowNumber(row.source_row_number),
+      title: typeof row.title === "string" ? row.title : null,
+      fields: row.fields && typeof row.fields === "object" ? row.fields : null,
+    };
+  }
+  // `complete:false` from the database (a truncated answer) is honoured: partial
+  // knowledge must never be reported as "these records are missing".
+  return { available: true, complete: res.data?.complete !== false, existing, reason: null };
 }

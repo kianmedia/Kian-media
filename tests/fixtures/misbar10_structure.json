@@ -1,18 +1,19 @@
 {
-  "_WARNING_AR": "بيانات تجريبية اصطناعية بالكامل. هذه ليست بيانات المالك ولا ملف الإكسل الحقيقي لمشروع مسبار 10.",
-  "_WARNING_EN": "SYNTHETIC ACCEPTANCE FIXTURE — NOT OWNER DATA. The owner's real MISBAR 10 Excel file does not exist in this repository. The ELEVEN stage names below were supplied by the owner and are real; EVERY deliverable title, platform, date, quantity and note was INVENTED to exercise platform shapes. Do not import this into any real project and do not quote its counts as the owner's scope.",
+  "_WARNING_AR": "ملف اصطناعي بالكامل — ليس بيانات المالك ولا بيانات أي عميل. أسماء المراحل وعناوين المخرجات والمنصّات والتواريخ كلّها مُختلَقة لأغراض الاختبار، ولا تصف نطاق أي مشروع حقيقي. لا يُستورد في أي مكان.",
+  "_WARNING_EN": "SYNTHETIC FIXTURE — NOT OWNER DATA, NOT CLIENT DATA. Every stage name, deliverable title, platform, quantity and date below was INVENTED to exercise platform SHAPES (empty stage, recurrence vs quantity, client visibility, no fabricated dates). It describes no real project's scope. Do not import it anywhere and do not quote its counts as anyone's real plan.",
   "synthetic": true,
   "fixture_version": "1.0.0",
   "purpose": "Acceptance dataset for the project platform. Shapes only — it must work for any Kian project, not just this one.",
   "owner_expectation": {
     "stages": 11,
     "deliverables": 79,
-    "source": "docs/input/MISBAR10_PLAN.xlsx — the owner's real workbook, now present in this repository",
+    "source": "docs/input/private/MISBAR10_PLAN.xlsx — the owner's real workbook, LOCAL ONLY and never committed (historical location: docs/input/MISBAR10_PLAN.xlsx).",
     "verified_against_real_file": true,
     "verified_by": "tests/misbar10_real_dataset.test.js",
-    "verified_payload": "docs/misbar10_import_payload.json",
-    "note_ar": "١١/٧٩ رقمان تحقّقا مقابل الملف الحقيقي عبر قارئ المستودع نفسه (انظر tests/misbar10_real_dataset.test.js)؛ عدد هذا الملف الاصطناعي يبقى مختلفًا عمدًا حتى لا يُخلط بالبيانات الحقيقية.",
-    "note_en": "11 stages / 79 deliverables are VERIFIED against the real workbook by tests/misbar10_real_dataset.test.js, using the repo's own reader. This synthetic file deliberately keeps a different count so it can never be mistaken for the owner's data."
+    "verified_payload": "docs/private-imports/misbar10_import_payload.json",
+    "ci_note_en": "11/79 were verified against the real workbook through the repo's own reader. That verification is a LOCAL acceptance run: with the private files absent (CI, a fresh clone, Vercel) tests/misbar10_real_dataset.test.js SKIPS and says so. The structural coverage that does NOT need client data runs in CI against tests/fixtures/misbar10_sanitized.json.",
+    "ci_note_ar": "الرقمان ١١/٧٩ تحقّقا مقابل الملف الحقيقي عبر قارئ المستودع نفسه. هذا التحقّق تشغيل قبول محلّي: عند غياب الملفات الخاصّة (التكامل المستمر أو نسخة جديدة أو Vercel) يتخطّى tests/misbar10_real_dataset.test.js ويعلن التخطّي صراحةً. أمّا التغطية البنيوية التي لا تحتاج بيانات عميل فتعمل دائمًا فوق tests/fixtures/misbar10_sanitized.json.",
+    "note_en": "This synthetic file deliberately keeps a DIFFERENT deliverable count so it can never be mistaken for the owner's data."
   },
   "platform_contract": {
     "stage_entity": "projects (project_scope='subproject', parent_project_id=<parent>, ordered by sequence_number)",
@@ -93,8 +94,8 @@
     {
       "stage_no": 1,
       "stage_key": "stage_01",
-      "title_ar": "01 التهيئة",
-      "name_ar": "التهيئة",
+      "title_ar": "01 التخطيط التحريري",
+      "name_ar": "التخطيط التحريري",
       "sequence_number": 1,
       "platform_mapping": {
         "entity": "projects",
@@ -114,8 +115,8 @@
     {
       "stage_no": 2,
       "stage_key": "stage_02",
-      "title_ar": "02 ما قبل التسجيل وأثناء التسجيل",
-      "name_ar": "ما قبل التسجيل وأثناء التسجيل",
+      "title_ar": "02 ما قبل الإطلاق وأثناء الإطلاق",
+      "name_ar": "ما قبل الإطلاق وأثناء الإطلاق",
       "sequence_number": 2,
       "platform_mapping": {
         "entity": "projects",
@@ -135,8 +136,8 @@
     {
       "stage_no": 3,
       "stage_key": "stage_03",
-      "title_ar": "03 القبول",
-      "name_ar": "القبول",
+      "title_ar": "03 اعتماد الهوية",
+      "name_ar": "اعتماد الهوية",
       "sequence_number": 3,
       "platform_mapping": {
         "entity": "projects",
@@ -156,8 +157,8 @@
     {
       "stage_no": 4,
       "stage_key": "stage_04",
-      "title_ar": "04 الانطلاق عن بُعد",
-      "name_ar": "الانطلاق عن بُعد",
+      "title_ar": "04 البث الافتتاحي عن بُعد",
+      "name_ar": "البث الافتتاحي عن بُعد",
       "sequence_number": 4,
       "platform_mapping": {
         "entity": "projects",
@@ -177,8 +178,8 @@
     {
       "stage_no": 5,
       "stage_key": "stage_05",
-      "title_ar": "05 ختام المرحلة الأولى وإعلان المتأهلين",
-      "name_ar": "ختام المرحلة الأولى وإعلان المتأهلين",
+      "title_ar": "05 ختام الجولة الأولى وإعلان القائمة القصيرة",
+      "name_ar": "ختام الجولة الأولى وإعلان القائمة القصيرة",
       "sequence_number": 5,
       "platform_mapping": {
         "entity": "projects",
@@ -198,8 +199,8 @@
     {
       "stage_no": 6,
       "stage_key": "stage_06",
-      "title_ar": "06 الاستكشاف عن بُعد",
-      "name_ar": "الاستكشاف عن بُعد",
+      "title_ar": "06 الاستطلاع الرقمي",
+      "name_ar": "الاستطلاع الرقمي",
       "sequence_number": 6,
       "platform_mapping": {
         "entity": "projects",
@@ -219,8 +220,8 @@
     {
       "stage_no": 7,
       "stage_key": "stage_07",
-      "title_ar": "07 المؤتمر الصحفي",
-      "name_ar": "المؤتمر الصحفي",
+      "title_ar": "07 الجلسة الإعلامية",
+      "name_ar": "الجلسة الإعلامية",
       "sequence_number": 7,
       "platform_mapping": {
         "entity": "projects",
@@ -240,8 +241,8 @@
     {
       "stage_no": 8,
       "stage_key": "stage_08",
-      "title_ar": "08 التهيئة الحضورية",
-      "name_ar": "التهيئة الحضورية",
+      "title_ar": "08 تجهيز الموقع",
+      "name_ar": "تجهيز الموقع",
       "sequence_number": 8,
       "platform_mapping": {
         "entity": "projects",
@@ -261,8 +262,8 @@
     {
       "stage_no": 9,
       "stage_key": "stage_09",
-      "title_ar": "09 المرحلة الحضورية",
-      "name_ar": "المرحلة الحضورية",
+      "title_ar": "09 أيام الفعالية",
+      "name_ar": "أيام الفعالية",
       "sequence_number": 9,
       "platform_mapping": {
         "entity": "projects",
@@ -282,8 +283,8 @@
     {
       "stage_no": 10,
       "stage_key": "stage_10",
-      "title_ar": "10 فيديوهات المسارات التخصصية",
-      "name_ar": "فيديوهات المسارات التخصصية",
+      "title_ar": "10 مكتبة الفيديو",
+      "name_ar": "مكتبة الفيديو",
       "sequence_number": 10,
       "platform_mapping": {
         "entity": "projects",
@@ -303,8 +304,8 @@
     {
       "stage_no": 11,
       "stage_key": "stage_11",
-      "title_ar": "11 الحفل الختامي",
-      "name_ar": "الحفل الختامي",
+      "title_ar": "11 الجلسة الختامية",
+      "name_ar": "الجلسة الختامية",
       "sequence_number": 11,
       "platform_mapping": {
         "entity": "projects",
@@ -486,7 +487,7 @@
     {
       "external_key": "M10-03-01",
       "stage_key": "stage_03",
-      "title_ar": "فيديو إعلان المقبولين",
+      "title_ar": "فيديو إعلان النتائج الأولى",
       "kind": "video",
       "db_type": "video",
       "platforms": [
@@ -629,7 +630,7 @@
     {
       "external_key": "M10-05-01",
       "stage_key": "stage_05",
-      "title_ar": "فيديو إعلان المتأهلين",
+      "title_ar": "فيديو إعلان القائمة القصيرة",
       "kind": "video",
       "db_type": "video",
       "platforms": [
@@ -652,7 +653,7 @@
     {
       "external_key": "M10-05-02",
       "stage_key": "stage_05",
-      "title_ar": "لوحات أسماء المتأهلين",
+      "title_ar": "لوحات أسماء القائمة القصيرة",
       "kind": "design",
       "db_type": "other",
       "platforms": [
@@ -750,7 +751,7 @@
     {
       "external_key": "M10-07-04",
       "stage_key": "stage_07",
-      "title_ar": "تقرير التغطية الإعلامية",
+      "title_ar": "تقرير التغطية الصحفية",
       "kind": "report",
       "db_type": "other",
       "platforms": [],

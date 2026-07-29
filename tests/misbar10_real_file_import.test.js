@@ -13,18 +13,23 @@
 // test files (import_preview_execute / import_parse); this file is the end-to-end
 // proof over the real bytes, so the platform stays free of the supplier's name.
 //
-// The workbook is owner data and is not committed. When it is absent the test
-// SAYS SO and skips — it never reports a pass it did not earn.
+// THE WORKBOOK IS CLIENT DATA AND IS NEVER COMMITTED. It is looked up at
+// docs/input/private/MISBAR10_PLAN.xlsx (git-ignored), falling back to the
+// historical docs/input/MISBAR10_PLAN.xlsx. When it is absent every test below
+// SKIPS with an explicit reason — CI, Vercel and a fresh clone stay green and
+// nothing here reports a pass it did not earn. The client-data-free structural
+// coverage lives in tests/misbar10_acceptance.test.js and always runs.
 // ════════════════════════════════════════════════════════════════════════════
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const path = require("node:path");
-const { loadTs, ROOT } = require("./import_engine_loader");
+const { loadTs } = require("./import_engine_loader");
+const { localAcceptanceInputs } = require("./misbar10_private_paths.js");
 
-const FILE = path.join(ROOT, "docs/input/MISBAR10_PLAN.xlsx");
-const PRESENT = fs.existsSync(FILE);
-const opts = PRESENT ? {} : { skip: `الملف غير موجود: ${path.relative(ROOT, FILE)} (بيانات المالك، غير مرفوعة للمستودع)` };
+const REAL = localAcceptanceInputs("misbar10_real_file_import.test.js", ["workbook"]);
+const FILE = REAL.paths.workbook;
+const PRESENT = REAL.present;
+const opts = REAL.opts;
 
 const { parseWorkbook, pickSheet } = loadTs("lib/portal/import/parse.ts");
 const { buildPlan } = loadTs("lib/portal/import/preview.ts");
@@ -47,6 +52,23 @@ function preview(existing) {
   });
 }
 const PLAN = PRESENT ? preview({}) : null;
+
+// ALWAYS RUNS. Its whole job is to make the state of this suite impossible to
+// misread: either the real file was found and used, or a skip reason exists and
+// names what is missing. Without it, an absent workbook would leave nothing but
+// SKIP lines, and a suite that never ran can be mistaken for a suite that passed.
+test("local acceptance status is REPORTED, never assumed", () => {
+  if (PRESENT) {
+    assert.ok(fs.existsSync(FILE), "the resolved workbook path vanished mid-run");
+    assert.ok(PLAN !== null, "the workbook is present but no plan was built");
+    return;
+  }
+  assert.equal(PLAN, null, "no workbook, yet a plan exists — something fabricated one");
+  assert.equal(typeof REAL.reason, "string", "the workbook is missing and no skip reason was produced");
+  assert.match(REAL.reason, /SKIPPED/, "the skip reason does not say it skipped");
+  assert.ok(REAL.missing.length > 0, "the workbook is missing but nothing was listed as missing");
+  assert.deepEqual(opts, { skip: REAL.reason }, "the skip reason is not attached to the tests");
+});
 
 test("the real workbook previews with the figures the owner verified", opts, () => {
   assert.equal(PLAN.ok, true, PLAN.fatalMessage ?? "");
@@ -88,9 +110,12 @@ test("the stage banners survive verbatim, dates inside them are TEXT only", opts
   assert.ok(PLAN.deliverables.every((d) => d.level_path[0] !== null), "a row ended up with no stage");
 });
 
-test("the two near-identical «إعلان المقبولين» rows stay two deliverables", opts, () => {
-  const pair = PLAN.deliverables.filter((d) => d.title === "إعلان المقبولين");
+// The two rows' literal title is CLIENT CONTENT and is never written into Git:
+// the pair is addressed by its source row numbers (20, 21) instead.
+test("the two near-identical rows at source rows 20 and 21 stay two deliverables", opts, () => {
+  const pair = PLAN.deliverables.filter((d) => d.source_row_number === 20 || d.source_row_number === 21);
   assert.equal(pair.length, 2, "the near-identical pair was merged or deduplicated");
+  assert.equal(pair[0].title, pair[1].title, "rows 20/21 no longer share a title — not the intended case");
   assert.notEqual(pair[0].external_key, pair[1].external_key, "the keys collided");
   assert.notEqual(pair[0].content_hash, pair[1].content_hash);
   // they differ ONLY in the last word of the execution details, and that word is

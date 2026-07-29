@@ -154,6 +154,10 @@ export default function ProjectImportPanel({
   const [skipInvalid, setSkipInvalid] = useState(false);
   const [ack, setAck] = useState(false);
   const [confirmCount, setConfirmCount] = useState("");
+  // تأكيدان منفصلان تمامًا. «نعم» واحدة عامّة يجب ألّا تُطبّق الاثنين معًا:
+  // تعديل سجل محفوظ قرار، وإنشاء سجل جديد لسطر أُعيدت تسميته قرار آخر.
+  const [applyUpdates, setApplyUpdates] = useState(false);
+  const [conflictChoice, setConflictChoice] = useState<"" | "skip" | "create">("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // ── نتائج الخطوات ──
@@ -175,6 +179,8 @@ export default function ProjectImportPanel({
     setAck(false);
     setConfirmCount("");
     setSkipInvalid(false);
+    setApplyUpdates(false);
+    setConflictChoice("");
     setShowOkRows(false);
   }, []);
 
@@ -189,25 +195,45 @@ export default function ProjectImportPanel({
   const migrationPending = backend != null && backend.available === false;
   const canExecuteHere = preview?.canExecute === true && backend?.available === true;
 
-  const toCreate = counts ? counts.deliverablesToCreate : 0;
+  // ── النتائج السبع ──
+  // `toCreate` لا يشمل الأسطر المتعارضة إطلاقًا: التعارض سؤال لا إنشاء مؤجَّل.
+  const toCreate = counts ? (counts.toCreate ?? counts.deliverablesToCreate) : 0;
+  const unchangedCount = counts ? (counts.unchanged ?? counts.deliverablesUnchanged) : 0;
+  const updateList = plan?.updateCandidates ?? [];
+  const conflictList = plan?.sourceRowConflicts ?? [];
+  const missingList = plan?.missingFromFile ?? [];
+  const updateCount = counts?.updateCandidates ?? updateList.length;
+  const conflictCount = counts?.sourceRowConflicts ?? conflictList.length;
+  const missingCount = counts?.missingFromFile ?? missingList.length;
+  const detection = plan?.changeDetection ?? null;
+
   const totalCreates = counts
-    ? counts.parentProjectsToCreate + counts.stagesToCreate + counts.subgroupsToCreate + counts.deliverablesToCreate
+    ? counts.parentProjectsToCreate + counts.stagesToCreate + counts.subgroupsToCreate + toCreate
     : 0;
   const isLarge = totalCreates >= LARGE_IMPORT_ROWS;
   const invalidCount = plan?.invalidRows.length ?? 0;
   const needsSkipAck = invalidCount > 0;
+  /** التعارض لا يمرّ بصمت: لا تنفيذ ولا تشغيل تجريبي قبل اختيار صريح. */
+  const conflictUnanswered = conflictCount > 0 && conflictChoice === "";
   // «سبق استيراد هذا الملف».
   // كان الشرط `duplicate > 0` فقط، وهذا لا يتحقّق أبدًا عند إعادة رفع الملف
   // نفسه: `duplicate` تعني «تكرار داخل الملف»، أمّا إعادة الاستيراد فتُنتج أسطرًا
   // «دون تغيير» (unchanged) لأنّها طابقت سجلات موجودة. النتيجة أنّ الرسالة
   // المخصّصة لإعادة الاستيراد كانت شيفرة ميّتة في الحالة التي كُتبت من أجلها
   // بالضبط. الشرط الآن: لا إنشاء ولا تحديث، مع وجود ما طابَق فعلًا.
+  // مكتوبان بدلالة `counts` وحدها (مع قبول الأسماء القديمة) حتى يبقيا قابلين
+  // للتقييم مباشرةً في الاختبارات، ولا يصيرا نصًّا يُطابَق بلا تنفيذ.
   const alreadyImported =
     !!counts &&
-    counts.deliverablesToCreate === 0 &&
-    counts.deliverablesToUpdate === 0 &&
-    (counts.deliverablesUnchanged > 0 || counts.duplicate > 0);
-  const nothingNew = !!counts && counts.deliverablesToCreate === 0 && counts.deliverablesToUpdate === 0;
+    (counts.toCreate ?? counts.deliverablesToCreate) === 0 &&
+    (counts.updateCandidates ?? counts.deliverablesToUpdate) === 0 &&
+    (counts.sourceRowConflicts ?? 0) === 0 &&
+    ((counts.unchanged ?? counts.deliverablesUnchanged) > 0 || counts.duplicate > 0);
+  const nothingNew =
+    !!counts &&
+    (counts.toCreate ?? counts.deliverablesToCreate) === 0 &&
+    (counts.updateCandidates ?? counts.deliverablesToUpdate) === 0 &&
+    (counts.sourceRowConflicts ?? 0) === 0;
 
   const confirmSatisfied = isLarge ? confirmCount.trim() === String(toCreate) : ack;
   const commitBlocked =
@@ -216,6 +242,7 @@ export default function ProjectImportPanel({
     !canExecuteHere ||
     !confirmSatisfied ||
     (needsSkipAck && !skipInvalid) ||
+    conflictUnanswered ||
     busy !== null ||
     !canManage;
 
@@ -231,6 +258,9 @@ export default function ProjectImportPanel({
     if (batchLabel.trim()) fd.append("batchLabel", batchLabel.trim());
     if (mode) fd.append("mode", mode);
     if (skipInvalid) fd.append("skipInvalidRows", "true");
+    // التأكيدان يُرسَلان كما هما بالضبط: غيابهما يعني «لا»، لا «تصرّف نيابةً عني».
+    if (applyUpdates) fd.append("applyUpdates", "true");
+    if (conflictChoice) fd.append("conflictResolution", conflictChoice);
     return fd;
   }
 
@@ -276,6 +306,12 @@ export default function ProjectImportPanel({
     }
     if (mode === "commit" && !confirmSatisfied) {
       setExecErr("التنفيذ يحتاج تأكيدًا صريحًا بعدد السجلات التي ستُنشأ.");
+      return;
+    }
+    if (conflictUnanswered) {
+      setExecErr(
+        `${conflictCount} سطرًا يتعارض مع سجلات محفوظة لنفس أسطر الملف (غالبًا بسبب تعديل العنوان). اختر ما يُفعل بها أوّلًا: تخطّيها أو إنشاؤها كسجلات جديدة — لن يُنفَّذ شيء قبل ذلك.`,
+      );
       return;
     }
     const fd = formOf(mode);
@@ -473,21 +509,79 @@ export default function ProjectImportPanel({
             </p>
           )}
 
-          {/* الأرقام — أسماء المستويات من ملفّ التعيين لا من الشيفرة */}
+          {/* النتائج السبع — كل سطر وارد يقع في واحدة منها بالضبط */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Kpi label={t({ ar: "مشاريع أب ستُنشأ", en: "Parent projects" })} value={counts.parentProjectsToCreate} />
-            <Kpi label={`${levels[0]?.label ?? t({ ar: "المستوى الأول", en: "Level 1" })} ${t({ ar: "ستُنشأ", en: "to create" })}`} value={counts.stagesToCreate} />
-            <Kpi label={`${levels[1]?.label ?? t({ ar: "المستوى الثاني", en: "Level 2" })} ${t({ ar: "ستُنشأ", en: "to create" })}`} value={counts.subgroupsToCreate} />
-            <Kpi label={t({ ar: "مخرجات ستُنشأ", en: "Deliverables to create" })} value={counts.deliverablesToCreate} tone="ok" />
-            <Kpi label={t({ ar: "مقبولة", en: "Accepted" })} value={counts.accepted} />
-            <Kpi label={t({ ar: "متجاهَلة", en: "Skipped" })} value={counts.skipped} tone={counts.skipped ? "warn" : "neutral"} />
-            <Kpi label={t({ ar: "مكرّرة", en: "Duplicate" })} value={counts.duplicate} tone={counts.duplicate ? "warn" : "neutral"} />
+            <Kpi label={t({ ar: "ستُنشأ", en: "To create" })} value={toCreate} tone="ok" />
+            <Kpi label={t({ ar: "دون تغيير", en: "Unchanged" })} value={unchangedCount} />
+            <Kpi label={t({ ar: "بانتظار تأكيد التعديل", en: "Update candidates" })} value={updateCount} tone={updateCount ? "warn" : "neutral"} />
+            <Kpi label={t({ ar: "تعارض في سطر المصدر", en: "Source-row conflicts" })} value={conflictCount} tone={conflictCount ? "danger" : "neutral"} />
+            <Kpi label={t({ ar: "محفوظة وغائبة عن الملف", en: "Missing from file" })} value={missingCount} tone={missingCount ? "warn" : "neutral"} />
             <Kpi label={t({ ar: "غير صالحة", en: "Invalid" })} value={counts.invalid} tone={counts.invalid ? "danger" : "neutral"} />
+            <Kpi label={t({ ar: "تنبيهات", en: "Warnings" })} value={counts.warnings ?? plan.warnings.length} tone={(counts.warnings ?? plan.warnings.length) ? "warn" : "neutral"} />
+            <Kpi label={t({ ar: "مقبولة", en: "Accepted" })} value={counts.accepted} />
           </div>
           <p className="text-[10px] text-stone-600">
-            {t({ ar: "تحديث", en: "Updates" })}: {counts.deliverablesToUpdate} · {t({ ar: "دون تغيير", en: "Unchanged" })}: {counts.deliverablesUnchanged}
+            {t({ ar: "سجلات هيكلية ستُنشأ", en: "Structural records to create" })}: {t({ ar: "مشاريع أب", en: "parent projects" })} {counts.parentProjectsToCreate} ·{" "}
+            {levels[0]?.label ?? t({ ar: "المستوى الأول", en: "Level 1" })} {counts.stagesToCreate} · {levels[1]?.label ?? t({ ar: "المستوى الثاني", en: "Level 2" })}{" "}
+            {counts.subgroupsToCreate} · {t({ ar: "متجاهَلة", en: "skipped" })} {counts.skipped} · {t({ ar: "مكرّرة داخل الملف", en: "duplicate in file" })} {counts.duplicate}
             {preview?.rowsTruncatedInResponse ? ` · ${t({ ar: "عُرض جزء من الأسطر فقط؛ التنفيذ يعالج", en: "Rows shown are partial; execution covers" })} ${preview.totalRows}` : ""}
           </p>
+          {detection?.note && <p className="text-[10px] text-amber-400/80 leading-relaxed">{detection.note}</p>}
+
+          {/* التعارضات أوّلًا: هذه هي الحالة التي كانت ستُنتج نسخة ثانية بصمت */}
+          {conflictCount > 0 && (
+            <RowList
+              title={`${t({ ar: "تعارض: أسطر تغيّر معرّفها عمّا هو محفوظ", en: "Conflicts: rows whose key changed" })} (${conflictCount})`}
+              tone="danger"
+              hint={t({
+                ar: "هذه الأسطر مسجَّلة سابقًا بعناوين مختلفة في المواضع نفسها. الاستيراد المباشر كان سيُنشئ نسخة ثانية ويترك السجل الأصلي معلّقًا، فتوقّف عمدًا. صحّح العنوان في الملف ليطابق المحفوظ، أو اختر أدناه ماذا يُفعل بها.",
+                en: "These rows are stored under different titles at the same source rows. Fix the sheet, or choose below.",
+              })}
+              items={conflictList.map((c) => ({
+                key: `c-${c.rowNumber}-${c.newKey}`,
+                row: c.rowNumber,
+                text: `«${c.existingTitle ?? c.existingKey}» ← «${c.newTitle}» — ${t({ ar: "المحفوظ", en: "stored" })}: ${c.existingTitle ?? "—"} / ${t({ ar: "في الملف الآن", en: "now in file" })}: ${c.newTitle}. ${c.reason}`,
+              }))}
+            />
+          )}
+
+          {/* التحديثات: ماذا تغيّر بالضبط، حقلًا حقلًا */}
+          {updateCount > 0 && (
+            <RowList
+              title={`${t({ ar: "أسطر ستُعدَّل على سجلات موجودة", en: "Rows that would update stored records" })} (${updateCount})`}
+              tone="warn"
+              hint={t({
+                ar: "لن يُعدَّل أي سجل محفوظ إلّا بتأكيد مستقلّ أدناه. بدون ذلك التأكيد يمضي الاستيراد ويترك هذه السجلات كما هي.",
+                en: "No stored record is updated without its own confirmation below.",
+              })}
+              items={updateList.map((u) => ({
+                key: `u-${u.rowNumber}-${u.external_key}`,
+                row: u.rowNumber,
+                text:
+                  `«${u.title}» — ` +
+                  (u.changes.length > 0
+                    ? u.changes.map((c) => `${c.label}: «${c.from || "—"}» ← «${c.to || "—"}»`).join(" · ")
+                    : u.reason),
+              }))}
+            />
+          )}
+
+          {/* الغائب عن الملف: تقرير فقط — لا حذف الآن ولا لاحقًا */}
+          {missingCount > 0 && (
+            <RowList
+              title={`${t({ ar: "سجلات محفوظة لا يقابلها سطر في الملف", en: "Stored records absent from the file" })} (${missingCount})`}
+              tone="warn"
+              hint={t({
+                ar: "لم يُحذف أي منها ولن يُحذف: الاستيراد لا يحذف شيئًا أبدًا. راجعها بنفسك — قد تكون حُذفت من الجدول عمدًا، أو قد يكون الملف المرفوع ناقصًا.",
+                en: "Nothing was or will be deleted — the importer never deletes. Review them yourself.",
+              })}
+              items={missingList.map((m) => ({
+                key: `m-${m.external_key}`,
+                row: m.source_row_number,
+                text: `«${m.title ?? m.external_key}» — ${m.reason}`,
+              }))}
+            />
+          )}
 
           {/* الأسطر غير الصالحة — برقم السطر والسبب، حتى يُصحَّح الجدول من هنا */}
           {invalidCount > 0 && (
@@ -553,11 +647,56 @@ export default function ProjectImportPanel({
             </label>
           )}
 
+          {/* تأكيد ① — التعديل على سجلات محفوظة. قرار قائم بذاته. */}
+          {updateCount > 0 && (
+            <label className="flex items-start gap-2 text-[11px] text-amber-200 rounded-lg border border-amber-900 bg-amber-950/25 px-3 py-2">
+              <input type="checkbox" checked={applyUpdates} onChange={(e) => setApplyUpdates(e.target.checked)} className="mt-0.5" />
+              <span className="leading-relaxed">
+                {t({ ar: "أؤكّد تعديل", en: "I confirm updating" })} <b dir="ltr">{updateCount}</b>{" "}
+                {t({
+                  ar: "سجلًّا محفوظًا بالقيم الجديدة الموضّحة أعلاه. بدون هذا التأكيد يمضي الاستيراد وتبقى تلك السجلات كما هي.",
+                  en: "stored records with the values listed above. Without this, they stay untouched.",
+                })}
+              </span>
+            </label>
+          )}
+
+          {/* تأكيد ② — التعارضات. قرار منفصل تمامًا عن التأكيد ①. */}
+          {conflictCount > 0 && (
+            <div className="rounded-lg border border-red-900 bg-red-950/30 px-3 py-2 space-y-1.5">
+              <p className="text-[11px] text-red-200 leading-relaxed">
+                {t({ ar: "قرار مطلوب:", en: "Decision required:" })} <b dir="ltr">{conflictCount}</b>{" "}
+                {t({
+                  ar: "سطرًا يحمل معرّفًا مختلفًا عمّا هو محفوظ لنفس موضعه في الملف. لن يُنفَّذ شيء — ولا حتى التشغيل التجريبي — قبل اختيار واحد ممّا يلي:",
+                  en: "rows changed identity at the same source row. Nothing runs until you pick one:",
+                })}
+              </p>
+              <label className="flex items-start gap-2 text-[11px] text-stone-200">
+                <input type="radio" name="conflictChoice" checked={conflictChoice === "skip"} onChange={() => setConflictChoice("skip")} className="mt-0.5" />
+                <span>{t({ ar: "تخطّي هذه الأسطر واستيراد الباقي (لا إنشاء ولا حذف — الأسلم عند تعديل عنوان بالخطأ).", en: "Skip them, import the rest (nothing created, nothing deleted)." })}</span>
+              </label>
+              <label className="flex items-start gap-2 text-[11px] text-stone-200">
+                <input type="radio" name="conflictChoice" checked={conflictChoice === "create"} onChange={() => setConflictChoice("create")} className="mt-0.5" />
+                <span>
+                  {t({
+                    ar: "إنشاؤها كسجلات جديدة — أؤكّد أنّها مخرجات مختلفة فعلًا وليست إعادة تسمية. السجلات السابقة ستبقى موجودة كما هي.",
+                    en: "Create them as new records — I confirm they are genuinely different deliverables.",
+                  })}
+                </span>
+              </label>
+              {conflictChoice !== "" && (
+                <button type="button" onClick={() => setConflictChoice("")} className="text-[10px] text-stone-400 underline">
+                  {t({ ar: "تراجع عن الاختيار", en: "Clear this choice" })}
+                </button>
+              )}
+            </div>
+          )}
+
           {/* خطوة ٢ — تشغيل تجريبي: تحقّق كامل بلا كتابة */}
           <div className="flex flex-wrap gap-2 items-center">
             <button
               type="button"
-              disabled={busy !== null || !canExecuteHere || !canManage || plan.ok === false || (needsSkipAck && !skipInvalid)}
+              disabled={busy !== null || !canExecuteHere || !canManage || plan.ok === false || (needsSkipAck && !skipInvalid) || conflictUnanswered}
               onClick={() => void runExecute("dry_run")}
               className={`${btnGhost} px-4 py-2 text-sky-300 border-sky-900`}
             >
@@ -588,8 +727,9 @@ export default function ProjectImportPanel({
               <label className="flex items-start gap-2 text-[11px] text-stone-300">
                 <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="mt-0.5" />
                 <span>
-                  {t({ ar: "أؤكّد إنشاء", en: "I confirm creating" })} <b dir="ltr">{toCreate}</b> {t({ ar: "مخرَجًا", en: "deliverables" })}
-                  {counts.deliverablesToUpdate ? ` ${t({ ar: "وتحديث", en: "and updating" })} ${counts.deliverablesToUpdate}` : ""} {t({ ar: "في هذا المشروع.", en: "in this project." })}
+                  {/* هذا التأكيد يغطّي الإنشاء وحده. التعديل والتعارض لكلٍّ منهما تأكيده. */}
+                  {t({ ar: "أؤكّد إنشاء", en: "I confirm creating" })} <b dir="ltr">{toCreate}</b>{" "}
+                  {t({ ar: "مخرَجًا جديدًا في هذا المشروع (لا يشمل التعديلات ولا الأسطر المتعارضة).", en: "new deliverables in this project (updates and conflicts excluded)." })}
                 </span>
               </label>
             )}

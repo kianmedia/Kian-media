@@ -12,21 +12,26 @@
 // are duplicates, which are invalid, and every warning per row.
 // ════════════════════════════════════════════════════════════════════════════
 import type {
+  ChangeDetection,
   ImportContext,
   ImportPlan,
   ImportProfile,
   ImportWarning,
   InvalidRow,
   MappedDeliverable,
+  MissingFromFile,
   PlannedDeliverable,
   PlannedNode,
   Sheet,
   SheetRow,
+  SourceRowConflict,
+  UpdateCandidate,
 } from "./types";
 import { buildMapping, parseDateStrict, parseIntStrict, type SheetMapping } from "./mapping";
 import { canonicalType, CORE_FIELDS } from "./profile";
 import { cleanCell, headerKey, isBlank, normalizeForMatch, splitMulti } from "./text";
 import { contentHash, externalKey, nodeKey, parentProjectKey, stableSlug } from "./keys";
+import { buildExistingIndex, classifyRow, isStructuralKey } from "./change";
 
 export const MAX_IMPORT_ROWS = 5000;
 /**
@@ -35,6 +40,13 @@ export const MAX_IMPORT_ROWS = 5000;
  * stay exact, only the listing is bounded.
  */
 export const MAX_LISTED_WARNINGS = 500;
+/**
+ * Same discipline for the change lists: a 5000-row sheet where everything
+ * changed must not become a 10 MB response. The COUNTS stay exact — they are
+ * derived from the rows themselves, not from the length of these lists — only
+ * the listing is bounded, and the UI says so.
+ */
+export const MAX_LISTED_CHANGES = 500;
 
 export interface BuildPlanInput {
   sheet: Sheet;
@@ -84,6 +96,20 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
   const existing = context.existing ?? {};
   const existingLookupAvailable = context.existingLookupAvailable !== false && context.existing !== undefined;
   const projectKey = context.projectKey;
+  const updateCandidates: UpdateCandidate[] = [];
+  const sourceRowConflicts: SourceRowConflict[] = [];
+  const missingFromFile: MissingFromFile[] = [];
+  // The index answers the three questions the key alone cannot: does this key
+  // already exist, what already sits at this file row, and what is stored that
+  // the file no longer mentions.
+  const existingIndex = buildExistingIndex(existing, existingLookupAvailable && context.existingSetComplete === true);
+  const changeDetection: ChangeDetection = {
+    existingLookupAvailable,
+    existingSetComplete: existingIndex.complete,
+    sourceRowNumbersKnown: existingIndex.rowNumbersKnown,
+    fieldLevelDiffAvailable: existingIndex.fieldsKnown,
+    note: null,
+  };
 
   for (const col of mapping.unmapped) {
     warnings.push({ code: "unmapped_column", column: col, message: `العمود «${col}» غير معروف في ملف التعيين، ولم يُستورد.` });
@@ -116,16 +142,27 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
       skipped: 0,
       duplicate: 0,
       invalid: 0,
+      toCreate: 0,
+      unchanged: 0,
+      updateCandidates: 0,
+      sourceRowConflicts: 0,
+      missingFromFile: 0,
+      warnings: 0,
     },
     skippedRows,
     duplicateRows,
     invalidRows,
     warnings,
+    updateCandidates,
+    sourceRowConflicts,
+    missingFromFile,
+    changeDetection,
     existingLookupAvailable,
     generatedAt: new Date().toISOString(),
   };
 
   if (!mapping.byField.has("title")) {
+    base.counts.warnings = warnings.length;
     return {
       ...base,
       ok: false,
@@ -387,9 +424,119 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
 
     mapped.external_key = key;
     mapped.content_hash = hash;
-    const prior = existing[key];
-    const action = !prior ? "create" : prior.content_hash === hash ? "unchanged" : "update";
-    deliverables.push({ ...mapped, parentKey: levelKeys.some(Boolean) ? nodeKey(profile.id, projectKey, levelKeys) : null, action, existingId: prior?.id ?? null });
+    // The ACTION is decided after the scan, not here: the renamed-title test
+    // needs the complete key set of the file (see the second pass below), and
+    // deciding early would mean deciding without it.
+    deliverables.push({
+      ...mapped,
+      parentKey: levelKeys.some(Boolean) ? nodeKey(profile.id, projectKey, levelKeys) : null,
+      action: "create",
+      existingId: null,
+      changedFields: [],
+      conflictWith: null,
+      changeReason: null,
+    });
+  }
+
+  // ─── SECOND PASS: change / conflict detection ────────────────────────────
+  // Runs on the finished row set because two of the five outcomes are only
+  // decidable with the WHOLE file in hand:
+  //   • a renamed title is a conflict only if the old key is claimed by NO row,
+  //   • a stored record is "missing" only if NO row claims it.
+  const fileKeys = new Set(deliverables.map((d) => d.external_key));
+  /** Existing keys a conflict already explains — never double-reported below. */
+  const explainedByConflict = new Set<string>();
+  for (const d of deliverables) {
+    const verdict = classifyRow({
+      external_key: d.external_key,
+      content_hash: d.content_hash,
+      source_row_number: d.source_row_number,
+      mapped: d,
+      index: existingIndex,
+      fileKeys,
+    });
+    d.action = verdict.outcome;
+    d.existingId = verdict.existingId;
+    d.changedFields = verdict.changes;
+    d.changeReason = verdict.reason;
+    d.conflictWith = verdict.conflictWith
+      ? {
+          external_key: verdict.conflictWith.external_key,
+          id: verdict.conflictWith.id,
+          title: verdict.conflictWith.title,
+          source_row_number: verdict.conflictWith.source_row_number,
+        }
+      : null;
+    if (verdict.outcome === "update") {
+      if (updateCandidates.length < MAX_LISTED_CHANGES) {
+        updateCandidates.push({
+          rowNumber: d.source_row_number,
+          external_key: d.external_key,
+          existingId: verdict.existingId,
+          title: d.title,
+          changes: verdict.changes,
+          reason: verdict.reason ?? "",
+        });
+      }
+    } else if (verdict.outcome === "source_row_conflict" && verdict.conflictWith) {
+      // Recorded even past the listing cap: this set decides what is reported as
+      // "missing from the file", and a truncated set would double-report rows.
+      explainedByConflict.add(verdict.conflictWith.external_key);
+      if (sourceRowConflicts.length < MAX_LISTED_CHANGES) {
+        sourceRowConflicts.push({
+          rowNumber: d.source_row_number,
+          newKey: d.external_key,
+          newTitle: d.title,
+          existingKey: verdict.conflictWith.external_key,
+          existingTitle: verdict.conflictWith.title,
+          existingId: verdict.conflictWith.id,
+          reason: verdict.reason ?? "",
+        });
+      }
+    }
+  }
+
+  // ── outcome 5: stored records the file no longer contains ──
+  // ONLY when the lookup covered the whole project. Otherwise we would report
+  // rows as "missing" merely because we never asked about them. NOTHING is
+  // deleted here or anywhere downstream — this list is a report.
+  let missingCount = 0;
+  if (existingIndex.complete) {
+    for (const entry of Array.from(existingIndex.byKey.entries())) {
+      const key = entry[0];
+      const info = entry[1];
+      if (isStructuralKey(key)) continue; // hierarchy nodes are not deliverables
+      if (fileKeys.has(key)) continue;
+      if (explainedByConflict.has(key)) continue; // already reported as a conflict
+      missingCount++;
+      if (missingFromFile.length >= MAX_LISTED_CHANGES) continue;
+      missingFromFile.push({
+        external_key: key,
+        id: info.id,
+        title: info.title,
+        source_row_number: info.source_row_number,
+        reason: `سجل محفوظ${info.source_row_number ? ` (كان في السطر ${info.source_row_number})` : ""} لا يقابله أي سطر في الملف الجديد. لم يُحذف شيء — راجعه بنفسك.`,
+      });
+    }
+    missingFromFile.sort((a, b) => (a.source_row_number ?? 0) - (b.source_row_number ?? 0) || a.external_key.localeCompare(b.external_key));
+  }
+
+  // The listings above are capped; the counts below are not. Say so rather than
+  // letting a short list imply a small problem.
+  if (updateCandidates.length >= MAX_LISTED_CHANGES || sourceRowConflicts.length >= MAX_LISTED_CHANGES || missingFromFile.length >= MAX_LISTED_CHANGES) {
+    warnings.push({
+      code: "truncated",
+      message: `عُرض أول ${MAX_LISTED_CHANGES} عنصر فقط في قوائم التعديلات/التعارضات/السجلات الغائبة؛ الأعداد المعروضة كاملة وصحيحة.`,
+    });
+  }
+
+  // ── say what could NOT be checked, instead of implying it was ──
+  if (existingLookupAvailable && (!existingIndex.complete || !existingIndex.rowNumbersKnown)) {
+    const missingChecks: string[] = [];
+    if (!existingIndex.rowNumbersKnown) missingChecks.push("كشف تعارض تغيير العنوان (لا تتوفّر أرقام الأسطر المحفوظة)");
+    if (!existingIndex.complete) missingChecks.push("كشف السجلات الغائبة عن الملف (لم تُجلب كل سجلات المشروع)");
+    changeDetection.note = `تعذّر إجراء: ${missingChecks.join(" ، ")}. الأرقام المعروضة صحيحة فيما تغطّيه، ولا تدّعي ما لم يُفحص.`;
+    warnings.push({ code: "change_detection_unavailable", message: changeDetection.note });
   }
 
   // ─── hierarchy nodes (derived from accepted rows only) ───────────────────
@@ -434,9 +581,19 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
 
   // ─── counts ──────────────────────────────────────────────────────────────
   const counts = base.counts;
-  counts.deliverablesToCreate = deliverables.filter((d) => d.action === "create").length;
-  counts.deliverablesToUpdate = deliverables.filter((d) => d.action === "update").length;
-  counts.deliverablesUnchanged = deliverables.filter((d) => d.action === "unchanged").length;
+  // The seven first-class outcomes. `toCreate` deliberately EXCLUDES conflicts:
+  // a conflict is not a creation waiting to happen, it is a question.
+  counts.toCreate = deliverables.filter((d) => d.action === "create").length;
+  counts.unchanged = deliverables.filter((d) => d.action === "unchanged").length;
+  // Counted from the rows themselves, never from the (capped) listings above.
+  counts.updateCandidates = deliverables.filter((d) => d.action === "update").length;
+  counts.sourceRowConflicts = deliverables.filter((d) => d.action === "source_row_conflict").length;
+  counts.missingFromFile = missingCount;
+  counts.warnings = warnings.length;
+  // Legacy names kept alive so every existing reader keeps working.
+  counts.deliverablesToCreate = counts.toCreate;
+  counts.deliverablesToUpdate = counts.updateCandidates;
+  counts.deliverablesUnchanged = counts.unchanged;
   counts.accepted = deliverables.length;
   counts.skipped = skippedRows.length;
   counts.duplicate = duplicateRows.length;

@@ -42,6 +42,10 @@ export async function POST(req: Request) {
         batchLabel: read.input.batchLabel ?? read.input.fileName,
         skipInvalidRows: read.input.skipInvalidRows,
         includeUnchanged: read.input.includeUnchanged,
+        // Two SEPARATE confirmations, forwarded exactly as the operator gave
+        // them: a blanket "yes" on the main button applies neither.
+        applyUpdates: read.input.applyUpdates,
+        conflictResolution: read.input.conflictResolution ?? undefined,
         profile,
       },
       call,
