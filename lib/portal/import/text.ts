@@ -103,7 +103,13 @@ export function splitMulti(v: unknown): string[] {
   if (s === "") return [];
   // NOTE: we deliberately do NOT split on the Arabic conjunction "و" — it is a
   // letter inside ordinary words and splitting on it corrupts real values.
-  const parts = s.split(/[،؛,;/|\n\r\t]+|\s\+\s|\s-\s/g);
+  // REAL-FILE CASE: Arabic sheets are typed in Word-autocorrected editors, so the
+  // SAME sheet writes one separator three ways — "أ + ب", "أ - ب" and "أ – ب"
+  // (en dash). Splitting only on the ASCII hyphen made "إنستقرام – إكس" a single
+  // platform while "الحفل + جميع المنصات" split into two. The dash class below
+  // covers hyphen, en dash and em dash; still SPACED only, because an unspaced
+  // dash is part of a real name.
+  const parts = s.split(/[،؛,;/|\n\r\t]+|\s\+\s|\s[-–—]\s/g);
   const out: string[] = [];
   const seen = new Set<string>();
   for (const p of parts) {

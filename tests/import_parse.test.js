@@ -227,6 +227,17 @@ test("splitMulti splits real separators and never on the conjunction و", () => 
   assert.deepEqual(text.splitMulti("واتساب"), ["واتساب"], "a word starting with و must survive");
   assert.deepEqual(text.splitMulti("انستغرام، انستغرام"), ["انستغرام"], "duplicates collapse");
   assert.deepEqual(text.splitMulti(""), []);
+  // REAL-FILE CASE: the same sheet writes the same separator three ways. Only the
+  // ASCII hyphen was split, so "إنستقرام – إكس" stayed ONE platform while
+  // "الحفل + جميع المنصات" split into two — from one column of one file.
+  assert.deepEqual(text.splitMulti("إنستقرام – إكس"), ["إنستقرام", "إكس"], "en dash must separate");
+  assert.deepEqual(text.splitMulti("إنستقرام — إكس"), ["إنستقرام", "إكس"], "em dash must separate");
+  assert.deepEqual(text.splitMulti("إنستقرام - إكس"), ["إنستقرام", "إكس"]);
+  assert.deepEqual(text.splitMulti("إنستقرام – إكس – تيك توك"), ["إنستقرام", "إكس", "تيك توك"]);
+  assert.deepEqual(text.splitMulti("الحفل + جميع المنصات"), ["الحفل", "جميع المنصات"]);
+  // an UNSPACED dash is part of a real name and must never split
+  assert.deepEqual(text.splitMulti("سناب-شات"), ["سناب-شات"], "an unspaced dash is part of the value");
+  assert.deepEqual(text.splitMulti("جميع المنصات"), ["جميع المنصات"], "a legitimate single value stays single");
 });
 
 test("toAsciiDigits converts both Arabic digit families, for numbers only", () => {

@@ -180,12 +180,25 @@ test("النتيجة لا تُخفي فشلًا جزئيًّا: «نجح كذا 
 
 test("إعادة الاستيراد: يقال صراحةً إنّ الملف سبق استيراده ولن يُنشأ شيء", () => {
   const panel = read(PANEL);
-  assert.match(
-    panel,
-    /counts\.duplicate > 0 && counts\.deliverablesToCreate === 0/,
-    "شرط «سبق استيراد هذا الملف» مفقود",
-  );
   assert.ok(panel.includes("سبق استيراد هذا الملف"), "الرسالة العربية الصريحة مفقودة");
+
+  // الاختبار السابق كان يطابق نصّ الشرط حرفيًّا، فثبّت العيب بدل أن يكشفه:
+  // كان الشرط `counts.duplicate > 0` وحده، و`duplicate` تعني «تكرار داخل الملف»
+  // لا «سبق استيراده». إعادة رفع الملف نفسه تُنتج `unchanged` لا `duplicate`،
+  // فكانت الرسالة شيفرة ميّتة في حالتها الأصليّة بالضبط. لذلك نُنفّذ الشرط الآن.
+  const m = panel.match(/const alreadyImported =([\s\S]*?);\n/);
+  assert.ok(m, "تعذّر إيجاد شرط «سبق استيراد هذا الملف» في الشاشة");
+  const predicate = new Function("counts", `return (${m[1].trim()});`);
+
+  // ما تُنتجه المعاينة فعلًا عند إعادة رفع الملف نفسه: لا إنشاء ولا تحديث،
+  // وكل الأسطر طابقت سجلات موجودة.
+  const reimport = { deliverablesToCreate: 0, deliverablesToUpdate: 0, deliverablesUnchanged: 79, duplicate: 0 };
+  assert.equal(!!predicate(reimport), true, "رسالة «سبق استيراد هذا الملف» لا تظهر عند إعادة الاستيراد");
+  // وتكرار داخل الملف بلا إنشاء يبقى محفوظًا كحالة تُظهر الرسالة أيضًا
+  assert.equal(!!predicate({ deliverablesToCreate: 0, deliverablesToUpdate: 0, deliverablesUnchanged: 0, duplicate: 3 }), true);
+  // ولا تظهر عندما يوجد فعلًا ما سيُنشأ أو يُحدَّث
+  assert.equal(!!predicate({ deliverablesToCreate: 5, deliverablesToUpdate: 0, deliverablesUnchanged: 74, duplicate: 0 }), false);
+  assert.equal(!!predicate({ deliverablesToCreate: 0, deliverablesToUpdate: 2, deliverablesUnchanged: 77, duplicate: 0 }), false);
 });
 
 // ─── (و) الشاشة عامّة: لا مشروع بعينه ولا أرقام مثبّتة ─────────────────────

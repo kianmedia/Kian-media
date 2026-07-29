@@ -129,10 +129,26 @@ test("preview reports every required figure over the full fixture", () => {
   assert.equal(PLAN.counts.stagesToCreate, 4, "4 stages");
   assert.equal(PLAN.counts.subgroupsToCreate, 5, "5 sub-groups");
   assert.equal(PLAN.counts.parentProjectsToCreate, 0, "no parent project was requested");
-  // 3 blank rows + 1 totals row + 2 section rows
-  assert.equal(PLAN.counts.skipped, 6, JSON.stringify(PLAN.skippedRows));
+  // 3 blank rows + 1 totals row + 2 section rows + the 2 decoration rows that sit
+  // ABOVE the header row (a title row and a blank one). Those last two used to be
+  // discarded with no skipped entry and no warning: content could vanish from a
+  // real sheet and the preview said nothing. They are now REPORTED (still not
+  // imported), which is why this figure is 8 and not 6.
+  assert.equal(PLAN.counts.skipped, 8, JSON.stringify(PLAN.skippedRows));
   assert.equal(PLAN.deliverables.length, 36);
   assert.equal(PLAN.nodes.length, 9, "4 stages + 5 sub-groups");
+});
+
+test("nothing above the header row is dropped silently — every row is accounted for", () => {
+  // The fixture's first two physical rows are a title row and a blank row.
+  const preHeader = PLAN.skippedRows.filter((r) => r.rowNumber <= 2);
+  assert.equal(preHeader.length, 2, JSON.stringify(PLAN.skippedRows));
+  assert.match(preHeader[0].reason, /قبل صف العناوين/);
+  // Total accounting: every physical row of the sheet ends up in exactly one
+  // bucket — accepted, skipped, duplicate or invalid — plus the header row.
+  const sheet = pickSheet(parseWorkbook(FIXTURE_CSV, "plan.csv"), null).sheet;
+  const bucketed = PLAN.counts.accepted + PLAN.counts.skipped + PLAN.counts.duplicate + PLAN.counts.invalid;
+  assert.equal(bucketed + 1, sheet.rows.length, "a row that is in no bucket has silently disappeared");
 });
 
 test("a parent project is planned only when one is actually requested", () => {
@@ -154,6 +170,95 @@ test("section rows, carry-forward and the deeper-level reset all work", () => {
   assert.deepEqual(byTitle("استمرارية 1").level_path, ["مرحلة الاستمرارية", "الشهر الأول"]);
   // stage D declares a new stage ⇒ the carried sub-group MUST be dropped
   assert.deepEqual(byTitle("تقرير 1").level_path, ["مرحلة القياس", null], "a stale sub-group leaked into a new stage");
+});
+
+// ─── banner rows: the hierarchy shape real planning sheets actually use ─────
+// REAL-FILE CASE. A supplier's plan has no "stage" COLUMN at all. The stage is a
+// full-width BANNER ROW — its title alone in the first content column, every
+// other column blank — and the rows beneath belong to it. The whole block then
+// repeats its own column-header row. Before this was handled, each banner became
+// a phantom deliverable, the file collapsed onto a single level, and two rows
+// that legitimately share a title in DIFFERENT stages were reported as an in-file
+// duplicate and one of them was silently dropped.
+const BANNER_HEADERS = ["المحتوى", "نوع المحتوى", "المنصات", "تفاصيل التنفيذ"];
+function bannerSheetRows() {
+  const rows = [];
+  const banner = (t) => rows.push([t, "", "", ""]);
+  const item = (t, extra) => rows.push([t, "فيديو", "انستغرام", extra]);
+  banner("المرحلة الأولى"); // ← ABOVE the header row, exactly as Excel users write it
+  rows.push([...BANNER_HEADERS]);
+  item("العد التنازلي", "تفصيل أ");
+  item("النشرة الأسبوعية", "تفصيل مشترك");
+  banner("المرحلة الثانية");
+  rows.push([...BANNER_HEADERS]); // the repeated column-header row mid-sheet
+  item("لقاء تعريفي", "تفصيل ب");
+  // same title AND same content as a row in the previous stage: a different
+  // deliverable, not a copy-paste accident.
+  item("النشرة الأسبوعية", "تفصيل مشترك");
+  return rows;
+}
+const BANNER_PLAN = buildPlan({
+  sheet: pickSheet(parseWorkbook(bannerSheetRows().map((r) => r.join(",")).join("\r\n"), "banner.csv"), null).sheet,
+  profile: PROFILE,
+  context: { projectKey: PROJECT_KEY, existing: {}, existingLookupAvailable: true },
+  fileName: "banner.csv",
+});
+
+test("a level written as a banner ROW builds the hierarchy instead of phantom rows", () => {
+  assert.equal(BANNER_PLAN.ok, true, BANNER_PLAN.fatalMessage ?? "");
+  assert.equal(BANNER_PLAN.counts.accepted, 4, JSON.stringify(BANNER_PLAN.deliverables.map((d) => d.title)));
+  assert.equal(BANNER_PLAN.counts.stagesToCreate, 2);
+  assert.deepEqual(
+    BANNER_PLAN.nodes.filter((n) => n.levelIndex === 0).map((n) => n.title),
+    ["المرحلة الأولى", "المرحلة الثانية"],
+  );
+  // the banners themselves are NOT deliverables …
+  assert.equal(BANNER_PLAN.deliverables.some((d) => d.title.startsWith("المرحلة")), false, "a banner became a deliverable");
+  // … and they are reported, not silently swallowed.
+  assert.equal(BANNER_PLAN.skippedRows.filter((r) => /سطر يعرّف/.test(r.reason)).length, 2);
+  // the banner ABOVE the header row still defines the first stage
+  assert.deepEqual(BANNER_PLAN.deliverables[0].level_path, ["المرحلة الأولى", null]);
+});
+
+test("identical titles in DIFFERENT banner stages are two deliverables, not a duplicate", () => {
+  const twins = BANNER_PLAN.deliverables.filter((d) => d.title === "النشرة الأسبوعية");
+  assert.equal(twins.length, 2, "a real deliverable was dropped as a false duplicate");
+  assert.equal(BANNER_PLAN.counts.duplicate, 0);
+  assert.notEqual(twins[0].external_key, twins[1].external_key);
+  assert.deepEqual(twins.map((d) => d.level_path[0]), ["المرحلة الأولى", "المرحلة الثانية"]);
+});
+
+test("banner detection stays off when the sheet really does have a level column", () => {
+  // The full fixture DOES carry a «المرحلة» column, so its section-row handling
+  // must be untouched — no row may be re-read as a banner.
+  assert.equal(PLAN.skippedRows.filter((r) => /سطر يعرّف/.test(r.reason)).length, 2, "the fixture has exactly 2 section rows");
+  assert.equal(PLAN.counts.accepted, 36);
+});
+
+test("a single-column list of titles never turns its rows into banners", () => {
+  // Guard against the obvious over-reach: with only ONE content column every row
+  // would look like a banner and the whole file would import as zero rows.
+  const csv = ["المحتوى", "عنوان أ", "عنوان ب", "عنوان ج"].join("\r\n");
+  const plan = buildPlan({
+    sheet: pickSheet(parseWorkbook(csv, "one.csv"), null).sheet,
+    profile: PROFILE,
+    context: { projectKey: PROJECT_KEY, existing: {}, existingLookupAvailable: true },
+    fileName: "one.csv",
+  });
+  assert.equal(plan.counts.accepted, 3, JSON.stringify(plan.skippedRows));
+  assert.equal(plan.counts.stagesToCreate, 0);
+});
+
+test("a totals row alone in the title column stays a totals row, not a stage", () => {
+  const csv = [BANNER_HEADERS.join(","), "الإجمالي,,,", "عنوان أ,فيديو,انستغرام,تفصيل"].join("\r\n");
+  const plan = buildPlan({
+    sheet: pickSheet(parseWorkbook(csv, "t.csv"), null).sheet,
+    profile: PROFILE,
+    context: { projectKey: PROJECT_KEY, existing: {}, existingLookupAvailable: true },
+    fileName: "t.csv",
+  });
+  assert.equal(plan.counts.stagesToCreate, 0, "a totals row was promoted to a stage");
+  assert.match(plan.skippedRows.find((r) => r.rowNumber === 2).reason, /تجميعي/);
 });
 
 test("every deliverable is linked to the node of its deepest level", () => {

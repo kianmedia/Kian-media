@@ -143,7 +143,39 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
   const keysSeen = new Map<string, number>();
   let dataRows = 0;
 
-  for (let i = mapping.headerRowIndex + 1; i < sheet.rows.length; i++) {
+  // ── BANNER ROWS ──────────────────────────────────────────────────────────
+  // REAL-FILE CASE: a planning sheet almost never carries a "stage" COLUMN. It
+  // writes the stage as a full-width BANNER ROW — the stage title alone in the
+  // first content column, every other column blank — and the rows beneath it
+  // belong to that stage. Without this, each banner became a phantom deliverable
+  // with no stage, the whole file collapsed onto one level, and two genuinely
+  // different rows that share a title in DIFFERENT stages were reported as an
+  // in-file duplicate and one of them was dropped.
+  //
+  // Deliberately narrow, so a sheet that really does have a stage column (the
+  // path the section-row logic below already covers) is untouched:
+  //   • only for a level the profile declares with sectionRows AND whose column
+  //     is genuinely ABSENT from this sheet (outermost such level wins),
+  //   • only when the sheet carries ≥2 content columns — otherwise a plain list
+  //     of titles would turn every one of its rows into a banner, and
+  //   • only when the title cell is the row's ONLY non-blank cell.
+  // Every banner is reported in skippedRows, so nothing disappears silently.
+  const contentFieldCount = mapping.columns.filter((c) => c.field && !levels.some((l) => l.field === c.field)).length;
+  let bannerLevel = -1;
+  for (let li = 0; li < levels.length; li++) {
+    if (levels[li].sectionRows && !mapping.byField.has(levels[li].field)) {
+      bannerLevel = li;
+      break;
+    }
+  }
+  const bannerEnabled = bannerLevel >= 0 && contentFieldCount >= 2;
+
+  // Start at row 0, not at the header row: the FIRST banner of a real sheet sits
+  // ABOVE the column-header row, and everything above that row used to be
+  // discarded with no skipped entry and no warning at all.
+  for (let i = 0; i < sheet.rows.length; i++) {
+    if (i === mapping.headerRowIndex) continue;
+    const beforeHeader = i < mapping.headerRowIndex;
     const row = sheet.rows[i];
     const r = readerFor(row, mapping);
 
@@ -151,7 +183,7 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
       skippedRows.push({ rowNumber: row.rowNumber, reason: "سطر فارغ" });
       continue;
     }
-    if (dataRows >= maxRows) {
+    if (!beforeHeader && dataRows >= maxRows) {
       warnings.push({ code: "truncated", message: `تجاوز الملف الحدّ الأقصى (${maxRows} سطرًا)؛ لم تُقرأ الأسطر التالية.`, rowNumber: row.rowNumber });
       break;
     }
@@ -164,6 +196,26 @@ export function buildPlan(input: BuildPlanInput): ImportPlan {
     const firstNonEmpty = row.cells.find((c) => !isBlank(c)) ?? "";
     if (skipSet.has(headerKey(firstNonEmpty))) {
       skippedRows.push({ rowNumber: row.rowNumber, reason: `سطر تجميعي («${cleanCell(firstNonEmpty)}»)` });
+      continue;
+    }
+
+    // A banner row DEFINES the level for the rows that follow it (see above).
+    // Checked after the totals/repeated-header guards so a lone «الإجمالي» stays
+    // a totals row rather than becoming a stage.
+    if (bannerEnabled && r.nonEmptyCount === 1) {
+      const bannerTitle = r.get("title");
+      if (bannerTitle !== "") {
+        carry[bannerLevel] = bannerTitle;
+        for (let k = bannerLevel + 1; k < levels.length; k++) carry[k] = null;
+        skippedRows.push({ rowNumber: row.rowNumber, reason: `سطر يعرّف ${levels[bannerLevel].label}: «${bannerTitle}»` });
+        continue;
+      }
+    }
+
+    // Anything else above the header row is decoration (a document title, a logo
+    // row). It is NOT imported — but it is now REPORTED instead of vanishing.
+    if (beforeHeader) {
+      skippedRows.push({ rowNumber: row.rowNumber, reason: "سطر قبل صف العناوين — لم يُقرأ" });
       continue;
     }
 

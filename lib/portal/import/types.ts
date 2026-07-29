@@ -2,8 +2,8 @@
 // lib/portal/import/types.ts — the shared vocabulary of the generic import
 // engine. NOTHING here is project-specific: no stage list, no deliverable
 // count, no client name. A mapping PROFILE (plain JSON data) supplies all of
-// that, so the same engine imports a 79-row social-media plan, a 4-row photo
-// shoot, or a 300-row documentary schedule without a code change.
+// that, so the same engine imports a large social-media plan, a small photo
+// shoot, or a long documentary schedule without a code change.
 // ════════════════════════════════════════════════════════════════════════════
 
 /** One physical row as read from the file, with its TRUE file row number. */

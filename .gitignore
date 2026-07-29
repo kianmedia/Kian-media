@@ -36,3 +36,16 @@ next-env.d.ts
 
 # Claude Code local tooling (machine-specific)
 .claude/
+
+# ── بيانات العملاء الحقيقية — محليّة فقط، لا تدخل Git إطلاقًا ──────────────
+# Real client import sources and anything generated from them. The parser, the
+# generic mapping profile, the tests and the SANITIZED fixtures are tracked;
+# the client's actual campaign content is not.
+docs/input/*
+!docs/input/README.md
+docs/input/private/
+docs/private-imports/
+tests/fixtures/*_real.json
+docs/*_import_ready.csv
+docs/*_import_payload.json
+docs/*.local.md

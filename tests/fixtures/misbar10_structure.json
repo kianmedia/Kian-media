@@ -7,10 +7,12 @@
   "owner_expectation": {
     "stages": 11,
     "deliverables": 79,
-    "source": "owner's Excel workbook — NOT present in this repository",
-    "verified_against_real_file": false,
-    "note_ar": "٧٩ هو توقّع المالك ولم يُتحقَّق منه؛ عدد هذا الملف الاصطناعي مختلف عمدًا حتى لا يُخلط بينهما.",
-    "note_en": "79 is the owner's UNVERIFIED expectation. This synthetic file deliberately holds a different count so the two are never confused. Re-check against the real workbook before acceptance."
+    "source": "docs/input/MISBAR10_PLAN.xlsx — the owner's real workbook, now present in this repository",
+    "verified_against_real_file": true,
+    "verified_by": "tests/misbar10_real_dataset.test.js",
+    "verified_payload": "docs/misbar10_import_payload.json",
+    "note_ar": "١١/٧٩ رقمان تحقّقا مقابل الملف الحقيقي عبر قارئ المستودع نفسه (انظر tests/misbar10_real_dataset.test.js)؛ عدد هذا الملف الاصطناعي يبقى مختلفًا عمدًا حتى لا يُخلط بالبيانات الحقيقية.",
+    "note_en": "11 stages / 79 deliverables are VERIFIED against the real workbook by tests/misbar10_real_dataset.test.js, using the repo's own reader. This synthetic file deliberately keeps a different count so it can never be mistaken for the owner's data."
   },
   "platform_contract": {
     "stage_entity": "projects (project_scope='subproject', parent_project_id=<parent>, ordered by sequence_number)",

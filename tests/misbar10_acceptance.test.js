@@ -2,11 +2,15 @@
 // tests/misbar10_acceptance.test.js — حراس مجموعة القبول الاصطناعية.
 //
 // This suite runs over tests/fixtures/misbar10_structure.json, which is a
-// SYNTHETIC dataset. The owner's real workbook is NOT in this repository, so
-// the eleven stage names are real (owner-supplied) while every deliverable is
-// invented. The suite therefore asserts:
-//   · the fixture's ACTUAL counts (self-consistency), and
-//   · the owner's 11/79 EXPECTATION separately, recorded as UNVERIFIED.
+// SYNTHETIC dataset: the eleven stage names are real (owner-supplied) while
+// every deliverable is invented. Its job is to guard the SHAPES the platform
+// must support (empty stage, recurrence vs quantity, client visibility, no
+// fabricated dates) independently of any one client's file.
+//
+// The owner's REAL workbook now lives at docs/input/MISBAR10_PLAN.xlsx and is
+// asserted, cell by cell and key by key, in tests/misbar10_real_dataset.test.js.
+// That is where 11 / 79 / the distribution are PROVEN; this file only records
+// that the expectation has been verified and points at the suite that did it.
 // It must never assert 79 as a platform requirement — no platform code may
 // hardcode a deliverable count, and no platform code may mention this project
 // by name.
@@ -54,13 +58,23 @@ test("الملف موسوم كبيانات اصطناعية بلا لبس", () =
   assert.equal(F.parent_project.synthetic, true, "المشروع الأب غير موسوم");
 });
 
-test("توقّع المالك (11/79) مسجَّل كتوقّع غير مُتحقَّق منه، لا كحقيقة", () => {
+test("توقّع المالك (11/79) مُتحقَّق منه مقابل الملف الحقيقي، ومصدر التحقّق مذكور ومُنفَّذ", () => {
   assert.equal(F.owner_expectation.stages, 11);
   assert.equal(F.owner_expectation.deliverables, 79);
-  assert.equal(F.owner_expectation.verified_against_real_file, false,
-    "لا يجوز الادّعاء بأنّ 79 تحقّق مقابل الملف الحقيقي — الملف غير موجود في المستودع");
-  assert.match(F.owner_expectation.source, /NOT present in this repository/i);
-  // The synthetic count is deliberately different so the two can never be conflated.
+  assert.equal(F.owner_expectation.verified_against_real_file, true,
+    "التحقّق تمّ فعلًا مقابل docs/input/MISBAR10_PLAN.xlsx — إبقاء العلم على false ادّعاء غير صحيح");
+  assert.match(F.owner_expectation.source, /MISBAR10_PLAN\.xlsx/,
+    "مصدر التحقّق لا يشير إلى ملف المالك الحقيقي");
+  // The claim must be backed by a suite that actually exists and actually runs.
+  const suite = path.join(ROOT, F.owner_expectation.verified_by);
+  assert.ok(fs.existsSync(suite), `مجموعة التحقّق «${F.owner_expectation.verified_by}» غير موجودة`);
+  assert.ok(fs.existsSync(path.join(ROOT, "docs/input/MISBAR10_PLAN.xlsx")), "ملف المالك الحقيقي غير موجود");
+  assert.ok(fs.existsSync(path.join(ROOT, F.owner_expectation.verified_payload)), "حمولة الاستخراج غير موجودة");
+  const suiteSrc = fs.readFileSync(suite, "utf8");
+  assert.match(suiteSrc, /docs\/input\/MISBAR10_PLAN\.xlsx/, "مجموعة التحقّق لا تقرأ الملف الحقيقي");
+  assert.match(suiteSrc, /deliverable_count = 79/, "مجموعة التحقّق لا تؤكّد العدد 79 باسمه");
+  assert.match(suiteSrc, /operational_block_count = 11/, "مجموعة التحقّق لا تؤكّد العدد 11 باسمه");
+  // The synthetic count stays deliberately different so the two can never be conflated.
   assert.notEqual(F.deliverables.length, F.owner_expectation.deliverables,
     "عدد الملف الاصطناعي يساوي 79 — يصبح مُضلِّلًا ويُخلط ببيانات المالك");
 });

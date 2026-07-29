@@ -196,8 +196,17 @@ export default function ProjectImportPanel({
   const isLarge = totalCreates >= LARGE_IMPORT_ROWS;
   const invalidCount = plan?.invalidRows.length ?? 0;
   const needsSkipAck = invalidCount > 0;
-  // «سبق استيراد هذا الملف» — نفس الشرط الذي طلبه المالك حرفيًّا.
-  const alreadyImported = !!counts && counts.duplicate > 0 && counts.deliverablesToCreate === 0;
+  // «سبق استيراد هذا الملف».
+  // كان الشرط `duplicate > 0` فقط، وهذا لا يتحقّق أبدًا عند إعادة رفع الملف
+  // نفسه: `duplicate` تعني «تكرار داخل الملف»، أمّا إعادة الاستيراد فتُنتج أسطرًا
+  // «دون تغيير» (unchanged) لأنّها طابقت سجلات موجودة. النتيجة أنّ الرسالة
+  // المخصّصة لإعادة الاستيراد كانت شيفرة ميّتة في الحالة التي كُتبت من أجلها
+  // بالضبط. الشرط الآن: لا إنشاء ولا تحديث، مع وجود ما طابَق فعلًا.
+  const alreadyImported =
+    !!counts &&
+    counts.deliverablesToCreate === 0 &&
+    counts.deliverablesToUpdate === 0 &&
+    (counts.deliverablesUnchanged > 0 || counts.duplicate > 0);
   const nothingNew = !!counts && counts.deliverablesToCreate === 0 && counts.deliverablesToUpdate === 0;
 
   const confirmSatisfied = isLarge ? confirmCount.trim() === String(toCreate) : ack;
