@@ -264,10 +264,16 @@ test("planFromInput runs the two-pass plan and degrades when the lookup is absen
   assert.equal(offline.plan.counts.accepted, 2);
   assert.equal(offline.plan.existingLookupAvailable, false);
 
-  // lookup RPC missing → the plan is still complete, and the reason is reported
+  // lookup RPC missing → the plan is still complete, and NO cause is invented.
+  // The consequence the UI states is the true one ("matching unavailable, every
+  // row reads as new"); asserting «الترحيلة غير مطبّقة» here contradicted the
+  // green «قاعدة البيانات جاهزة للاستيراد» produced by detectBackend() on the
+  // very same screen, because production runs the staging-batch protocol and has
+  // never had project_import_lookup.
   const missing = await planFromInput(input, async () => ({ ok: false, error: "PGRST202 could not find the function", status: 404 }));
   assert.equal(missing.plan.counts.accepted, 2);
-  assert.match(missing.lookupReason, /لم تُحدَّث بعد/);
+  assert.equal(missing.plan.existingLookupAvailable, false);
+  assert.equal(missing.lookupReason, null, "★ عاد ادّعاء «الترحيلة غير مطبّقة» إلى المعاينة");
 
   // lookup available → the second pass classifies the known row as unchanged
   const firstKey = offline.plan.deliverables[0].external_key;

@@ -13,6 +13,13 @@
 // خارج ما يراه المستخدم الآن، والعدد المعروض هو العدد المتأثّر بالضبط.
 // ════════════════════════════════════════════════════════════════════════════
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+// ملاحظة على النصّ الحرّ: `execution_details` و`proposed_caption` و
+// `internal_notes` كانت تُجلَب في اللقطة ولا تُعرض في أيّ شاشة على الإطلاق.
+// ملفّات التعيين في docs/import_profiles تستورد الحقول الثلاثة، والـSQL المطبَّق
+// (project_bulk_import_RUNME.sql §4) يكتب الأوّلَين على public.deliverables
+// والثالث على public.deliverable_internal — فكانت الخطّة المستورَدة تصل قائمةَ
+// عناوين بلا بريف تنفيذ ولا نصّ منشور ولا ملاحظات. تُعرض الآن للقراءة فقط، من
+// البيانات المجلوبة أصلًا: بلا طلب جديد، وبلا عمود جديد.
 import { useI18n } from "@/lib/i18n";
 import {
   lpFilter, lpFiltersActive, lpGroupsOf, lpStageIdOf, lpPlatformsOf, lpTypesOf, lpTodayISO,
@@ -273,6 +280,8 @@ export default function DeliverableMatrix({
               stage={stageName.get(lpStageIdOf(d)) ?? "—"}
               assignee={d.assignee_id ? (staffName.get(d.assignee_id) ?? d.assignee_id.slice(0, 8)) : null}
               group={lpGroupOf(d)} type={lpTypeOf(d)} showVisibility={!!caps.columns.client_visible}
+              details={txt(d.execution_details)} caption={txt(d.proposed_caption)}
+              note={txt(d.internal_notes)} sourceKey={txt(d.external_key)}
             />
           ))}
           {shown < filtered.length && (
@@ -287,17 +296,34 @@ export default function DeliverableMatrix({
   );
 }
 
+/** نصّ حرّ قابل للعرض، أو null. الفراغ والمسافات وحدها = لا شيء. */
+const txt = (v: unknown): string | null => {
+  const s = v == null ? "" : String(v).trim();
+  return s === "" ? null : s;
+};
+
 // ─── صفّ واحد: memo + خصائص بدائية ⇒ لا إعادة رسم للقائمة كلّها عند التحديد ───
 const DeliverableRow = memo(function DeliverableRow({
   d, selected, onToggle, stage, assignee, today, group, type, showVisibility,
+  details, caption, note, sourceKey,
 }: {
   d: LpDeliverable; selected: boolean; onToggle: (id: string) => void;
   stage: string; assignee: string | null; today: string;
   group: string | null; type: string; showVisibility: boolean;
+  /** deliverables.execution_details — «تفاصيل التنفيذ» من ملفّ الخطّة. */
+  details: string | null;
+  /** deliverables.proposed_caption — «نصّ الوصف المقترح». */
+  caption: string | null;
+  /** deliverable_internal.internal_notes — كوادر فقط (العميل يحصل على صفر صفوف). */
+  note: string | null;
+  /** deliverable_internal.external_key — أثر السطر المصدر، مفيد عند تصحيح الملفّ. */
+  sourceKey: string | null;
 }) {
   const { t } = useI18n();
+  const [open, setOpen] = useState(false);
   const units = typeof d.expected_units === "number" && d.expected_units > 0
     ? `${d.completed_units ?? 0}/${d.expected_units}` : null;
+  const hasBody = !!(details || caption || note);
   return (
     <div className={`${lpCard} p-2 sm:p-2.5 ${selected ? "border-sky-800 bg-stone-800/60" : ""}`}>
       <div className="flex items-start gap-2">
@@ -330,11 +356,43 @@ const DeliverableRow = memo(function DeliverableRow({
               ))}
             </div>
           )}
+
+          {/* النصّ الحرّ للمخرَج — مطويّ افتراضيًّا حتى لا يتضخّم DOM في قائمة
+              بمئات الصفوف، ومفتوح بنقرة واحدة. لا شيء يُجلب هنا: الحقول موجودة
+              في اللقطة أصلًا. غياب الثلاثة معًا ⇒ لا زرّ ولا سطر فارغ. */}
+          {hasBody && (
+            <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+              className="mt-1 text-[10px] text-sky-300 hover:text-sky-200 underline">
+              {open ? t({ ar: "إخفاء التفاصيل", en: "Hide details" }) : t({ ar: "عرض التفاصيل", en: "Show details" })}
+            </button>
+          )}
+          {open && hasBody && (
+            <div className="mt-1 space-y-1.5 border-s-2 border-stone-800 ps-2">
+              {details && <Field label={t({ ar: "تفاصيل التنفيذ", en: "Execution details" })} value={details} />}
+              {caption && <Field label={t({ ar: "نصّ الوصف المقترح", en: "Proposed caption" })} value={caption} />}
+              {note && <Field label={t({ ar: "ملاحظات داخلية (لا يراها العميل)", en: "Internal notes (staff only)" })} value={note} />}
+              {sourceKey && (
+                <p className="text-[9px] text-stone-600">
+                  {t({ ar: "معرّف المصدر", en: "Source key" })} <span dir="ltr">{sourceKey}</span>
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 });
+
+/** حقل نصّ حرّ: يحترم اتجاه النصّ، ويحافظ على أسطر الجدول كما كُتبت. */
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[9px] text-stone-500">{label}</div>
+      <p className="text-[11px] text-stone-300 leading-relaxed whitespace-pre-wrap break-words" dir="auto">{value}</p>
+    </div>
+  );
+}
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (

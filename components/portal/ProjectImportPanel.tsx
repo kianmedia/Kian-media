@@ -17,6 +17,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { getValidSession } from "@/lib/portalAuth";
+// ONE classifier for database failures — the file that exists because a 42703
+// was once printed as «الترحيلة غير مطبّقة» and cost a production debugging
+// cycle. This screen must never repeat that: see `migrationPending` below.
+import { pgClassify, pgIsMigrationPending, pgTechnicalTail } from "@/lib/portal/pgerror";
+import { MIGRATION_PENDING_AR } from "@/lib/portal/import";
 import type {
   BackendState,
   ExecuteResult,
@@ -101,10 +106,13 @@ async function importFetch<T>(url: string, init: RequestInit): Promise<{ status:
 
 export default function ProjectImportPanel({
   projectId,
+  projectName,
   canManage,
   flash,
 }: {
   projectId: string;
+  /** اسم المشروع الهدف — يُعرض كوجهة صريحة. بيانات، لا مشروع مثبَّت في الشيفرة. */
+  projectName?: string;
   canManage: boolean;
   flash?: (m: string) => void;
 }) {
@@ -192,8 +200,27 @@ export default function ProjectImportPanel({
   const plan = preview?.plan ?? null;
   const counts = plan?.counts ?? null;
   const levels = preview?.profile?.levels ?? profiles.find((p) => p.id === profileId)?.levels ?? [];
-  const migrationPending = backend != null && backend.available === false;
+  // ── WHY the disabled state is split in two ────────────────────────────────
+  // «الترحيل معلّق» is a CAUSE, not a synonym for "execution is off". Rendering
+  // that badge for every unavailable backend turned a 42703, a stale schema
+  // cache and a permission denial into "run the migration" — the exact false
+  // claim lib/portal/pgerror.ts was written to stop. So the badge is shown ONLY
+  // for the sentence the engine reserves for a genuinely absent function/table,
+  // or when the reason itself carries PGRST202/42883/42P01. Everything else is
+  // shown as itself, with its technical code attached.
+  const backendOff = backend != null && backend.available === false;
+  const backendDiag = backendOff ? pgClassify(backend?.reason ?? "") : null;
+  const migrationPending = backendOff && (backend?.reason === MIGRATION_PENDING_AR || (backendDiag !== null && pgIsMigrationPending(backendDiag)));
+  const backendBlocked = backendOff && !migrationPending;
   const canExecuteHere = preview?.canExecute === true && backend?.available === true;
+  /**
+   * The deployed staging-batch protocol CREATES what is new and SKIPS what
+   * already exists — it never rewrites a stored record (see
+   * docs/project_bulk_import_RUNME.sql, import_batch_execute_core: an existing
+   * external_key is marked `skipped`). Offering «أؤكّد تعديل N سجلًّا» on that
+   * protocol would take a confirmation and do nothing with it.
+   */
+  const backendRewritesRows = backend?.protocol !== "batch";
 
   // ── النتائج السبع ──
   // `toCreate` لا يشمل الأسطر المتعارضة إطلاقًا: التعارض سؤال لا إنشاء مؤجَّل.
@@ -379,6 +406,26 @@ export default function ProjectImportPanel({
           </p>
         </div>
       )}
+      {/* التنفيذ معطّل لسبب آخر — يُقال كما هو، ولا يُلبَس ثوب «الترحيل معلّق» */}
+      {backendBlocked && (
+        <div className={`${card} p-3 space-y-1 border-red-900/70`}>
+          <p className="text-xs font-semibold text-red-200">
+            <span className="inline-block rounded px-1.5 py-0.5 bg-red-500/15 border border-red-500/30">
+              {t({ ar: "التنفيذ غير متاح الآن", en: "Execution unavailable" })}
+            </span>
+          </p>
+          <p className="text-[11px] leading-relaxed text-stone-300">
+            {backend?.reason}
+            {backendDiag ? pgTechnicalTail(backendDiag) : ""}
+          </p>
+          <p className="text-[11px] leading-relaxed text-stone-500">
+            {t({
+              ar: "هذا ليس ملف ترحيل ناقصًا: الرسالة أعلاه هي سبب الرفض كما ورد من قاعدة البيانات. المعاينة تعمل كاملةً (تحليل الملف لا يمرّ بقاعدة البيانات).",
+              en: "This is not a pending migration — the sentence above is the database's own reason. Preview still works (parsing never touches the database).",
+            })}
+          </p>
+        </div>
+      )}
       {backend?.available && (
         <p className="text-[10px] text-emerald-400/80">
           {t({ ar: "قاعدة البيانات جاهزة للاستيراد.", en: "Import backend is ready." })}
@@ -394,6 +441,22 @@ export default function ProjectImportPanel({
             ar: "ارفع ملف Excel (‎.xlsx) أو CSV، اختر ملفّ التعيين المناسب، ثم عايِن قبل أي كتابة. المعاينة والتشغيل التجريبي لا يكتبان شيئًا إطلاقًا.",
             en: "Upload .xlsx or .csv, pick a mapping profile, then preview. Preview and dry run never write.",
           })}
+        </p>
+        {/* الوجهة تُقال صراحةً: الشاشة تستورد إلى المشروع المفتوح وحده، ولا
+            تُنشئ مشروعًا جديدًا. استيراد ملفّ كامل في المشروع الخطأ خطأ مكلف،
+            فلا يجوز أن يبقى اسم الوجهة مضمرًا في المسار. */}
+        <p className="text-[11px] leading-relaxed rounded-lg border border-stone-700 bg-stone-950 text-stone-300 px-3 py-2">
+          {t({ ar: "الوجهة:", en: "Destination:" })} <b>{projectName ?? projectId}</b>
+          {" — "}
+          {t({
+            ar: "كل ما في الملف يُضاف داخل هذا المشروع وحده. هذه الشاشة لا تُنشئ مشروعًا جديدًا: إن كانت الوجهة خاطئة، افتح المشروع الصحيح (أو أنشئه من قائمة المشاريع) ثم عُد إلى هنا.",
+            en: "Everything in the file is added inside this project only. This screen does not create a project: open the right one (or create it from the projects list) first.",
+          })}
+          {backend?.protocol === "batch" &&
+            ` ${t({
+              ar: "كل مرحلة في الملف تُنشأ كمشروع فرعيّ داخله، ويصير هذا المشروع «رئيسيًّا» عند وجود مراحل.",
+              en: "Each stage in the file becomes a subproject, and this project becomes a master when stages exist.",
+            })}`}
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -499,12 +562,20 @@ export default function ProjectImportPanel({
               {t({ ar: "لا جديد في هذا الملف: لا إنشاء ولا تحديث.", en: "Nothing new: no creates, no updates." })}
             </p>
           )}
+          {/* مطابقة السجلات السابقة غير متاحة.
+              الرسالة تقول الأثر الحقيقيّ ولا تخترع سببًا: «الترحيلة غير مطبّقة»
+              يقرّرها فحص الواجهة الخلفية أعلاه وحده (backend.available)، لا هذا
+              الموضع. وتُذكر هنا صراحةً النتيجة العمليّة الوحيدة الخطِرة: الكشف عن
+              «سطر أُعيدت تسميته» يعتمد على هذه المطابقة، فبدونها تُقرأ إعادة
+              الاستيراد بعد تعديل عنوان كسطر جديد — تُنشأ نسخة ثانية ويبقى الأصل.
+              الكتابة نفسها تبقى محميّة من التكرار على المفتاح الخارجيّ في قاعدة
+              البيانات، فالخطر محصور في الأسطر التي تغيّر عنوانها. */}
           {plan.existingLookupAvailable === false && (
             <p className="text-[11px] leading-relaxed rounded-lg border border-amber-900 bg-amber-950/30 text-amber-200 px-3 py-2">
               {preview?.lookupReason ??
                 t({
-                  ar: "تعذّرت مطابقة السجلات السابقة، فكل الأسطر تظهر «جديدة». لا تعتمد على أرقام الإنشاء قبل توفّر المطابقة.",
-                  en: "Existing-record matching is unavailable, so every row reads as new.",
+                  ar: "تعذّرت مطابقة السجلات السابقة، فكل الأسطر تظهر «جديدة». لا تعتمد على أرقام الإنشاء. الأسطر التي لم يتغيّر عنوانها لن تتكرّر (قاعدة البيانات تتخطّاها بالمفتاح الخارجيّ)، لكن أيّ سطر عُدِّل عنوانه سيُقرأ كسطر جديد فيُنشأ مرّتين — صحّح العناوين قبل إعادة الاستيراد لا بعده.",
+                  en: "Existing-record matching is unavailable, so every row reads as new. Untouched rows are still de-duplicated by external key, but any row whose TITLE changed will be created a second time — fix titles before re-importing, not after.",
                 })}
             </p>
           )}
@@ -647,8 +718,21 @@ export default function ProjectImportPanel({
             </label>
           )}
 
+          {/* البروتوكول المنشور لا يُعيد كتابة سجل محفوظ — لا يجوز أن تُطلَب
+              موافقة على فعل لن يقع. تُعرض الحقيقة بدل مربّع تأكيد بلا أثر. */}
+          {updateCount > 0 && !backendRewritesRows && (
+            <p className="text-[11px] leading-relaxed rounded-lg border border-amber-900 bg-amber-950/25 text-amber-200 px-3 py-2">
+              {t({ ar: "لا يمكن تعديل سجلات محفوظة من هنا:", en: "Stored records cannot be rewritten here:" })}{" "}
+              <b dir="ltr">{updateCount}</b>{" "}
+              {t({
+                ar: "سطرًا يطابق سجلات موجودة بقيم مختلفة. الاستيراد في قاعدة البيانات ينشئ الجديد ويتخطّى الموجود ولا يستبدله، فستبقى هذه السجلات كما هي وستظهر في النتيجة «دون تغيير». عدّلها من تبويب المخرجات.",
+                en: "rows match stored records with different values. The importer creates new rows and skips existing ones; it never overwrites. Edit them in the deliverables tab.",
+              })}
+            </p>
+          )}
+
           {/* تأكيد ① — التعديل على سجلات محفوظة. قرار قائم بذاته. */}
-          {updateCount > 0 && (
+          {updateCount > 0 && backendRewritesRows && (
             <label className="flex items-start gap-2 text-[11px] text-amber-200 rounded-lg border border-amber-900 bg-amber-950/25 px-3 py-2">
               <input type="checkbox" checked={applyUpdates} onChange={(e) => setApplyUpdates(e.target.checked)} className="mt-0.5" />
               <span className="leading-relaxed">

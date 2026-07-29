@@ -664,7 +664,19 @@ test("lookupExisting degrades instead of throwing when its RPC is missing", asyn
   const missing = await lookupExisting(stubCaller({ project_import_lookup: PGRST202 }), { projectId: null, profileId: "misbar10", keys: ["a"] });
   assert.equal(missing.available, false);
   assert.deepEqual(missing.existing, {});
-  assert.match(missing.reason, /لم تُحدَّث بعد/);
+  // ★ An absent OPTIONAL lookup RPC must NOT be phrased as «الترحيلة غير مطبّقة».
+  //   The deployed database exposes the staging-batch protocol, so PGRST202 here
+  //   is the normal production answer; claiming «التنفيذ معطّل حتى تشغيل ملف
+  //   الترحيل» printed a false cause beside an enabled execute button. Whether a
+  //   migration is pending is detectBackend()'s decision, not this function's.
+  assert.equal(missing.reason, null, "★ عاد ادّعاء «الترحيلة غير مطبّقة» من دالّة قراءة اختيارية");
+  // A real failure (not an absent object) still carries its own message.
+  const denied = await lookupExisting(
+    stubCaller({ project_import_lookup: { ok: false, error: "boom", status: 500 } }),
+    { projectId: null, profileId: "misbar10", keys: ["a"] },
+  );
+  assert.equal(denied.available, false);
+  assert.match(denied.reason, /تعذّر جلب السجلّات السابقة/);
   const found = await lookupExisting(
     stubCaller({ project_import_lookup: { ok: true, data: { rows: [{ external_key: "a", content_hash: "h", id: "i" }] } } }),
     { projectId: null, profileId: "misbar10", keys: ["a"] },

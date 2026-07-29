@@ -427,3 +427,43 @@ test("القاعدة الأهمّ ناجية: «بانتظار الجدولة» 
   // محرّك التأخّر يعمل على المخرج (deliverables.due_date) لا على المشروع.
   assert.match(LIB, /موعد المخرج|LP_BASE_COLUMNS/);
 });
+
+// ─── (ط) النصّ الحرّ المستورَد له سطح قراءة ──────────────────────────────────
+//
+// الخلل: ملفّات التعيين في docs/import_profiles تستورد
+// execution_details و proposed_caption و notes، والـSQL المطبَّق يكتب الأوّلَين
+// على public.deliverables والثالث على public.deliverable_internal.internal_notes،
+// وlarge-projects.ts يجلب الثلاثة في اللقطة — ثم **لا شاشة تعرضها**. أي أن
+// الخطّة المستورَدة تصل قائمةَ عناوين بلا بريف تنفيذ ولا نصّ منشور ولا ملاحظات.
+
+test("النصّ الحرّ المستورَد (تفاصيل التنفيذ/الوصف المقترح/الملاحظات) له سطح قراءة", () => {
+  // الحقول الثلاثة مقروءة من الصفّ فعلًا، لا مجرّد مذكورة في تعليق.
+  assert.match(MATRIX, /details=\{txt\(d\.execution_details\)\}/, "تفاصيل التنفيذ لا تُمرَّر إلى الصفّ");
+  assert.match(MATRIX, /caption=\{txt\(d\.proposed_caption\)\}/, "الوصف المقترح لا يُمرَّر إلى الصفّ");
+  assert.match(MATRIX, /note=\{txt\(d\.internal_notes\)\}/, "الملاحظات الداخلية لا تُمرَّر إلى الصفّ");
+  // وتُرسَم بعناوين عربية مفهومة.
+  assert.match(MATRIX, /تفاصيل التنفيذ/);
+  assert.match(MATRIX, /نصّ الوصف المقترح/);
+  assert.match(MATRIX, /ملاحظات داخلية/);
+  // ولا تُجلب من جديد: نفس اللقطة، بلا استعلام إضافيّ داخل المكوّن.
+  assert.doesNotMatch(MATRIX, /pget|prpc|fetch\(/, "الجدول يجب أن يبقى بلا شبكة");
+});
+
+test("الحقول الثلاثة مجلوبة أصلًا في اللقطة — لا عمود جديد ولا طلب جديد", () => {
+  const optional = LIB.match(/LP_OPTIONAL_COLUMNS = \[([\s\S]*?)\]/);
+  assert.ok(optional, "LP_OPTIONAL_COLUMNS غير موجود");
+  assert.ok(optional[1].includes('"execution_details"'));
+  assert.ok(optional[1].includes('"proposed_caption"'));
+  const internal = LIB.match(/LP_INTERNAL_COLUMNS = \[([\s\S]*?)\]/);
+  assert.ok(internal, "LP_INTERNAL_COLUMNS غير موجود");
+  assert.ok(internal[1].includes('"internal_notes"'));
+});
+
+test("النصّ الحرّ مطويّ افتراضيًّا ويحترم الاتجاه — لا تضخّم DOM ولا نصّ مقلوب", () => {
+  assert.match(MATRIX, /const \[open, setOpen\] = useState\(false\)/, "التفاصيل يجب أن تكون مطويّة افتراضيًّا");
+  assert.match(MATRIX, /aria-expanded=\{open\}/);
+  assert.match(MATRIX, /hasBody &&/, "لا زرّ حين لا نصّ");
+  assert.match(MATRIX, /whitespace-pre-wrap break-words/, "أسطر الجدول تُحفظ ولا تكسر التخطيط");
+  assert.match(MATRIX, /<p className="text-\[11px\] text-stone-300 leading-relaxed whitespace-pre-wrap break-words" dir="auto">/,
+    "النصّ الحرّ يجب أن يحمل dir=\"auto\"");
+});

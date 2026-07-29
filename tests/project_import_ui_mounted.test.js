@@ -224,3 +224,39 @@ test("الشاشة تعمل على الجوال وبالاتجاه العربي"
   assert.match(panel, /grid-cols-2 sm:grid-cols-4/, "الأرقام يجب أن تنضغط على الجوال");
   assert.match(panel, /flex-wrap/, "أشرطة الأزرار يجب أن تلتفّ على الشاشات الضيّقة");
 });
+
+// ─── صدق الرسائل: لا سبب مُختلَق، ولا خطر صامت ──────────────────────────────
+//
+// الحادثة: `project_import_lookup` جزء من عقد «الحمولة الواحدة»، وقاعدة البيانات
+// المطبَّقة تُنفّذ بروتوكول الدفعات (import_batch_*) ولا تملك تلك الدالّة. فكان
+// PGRST202 الطبيعيّ يُترجَم إلى «التنفيذ معطّل حتى تشغيل ملف الترحيل» ويظهر تحت
+// «قاعدة البيانات جاهزة للاستيراد» وبجانب زرّ تنفيذ **مفعَّل**: ادّعاءان
+// متناقضان، وثانيهما كاذب. قرار «الترحيل معلّق» صار حصرًا لـ detectBackend().
+
+test("الشاشة لا تدّعي «الترحيل معلّق» إلا من فحص الواجهة الخلفية وحده", () => {
+  const PANEL = fs.readFileSync(path.join(ROOT, "components/portal/ProjectImportPanel.tsx"), "utf8");
+  // شارة «الترحيل معلّق» تُشتقّ من فحص الواجهة الخلفية وحده، وتُقصَر على السبب
+  // الذي يحتمله الدليل (دالّة/جدول غائب فعلًا) لا على كلّ تعطيل.
+  const decl = /const migrationPending = [^\n]*/.exec(PANEL);
+  assert.ok(decl, "migrationPending غير معرَّف في الشاشة");
+  assert.match(decl[0], /backend/, "قرار «الترحيل معلّق» يجب أن يأتي من فحص الواجهة الخلفية");
+  assert.match(decl[0], /pgIsMigrationPending|MIGRATION_PENDING_AR/,
+    "★ «الترحيل معلّق» يجب ألّا يكون مرادفًا لـ«التنفيذ معطّل»");
+  assert.match(PANEL, /\{migrationPending && \(/);
+  // وصندوق «تعذّرت المطابقة» ليس مصدرًا لهذا الادّعاء.
+  const RPC = fs.readFileSync(path.join(ROOT, "lib/portal/import/rpc.ts"), "utf8");
+  const body = /export async function lookupExisting[\s\S]*?\n\}/.exec(RPC);
+  assert.ok(body, "lookupExisting غير موجودة");
+  assert.doesNotMatch(body[0], /importFailureReason/,
+    "★ عادت دالّة القراءة الاختيارية تدّعي «الترحيلة غير مطبّقة»");
+  assert.match(body[0], /reason: kind \? null :/, "الكائن الغائب يجب ألّا يحمل سببًا مُختلَقًا");
+});
+
+test("غياب المطابقة يُعلَن مع خطره الحقيقيّ: تعديل العنوان يُنشئ نسخة ثانية", () => {
+  const PANEL = fs.readFileSync(path.join(ROOT, "components/portal/ProjectImportPanel.tsx"), "utf8");
+  const m = /plan\.existingLookupAvailable === false && \([\s\S]{0,1400}?\n          \)\}/.exec(PANEL);
+  assert.ok(m, "صندوق «تعذّرت المطابقة» غير موجود");
+  assert.match(m[0], /عُدِّل عنوانه/, "لم يُذكر خطر تكرار السطر المعدَّل عنوانه");
+  assert.match(m[0], /لن تتكرّر/, "لم يُذكر أن الأسطر غير المعدَّلة محميّة بالمفتاح الخارجيّ");
+  assert.doesNotMatch(m[0], /ملف الترحيل/, "★ ادّعاء «شغّل ملف الترحيل» عاد إلى رسالة المطابقة");
+});

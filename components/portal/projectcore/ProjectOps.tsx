@@ -554,7 +554,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {/* الاستيراد الجماعيّ — نفس بوّابة «المحذوفات»: مزدوجة (تصفية التبويب +
           شرط الرسم) فلا يظهر لغير المخوَّل حتى برابط مباشر. قبل تطبيق الـSQL
           تعمل المعاينة وتُظهر اللوحة «الترحيل معلّق» ويُرفض التنفيذ صراحةً. */}
-      {tab === "import" && canManage && <ProjectImportPanel projectId={projectId} canManage={canManage} flash={flash} />}
+      {tab === "import" && canManage && <ProjectImportPanel projectId={projectId} projectName={projectName} canManage={canManage} flash={flash} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
       {tab === "finance" && isFinance && <FinanceTab projectId={projectId} flash={flash} />}
       {tab === "costs" && <CostsTab projectId={projectId} canManage={canManage} flash={flash} />}

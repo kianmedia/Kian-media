@@ -467,6 +467,18 @@ async function executeViaBatch(plan: ImportPlan, opts: ExecuteOptions, call: Rpc
 
   const result = normalizeBatchReport(run.reportRows, built.index, mode, run.batchId);
   const notes: string[] = [];
+  // This protocol CREATES what is new and SKIPS what already exists; it never
+  // rewrites a stored row. If the operator confirmed updates, those rows were
+  // sent and came back as "already there" — say so, or the report would count a
+  // confirmed change as «دون تغيير» and let it pass for applied.
+  if (opts.applyUpdates === true) {
+    const confirmedUpdates = plan.deliverables.filter((d) => d.action === "update").length;
+    if (confirmedUpdates > 0) {
+      notes.push(
+        `${confirmedUpdates} سطرًا مؤكَّدًا للتعديل لم يُعَد كتابته: هذا البروتوكول ينشئ الجديد ويتخطّى الموجود ولا يستبدل سجلًّا محفوظًا. عدّل تلك السجلات من تبويب المخرجات.`,
+      );
+    }
+  }
   if (built.deeperLevelsRecordedAsMetadata) {
     notes.push("الملف يحتوي مستويات أعمق من «المرحلة»؛ سُجِّلت داخل بيانات المخرَج (metadata) لأن قاعدة البيانات تدعم مستوى فرعيًّا واحدًا.");
   }

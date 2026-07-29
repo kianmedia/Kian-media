@@ -298,6 +298,16 @@ export async function detectBackend(call: RpcCaller): Promise<BackendState> {
     if (batch.ok) return { available: true, protocol: "batch", version: null, reason: null, lookupAvailable: true };
     logImportFailure("import_batch_list", "probe the staging-batch import protocol", batch.error, batch.status);
     if (isDenied(batch.error, batch.status)) return off(DENIED_AR);
+    // A 42703 (a column OUR request named) or a stale schema cache is a REAL and
+    // DIFFERENT failure of a backend that exists. Falling through to the
+    // single-payload probe would end at «الترحيل معلّق» — the deployed protocol
+    // is this one, so the other probe fails by design — and that sentence would
+    // send the owner hunting a migration that is already applied. Say the truth
+    // here instead; only a genuinely absent function/table may fall through.
+    const batchKind = pgKindOf(batch.error, batch.status);
+    if (batchKind === "column" || batchKind === "cache" || batchKind === "invalid") {
+      return off(importFailureReason(batch.error, batch.status));
+    }
     if (!classifyMissing(batch.error, batch.status)) return off(`تعذّر التحقّق من دعم الاستيراد: ${batch.error}`);
   } catch (e) {
     return off(`تعذّر الاتصال بقاعدة البيانات (${String(e)}).`);
@@ -340,8 +350,23 @@ export async function lookupExisting(
   }
   if (!res.ok) {
     logImportFailure(IMPORT_RPC.lookup, "match file rows against already-imported rows", res.error, res.status);
+    // An ABSENT lookup object is NOT "the import migration has not run".
+    //
+    // This RPC belongs to the single-payload contract and is optional by its own
+    // documentation above; the deployed database exposes the staging-batch
+    // protocol instead, so PGRST202 here is the NORMAL production answer. Phrasing
+    // it with MIGRATION_PENDING_AR printed «التنفيذ معطّل حتى تشغيل ملف الترحيل»
+    // directly beneath «قاعدة البيانات جاهزة للاستيراد» and an ENABLED execute
+    // button — two contradictory claims, the second false, sending the operator
+    // to hunt a migration that is already applied. That is the exact failure
+    // class lib/portal/pgerror.ts exists to prevent.
+    //
+    // So: report NO reason for an absent object (identical to lookupProjectRows
+    // below) and let the caller state the only consequence the evidence supports
+    // — matching is unavailable, so every row reads as new. A permission, network
+    // or malformed-request failure still carries its real message.
     const kind = classifyMissing(res.error, res.status);
-    return { available: false, existing: {}, reason: kind ? importFailureReason(res.error, res.status) : `تعذّر جلب السجلّات السابقة: ${res.error}` };
+    return { available: false, existing: {}, reason: kind ? null : `تعذّر جلب السجلّات السابقة: ${res.error}` };
   }
   const existing: Record<string, { id: string | null; content_hash: string | null }> = {};
   for (const row of res.data?.rows ?? []) {
