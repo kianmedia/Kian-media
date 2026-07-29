@@ -18,6 +18,8 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { pget, prpc, enc, type Result } from "@/lib/portal/client";
+// مصدر واحد لتصنيف أخطاء PostgREST/Postgres — لا تُكرَّر تعبيرات نمطية هنا.
+import { pgClassify, pgLog, pgUserMessageAr, type PgDiagnosis } from "@/lib/portal/pgerror";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1) الأنواع
@@ -175,6 +177,11 @@ export interface LpStage {
   status: string | null;
   core_stage: string | null;
   manager_name: string | null;
+  /**
+   * الموعد النهائيّ للمرحلة (= المشروع الفرعيّ). مصدره **project_core.due_date**
+   * حصرًا — لا يوجد projects.due_date. null = «غير محدَّد»، حالة صحيحة تمامًا:
+   * مشروع بلا موعد ليس متأخّرًا. استعمل lpDueLabel للعرض.
+   */
   due_date: string | null;
 }
 
@@ -255,20 +262,76 @@ export const LP_RPC = {
   dashboard: "large_project_dashboard",
 } as const;
 
+/**
+ * أصناف الخطأ. **لا يُدمج صنفان في واحد**: كان 42703 (عمود طلبه استعلامنا وهو
+ * غير موجود) يُدمج مع PGRST204 (ذاكرة مخطط قديمة) في «missing_column» واحدة
+ * نصّها «الترحيلة غير مطبّقة» — فأرسل ذلك المالكَ يبحث عن ترحيلة ناقصة بينما
+ * كان الاستعلام نفسه هو الخطأ. التصنيف الآن مُفوَّض إلى lib/portal/pgerror.ts.
+ */
 export type LpErrorKind =
   | "missing_function" | "missing_column" | "missing_table"
+  /** PGRST204/205 — الكائن موجود لكنّ ذاكرة مخطط PostgREST قديمة. */
+  | "schema_cache"
+  /** 42601/PGRST100 — الطلب نفسه غير صالح. */
+  | "invalid_query"
   | "forbidden" | "auth" | "network" | "other";
+
+/** التشخيص الكامل (الرمز، اسم العمود، الحكم) — لمن يحتاج أكثر من الصنف. */
+export function lpDiagnose(error: string, status?: number): PgDiagnosis {
+  return pgClassify(error, status);
+}
+
+/**
+ * تشخيص + سجلّ للمطوّر: المكوّن، الجدول أو الدالّة، الرمز، اسم العمود الناقص،
+ * والغرض من الطلب. لا يُسجَّل أيّ رمز جلسة أو مفتاح أو بيانات شخصية، ولا يُسجَّل
+ * المسار الكامل (فهو يحمل معرّفات) — الجدول والغرض فقط.
+ */
+export function lpLogError(
+  purpose: string,
+  target: { table?: string; rpc?: string },
+  error: string,
+  status?: number,
+): PgDiagnosis {
+  return pgLog({ component: "large-projects", table: target.table, rpc: target.rpc, purpose }, error, status);
+}
 
 /** تصنيف خطأ PostgREST/Postgres إلى سبب مفهوم — أساس كلّ كشف للقدرات. */
 export function lpClassify(error: string, status?: number): LpErrorKind {
-  const e = String(error || "");
-  if (/PGRST202|Could not find the function|function .* does not exist/i.test(e)) return "missing_function";
-  if (/PGRST204|42703|column .* does not exist|Could not find the '.*' column/i.test(e)) return "missing_column";
-  if (/PGRST205|42P01|relation .* does not exist|Could not find the table/i.test(e)) return "missing_table";
-  if (status === 401 || /not_authenticated|session_expired|JWT/i.test(e)) return "auth";
-  if (status === 403 || /42501|permission denied|row-level security|not authorized|admin only/i.test(e)) return "forbidden";
-  if (status === 0) return "network";
-  return "other";
+  const d = pgClassify(error, status);
+  switch (d.kind) {
+    case "missing_function": return "missing_function";
+    case "missing_column": return "missing_column";
+    case "missing_table": return "missing_table";
+    case "schema_cache_stale": return "schema_cache";
+    case "invalid_query": return "invalid_query";
+    case "permission_denied": return "forbidden";
+    case "not_authenticated": return "auth";
+    case "network": return "network";
+    default: return "other";
+  }
+}
+
+/**
+ * هل يدلّ الخطأ على أنّ العمود غير مقروء الآن؟ (42703 أو ذاكرة مخطط قديمة)
+ * يُستعمل في كشف القدرات فقط: الاتجاه الآمن هو تعطيل الميزة، لا الادّعاء.
+ * لا يعني ذلك «الترحيلة غير مطبّقة» — انظر lpIsMigrationPending.
+ */
+export function lpColumnUnavailable(kind: LpErrorKind): boolean {
+  return kind === "missing_column" || kind === "schema_cache";
+}
+
+/** هل الكائن (جدول/دالّة) غائب أو غير مرئيّ لذاكرة المخطط؟ */
+export function lpObjectUnavailable(kind: LpErrorKind): boolean {
+  return kind === "missing_table" || kind === "missing_function" || kind === "schema_cache";
+}
+
+/**
+ * الحالة الوحيدة التي يجوز فيها عرض «الترحيل معلّق»: جدول أو دالّة غير موجودة
+ * فعلًا. 42703 مستثنى عمدًا — فهو غالبًا خطأ في استعلامنا، وعرضه كترحيلة معلّقة
+ * هو بالضبط ما كلّف دورة تصحيح في الإنتاج.
+ */
+export function lpIsMigrationPending(kind: LpErrorKind): boolean {
+  return kind === "missing_function" || kind === "missing_table";
 }
 
 export interface LpCapabilities {
@@ -303,7 +366,8 @@ export function lpResetCapabilities(): void { capCache = null; capInflight = nul
 async function probeColumn(col: string): Promise<boolean> {
   const r = await pget<unknown[]>(`deliverables?select=id,${col}&id=eq.${ZERO_UUID}&limit=1`);
   if (r.ok) return true;
-  return lpClassify(r.error, r.status) !== "missing_column";  // خطأ آخر ⇒ لا نُعلن غيابه كذبًا
+  // خطأ آخر (صلاحية/شبكة) ⇒ لا نُعلن غياب العمود كذبًا.
+  return !lpColumnUnavailable(lpClassify(r.error, r.status));
 }
 
 async function detectCapabilities(): Promise<LpCapabilities> {
@@ -321,9 +385,11 @@ async function detectCapabilities(): Promise<LpCapabilities> {
   if (first.ok) {
     for (const c of LP_OPTIONAL_COLUMNS) columns[c] = true;
   } else {
+    // سجلّ واحد صريح للمطوّر: الرمز والعمود والغرض — لا تخمين لاحق.
+    lpLogError("detect optional deliverable columns", { table: "deliverables" }, first.error, first.status);
     const kind = lpClassify(first.error, first.status);
     if (kind === "missing_table") { reachable = false; note = "deliverables_missing"; }
-    else if (kind === "missing_column") {
+    else if (lpColumnUnavailable(kind)) {
       // (ب) فحص متوازٍ لكلّ عمود — رحلة ذهاب وإياب واحدة، لا حلقة متسلسلة.
       const flags = await Promise.all(LP_OPTIONAL_COLUMNS.map((c) => probeColumn(c)));
       LP_OPTIONAL_COLUMNS.forEach((c, i) => { columns[c] = flags[i]; });
@@ -350,7 +416,7 @@ async function probeInternal(): Promise<boolean> {
     `${LP_INTERNAL_TABLE}?select=${cols}&deliverable_id=eq.${ZERO_UUID}&limit=1`);
   if (r.ok) return true;
   const kind = lpClassify(r.error, r.status);
-  return kind !== "missing_table" && kind !== "missing_column";
+  return !lpObjectUnavailable(kind) && !lpColumnUnavailable(kind);
 }
 
 /**
@@ -361,13 +427,13 @@ async function probeInternal(): Promise<boolean> {
 async function probeBulkRpc(): Promise<boolean> {
   const r = await prpc<unknown>(LP_RPC.bulk, { p_ids: [], p_patch: {}, p_reason: "probe", p_dry_run: true });
   if (r.ok) return true;
-  return lpClassify(r.error, r.status) !== "missing_function";
+  return !lpObjectUnavailable(lpClassify(r.error, r.status));
 }
 
 async function probeHierarchy(): Promise<boolean> {
   const r = await pget<unknown[]>(`projects?select=id,parent_project_id,project_scope&id=eq.${ZERO_UUID}&limit=1`);
   if (r.ok) return true;
-  return lpClassify(r.error, r.status) !== "missing_column";
+  return !lpColumnUnavailable(lpClassify(r.error, r.status));
 }
 
 /** قدرات مُخزَّنة لخمس دقائق، ومحميّة من الطلبات المتوازية. */
@@ -901,10 +967,55 @@ export async function lpBulkApply(
 // ─────────────────────────────────────────────────────────────────────────────
 // 6) القراءة — لقطة المشروع الكبير
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ★ مصفوفة عقد القراءة — كلّ عمود تطلبه هذه الطبقة مقابل ما هو موجود فعلًا ★
+// (دُقِّقت عمودًا عمودًا مقابل docs/*.sql. مصدر إثبات كلّ سطر مذكور صراحةً.)
+//
+//  حقل الواجهة        │ الجدول الفعليّ      │ العمود الفعليّ    │ من ينشئه            │ POSTCHECK │ الحالة
+//  ───────────────────┼────────────────────┼──────────────────┼─────────────────────┼───────────┼────────
+//  المعرّف             │ projects           │ id               │ الجدول الأساسيّ       │ ✗         │ سليم
+//  اسم المشروع         │ projects           │ project_name     │ الجدول الأساسيّ       │ ✗         │ سليم
+//  الحالة              │ projects           │ status           │ الجدول الأساسيّ       │ ✗         │ سليم
+//  العميل              │ projects           │ client_id        │ الجدول الأساسيّ       │ ✗         │ سليم
+//  تاريخ الإنشاء       │ projects           │ created_at       │ الجدول الأساسيّ       │ ✗         │ سليم
+//  الحذف الناعم        │ projects           │ is_deleted       │ الجدول الأساسيّ       │ ✗         │ سليم (فلتر فقط)
+//  الأب                │ projects           │ parent_project_id│ hierarchy B1/6A     │ ✗         │ سليم · محميّ بفحص القدرات
+//  نطاق المشروع        │ projects           │ project_scope    │ hierarchy B1/6A     │ ✗         │ سليم · محميّ بفحص القدرات
+//  ★ الموعد النهائيّ   │ project_core       │ due_date         │ project_core_FINAL  │ ✗ (يُضاف) │ ★ أُصلح: كان يُطلب من projects ⇒ 42703
+//  المرحلة             │ project_core       │ core_stage       │ project_core_FINAL  │ ✗ (يُضاف) │ سليم
+//  النسبة              │ project_core       │ progress_pct     │ project_core_FINAL  │ ✗ (يُضاف) │ سليم
+//  النوع               │ project_core       │ project_type     │ project_core_FINAL  │ ✗ (يُضاف) │ سليم
+//  الصحّة               │ project_core       │ health           │ project_core_FINAL  │ ✗ (يُضاف) │ سليم
+//  الأعمدة الأساسية ١٣ │ deliverables       │ LP_BASE_COLUMNS  │ phase0 + الترحيلة    │ جزئيًّا    │ سليم (تُقرأ دائمًا)
+//  الأعمدة الاختيارية ١٨│ deliverables       │LP_OPTIONAL_COLUMNS│large_projects RUNME │ ✓ (أ-١/ح) │ سليم · لا تُطلب إلا بعد إثبات وجودها
+//  الحقول الداخلية ٦   │ deliverable_internal│LP_INTERNAL_COLUMNS│large_projects RUNME│ ✓ (أ-١/ح) │ سليم · جدول جانبيّ كوادر-فقط
+//  اسم العميل          │ clients            │ full_name/company│ الجدول الأساسيّ       │ ✗         │ سليم
+//  مدير المشروع        │ project_members    │ user_id·role·is_deleted│ الجدول الأساسيّ │ ✗         │ سليم
+//  اسم المدير          │ profiles           │ id·full_name·staff_role│ الجدول الأساسيّ │ ✗         │ سليم
+//
+// السابقة المرجعية في القاعدة نفسها: project_portfolio_ux_batch9b_RUNME.sql:71
+// يكتب `pc.due_date, p.created_at` — أي الموعد من project_core والإنشاء من
+// projects؛ و project_core_UI_COMPLETION_RUNME.sql:64 يختار من projects بالضبط
+// الأعمدة الخمسة أعلاه ثم يأخذ due_date من pc. هذا الملفّ صار مطابقًا لهما.
+//
+// خلاصة التدقيق: **لا عمود مفقود آخر.** المخرجات وdeliverable_internal تعود 200
+// اليوم لأن كلّ عمود اختياريّ يمرّ بفحص قدرات فعليّ (probeColumns) قبل طلبه،
+// وLP_BASE_COLUMNS كلّها من الأصل. الخلل كان محصورًا في projects.due_date وحده.
 
+/**
+ * صفّ من public.projects — **الأعمدة الموجودة فعلًا على الجدول الأساسيّ فقط.**
+ *
+ * لا يوجد ولم يوجد قطّ public.projects.due_date. الموعد النهائيّ للمشروع يعيش على
+ * public.project_core.due_date (date)، وهو ما تقرؤه هذه الطبقة عبر coreByProject.
+ * وضع due_date هنا كان يجعل الـselect يطلب عمودًا غير موجود ⇒ 400/42703 على كلّ
+ * فتح للشاشة، فتظهر رسالة «الترحيل معلّق» كذبًا بينما الترحيلة مطبَّقة فعلًا.
+ * التواريخ الموجودة على projects هي: archived_at · closed_at · reopened_at
+ * (timestamptz) و planned_start_date · planned_release_date · actual_release_date
+ * (date). لا تُضِف due_date هنا ولا إلى القاعدة — المعنى مملوك لـ project_core.
+ */
 export interface LpProjectRow {
   id: string; project_name: string | null; status: string | null;
-  client_id: string | null; created_at: string | null; due_date?: string | null;
+  client_id: string | null; created_at: string | null;
   parent_project_id?: string | null; project_scope?: string | null;
 }
 
@@ -928,9 +1039,16 @@ export const LP_FETCH_LIMIT = 1000;
 
 const CLIENT_COLS = "id,full_name,company";
 
+/**
+ * أعمدة projects المطلوبة. كلّ اسم هنا مُثبَت وجوده على الجدول (انظر مصفوفة
+ * العقد أعلى القسم 6). لا تُضِف اسمًا دون إثبات «add column» أو التعريف الأساسيّ.
+ */
+export const LP_PROJECT_COLUMNS = ["id", "project_name", "status", "client_id", "created_at"] as const;
+export const LP_PROJECT_HIERARCHY_COLUMNS = ["parent_project_id", "project_scope"] as const;
+
 async function fetchProjects(projectId: string, hierarchy: boolean): Promise<Result<LpProjectRow[]>> {
-  const base = "id,project_name,status,client_id,created_at,due_date";
-  const cols = hierarchy ? `${base},parent_project_id,project_scope` : base;
+  const base = LP_PROJECT_COLUMNS.join(",");
+  const cols = hierarchy ? `${base},${LP_PROJECT_HIERARCHY_COLUMNS.join(",")}` : base;
   const q = hierarchy
     ? `projects?or=(id.eq.${enc(projectId)},parent_project_id.eq.${enc(projectId)})&is_deleted=eq.false&select=${cols}&order=created_at.asc`
     : `projects?id=eq.${enc(projectId)}&is_deleted=eq.false&select=${cols}`;
@@ -1061,12 +1179,14 @@ export async function lpLoadSnapshot(projectId: string): Promise<Result<LpSnapsh
     {
       project_id: self.id, name: self.project_name, is_master: true, sequence: 0,
       status: self.status, core_stage: coreByProject[self.id]?.core_stage ?? null,
-      manager_name: managerName, due_date: self.due_date ?? coreByProject[self.id]?.due_date ?? null,
+      // المصدر الوحيد للموعد النهائيّ: project_core.due_date (مجلوب أعلاه).
+      // مشروع بلا موعد ⇒ null، وهو وضع مشروع صحيح لا خطأ (انظر lpDueLabel).
+      manager_name: managerName, due_date: coreByProject[self.id]?.due_date ?? null,
     },
     ...children.map((c, i) => ({
       project_id: c.id, name: c.project_name, is_master: false, sequence: i + 1,
       status: c.status, core_stage: coreByProject[c.id]?.core_stage ?? null,
-      manager_name: null, due_date: c.due_date ?? coreByProject[c.id]?.due_date ?? null,
+      manager_name: null, due_date: coreByProject[c.id]?.due_date ?? null,
     })),
   ];
 
@@ -1156,6 +1276,29 @@ export function lpStageBreakdown(stages: LpStage[], rows: LpDeliverable[], today
   });
 }
 
+/**
+ * الموعد النهائيّ لمشروع (رئيسيّ أو فرعيّ) من اللقطة. **المصدر الوحيد** هو
+ * project_core.due_date — المجلوب أصلًا ضمن coreByProject، فلا طلب إضافيّ ولا
+ * عمود جديد. يُرجع null حين لا موعد، وحين يتعذّر جلب project_core (degraded).
+ */
+export function lpProjectDueDate(
+  coreByProject: LpSnapshot["coreByProject"], projectId: string,
+): string | null {
+  const v = coreByProject ? coreByProject[projectId] : null;
+  const due = v ? v.due_date : null;
+  return due ? String(due).slice(0, 10) : null;
+}
+
+/**
+ * نصّ العرض للموعد النهائيّ. غياب الموعد **ليس خطأً ولا تأخّرًا** — يُقال صراحةً
+ * «غير محدَّد» ولا يُختلَق تاريخ ولا تُترك خانة فارغة غامضة.
+ */
+export function lpDueLabel(due: string | null | undefined, lang?: string): string {
+  const s = due == null ? "" : String(due).slice(0, 10);
+  if (s === "") return String(lang).toLowerCase() === "en" ? "Not set" : "غير محدَّد";
+  return s;
+}
+
 /** حالة الجدولة على مستوى المشروع: مشتقّة من مخرجاته، لا عمود جديد. */
 export function lpProjectScheduleStatus(rows: LpDeliverable[]): { key: LpScheduleStatus; awaiting: number; total: number } {
   let awaiting = 0;
@@ -1168,20 +1311,16 @@ export function lpProjectScheduleStatus(rows: LpDeliverable[]): { key: LpSchedul
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function lpErr(e: string, status?: number): string {
-  const k = lpClassify(e, status);
+  // (١) رموز داخلية تُصنعها هذه الوحدة نفسها — ليست أخطاء قاعدة بيانات.
   if (/bulk_rpc_missing/.test(e)) return "الإجراءات الجماعية معطّلة: دالّة التعديل الجماعي غير مطبّقة في قاعدة البيانات بعد.";
   if (/^missing_column:/.test(e)) return `هذا الإجراء يحتاج عمودًا لم يُضَف بعد (${e.split(":")[1]}). طبّق الترحيلة أوّلًا.`;
   if (/no_selection/.test(e)) return "لم تختر أيّ مخرج.";
   if (/reason_required/.test(e)) return "السبب إلزاميّ لتسجيل أثر التدقيق.";
   if (/empty_patch/.test(e)) return "لا تغيير مطلوب.";
   if (/project_not_found/.test(e)) return "المشروع غير موجود أو لا تملك صلاحية رؤيته.";
-  if (k === "missing_function") return "الترحيلة غير مطبّقة: الدالّة المطلوبة غير موجودة في قاعدة البيانات.";
-  if (k === "missing_column") return "الترحيلة غير مطبّقة: عمود مطلوب غير موجود بعد.";
-  if (k === "missing_table") return "الترحيلة غير مطبّقة: جدول مطلوب غير موجود بعد.";
-  if (k === "forbidden") return "لا تملك صلاحية هذا الإجراء.";
-  if (k === "auth") return "انتهت الجلسة — سجّل الدخول من جديد.";
-  if (k === "network") return "تعذّر الاتصال. تحقّق من الشبكة وأعد المحاولة.";
-  return "تعذّر تنفيذ الطلب. حاول مرة أخرى.";
+  // (٢) كلّ ما عدا ذلك: النصّ من المصنّف المشترك، فيطابق السبب الحقيقيّ ويحمل
+  // الرمز واسم العمود. لا يُقال «الترحيلة غير مطبّقة» إلّا حين يكون ذلك صحيحًا.
+  return pgUserMessageAr(pgClassify(e, status));
 }
 
 /**

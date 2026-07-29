@@ -49,6 +49,89 @@
 
 export type RpcOutcome<T> = { ok: true; data: T } | { ok: false; error: string; status?: number };
 
+// ─── error classification (engine-local BY DESIGN) ──────────────────────────
+//
+// The app-wide classifier is lib/portal/pgerror.ts, and this is the same
+// decision table written again here — deliberately, because the engine may not
+// import from the rest of the app (tests/import_contract.test.js: "the engine
+// imports nothing from the rest of the app"). The two are pinned to identical
+// behaviour by tests/pg_error_classification.test.js, which fails the moment
+// they drift.
+//
+// WHY THE TABLE HAS NINE ROWS INSTEAD OF THREE: a 42703 ("column X does not
+// exist") used to be filed under the same "migration pending" banner as a
+// PGRST202. On the large-project dashboard a select asked public.projects for a
+// due_date column that has never existed there — the deadline lives on
+// public.project_core.due_date — and the banner sent the owner hunting an
+// unapplied migration for a migration that was fine. A cause may only be
+// asserted when the evidence supports it.
+
+/** Precise cause of one failed call. */
+export type PgKind =
+  /** PGRST202 / 42883 — the function is absent from the database. */
+  | "function"
+  /** 42P01 — the relation is absent from the database. */
+  | "table"
+  /** 42703 — a column named in OUR request does not exist. */
+  | "column"
+  /** PGRST204 / PGRST205 — the schema cache is stale ("reload schema"). */
+  | "cache"
+  /** 42501 / 401 / 403 — authorisation, never a schema story. */
+  | "permission"
+  /** 42601 / PGRST100 — the request itself is malformed. */
+  | "invalid"
+  /** 401 — the session is gone. */
+  | "auth"
+  /** The transport never reached Postgres. */
+  | "network"
+  /** Honestly unlabelled. */
+  | "other";
+
+/**
+ * Order is deliberate: authorisation is decided BEFORE any schema question so a
+ * permission denial can never surface as a missing column, and the function case
+ * is decided before the cache case because PGRST202's own text says "in the
+ * schema cache".
+ */
+export function pgKindOf(error: string | null | undefined, status?: number): PgKind {
+  const e = (error ?? "").toLowerCase();
+  if (status === 0 || /failed to fetch|networkerror|load failed|econnrefused|etimedout/.test(e)) return "network";
+  if (status === 401 || /\bnot_authenticated\b|session_expired|\bjwt\b|invalid (?:token|claim)/.test(e)) return "auth";
+  if (status === 403 || /\b42501\b|permission denied|insufficient_privilege|row-level security|not authorized|not_authorized|admin only/.test(e)) return "permission";
+  if (/\bpgrst202\b|\b42883\b|could not find the function|function not found|no function matches/.test(e)) return "function";
+  if (/\bpgrst204\b/.test(e)) return "cache";
+  if (/\bpgrst205\b/.test(e)) return "cache";
+  if (/schema cache/.test(e)) return "cache";
+  if (/\b42703\b/.test(e) || /column\s+.*does not exist/.test(e)) return "column";
+  if (/\b42p01\b/.test(e) || /relation\s+.*does not exist/.test(e)) return "table";
+  if (/\b42601\b|syntax error/.test(e)) return "invalid";
+  if (/\bpgrst100\b|failed to parse|unexpected .*expecting|parse error/.test(e)) return "invalid";
+  return "other";
+}
+
+/** The column named by the error, when the message carries one. */
+export function pgColumnOf(error: string | null | undefined): string | null {
+  const e = String(error ?? "");
+  const m =
+    /column\s+"([^"]+)"\s+of\s+relation/i.exec(e) ??
+    /column\s+(?:"([^"]+)"|([A-Za-z0-9_.]+))\s+does not exist/i.exec(e) ??
+    /could not find the '([^']+)' column/i.exec(e);
+  if (!m) return null;
+  for (let i = 1; i < m.length; i++) if (m[i]) return m[i];
+  return null;
+}
+
+/** Never log a token, a key, an address or a row id. */
+function redact(s: string): string {
+  return String(s ?? "")
+    .replace(/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}(?:\.[A-Za-z0-9_-]+)?/g, "<jwt>")
+    .replace(/\b(apikey|api_key|access_token|refresh_token|authorization|bearer|password|secret|token|key)\b\s*[:=]\s*[^\s,;&)"']+/gi, "$1=<redacted>")
+    .replace(/https?:\/\/\S+/gi, "<url>")
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "<email>")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<id>")
+    .replace(/\b\d{9,}\b/g, "<number>");
+}
+
 /** Injected transport: the API route passes a service/user-token fetcher, the
  *  browser passes `prpc`, and tests pass a stub. The engine stays pure. */
 export type RpcCaller = <T>(fn: string, args: Record<string, unknown>) => Promise<RpcOutcome<T>>;
@@ -76,23 +159,104 @@ export const PROJECT_ROWS_RPC = "project_import_project_rows";
 export type MissingKind = "function" | "column" | "table" | null;
 
 /**
- * Classify a PostgREST/Postgres error as "the migration has not run yet".
- * PGRST202 = function not found, PGRST204/42703 = column not found,
- * PGRST205/42P01 = table not found. The message text is matched too because the
- * shared REST client flattens the error body to a string.
+ * WHICH SCHEMA OBJECT the error names — a shape, NOT a verdict about migrations.
+ * That distinction is the whole point: the same 42703 that means "the import
+ * migration has not run" can equally mean "our own SELECT asked for a column
+ * that never existed", and phrasing both as «الترحيلة غير مطبّقة» once cost a
+ * production debugging cycle on the large-project dashboard. Use this to decide
+ * WHICH capability to switch off; use importFailureReason() for what to SAY.
+ *
+ * Codes are matched as well as message text: the server caller keeps a
+ * "CODE | message" prefix while the browser client flattens the body to just
+ * `message`.
  */
 export function classifyMissing(error: string | null | undefined, status?: number): MissingKind {
   const e = (error ?? "").toLowerCase();
   if (!e) return null;
-  if (e.includes("pgrst202") || e.includes("42883") || e.includes("could not find the function") || e.includes("function not found")) return "function";
-  if (e.includes("pgrst205") || e.includes("42p01") || e.includes("does not exist: relation") || e.includes("could not find the table")) return "table";
-  if (e.includes("pgrst204") || e.includes("42703") || (e.includes("column") && e.includes("does not exist"))) return "column";
+  const kind = pgKindOf(error, status);
+  if (kind === "function") return "function";
+  if (kind === "table") return "table";
+  if (kind === "column") return "column";
+  // PGRST204/205 = stale schema cache. It names an object, so it still gates the
+  // same capability, but it is NOT the same cause and never says "run the SQL".
+  if (kind === "cache") return pgColumnOf(error) ? "column" : "table";
   if (status === 404 && e.includes("not found")) return "function";
   return null;
 }
 
 export const MIGRATION_PENDING_AR =
   "قاعدة البيانات لم تُحدَّث بعد لدعم الاستيراد. المعاينة تعمل كاملةً، أمّا التنفيذ فسيبقى معطّلًا حتى تشغيل ملف الترحيل الخاص بالاستيراد.";
+
+/**
+ * The sentence to SHOW for a failed import call. Only a genuinely absent
+ * function or table is reported as "the migration has not run"; a stale schema
+ * cache asks for a reload, and a missing column names the column and points at
+ * the request first. The technical code always travels with the message so the
+ * real error is never swallowed.
+ */
+export function importFailureReason(error: string | null | undefined, status?: number): string {
+  const kind = pgKindOf(error, status);
+  const col = pgColumnOf(error);
+  switch (kind) {
+    // The exact, unadorned sentence for the real "SQL not run yet" case: the
+    // technical code reaches the developer through logImportFailure(), not
+    // through the operator's banner.
+    case "function":
+    case "table":
+      return MIGRATION_PENDING_AR;
+    case "cache":
+      return "الخادم يقرأ نسخة قديمة من مخطط قاعدة البيانات. أعِد تحميل المخطط (Reload schema) ثم أعد المحاولة.";
+    case "column":
+      return `طلب الاستيراد عمودًا غير موجود${col ? ` («${col}»)` : ""}. هذا خطأ في الطلب نفسه غالبًا وليس ترحيلة ناقصة — أبلغ الفريق التقنيّ باسم العمود. (42703)`;
+    case "invalid":
+      return "طلب غير صالح (خطأ برمجيّ، لا نقص في قاعدة البيانات). أبلغ الفريق التقنيّ.";
+    case "permission":
+      return DENIED_AR;
+    case "auth":
+      return "انتهت الجلسة — سجّل الدخول من جديد.";
+    case "network":
+      return "تعذّر الاتصال بقاعدة البيانات. تحقّق من الشبكة وأعد المحاولة.";
+    default:
+      return `تعذّر تنفيذ الطلب: ${redact(String(error ?? ""))}`;
+  }
+}
+
+/**
+ * TRUE only when the import's SQL genuinely has not run — an absent function or
+ * table. A 42703 (missing column) and a PGRST204/205 (stale cache) are excluded
+ * on purpose: telling an operator to "run the migration" for those sends them
+ * hunting a file that is already applied.
+ */
+export function isMigrationPending(error: string | null | undefined, status?: number): boolean {
+  const kind = pgKindOf(error, status);
+  return kind === "function" || kind === "table";
+}
+
+/**
+ * Log one import failure for the developer: the RPC, the precise cause, the
+ * missing column when the message names one, and WHY the request was made.
+ * Never a token, a key, an address, a row id or a URL — the message is redacted
+ * first, and the RPC name is logged instead of the path.
+ */
+export function logImportFailure(rpc: string, purpose: string, error: string | null | undefined, status?: number): void {
+  const kind = pgKindOf(error, status);
+  const col = pgColumnOf(error);
+  const bits = [
+    "[pg] import",
+    `rpc:${String(rpc).split("?")[0]}`,
+    `purpose="${purpose}"`,
+    `kind=${kind}`,
+    `migration_pending=${isMigrationPending(error, status)}`,
+  ];
+  if (col) bits.push(`column=${col}`);
+  if (typeof status === "number") bits.push(`http=${status}`);
+  bits.push(`message="${redact(String(error ?? ""))}"`);
+  if (kind === "column") bits.push('note="42703 = the column named in OUR request does not exist. Check the request BEFORE suspecting a migration."');
+  try {
+    if (kind === "column" || kind === "invalid") console.error(bits.join(" "));
+    else console.warn(bits.join(" "));
+  } catch { /* a console-less runtime must never break an import */ }
+}
 
 /**
  * Which write protocol the database actually exposes.
@@ -132,6 +296,7 @@ export async function detectBackend(call: RpcCaller): Promise<BackendState> {
   try {
     const batch = await call<unknown>("import_batch_list", { p_limit: 1, p_offset: 0 });
     if (batch.ok) return { available: true, protocol: "batch", version: null, reason: null, lookupAvailable: true };
+    logImportFailure("import_batch_list", "probe the staging-batch import protocol", batch.error, batch.status);
     if (isDenied(batch.error, batch.status)) return off(DENIED_AR);
     if (!classifyMissing(batch.error, batch.status)) return off(`تعذّر التحقّق من دعم الاستيراد: ${batch.error}`);
   } catch (e) {
@@ -146,7 +311,10 @@ export async function detectBackend(call: RpcCaller): Promise<BackendState> {
     return off(`تعذّر الاتصال بقاعدة البيانات (${String(e)}).`);
   }
   if (!res.ok) {
-    if (classifyMissing(res.error, res.status)) return off(MIGRATION_PENDING_AR);
+    logImportFailure(IMPORT_RPC.capabilities, "probe the single-payload import contract", res.error, res.status);
+    // Only a genuinely absent function/table is phrased as "the SQL has not run";
+    // a stale cache or a bad column says what it really is.
+    if (classifyMissing(res.error, res.status)) return off(importFailureReason(res.error, res.status));
     if (isDenied(res.error, res.status)) return off(DENIED_AR);
     return off(`تعذّر التحقّق من دعم الاستيراد: ${res.error}`);
   }
@@ -171,8 +339,9 @@ export async function lookupExisting(
     return { available: false, existing: {}, reason: `تعذّر الاتصال بقاعدة البيانات (${String(e)}).` };
   }
   if (!res.ok) {
+    logImportFailure(IMPORT_RPC.lookup, "match file rows against already-imported rows", res.error, res.status);
     const kind = classifyMissing(res.error, res.status);
-    return { available: false, existing: {}, reason: kind ? MIGRATION_PENDING_AR : `تعذّر جلب السجلّات السابقة: ${res.error}` };
+    return { available: false, existing: {}, reason: kind ? importFailureReason(res.error, res.status) : `تعذّر جلب السجلّات السابقة: ${res.error}` };
   }
   const existing: Record<string, { id: string | null; content_hash: string | null }> = {};
   for (const row of res.data?.rows ?? []) {
@@ -232,6 +401,7 @@ export async function lookupProjectRows(call: RpcCaller, args: { projectId: stri
     return none(`تعذّر الاتصال بقاعدة البيانات (${String(e)}).`);
   }
   if (!res.ok) {
+    logImportFailure(PROJECT_ROWS_RPC, "read every already-imported row of the project", res.error, res.status);
     const kind = classifyMissing(res.error, res.status);
     return none(kind ? null : `تعذّر جلب سجلات المشروع السابقة: ${res.error}`);
   }

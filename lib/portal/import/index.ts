@@ -54,6 +54,9 @@ export {
 export {
   classifyMissing,
   detectBackend,
+  importFailureReason,
+  isMigrationPending,
+  logImportFailure,
   lookupExisting,
   lookupProjectRows,
   IMPORT_RPC,

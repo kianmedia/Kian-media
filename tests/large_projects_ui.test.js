@@ -347,3 +347,83 @@ test("نسبة واحدة على الشاشة: رقم الخادم يتقدّم�
   assert.match(LIB, /if \(pct !== null && typeof pct !== "number"\) return null;/,
     "شكل غير متوقَّع من الخادم يجب ألّا يُعرض كنسبة");
 });
+
+// ─── (ي) عقد الواجهة ↔ المخطّط — حادثة الإنتاج 2026-07-28 ─────────────────
+//
+// اللوحة كانت تطلب public.projects.due_date — عمود لم يوجد قطّ — فيعود 400/42703
+// على كلّ فتح، وتظهر رسالة «الترحيل معلّق» كذبًا رغم أن الترحيلة مطبَّقة. الموعد
+// النهائيّ للمشروع مِلك public.project_core.due_date وحده. هذه الحرّاس تمنع
+// عودة العمود الوهميّ ومثيله، وتُثبّت أن القاعدة الأهمّ (بانتظار الجدولة ≠ متأخّر)
+// لم تتأثّر بالإصلاح.
+
+/** كلّ سلسلة `select=` تُطلب من public.projects داخل الطبقة. */
+function projectSelects(src) {
+  const out = [];
+  for (const m of src.matchAll(/projects\?[^`"'\n]*select=([^&`"'\n]*)/g)) out.push(m[1]);
+  return out;
+}
+
+test("لا طلب لـ projects.due_date — العمود غير موجود في القاعدة", () => {
+  const sels = projectSelects(LIB);
+  assert.ok(sels.length >= 2, "يُتوقَّع استعلاما projects على الأقلّ");
+  for (const s of sels) {
+    assert.doesNotMatch(s, /(^|,)due_date(,|$|\$)/,
+      `select من projects يطلب due_date — عمود غير موجود ⇒ 400/42703: ${s}`);
+  }
+  assert.doesNotMatch(LIB, /LP_PROJECT_COLUMNS[\s\S]{0,200}?"due_date"/);
+});
+
+/** قيم مصفوفة ثابتة مُصدَّرة (LP_PROJECT_COLUMNS…) كما هي في المصدر. */
+function constArray(src, name) {
+  const m = src.match(new RegExp(`${name}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
+  assert.ok(m, `${name} غير موجودة`);
+  return Array.from(m[1].matchAll(/"([a-z_]+)"/g)).map((x) => x[1]);
+}
+
+test("كل عمود يُطلب من projects مُثبَت وجوده", () => {
+  // القائمة البيضاء = أعمدة أثبتُّها على public.projects (مصفوفة العقد في الطبقة).
+  const allowed = new Set([
+    "id", "project_name", "status", "client_id", "created_at",
+    "parent_project_id", "project_scope",
+  ]);
+  // المصدران معًا: السلاسل الحرفية + المصفوفتان اللتان تُبنى منهما `${cols}`،
+  // وإلّا صار الحارس بلا أسنان لأن الاستعلام يمرّر متغيّرًا لا نصًّا.
+  const cols = [
+    ...constArray(LIB, "LP_PROJECT_COLUMNS"),
+    ...constArray(LIB, "LP_PROJECT_HIERARCHY_COLUMNS"),
+  ];
+  for (const s of projectSelects(LIB)) {
+    for (const raw of s.split(",")) {
+      const col = raw.replace(/\$\{[^}]*\}/g, "").trim();
+      if (col !== "") cols.push(col);
+    }
+  }
+  assert.ok(cols.length >= 7, "لم تُقرأ أعمدة projects من المصدر");
+  for (const col of cols) {
+    assert.ok(allowed.has(col), `عمود غير مُثبَت على public.projects: ${col}`);
+  }
+});
+
+test("الموعد النهائيّ يُقرأ من project_core لا من projects", () => {
+  const core = LIB.match(/project_core\?[^`\n]*select=([^&`\n]*)/);
+  assert.ok(core, "لا يوجد استعلام project_core");
+  assert.match(core[1], /(^|,)due_date(,|$)/, "project_core select يجب أن يجلب due_date");
+  // المراحل تأخذ الموعد من coreByProject وحده — لا رجوع إلى صفّ projects.
+  assert.match(LIB, /due_date: coreByProject\[self\.id\]\?\.due_date \?\? null/);
+  assert.match(LIB, /due_date: coreByProject\[c\.id\]\?\.due_date \?\? null/);
+  assert.doesNotMatch(LIB, /self\.due_date/, "صفّ projects لا يحمل due_date");
+  assert.doesNotMatch(LIB, /due_date: c\.due_date \?\?/, "صفّ projects لا يحمل due_date");
+});
+
+test("غياب الموعد يُقال صراحةً «غير محدَّد» ولا يُختلَق تاريخ", () => {
+  assert.match(LIB, /export function lpDueLabel/);
+  assert.match(LIB, /غير محدَّد/);
+  assert.match(LIB, /export function lpProjectDueDate/);
+});
+
+test("القاعدة الأهمّ ناجية: «بانتظار الجدولة» لا يُحسب متأخّرًا بعد الإصلاح", () => {
+  assert.match(LIB, /export function lpIsOverdue[\s\S]{0,240}?if \(lpIsAwaitingSchedule\(d\)\) return false;/,
+    "أول شرط في lpIsOverdue يجب أن يبقى استبعاد «بانتظار الجدولة»");
+  // محرّك التأخّر يعمل على المخرج (deliverables.due_date) لا على المشروع.
+  assert.match(LIB, /موعد المخرج|LP_BASE_COLUMNS/);
+});

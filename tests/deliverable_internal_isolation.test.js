@@ -249,8 +249,10 @@ test("الدمج يمرّ عبر الجدول الجانبي ويُجزّئ ال
 test("كشف القدرات: غياب الجدول/العمود ⇒ تعطيل هادئ لا سقوط", () => {
   const m = LIB.match(/async function probeInternal\(\)[\s\S]*?\n\}/);
   assert.ok(m, "probeInternal مفقودة");
-  assert.match(m[0], /missing_table/);
-  assert.match(m[0], /missing_column/);
+  // الغياب يُقاس بمُسنِدات مسمّاة تغطّي أيضًا ذاكرة المخطط القديمة (PGRST204/205)
+  // بدل مقارنة نصّية بصنف واحد مدموج.
+  assert.match(m[0], /lpObjectUnavailable\(kind\)/);
+  assert.match(m[0], /lpColumnUnavailable\(kind\)/);
   assert.match(LIB, /internal: boolean/);
   assert.match(LIB, /if \(caps\.internal && deliverables\.length > 0\)/);
 });

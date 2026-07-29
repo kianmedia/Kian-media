@@ -129,7 +129,10 @@ test("اللوحة تُظهر «الترحيل معلّق» صراحةً بدل 
   // الحالتان: نقص جزئيّ (شريط تنبيه) وفشل جلب من صنف الترحيلة (بطاقة معلومة).
   assert.ok(DASH.split('"الترحيل معلّق"').length - 1 >= 2, "يجب أن تُغطّى حالتا النقص الجزئيّ وفشل الجلب");
   assert.match(DASH, /lpClassify\(r\.error, r\.status\)/, "تصنيف الخطأ مطلوب للتمييز بين العطل وغياب الترحيلة");
-  assert.match(DASH, /setMigrationPending\(\s*k === "missing_table" \|\| k === "missing_function" \|\| k === "missing_column"\s*\)/);
+  // «الترحيل معلّق» للجدول/الدالّة الغائبين فقط. 42703 (عمود طلبه استعلامنا)
+  // مستثنى: عرضه كترحيلة معلّقة كلّف دورة تصحيح في الإنتاج.
+  assert.match(DASH, /setMigrationPending\(lpIsMigrationPending\(k\)\)/);
+  assert.doesNotMatch(DASH, /setMigrationPending\([^)]*missing_column/, "42703 لا يُعرض أبدًا كترحيلة معلّقة");
   // خطأ الترحيلة لا يُرسم أحمر (ليس عطلًا).
   assert.match(DASH, /migrationPending \? "text-stone-400" : "text-red-300"/);
 });

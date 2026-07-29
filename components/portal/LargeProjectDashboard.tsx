@@ -11,9 +11,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
-  lpLoadSnapshot, lpStaffOptions, lpResetCapabilities, lpErr, lpClassify,
+  lpLoadSnapshot, lpStaffOptions, lpResetCapabilities, lpErr, lpClassify, lpIsMigrationPending, lpLogError,
   lpMigrationNotice, lpProgress, lpCounters, lpStageBreakdown, lpGroupsOf,
-  lpProjectScheduleStatus, lpTodayISO, lpServerProgress, LP_STATUS_LABELS, LP_SCHEDULE_LABELS,
+  lpProjectScheduleStatus, lpTodayISO, lpServerProgress, lpDueLabel, LP_STATUS_LABELS, LP_SCHEDULE_LABELS,
   type LpSnapshot, type LpFilters, type LpServerProgress,
 } from "@/lib/portal/large-projects";
 import {
@@ -60,8 +60,12 @@ export default function LargeProjectDashboard({ projectId, initialTab }: { proje
     const r = await lpLoadSnapshot(projectId);
     if (!alive.current || my !== seq.current) return;
     if (!r.ok) {
+      lpLogError("load large-project dashboard snapshot", { table: "projects" }, r.error, r.status);
+      // «الترحيل معلّق» فقط حين يكون جدول أو دالّة غائبًا فعلًا. 42703 (عمود
+      // طلبه استعلامنا) مستثنى عمدًا: عرضه كترحيلة معلّقة أرسل المالك يبحث عن
+      // ترحيلة سليمة بينما كان الاستعلام هو الخطأ.
       const k = lpClassify(r.error, r.status);
-      setMigrationPending(k === "missing_table" || k === "missing_function" || k === "missing_column");
+      setMigrationPending(lpIsMigrationPending(k));
       setErr(lpErr(r.error, r.status)); setPhase("error"); return;
     }
     setMigrationPending(false);
@@ -119,7 +123,7 @@ function Loaded({
   filters: LpFilters; setFilters: (f: LpFilters) => void;
   reload: (force?: boolean) => void | Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const rows = snap.deliverables;
   const core = snap.coreByProject[snap.project.id];
   const closed = core?.core_stage === "closed";
@@ -283,6 +287,13 @@ function Loaded({
                     {stage.name ?? "—"}{stage.is_master ? ` · ${t({ ar: "رئيسيّ", en: "master" })}` : ""}
                   </span>
                   <span className="text-[10px] text-stone-500"><span dir="ltr">{c.total}</span> {t({ ar: "مخرج", en: "items" })}</span>
+                  {/* الموعد النهائيّ للمرحلة/المشروع الفرعيّ. مصدره الوحيد
+                      project_core.due_date عبر lpLoadSnapshot — لا projects.due_date
+                      (عمود لم يوجد قطّ، وطلبُه هو ما كسر اللوحة على الإنتاج).
+                      غيابه حالة صحيحة تُقال صراحةً «غير محدَّد». */}
+                  <span className="text-[10px] text-stone-500">
+                    {t({ ar: "الموعد", en: "Due" })} <span dir="ltr">{lpDueLabel(stage.due_date, lang)}</span>
+                  </span>
                   {c.awaiting_schedule > 0 && <span className="text-[10px] text-sky-300"><span dir="ltr">{c.awaiting_schedule}</span> {t({ ar: "بانتظار الجدولة", en: "awaiting" })}</span>}
                   {c.overdue > 0 && <span className="text-[10px] text-red-300"><span dir="ltr">{c.overdue}</span> {t({ ar: "متأخّر", en: "overdue" })}</span>}
                   <span className="ms-auto min-w-[120px]"><LpProgressBar progress={p} compact /></span>

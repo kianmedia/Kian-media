@@ -8,6 +8,9 @@
 --
 --   ★ كل استعلام يطبع عمود «المتوقّع» بجانب «النتيجة» — لا تحتاج ذاكرة ولا مرجعًا.
 --   ★ قارن الجزء (و) بالجزء (هـ) من الفحص القبْليّ: يجب أن يتطابقا حرفيًّا.
+--   ★ الجزء (أ-4) ليس عن الترحيلة: يفحص **ما تطلبه الواجهة** من المخطّط.
+--     أُضيف بعد حادثة 2026-07-28 حيث نجح هذا الفحص كلّه بينما اللوحة مكسورة —
+--     الترحيلة سليمة والواجهة تطلب عمودًا غير موجود. راجع docs/UI_SCHEMA_CONTRACT.md.
 -- ════════════════════════════════════════════════════════════════════════════
 
 
@@ -110,6 +113,117 @@ select '5. صفوف جانبية يتيمة (بلا مخرج)', '0',
        case when coalesce((select count(*) from public.deliverable_internal i
                             where not exists (select 1 from public.deliverables d where d.id = i.deliverable_id)), 0) = 0
             then 'PASS' else 'FAIL — المفتاح الخارجي بـ cascade يمنع هذا' end;
+
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- (أ-4) ★★ عقد الواجهة ↔ المخطّط ★★  —  UI ↔ SCHEMA CONTRACT
+--
+--   لماذا هذا القسم موجود (درس حادثة الإنتاج 2026-07-28):
+--   الأقسام (أ)…(ز) كانت تفحص **ما تُنشئه الترحيلة** فقط. فمرّت بنجاح كامل بينما
+--   لوحة المشروع الكبير مكسورة على الإنتاج: الواجهة كانت تطلب عمودًا **لم تُنشئه
+--   أيّ ترحيلة ولم يوجد قطّ** ⇒ 400 / 42703 · "column projects.due_date does not exist"
+--   ورسالة «الترحيل معلّق» الكاذبة. ترحيلة مطبَّقة تمامًا + تطبيق يعطب = ممكن.
+--
+--   لذلك يفحص هذا القسم **ما تطلبه الواجهة فعلًا**، لا ما تبنيه الترحيلة.
+--   المصدر الوحيد للقائمة أدناه: سلاسل `select=` داخل lib/portal/large-projects.ts
+--   (fetchProjects · lpLoadSnapshot · mergeInternal · probeHierarchy). العقد الكامل
+--   والمصفوفة المرجعية في docs/UI_SCHEMA_CONTRACT.md — حدِّثهما معًا دائمًا.
+--
+--   قراءة محضة: information_schema فقط · لا insert/update/delete/ddl/grant.
+--   نعتمد وجود العمود لا مطابقة نصّ — فحص الوجود لا يخدعه تنسيق ولا حالة أحرف.
+-- ═════════════════════════════════════════════════════════════════════════════
+with ui_needs(ord, tbl, col, must_exist, src) as (values
+  -- ── public.projects — fetchProjects() + استعلام الأب + probeHierarchy() ──
+  ( 1,'projects','id',                 true , 'LP_PROJECT_COLUMNS'),
+  ( 2,'projects','project_name',       true , 'LP_PROJECT_COLUMNS'),
+  ( 3,'projects','status',             true , 'LP_PROJECT_COLUMNS'),
+  ( 4,'projects','client_id',          true , 'LP_PROJECT_COLUMNS'),
+  ( 5,'projects','created_at',         true , 'LP_PROJECT_COLUMNS + order'),
+  ( 6,'projects','is_deleted',         true , 'fetchProjects() — is_deleted=eq.false'),
+  ( 7,'projects','parent_project_id',  true , 'LP_PROJECT_HIERARCHY_COLUMNS + probeHierarchy()'),
+  ( 8,'projects','project_scope',      true , 'LP_PROJECT_HIERARCHY_COLUMNS + استعلام الأب'),
+  -- ★ الصفّ التاسع مقلوب عمدًا: يجب أن **لا** يوجد. ★
+  --   الموعد النهائيّ للمشروع مِلك public.project_core.due_date وحده. إضافة
+  --   projects.due_date تُنشئ مصدرَي حقيقة لمعنى واحد — ممنوعة صراحةً من المالك.
+  ( 9,'projects','due_date',           false, '★ ممنوع — الموعد في project_core.due_date'),
+
+  -- ── public.project_core — lpLoadSnapshot() ⇒ coreByProject ──
+  (10,'project_core','project_id',     true , 'lpLoadSnapshot() — project_core select'),
+  (11,'project_core','core_stage',     true , 'lpLoadSnapshot() — project_core select'),
+  (12,'project_core','progress_pct',   true , 'lpLoadSnapshot() — project_core select'),
+  (13,'project_core','project_type',   true , 'lpLoadSnapshot() — project_core select'),
+  (14,'project_core','health',         true , 'lpLoadSnapshot() — project_core select'),
+  (15,'project_core','due_date',       true , '★ الموعد النهائيّ للمشروع — المصدر الوحيد'),
+
+  -- ── public.deliverables — LP_BASE_COLUMNS (مضمونة منذ phase0) + مرشّح/ترتيب ──
+  (16,'deliverables','id',             true , 'LP_BASE_COLUMNS'),
+  (17,'deliverables','project_id',     true , 'LP_BASE_COLUMNS + project_id=in.(…)'),
+  (18,'deliverables','title',          true , 'LP_BASE_COLUMNS'),
+  (19,'deliverables','type',           true , 'LP_BASE_COLUMNS'),
+  (20,'deliverables','version',        true , 'LP_BASE_COLUMNS'),
+  (21,'deliverables','status',         true , 'LP_BASE_COLUMNS'),
+  (22,'deliverables','assignee_id',    true , 'LP_BASE_COLUMNS'),
+  (23,'deliverables','due_date',       true , '★ موعد المخرج — مستوى آخر، لا يُخلط بالمشروع'),
+  (24,'deliverables','created_at',     true , 'LP_BASE_COLUMNS + order'),
+  (25,'deliverables','preview_url',    true , 'LP_BASE_COLUMNS'),
+  (26,'deliverables','vimeo_review_url',true, 'LP_BASE_COLUMNS'),
+  (27,'deliverables','allow_download', true , 'LP_BASE_COLUMNS'),
+  (28,'deliverables','watermark_required',true,'LP_BASE_COLUMNS'),
+  (29,'deliverables','is_deleted',     true , 'lpLoadSnapshot() — is_deleted=eq.false'),
+
+  -- ── public.deliverable_internal — mergeInternal() + probeInternal() ──
+  (30,'deliverable_internal','deliverable_id',    true, 'mergeInternal()'),
+  (31,'deliverable_internal','internal_notes',    true, 'LP_INTERNAL_COLUMNS'),
+  (32,'deliverable_internal','external_key',      true, 'LP_INTERNAL_COLUMNS'),
+  (33,'deliverable_internal','import_batch_id',   true, 'LP_INTERNAL_COLUMNS'),
+  (34,'deliverable_internal','source_row_number', true, 'LP_INTERNAL_COLUMNS'),
+  (35,'deliverable_internal','source_file_name',  true, 'LP_INTERNAL_COLUMNS'),
+  (36,'deliverable_internal','metadata',          true, 'LP_INTERNAL_COLUMNS')
+)
+select u.ord                                          as "#",
+       'public.'||u.tbl||'.'||u.col                   as "العمود الذي تطلبه الواجهة",
+       case when u.must_exist then 'موجود' else '★ غير موجود ★' end as "المتوقّع",
+       case
+         when u.must_exist and c.column_name is null
+           then 'FAIL — مفقود ⇒ الواجهة ستُرجع 400/42703'
+         when (not u.must_exist) and c.column_name is not null
+           then '🔴 FAIL حرج — عمود ممنوع أُضيف ⇒ ازدواج معنى'
+         else 'PASS' end                              as "النتيجة",
+       coalesce(c.data_type,'—')                      as "النوع",
+       u.src                                          as "من يطلبه (lib/portal/large-projects.ts)"
+from ui_needs u
+left join information_schema.columns c
+       on c.table_schema='public' and c.table_name=u.tbl and c.column_name=u.col
+order by u.ord;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- (أ-5) مصادر «أفضل جهد» — غيابها يُدرَج في degraded[] ولا يكسر اللوحة.
+--       لذلك WARN وليس FAIL: هذا ما يفعله الكود فعلًا، ولا نبالغ في الادّعاء.
+-- ─────────────────────────────────────────────────────────────────────────────
+with soft(ord, tbl, col, src) as (values
+  (1,'clients','id',           'CLIENT_COLS — اسم العميل'),
+  (2,'clients','full_name',    'CLIENT_COLS'),
+  (3,'clients','company',      'CLIENT_COLS'),
+  (4,'project_members','project_id','fetchManagerName()'),
+  (5,'project_members','user_id',   'fetchManagerName()'),
+  (6,'project_members','role',      'fetchManagerName()'),
+  (7,'project_members','is_deleted','fetchManagerName() — is_deleted=eq.false'),
+  (8,'profiles','id',          'fetchManagerName() + قائمة الكوادر'),
+  (9,'profiles','full_name',   'fetchManagerName() + قائمة الكوادر'),
+  (10,'profiles','staff_role', 'قائمة الكوادر — staff_role=not.is.null')
+)
+select s.ord                                as "#",
+       'public.'||s.tbl||'.'||s.col         as "العمود",
+       'موجود'                              as "المتوقّع",
+       case when c.column_name is null
+            then 'WARN — سيظهر ضمن degraded[]، واللوحة تبقى تعمل'
+            else 'PASS' end                 as "النتيجة",
+       s.src                                as "من يطلبه"
+from soft s
+left join information_schema.columns c
+       on c.table_schema='public' and c.table_name=s.tbl and c.column_name=s.col
+order by s.ord;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -319,7 +433,7 @@ select 'حدّ عمق الهرمية' as "المحور", '8' as "المتوقّ�
 -- (ح) بوّابة الفشل الصاخب — قراءة محضة، ترفع استثناءً عند أيّ FAIL حرج
 -- ─────────────────────────────────────────────────────────────────────────────
 do $post$
-declare v text := ''; c text; f text; n int;
+declare v text := ''; u text := ''; c text; f text; n int; r record;
 begin
   foreach c in array array[
     'stage_id','content_type','platforms','execution_details','proposed_caption','priority',
@@ -405,6 +519,47 @@ begin
                           'project_breadcrumb','deliverable_content_types_list');
   if n > 0 then v := v || ' ★anon-يملك-تنفيذ★'; end if;
 
+  -- ═══════════════════════════════════════════════════════════════════════════
+  -- ★★ بوّابة عقد الواجهة ↔ المخطّط ★★ (درس حادثة 2026-07-28)
+  --   كلّ ما سبق يفحص ما تبنيه الترحيلة. هذه الحلقة تفحص ما **تطلبه الواجهة**.
+  --   الترحيلة قد تكون مطبَّقة 100% واللوحة مكسورة — وهذا ما حدث بالضبط.
+  --   القائمة مشتقّة حرفيًّا من سلاسل select= في lib/portal/large-projects.ts.
+  -- ═══════════════════════════════════════════════════════════════════════════
+  for r in
+    select t.tbl, t.col from (values
+      ('projects','id'),('projects','project_name'),('projects','status'),
+      ('projects','client_id'),('projects','created_at'),('projects','is_deleted'),
+      ('projects','parent_project_id'),('projects','project_scope'),
+      ('project_core','project_id'),('project_core','core_stage'),
+      ('project_core','progress_pct'),('project_core','project_type'),
+      ('project_core','health'),('project_core','due_date'),
+      ('deliverables','id'),('deliverables','project_id'),('deliverables','title'),
+      ('deliverables','type'),('deliverables','version'),('deliverables','status'),
+      ('deliverables','assignee_id'),('deliverables','due_date'),
+      ('deliverables','created_at'),('deliverables','preview_url'),
+      ('deliverables','vimeo_review_url'),('deliverables','allow_download'),
+      ('deliverables','watermark_required'),('deliverables','is_deleted'),
+      ('deliverable_internal','deliverable_id')
+    ) as t(tbl,col)
+  loop
+    if not exists (select 1 from information_schema.columns
+                    where table_schema='public' and table_name=r.tbl and column_name=r.col)
+      then u := u || ' مفقود:public.' || r.tbl || '.' || r.col; end if;
+  end loop;
+
+  -- العكس: عمود ممنوع. الموعد النهائيّ للمشروع مِلك project_core.due_date وحده؛
+  -- projects.due_date لم يوجد قطّ ويجب ألّا يوجد (ازدواج معنى — منعه المالك صراحةً).
+  if exists (select 1 from information_schema.columns
+              where table_schema='public' and table_name='projects' and column_name='due_date')
+    then u := u || ' ★ممنوع-وقد-أُضيف:public.projects.due_date★'; end if;
+
+  if u <> '' then
+    v := v || '  ||  ★عقد-الواجهة-↔-المخطّط-مكسور★' || u
+           || '  ← الطالب: lib/portal/large-projects.ts'
+           || ' (fetchProjects · lpLoadSnapshot · mergeInternal · probeHierarchy)'
+           || '  ← العقد المرجعيّ: docs/UI_SCHEMA_CONTRACT.md';
+  end if;
+
   if v <> '' then raise exception 'POSTCHECK FAIL —%', v; end if;
-  raise notice 'POSTCHECK: PASS — الحزمة مطبَّقة بالكامل، الحقول الداخلية معزولة في deliverable_internal (كوادر فقط، والعميل صفر صفوف)، العمود القديم سليم، ولا منح لـ anon.';
+  raise notice 'POSTCHECK: PASS — الحزمة مطبَّقة بالكامل، الحقول الداخلية معزولة في deliverable_internal (كوادر فقط، والعميل صفر صفوف)، العمود القديم سليم، ولا منح لـ anon، وكلّ عمود تطلبه لوحة المشروع الكبير موجود فعلًا (ولا يوجد projects.due_date الممنوع).';
 end $post$;

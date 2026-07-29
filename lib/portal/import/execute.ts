@@ -14,7 +14,10 @@
 // Nothing here is project-specific and nothing here invents data.
 // ════════════════════════════════════════════════════════════════════════════
 import type { ImportPlan, ImportProfile, PlannedDeliverable } from "./types";
-import { classifyMissing, detectBackend, IMPORT_RPC, MIGRATION_PENDING_AR, type RpcCaller } from "./rpc";
+import {
+  classifyMissing, detectBackend, IMPORT_RPC, importFailureReason, isMigrationPending,
+  logImportFailure, MIGRATION_PENDING_AR, type RpcCaller,
+} from "./rpc";
 import {
   BATCH_ROW_LIMIT,
   buildBatchRows,
@@ -28,7 +31,10 @@ export type ExecuteCode =
   | "COMMITTED"
   | "DRY_RUN_OK"
   | "NOTHING_TO_DO"
+  /** A function or table the import needs is genuinely absent: run the SQL. */
   | "MIGRATION_PENDING"
+  /** A column is missing or PostgREST's cache is stale — NOT "run the SQL". */
+  | "SCHEMA_MISMATCH"
   | "REFUSED_INVALID_PLAN"
   | "REFUSED_INVALID_ROWS"
   | "REFUSED_DUPLICATES"
@@ -437,7 +443,13 @@ async function executeViaBatch(plan: ImportPlan, opts: ExecuteOptions, call: Rpc
     const where = `أثناء «${f.step}»`;
     const partial = normalizeBatchReport(run.reportRows, built.index, mode, run.batchId);
     const base = { ...partial, rows: partial.rows, batchId: run.batchId };
-    if (f.missing) return { ...base, ok: false, code: "MIGRATION_PENDING", message: MIGRATION_PENDING_AR, created: 0, updated: 0, unchanged: 0 };
+    if (f.missing) {
+      // Same split as the single-payload path: "run the SQL" only when a
+      // function/table is genuinely absent, never for a column or a stale cache.
+      const pending = isMigrationPending(f.error, f.status);
+      logImportFailure(`import_batch:${f.step}`, "run the staging-batch import protocol", f.error, f.status);
+      return { ...base, ok: false, code: pending ? "MIGRATION_PENDING" : "SCHEMA_MISMATCH", message: importFailureReason(f.error, f.status), created: 0, updated: 0, unchanged: 0 };
+    }
     if (f.notAuthorized) return { ...base, ok: false, code: "NOT_AUTHORIZED", message: `لا تملك صلاحية تنفيذ الاستيراد (${where}).`, created: 0, updated: 0, unchanged: 0 };
     return {
       ...base,
@@ -505,7 +517,14 @@ export async function executeImport(plan: ImportPlan, opts: ExecuteOptions, call
     return refusal("TRANSPORT_FAILED", `تعذّر الاتصال بقاعدة البيانات أثناء التنفيذ: ${String(e)}. لم يُؤكَّد أي سطر — تحقّق قبل إعادة المحاولة.`, mode);
   }
   if (!res.ok) {
-    if (classifyMissing(res.error, res.status)) return refusal("MIGRATION_PENDING", MIGRATION_PENDING_AR, mode);
+    logImportFailure(IMPORT_RPC.execute, "commit the import batch", res.error, res.status);
+    const missing = classifyMissing(res.error, res.status);
+    if (missing) {
+      // An absent function/table really is "run the SQL"; a missing column or a
+      // stale cache is a DIFFERENT failure and must not be filed under it.
+      const pending = isMigrationPending(res.error, res.status);
+      return refusal(pending ? "MIGRATION_PENDING" : "SCHEMA_MISMATCH", importFailureReason(res.error, res.status), mode);
+    }
     if (res.status === 401 || res.status === 403) return refusal("NOT_AUTHORIZED", "لا تملك صلاحية تنفيذ الاستيراد على هذا المشروع.", mode);
     return refusal("TRANSPORT_FAILED", `فشل التنفيذ: ${res.error}. راجع الدفعة قبل إعادة المحاولة.`, mode);
   }

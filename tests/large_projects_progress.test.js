@@ -363,10 +363,15 @@ test("فحص الدالّة الجماعية لا يُعدّل شيئًا (قا�
   assert.match(probe[0], /p_dry_run: true/);
 });
 
-test("تصنيف أخطاء الترحيلة الثلاثة موجود (دالّة/عمود/جدول)", () => {
-  assert.match(LIB, /PGRST202/);
-  assert.match(LIB, /PGRST204\|42703/);
-  assert.match(LIB, /PGRST205\|42P01/);
+test("التصنيف مُفوَّض لمصنّف واحد ولا يُدمج 42703 مع PGRST204", () => {
+  // التعبيرات النمطية انتقلت إلى المصنّف المشترك؛ الطبقة تستدعيه ولا تكرّره.
+  assert.match(LIB, /from "@\/lib\/portal\/pgerror"/, "التصنيف يجب أن يأتي من المصنّف المشترك");
+  assert.doesNotMatch(LIB, /PGRST204\|42703/, "دمج ذاكرة المخطط مع عمود مفقود هو الخطأ الذي كلّف دورة إنتاج");
+  assert.match(LIB, /export function lpIsMigrationPending/);
+  const fn = LIB.match(/export function lpIsMigrationPending[\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(fn, /missing_column/, "42703 ليس «ترحيلة غير مطبّقة»");
+  assert.match(fn, /missing_function/);
+  assert.match(fn, /missing_table/);
 });
 
 test("الحفظ بلا تاريخ مسموح: لا رفض، ويعود إلى «بانتظار الجدولة»", () => {
