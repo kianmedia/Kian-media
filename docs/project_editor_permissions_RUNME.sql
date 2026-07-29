@@ -737,7 +737,7 @@ end $g$;
 -- §6) SELF-TEST — بلا أيّ أثر جانبيّ. الفشل يُلغي المعاملة كاملةً.
 -- ════════════════════════════════════════════════════════════════════════════
 do $st$
-declare f text; v_def text; v_out jsonb; v_b boolean;
+declare f text; v_def text; v_def_bulk text; v_b boolean;
 begin
   foreach f in array array[
     'public.can_move_deliverable(uuid)','public.can_send_to_client_review(uuid)',
@@ -757,16 +757,39 @@ begin
 
   -- (2) الحرّاس الثلاثة موجودة فعلًا في جسم الدالّة المجبوبة (ilike — المُفكِّك يرفع الحالة).
   v_def := pg_get_functiondef(to_regprocedure('public.large_project_deliverables_bulk_update(uuid[],jsonb,text,boolean)'));
+  v_def_bulk := v_def;
   if v_def not ilike '%can_move_deliverable%'       then raise exception 'SELF-TEST: حارس stage_id غائب'; end if;
   if v_def not ilike '%can_send_to_client_review%'  then raise exception 'SELF-TEST: حارس client_visible غائب'; end if;
   if v_def not ilike '%can_finalize_deliverable%'   then raise exception 'SELF-TEST: حارس status غائب'; end if;
   if v_def not ilike '%''stage_id''%' or v_def not ilike '%''client_visible''%' or v_def not ilike '%''status''%'
     then raise exception 'SELF-TEST: القائمة البيضاء فقدت مفتاحًا — المالك يجب أن يحتفظ بكلّ مفاتيحه'; end if;
 
-  -- (3) فحص التوفّر (قائمة فارغة) ما زال ينجح بلا أثر — الواجهة تعتمد عليه.
-  v_out := public.large_project_deliverables_bulk_update('{}'::uuid[], '{}'::jsonb, null, true);
-  if coalesce((v_out->>'ok')::boolean,false) is not true or coalesce((v_out->>'requested')::int,-1) <> 0
-    then raise exception 'SELF-TEST: فحص التوفّر بقائمة فارغة تغيّر سلوكه'; end if;
+  -- (3) فحص التوفّر (قائمة فارغة) — **فحص نصّيّ لا استدعاء حيّ.**
+  --
+  -- ★ هنا فشل التشغيل الأول على الإنتاج، والسبب أن **الاختبار** كان خاطئًا لا الحماية. ★
+  --   كان هذا السطر يستدعي الدالّة فعليًّا:
+  --       v_out := public.large_project_deliverables_bulk_update('{}', '{}', null, true);
+  --   وأوّل سطر في جسم الدالّة هو `if auth.uid() is null then raise 'not authorized'`.
+  --   ومحرّر SQL في Supabase يعمل بدور `postgres` **بلا جلسة GoTrue**، فـauth.uid()
+  --   تساوي NULL دائمًا ⇒ الاستثناء يقع قبل بلوغ أيّ منطق، وتتراجع المعاملة كلّها.
+  --
+  --   ⛔ ما **لا** نفعله لعلاجها: إضافة استثناء لـpostgres داخل الدالّة الإنتاجية.
+  --      ذلك يفتح بابًا دائمًا في الإنتاج لإصلاح اختبار — الثمن أكبر من الفائدة بكثير.
+  --   ⛔ ولا نلفّها بـ`exception when others then null` — فتصير الفحص عديم القيمة
+  --      (ينجح سواء كانت الحماية سليمة أم غائبة).
+  --   ✅ ما نفعله: نُثبت **نصًّا** أن مسار «القائمة الفارغة» ما زال موجودًا وأنه
+  --      يسبق أيّ كتابة، ثم نُحيل الإثبات السلوكيّ إلى ملفّ منفصل يُشغَّل بجلسة حقيقية:
+  --      docs/project_editor_permissions_BEHAVIOR_DIAGNOSTIC.sql
+  if v_def_bulk not ilike '%cardinality(v_ids) = 0%' then
+    raise exception 'SELF-TEST: مسار فحص التوفّر بقائمة فارغة اختفى — الواجهة تعتمد عليه';
+  end if;
+  if v_def_bulk not ilike '%auth.uid() is null%' then
+    raise exception 'SELF-TEST: بوّابة الجلسة اختفت من الحزمة';
+  end if;
+  -- الترتيب مهمّ: بوّابة الجلسة يجب أن تسبق الخروج المبكر، وإلّا صار الفحص بلا حراسة.
+  if position('auth.uid() is null' in v_def_bulk) > position('cardinality(v_ids) = 0' in v_def_bulk) then
+    raise exception 'SELF-TEST: الخروج المبكر صار قبل بوّابة الجلسة';
+  end if;
 
   -- (4) §4 طبّق التضييق (أو تُخطّي بإشعار صريح).
   if to_regprocedure('public.project_core_set_stage(uuid,text,text)') is not null then

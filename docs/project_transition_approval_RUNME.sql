@@ -751,7 +751,7 @@ revoke all on function public.ptr_project_blocked(uuid) from public, anon, authe
 -- §10) SELF-TEST — بلا أيّ أثر على بيانات المشاريع. الفشل يُلغي المعاملة.
 -- ════════════════════════════════════════════════════════════════════════════
 do $st$
-declare f text; v jsonb; v_b boolean; v_before bigint; v_after bigint;
+declare f text; v jsonb; v_b boolean; v_before bigint; v_after bigint; v_def text;
   ZERO constant uuid := '00000000-0000-0000-0000-000000000000';
 begin
   if to_regclass('public.project_transition_requests') is null then
@@ -771,27 +771,50 @@ begin
   v_b := public.project_transition_can_decide(null);
   if v_b is null then raise exception 'SELF-TEST: can_decide أعادت NULL'; end if;
 
-  -- (2) p_dry_run لا يكتب صفًّا — العدّ قبل/بعد.
-  select count(*) into v_before from public.project_transition_requests;
-  v := public.project_transition_request_create(ZERO, null, 'status', null, null, 'probe', true);
-  if coalesce((v->>'ok')::boolean, true) is not false then
-    raise exception 'SELF-TEST: dry_run يجب أن يعيد ok=false بلا أثر'; end if;
-  v := public.project_transition_request_decide(ZERO, 'reject', 'probe', true);
-  if coalesce((v->>'applied')::boolean, true) is not false then
-    raise exception 'SELF-TEST: dry_run للبتّ يجب أن يعيد applied=false'; end if;
-  select count(*) into v_after from public.project_transition_requests;
-  if v_after <> v_before then raise exception 'SELF-TEST: dry_run كتب صفًّا (%→%)', v_before, v_after; end if;
+  -- (2) و(3) — **فحص نصّيّ لا استدعاء حيّ.**
+  --
+  -- ★ هنا كان الملفّ سيموت مثل حزمة الصلاحيات تمامًا. ★
+  --   كان القسمان يستدعيان project_transition_request_create/decide فعليًّا،
+  --   وأوّل ما تفعله كلّ منهما هو التحقّق من الجلسة. ومحرّر SQL يعمل بدور
+  --   `postgres` بلا جلسة GoTrue ⇒ auth.uid() = NULL ⇒ «not authorized»
+  --   قبل بلوغ أيّ منطق، فتتراجع المعاملة كلّها.
+  --
+  --   وكان القسم (3) أسوأ من ذلك: ملفوفًا بـ`exception when others then v_b := true`
+  --   ⇒ **ينجح مهما حدث**. اختبار لا يستطيع الفشل ليس اختبارًا؛ يطبع PASS
+  --   ولا يُثبت شيئًا. حُذف الالتفاف ولم يُستبدل بمثله.
+  --
+  --   الإثبات السلوكيّ الحقيقيّ — بجلستَي مونتير ومالك — في:
+  --     docs/project_editor_permissions_BEHAVIOR_DIAGNOSTIC.sql
+  --   ولا يُقال إنه نجح قبل تشغيله بهما فعلًا.
+  v_def := pg_get_functiondef(to_regprocedure(
+    'public.project_transition_request_create(uuid,uuid,text,text,text,text,boolean)'));
+  if v_def not ilike '%auth.uid() is null%' then
+    raise exception 'SELF-TEST: بوّابة الجلسة غائبة عن create'; end if;
+  if v_def not ilike '%p_dry_run%' and v_def not ilike '%v_dry%' then
+    raise exception 'SELF-TEST: مسار dry_run غائب عن create'; end if;
+  if v_def not ilike '%can_request_project_transition%' then
+    raise exception 'SELF-TEST: create لا تفحص قدرة الطلب'; end if;
 
-  -- (3) البتّ على طلب غير موجود لا ينفّذ شيئًا.
-  --     في جلسة الترحيل auth.uid() = NULL ⇒ «not authorized» ردّ مقبول أيضًا؛
-  --     المرفوض الوحيد هو ادّعاء تنفيذ.
-  begin
-    v := public.project_transition_request_decide(ZERO, 'approve', null, false);
-    v_b := coalesce((v->>'applied')::boolean, true) is false;
-  exception when others then
-    v_b := true;
-  end;
-  if not v_b then raise exception 'SELF-TEST: البتّ على طلب غير موجود ادّعى تنفيذًا'; end if;
+  v_def := pg_get_functiondef(to_regprocedure(
+    'public.project_transition_request_decide(uuid,text,text,boolean)'));
+  if v_def not ilike '%auth.uid() is null%' then
+    raise exception 'SELF-TEST: بوّابة الجلسة غائبة عن decide'; end if;
+  if v_def not ilike '%can_approve_project_transition%' then
+    raise exception 'SELF-TEST: decide لا تفحص قدرة الاعتماد'; end if;
+  -- منع اعتماد صاحب الطلب نفسه — الحارس الذي لا يجوز أن يغيب.
+  if v_def not ilike '%requested_by%' then
+    raise exception 'SELF-TEST: decide لا تقارن بمقدّم الطلب — الاعتماد الذاتيّ ممكن'; end if;
+  -- إعادة التحقّق من الحالة الحالية قبل التنفيذ (منع الطلب البائت).
+  if v_def not ilike '%ptr_current_value%' then
+    raise exception 'SELF-TEST: decide لا تُعيد التحقّق من الحالة — تنفيذ على بيانات قديمة'; end if;
+  -- التنفيذ مرّة واحدة: قفل الصفّ + شرط pending.
+  if v_def not ilike '%for update%' or v_def not ilike '%pending%' then
+    raise exception 'SELF-TEST: decide بلا قفل/شرط pending — تنفيذ مزدوج ممكن'; end if;
+
+  -- الجدول فارغ فعلًا: الترحيل يجب ألّا يُنشئ أيّ طلب.
+  select count(*) into v_after from public.project_transition_requests;
+  if v_after <> 0 then
+    raise exception 'SELF-TEST: الترحيل أنشأ % طلبًا — يجب ألّا يُنشئ شيئًا', v_after; end if;
 
   -- (4) فحص الهدف يرفض المفردات المخترعة ويقبل القائمة.
   if coalesce((public.ptr_target_check('status', ZERO, ZERO, 'shipped')->>'ok')::boolean, true) is not false then
