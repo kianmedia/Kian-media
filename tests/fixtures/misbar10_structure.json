@@ -1,0 +1,1187 @@
+{
+  "_WARNING_AR": "بيانات تجريبية اصطناعية بالكامل. هذه ليست بيانات المالك ولا ملف الإكسل الحقيقي لمشروع مسبار 10.",
+  "_WARNING_EN": "SYNTHETIC ACCEPTANCE FIXTURE — NOT OWNER DATA. The owner's real MISBAR 10 Excel file does not exist in this repository. The ELEVEN stage names below were supplied by the owner and are real; EVERY deliverable title, platform, date, quantity and note was INVENTED to exercise platform shapes. Do not import this into any real project and do not quote its counts as the owner's scope.",
+  "synthetic": true,
+  "fixture_version": "1.0.0",
+  "purpose": "Acceptance dataset for the project platform. Shapes only — it must work for any Kian project, not just this one.",
+  "owner_expectation": {
+    "stages": 11,
+    "deliverables": 79,
+    "source": "owner's Excel workbook — NOT present in this repository",
+    "verified_against_real_file": false,
+    "note_ar": "٧٩ هو توقّع المالك ولم يُتحقَّق منه؛ عدد هذا الملف الاصطناعي مختلف عمدًا حتى لا يُخلط بينهما.",
+    "note_en": "79 is the owner's UNVERIFIED expectation. This synthetic file deliberately holds a different count so the two are never confused. Re-check against the real workbook before acceptance."
+  },
+  "platform_contract": {
+    "stage_entity": "projects (project_scope='subproject', parent_project_id=<parent>, ordered by sequence_number)",
+    "deliverable_entity": "deliverables (project_id = the STAGE subproject, not the parent)",
+    "db_type_check": [
+      "video",
+      "photo",
+      "other"
+    ],
+    "kind_to_db_type": {
+      "video": "video",
+      "photo": "photo",
+      "design": "other",
+      "print": "other",
+      "live_stream": "other",
+      "event": "other",
+      "field_execution": "other",
+      "gift": "other",
+      "report": "other"
+    },
+    "client_visibility_rule": "deliverables has NO client_visible column; a client sees a row only while status is one of client_review / revision_requested / approved / final_delivered.",
+    "fields_not_in_db": [
+      "kind",
+      "platforms",
+      "schedule_status",
+      "recurrence",
+      "expected_units",
+      "completed_units",
+      "progress_pct",
+      "client_visible",
+      "internal_note",
+      "external_key",
+      "stage_key"
+    ],
+    "fields_not_in_db_note": "These are IMPORT-PROFILE fields carried by this fixture, not columns on public.deliverables. Anything consuming this file must map or drop them explicitly."
+  },
+  "parent_project": {
+    "external_key": "M10-PARENT",
+    "name_ar": "مشروع اصطناعي — مجموعة مراحل (بيانات تجريبية)",
+    "project_scope": "master",
+    "client_external_key": "CLIENT-SYNTHETIC-001",
+    "due_date": null,
+    "expected_rollup": {
+      "stages_total": 11,
+      "stages_with_deliverables": 10,
+      "empty_stages": 1,
+      "deliverables_total": 42,
+      "client_visible": 23,
+      "client_hidden": 19,
+      "awaiting_schedule": 22,
+      "scheduled": 20,
+      "recurring": 6,
+      "recurrence_expected_units": 35,
+      "recurrence_completed_units": 16,
+      "multi_platform": 16,
+      "by_kind": {
+        "video": 11,
+        "design": 6,
+        "report": 6,
+        "live_stream": 5,
+        "field_execution": 3,
+        "photo": 3,
+        "event": 2,
+        "print": 4,
+        "gift": 2
+      },
+      "by_db_type": {
+        "video": 11,
+        "other": 28,
+        "photo": 3
+      },
+      "progress_pct_deliverable_mean": 13,
+      "progress_pct_stage_mean": 13
+    },
+    "synthetic": true
+  },
+  "stages": [
+    {
+      "stage_no": 1,
+      "stage_key": "stage_01",
+      "title_ar": "01 التهيئة",
+      "name_ar": "التهيئة",
+      "sequence_number": 1,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 3,
+        "progress_pct": 33,
+        "client_visible": 1,
+        "client_hidden": 2,
+        "awaiting_schedule": 2
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 2,
+      "stage_key": "stage_02",
+      "title_ar": "02 ما قبل التسجيل وأثناء التسجيل",
+      "name_ar": "ما قبل التسجيل وأثناء التسجيل",
+      "sequence_number": 2,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 5,
+        "progress_pct": 27,
+        "client_visible": 3,
+        "client_hidden": 2,
+        "awaiting_schedule": 3
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 3,
+      "stage_key": "stage_03",
+      "title_ar": "03 القبول",
+      "name_ar": "القبول",
+      "sequence_number": 3,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 3,
+        "progress_pct": 0,
+        "client_visible": 2,
+        "client_hidden": 1,
+        "awaiting_schedule": 1
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 4,
+      "stage_key": "stage_04",
+      "title_ar": "04 الانطلاق عن بُعد",
+      "name_ar": "الانطلاق عن بُعد",
+      "sequence_number": 4,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 4,
+        "progress_pct": 25,
+        "client_visible": 3,
+        "client_hidden": 1,
+        "awaiting_schedule": 2
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 5,
+      "stage_key": "stage_05",
+      "title_ar": "05 ختام المرحلة الأولى وإعلان المتأهلين",
+      "name_ar": "ختام المرحلة الأولى وإعلان المتأهلين",
+      "sequence_number": 5,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 3,
+        "progress_pct": 0,
+        "client_visible": 2,
+        "client_hidden": 1,
+        "awaiting_schedule": 2
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 6,
+      "stage_key": "stage_06",
+      "title_ar": "06 الاستكشاف عن بُعد",
+      "name_ar": "الاستكشاف عن بُعد",
+      "sequence_number": 6,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": true,
+      "expected": {
+        "deliverables_count": 0,
+        "progress_pct": null,
+        "client_visible": 0,
+        "client_hidden": 0,
+        "awaiting_schedule": 0
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 7,
+      "stage_key": "stage_07",
+      "title_ar": "07 المؤتمر الصحفي",
+      "name_ar": "المؤتمر الصحفي",
+      "sequence_number": 7,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 4,
+        "progress_pct": 0,
+        "client_visible": 2,
+        "client_hidden": 2,
+        "awaiting_schedule": 1
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 8,
+      "stage_key": "stage_08",
+      "title_ar": "08 التهيئة الحضورية",
+      "name_ar": "التهيئة الحضورية",
+      "sequence_number": 8,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 4,
+        "progress_pct": 25,
+        "client_visible": 0,
+        "client_hidden": 4,
+        "awaiting_schedule": 3
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 9,
+      "stage_key": "stage_09",
+      "title_ar": "09 المرحلة الحضورية",
+      "name_ar": "المرحلة الحضورية",
+      "sequence_number": 9,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 6,
+        "progress_pct": 22,
+        "client_visible": 4,
+        "client_hidden": 2,
+        "awaiting_schedule": 4
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 10,
+      "stage_key": "stage_10",
+      "title_ar": "10 فيديوهات المسارات التخصصية",
+      "name_ar": "فيديوهات المسارات التخصصية",
+      "sequence_number": 10,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 5,
+        "progress_pct": 0,
+        "client_visible": 4,
+        "client_hidden": 1,
+        "awaiting_schedule": 2
+      },
+      "synthetic": true
+    },
+    {
+      "stage_no": 11,
+      "stage_key": "stage_11",
+      "title_ar": "11 الحفل الختامي",
+      "name_ar": "الحفل الختامي",
+      "sequence_number": 11,
+      "platform_mapping": {
+        "entity": "projects",
+        "project_scope": "subproject",
+        "ordering_column": "sequence_number"
+      },
+      "intentionally_empty": false,
+      "expected": {
+        "deliverables_count": 5,
+        "progress_pct": 0,
+        "client_visible": 2,
+        "client_hidden": 3,
+        "awaiting_schedule": 2
+      },
+      "synthetic": true
+    }
+  ],
+  "deliverables": [
+    {
+      "external_key": "M10-01-01",
+      "stage_key": "stage_01",
+      "title_ar": "فيديو تعريفي بالمبادرة",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "youtube",
+        "x"
+      ],
+      "due_date": "2026-09-01",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 1,
+      "progress_pct": 100,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "نسخة معتمدة من الهوية",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-01-02",
+      "stage_key": "stage_01",
+      "title_ar": "الهوية البصرية للمرحلة",
+      "kind": "design",
+      "db_type": "other",
+      "platforms": [
+        "internal"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "بانتظار اعتماد اتجاه التصميم",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-01-03",
+      "stage_key": "stage_01",
+      "title_ar": "تقرير جاهزية التشغيل",
+      "kind": "report",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "داخلي — لا يُشارك مع العميل",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-02-01",
+      "stage_key": "stage_02",
+      "title_ar": "حملة تشويقية أسبوعية",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "instagram",
+        "tiktok",
+        "x"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": {
+        "type": "weekly"
+      },
+      "expected_units": 6,
+      "completed_units": 2,
+      "progress_pct": 33,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "تتكرر أسبوعيًّا حتى إغلاق التسجيل",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-02-02",
+      "stage_key": "stage_02",
+      "title_ar": "بانرات التسجيل",
+      "kind": "design",
+      "db_type": "other",
+      "platforms": [
+        "web",
+        "x"
+      ],
+      "due_date": "2026-09-10",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 1,
+      "progress_pct": 100,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-02-03",
+      "stage_key": "stage_02",
+      "title_ar": "بث مباشر لجلسة تعريفية",
+      "kind": "live_stream",
+      "db_type": "other",
+      "platforms": [
+        "youtube"
+      ],
+      "due_date": "2026-09-14",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-02-04",
+      "stage_key": "stage_02",
+      "title_ar": "تغطية ميدانية لنقاط التسجيل",
+      "kind": "field_execution",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "الموقع والتاريخ غير محدّدين بعد",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-02-05",
+      "stage_key": "stage_02",
+      "title_ar": "تقرير أعداد المسجّلين",
+      "kind": "report",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "داخلي",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-03-01",
+      "stage_key": "stage_03",
+      "title_ar": "فيديو إعلان المقبولين",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "instagram",
+        "x"
+      ],
+      "due_date": "2026-09-28",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-03-02",
+      "stage_key": "stage_03",
+      "title_ar": "رسائل قبول مصمّمة",
+      "kind": "design",
+      "db_type": "other",
+      "platforms": [
+        "email"
+      ],
+      "due_date": "2026-09-27",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-03-03",
+      "stage_key": "stage_03",
+      "title_ar": "تقرير نتائج الفرز",
+      "kind": "report",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "داخلي — بيانات مرشّحين",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-04-01",
+      "stage_key": "stage_04",
+      "title_ar": "بث مباشر لحفل الانطلاق",
+      "kind": "live_stream",
+      "db_type": "other",
+      "platforms": [
+        "youtube",
+        "x"
+      ],
+      "due_date": "2026-10-05",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-04-02",
+      "stage_key": "stage_04",
+      "title_ar": "ملخّص يومي للانطلاق",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "instagram",
+        "tiktok"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": {
+        "type": "daily"
+      },
+      "expected_units": 5,
+      "completed_units": 5,
+      "progress_pct": 100,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "اكتملت كل الوحدات",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-04-03",
+      "stage_key": "stage_04",
+      "title_ar": "عرض تقديمي للمنصّة",
+      "kind": "design",
+      "db_type": "other",
+      "platforms": [
+        "internal"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-04-04",
+      "stage_key": "stage_04",
+      "title_ar": "تغطية فوتوغرافية عن بُعد",
+      "kind": "photo",
+      "db_type": "photo",
+      "platforms": [
+        "instagram"
+      ],
+      "due_date": "2026-10-05",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-05-01",
+      "stage_key": "stage_05",
+      "title_ar": "فيديو إعلان المتأهلين",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "instagram",
+        "tiktok",
+        "x",
+        "youtube"
+      ],
+      "due_date": "2026-10-20",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-05-02",
+      "stage_key": "stage_05",
+      "title_ar": "لوحات أسماء المتأهلين",
+      "kind": "design",
+      "db_type": "other",
+      "platforms": [
+        "web"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-05-03",
+      "stage_key": "stage_05",
+      "title_ar": "حدث إعلان افتراضي",
+      "kind": "event",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "لم يُحدَّد الموعد بعد",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-07-01",
+      "stage_key": "stage_07",
+      "title_ar": "بث مباشر للمؤتمر الصحفي",
+      "kind": "live_stream",
+      "db_type": "other",
+      "platforms": [
+        "youtube",
+        "x"
+      ],
+      "due_date": "2026-11-02",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-07-02",
+      "stage_key": "stage_07",
+      "title_ar": "حقيبة صحفية مطبوعة",
+      "kind": "print",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": "2026-10-30",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 200,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "كمية طباعة — ليست تكرارًا",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-07-03",
+      "stage_key": "stage_07",
+      "title_ar": "تغطية فوتوغرافية للمؤتمر",
+      "kind": "photo",
+      "db_type": "photo",
+      "platforms": [
+        "instagram",
+        "x"
+      ],
+      "due_date": "2026-11-02",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-07-04",
+      "stage_key": "stage_07",
+      "title_ar": "تقرير التغطية الإعلامية",
+      "kind": "report",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "داخلي",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-08-01",
+      "stage_key": "stage_08",
+      "title_ar": "لوحات إرشادية مطبوعة",
+      "kind": "print",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 40,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "كمية طباعة",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-08-02",
+      "stage_key": "stage_08",
+      "title_ar": "تنفيذ ميداني لتجهيز القاعة",
+      "kind": "field_execution",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "بانتظار تأكيد القاعة",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-08-03",
+      "stage_key": "stage_08",
+      "title_ar": "هدايا تذكارية للمشاركين",
+      "kind": "gift",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 120,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "كمية — ليست تكرارًا",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-08-04",
+      "stage_key": "stage_08",
+      "title_ar": "دليل المشارك المطبوع",
+      "kind": "print",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": "2026-11-15",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 150,
+      "completed_units": 150,
+      "progress_pct": 100,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "اكتملت الطباعة",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-09-01",
+      "stage_key": "stage_09",
+      "title_ar": "فيديو يومي للمرحلة الحضورية",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "instagram",
+        "tiktok",
+        "snapchat"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": {
+        "type": "daily"
+      },
+      "expected_units": 7,
+      "completed_units": 3,
+      "progress_pct": 43,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "يتكرر يوميًّا طوال المرحلة",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-09-02",
+      "stage_key": "stage_09",
+      "title_ar": "تغطية فوتوغرافية يومية",
+      "kind": "photo",
+      "db_type": "photo",
+      "platforms": [
+        "instagram"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": {
+        "type": "daily"
+      },
+      "expected_units": 7,
+      "completed_units": 3,
+      "progress_pct": 43,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-09-03",
+      "stage_key": "stage_09",
+      "title_ar": "بث مباشر للورش",
+      "kind": "live_stream",
+      "db_type": "other",
+      "platforms": [
+        "youtube"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": {
+        "type": "weekly"
+      },
+      "expected_units": 3,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "جدول الورش لم يصدر",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-09-04",
+      "stage_key": "stage_09",
+      "title_ar": "تنفيذ ميداني للجلسات",
+      "kind": "field_execution",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": "2026-11-20",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-09-05",
+      "stage_key": "stage_09",
+      "title_ar": "تقرير حضور يومي",
+      "kind": "report",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": {
+        "type": "daily"
+      },
+      "expected_units": 7,
+      "completed_units": 3,
+      "progress_pct": 43,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "داخلي",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-09-06",
+      "stage_key": "stage_09",
+      "title_ar": "حدث ختام اليوم",
+      "kind": "event",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": "2026-11-24",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-10-01",
+      "stage_key": "stage_10",
+      "title_ar": "فيديو مسار الإعلام",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "due_date": "2026-12-01",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-10-02",
+      "stage_key": "stage_10",
+      "title_ar": "فيديو مسار التقنية",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "due_date": "2026-12-03",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-10-03",
+      "stage_key": "stage_10",
+      "title_ar": "فيديو مسار ريادة الأعمال",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "due_date": "2026-12-05",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-10-04",
+      "stage_key": "stage_10",
+      "title_ar": "فيديو مسار التصميم",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "بانتظار جدولة التصوير",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-10-05",
+      "stage_key": "stage_10",
+      "title_ar": "موشن جرافيك تعريفي بالمسارات",
+      "kind": "design",
+      "db_type": "other",
+      "platforms": [
+        "x"
+      ],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-11-01",
+      "stage_key": "stage_11",
+      "title_ar": "بث مباشر للحفل الختامي",
+      "kind": "live_stream",
+      "db_type": "other",
+      "platforms": [
+        "youtube",
+        "x"
+      ],
+      "due_date": "2026-12-18",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-11-02",
+      "stage_key": "stage_11",
+      "title_ar": "فيلم ختامي",
+      "kind": "video",
+      "db_type": "video",
+      "platforms": [
+        "youtube",
+        "instagram",
+        "tiktok",
+        "x"
+      ],
+      "due_date": "2026-12-22",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": true,
+      "initial_db_status": "client_review",
+      "internal_note": "",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-11-03",
+      "stage_key": "stage_11",
+      "title_ar": "دروع وجوائز",
+      "kind": "gift",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": "2026-12-15",
+      "schedule_status": "scheduled",
+      "recurrence": null,
+      "expected_units": 15,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "كمية",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-11-04",
+      "stage_key": "stage_11",
+      "title_ar": "مطبوعات الحفل",
+      "kind": "print",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 300,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "كمية طباعة — الموعد غير محدّد",
+      "synthetic": true
+    },
+    {
+      "external_key": "M10-11-05",
+      "stage_key": "stage_11",
+      "title_ar": "تقرير الأثر النهائي",
+      "kind": "report",
+      "db_type": "other",
+      "platforms": [],
+      "due_date": null,
+      "schedule_status": "awaiting_schedule",
+      "recurrence": null,
+      "expected_units": 1,
+      "completed_units": 0,
+      "progress_pct": 0,
+      "client_visible": false,
+      "initial_db_status": "draft",
+      "internal_note": "داخلي",
+      "synthetic": true
+    }
+  ],
+  "shape_coverage": {
+    "no_dates": "deliverables[].schedule_status === 'awaiting_schedule' (due_date null)",
+    "recurring": "deliverables[].recurrence !== null",
+    "quantity_not_recurrence": "expected_units > 1 with recurrence === null (print runs, gifts)",
+    "multi_platform": "deliverables[].platforms.length > 1",
+    "kinds": [
+      "design",
+      "event",
+      "field_execution",
+      "gift",
+      "live_stream",
+      "photo",
+      "print",
+      "report",
+      "video"
+    ],
+    "client_visible": "deliverables[].client_visible === true",
+    "client_hidden": "deliverables[].client_visible === false",
+    "empty_stage": "stage_06 has zero deliverables on purpose",
+    "fully_complete_recurrence": "at least one recurring item at 100%",
+    "untouched_recurrence": "at least one recurring item at 0%"
+  }
+}
