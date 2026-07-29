@@ -121,10 +121,33 @@ select policyname, cmd,
 from pg_policies where schemaname='public' and tablename='deliverables'
 order by cmd, policyname;
 
--- ─── 10) فحص سلوكيّ آمن: نداء فحص التوفّر (قائمة فارغة) لا يكتب شيئًا ──────
--- متوقّع: ok=true · requested=0 · applied=0 · audited=true.
--- (هذا هو النداء نفسه الذي تستعمله الواجهة للكشف عن وجود الدالّة؛ لا أثر له.)
-select public.large_project_deliverables_bulk_update('{}'::uuid[], '{}'::jsonb, null, true) as availability_probe;
+-- ─── 10) مسار فحص التوفّر — **فحص نصّيّ لا نداء حيّ** ──────────────────────
+--
+-- ★ هنا سقط هذا الملفّ على الإنتاج، والسبب في **الفاحص** لا في الترحيل. ★
+--   كان السطر: select public.large_project_deliverables_bulk_update('{}','{}',null,true);
+--   وأوّل سطر في جسم الدالّة: if auth.uid() is null then raise 'not authorized'.
+--   ومحرّر SQL يعمل بدور `postgres` بلا جلسة GoTrue ⇒ auth.uid() = NULL دائمًا.
+--   وصفتُه سابقًا بأنه «نداء آمن بلا أثر» — وهو كذلك من حيث الكتابة، لكنه
+--   **غير قابل للتنفيذ** من هذا السياق أصلًا. الوصف كان ناقصًا، والخطأ خطئي.
+--
+--   ⛔ لا استثناء لـpostgres داخل الدالّة الإنتاجية لإرضاء فاحص.
+--   ⛔ ولا `exception when others then null` — فيصير الفحص ناجحًا مهما حدث.
+--   ✅ نُثبت نصًّا أن المسار قائم وأن بوّابة الجلسة تسبقه.
+--
+-- متوقّع: fast_path_present = true · session_gate_present = true · gate_first = true.
+select
+  pg_get_functiondef(to_regprocedure('public.large_project_deliverables_bulk_update(uuid[],jsonb,text,boolean)'))
+    ilike '%cardinality(v_ids) = 0%'                                   as fast_path_present,
+  pg_get_functiondef(to_regprocedure('public.large_project_deliverables_bulk_update(uuid[],jsonb,text,boolean)'))
+    ilike '%auth.uid() is null%'                                       as session_gate_present,
+  position('auth.uid() is null' in
+    pg_get_functiondef(to_regprocedure('public.large_project_deliverables_bulk_update(uuid[],jsonb,text,boolean)')))
+  < position('cardinality(v_ids) = 0' in
+    pg_get_functiondef(to_regprocedure('public.large_project_deliverables_bulk_update(uuid[],jsonb,text,boolean)')))
+                                                                       as gate_before_fast_path;
+
+-- السلوك الحيّ (المونتير يُمنع · المالك يُسمح) لا يُثبت من هنا إطلاقًا.
+-- شغّل بجلستَين حقيقيّتين: docs/project_editor_permissions_BEHAVIOR_DIAGNOSTIC.sql
 
 -- ─── 11) عدّاد أمان: لا مخرجات تغيّرت أثناء التشغيل ────────────────────────
 -- متوقّع: صفر صفوف — الحزمة لا تلمس بيانات المخرجات إطلاقًا.

@@ -132,21 +132,36 @@ select
     where table_schema='public' and table_name='project_change_requests'
       and column_name in ('from_value','to_value')) as changes_polluted;
 
--- ─── 10) فحص سلوكيّ بلا أثر: p_dry_run لا يكتب صفًّا ───────────────────────
--- متوقّع: rows_before = rows_after · create_ok = false · decide_applied = false.
-with before_cnt as (select count(*) as n from public.project_transition_requests),
-     probe as (
-       select public.project_transition_request_create(
-                '00000000-0000-0000-0000-000000000000'::uuid, null, 'status',
-                null, null, 'postcheck probe', true) as c,
-              public.project_transition_request_decide(
-                '00000000-0000-0000-0000-000000000000'::uuid, 'reject', 'postcheck probe', true) as d
-     ),
-     after_cnt as (select count(*) as n from public.project_transition_requests)
-select (select n from before_cnt) as rows_before,
-       (select n from after_cnt)  as rows_after,
-       (select (c->>'ok')::boolean from probe)      as create_ok,
-       (select (d->>'applied')::boolean from probe) as decide_applied;
+-- ─── 10) dry_run — **فحص نصّيّ لا نداء حيّ** ────────────────────────────────
+--
+-- ★ نفس العيب الذي أسقط حزمة الصلاحيات كان هنا حرفيًّا. ★
+--   كان هذا القسم يستدعي project_transition_request_create/decide فعليًّا،
+--   وكلتاهما تبدأ بفحص الجلسة. ومحرّر SQL يعمل بدور `postgres` بلا جلسة GoTrue
+--   ⇒ auth.uid() = NULL ⇒ «not authorized» قبل بلوغ أيّ منطق dry_run.
+--   كان سيسقط هذا الملفّ بعد ترحيل ناجح تمامًا كما حدث في حزمة الصلاحيات.
+--
+-- متوقّع: الأعمدة الأربعة true.
+select
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_create(uuid,uuid,text,text,text,text,boolean)'))
+    ilike '%auth.uid() is null%'                    as create_has_session_gate,
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_create(uuid,uuid,text,text,text,text,boolean)'))
+    ilike '%can_request_project_transition%'        as create_checks_capability,
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_decide(uuid,text,text,boolean)'))
+    ilike '%can_approve_project_transition%'        as decide_checks_capability,
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_decide(uuid,text,text,boolean)'))
+    ilike '%requested_by%'                          as decide_blocks_self_approval;
+
+-- الحرّاس التي لا يجوز أن تغيب من decide. متوقّع: الثلاثة true.
+select
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_decide(uuid,text,text,boolean)'))
+    ilike '%ptr_current_value%'  as rechecks_current_state,
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_decide(uuid,text,text,boolean)'))
+    ilike '%for update%'         as locks_row,
+  pg_get_functiondef(to_regprocedure('public.project_transition_request_decide(uuid,text,text,boolean)'))
+    ilike '%pending%'            as requires_pending;
+
+-- السلوك الحيّ (إنشاء · اعتماد · رفض · طلب بائت) لا يُثبت من محرّر SQL.
+-- شغّله بجلستَي مونتير ومالك: docs/project_editor_permissions_BEHAVIOR_DIAGNOSTIC.sql
 
 -- ─── 11) فحص المفردات: لا قيمة مخترعة تمرّ ────────────────────────────────
 -- متوقّع: bad_status_rejected = false · good_status_accepted = true ·
