@@ -958,10 +958,21 @@ begin
     raise exception 'SELF-TEST FAIL — تغيّر عدد المخرجات من % إلى %', v_before, v_after;
   end if;
 
-  -- ★ لا دفعات ولا صفوف staging أُنشئت بالترحيل ★
-  select count(*) into n from public.import_rows;
-  if n > 0 and not exists (select 1 from public.import_batches) then
-    raise exception 'SELF-TEST FAIL — صفوف staging يتيمة'; end if;
+  -- ★ استحالة الصفوف اليتيمة — تُفحص **بالقيد** لا بالعدّ ★
+  --   الصيغة السابقة (`if n > 0 and not exists (select 1 from import_batches)`)
+  --   كانت **لا تفشل أبدًا**: import_rows.batch_id عمود not null بمفتاح خارجيّ
+  --   إلى import_batches، فوجود صفّ واحد يضمن رياضيًّا وجود دفعة تقابله. فحص
+  --   يطبع PASS ولا يُثبت شيئًا. الضمانة الحقيقية هي القيد نفسه ⇒ نفحصه هو.
+  select count(*) into n from pg_constraint
+   where conrelid = 'public.import_rows'::regclass and contype = 'f'
+     and confrelid = 'public.import_batches'::regclass;
+  if n = 0 then
+    raise exception 'SELF-TEST FAIL — لا مفتاح خارجيّ من import_rows إلى import_batches ⇒ صفوف staging يتيمة ممكنة'; end if;
+  if exists (select 1 from information_schema.columns
+              where table_schema='public' and table_name='import_rows'
+                and column_name='batch_id' and is_nullable='YES') then
+    raise exception 'SELF-TEST FAIL — import_rows.batch_id يقبل NULL ⇒ صفّ staging بلا دفعة';
+  end if;
 
   -- ★ لا منح لـ anon ★
   select count(*) into n from information_schema.role_table_grants

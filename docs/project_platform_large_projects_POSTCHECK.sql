@@ -87,12 +87,12 @@ union all
 select '3. سياسات بلا coalesce أو بلا البوّابة (تنهار إلى NULL)', '0',
        (select count(*)::text from pg_policies
          where schemaname='public' and tablename='deliverable_internal'
-           and (coalesce(qual,'') not like '%coalesce%'
-                or coalesce(qual,'') not like '%deliverable_internal_is_staff%')),
+           and (coalesce(qual,'') not ilike '%coalesce%'
+                or coalesce(qual,'') not ilike '%deliverable_internal_is_staff%')),
        case when (select count(*) from pg_policies
                    where schemaname='public' and tablename='deliverable_internal'
-                     and (coalesce(qual,'') not like '%coalesce%'
-                          or coalesce(qual,'') not like '%deliverable_internal_is_staff%')) = 0
+                     and (coalesce(qual,'') not ilike '%coalesce%'
+                          or coalesce(qual,'') not ilike '%deliverable_internal_is_staff%')) = 0
             then 'PASS' else '🔴 FAIL' end
 union all
 select '4. منح anon/PUBLIC على deliverable_internal', '0',
@@ -353,9 +353,15 @@ begin
       then v := v || ' ★RLS-معطّلة-على-deliverable_internal★'; end if;
     select count(*) into n from pg_policies
      where schemaname='public' and tablename='deliverable_internal'
-       and (coalesce(qual,'') not like '%coalesce%'
-            or coalesce(qual,'') not like '%deliverable_internal_is_staff%');
+       and (coalesce(qual,'') not ilike '%coalesce%'
+            or coalesce(qual,'') not ilike '%deliverable_internal_is_staff%');
     if n > 0 then v := v || ' ★سياسة-قد-تنهار-إلى-NULL★'; end if;
+    -- ★ WITH CHECK يُفحص أيضًا (مثل §10 في RUNME): سياسة الكتابة `for all` تحمل
+    --   `with_check` مستقلًّا عن `qual`، وكانت خارج الفحص هنا تمامًا.
+    select count(*) into n from pg_policies
+     where schemaname='public' and tablename='deliverable_internal' and with_check is not null
+       and (with_check not ilike '%coalesce%' or with_check not ilike '%deliverable_internal_is_staff%');
+    if n > 0 then v := v || ' ★WITH-CHECK-قد-ينهار-إلى-NULL★'; end if;
     select count(*) into n from information_schema.role_table_grants
      where table_schema='public' and table_name='deliverable_internal' and grantee in ('anon','PUBLIC');
     if n > 0 then v := v || ' ★anon-يملك-deliverable_internal★'; end if;

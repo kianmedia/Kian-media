@@ -54,7 +54,7 @@
 -- §0 · فحص قبْليّ داخل الملفّ (خارج المعاملة) — يفشل مبكرًا لا في المنتصف
 -- ─────────────────────────────────────────────────────────────────────────────
 do $pre$
-declare v_miss text := '';
+declare v_miss text := ''; c text;
 begin
   if to_regclass('public.deliverables') is null then v_miss := v_miss || ' public.deliverables'; end if;
   if to_regclass('public.projects')     is null then v_miss := v_miss || ' public.projects';     end if;
@@ -62,9 +62,25 @@ begin
   if to_regprocedure('public.is_admin()')              is null then v_miss := v_miss || ' is_admin()'; end if;
   if to_regprocedure('public.can_manage_projects()')   is null then v_miss := v_miss || ' can_manage_projects()'; end if;
   if to_regprocedure('public.can_access_project(uuid)')is null then v_miss := v_miss || ' can_access_project(uuid)'; end if;
+  -- ★ تبعيات صلبة لا تحذيرات: §8c يُعيد إنشاء سياسة "deliverables read" ويذكر
+  --   هذه الدوالّ **حرفيًّا داخل CREATE POLICY**؛ تعبير السياسة يُحلَّل وقت
+  --   الإنشاء، فغياب أيّها = فشل 42883 في منتصف المعاملة بعد أن أُسقطت السياسة.
+  if to_regprocedure('public.is_client_side(uuid)') is null then v_miss := v_miss || ' is_client_side(uuid)'; end if;
+  if to_regprocedure('public.is_not_blocked()')     is null then v_miss := v_miss || ' is_not_blocked()';     end if;
+  if to_regprocedure('public.is_kian_member(uuid)') is null then v_miss := v_miss || ' is_kian_member(uuid)'; end if;
   if not exists (select 1 from information_schema.columns
                   where table_schema='public' and table_name='projects' and column_name='parent_project_id')
     then v_miss := v_miss || ' projects.parent_project_id'; end if;
+  -- ★ أعمدة يعتمد عليها §8 (محرّك التقدّم) و§8b (التعديل الجماعيّ) داخل أجسام
+  --   plpgsql. أجسام plpgsql **لا تُحلَّل وقت الإنشاء**، والفحص الذاتي لا يصل
+  --   إليها (auth.uid() = NULL يوقف النداء عند البوّابة) ⇒ غيابها كان يُنتج
+  --   ترحيلًا يُعلن PASS ثم ينهار في أوّل استعمال حقيقيّ. نرفض هنا بدلًا من ذلك.
+  foreach c in array array['due_date','assignee_id','is_deleted']
+  loop
+    if not exists (select 1 from information_schema.columns
+                    where table_schema='public' and table_name='deliverables' and column_name=c)
+      then v_miss := v_miss || ' deliverables.' || c; end if;
+  end loop;
   if v_miss <> '' then
     raise exception 'LARGE_PROJECTS PREFLIGHT: تبعيات مفقودة:% — طبّق حزم المنصّة الأساسية أولًا.', v_miss;
   end if;
@@ -126,7 +142,13 @@ alter table public.deliverables add column if not exists requires_printing  bool
 alter table public.deliverables add column if not exists sort_order         int;
 
 -- حزام أمان: لو كانت الأعمدة موجودة من تشغيل سابق وفيها NULL.
-update public.deliverables set client_visible    = false               where client_visible    is null;
+-- ⚠️ `true` وليس `false`. العمود مُعرَّف `not null default true` (السطر 118)،
+--    و§8c تقرأ `coalesce(client_visible, true)`. تعبئة الفراغ بـ`false` كانت
+--    تناقض الاثنين، وهي **نفس** الخطأ الذي أُصلح مرّة عند القيمة الافتراضية:
+--    تحت أيّ حالة جزئية سابقة كانت ستُخفي **كل مخرج تاريخيّ عن كل عميل** دفعةً
+--    واحدة. السطر ميت اليوم (لا NULL تحت `not null`) — والاتّساق يبقى واجبًا،
+--    لأن الحزام الذي يشدّ في الاتجاه الخاطئ أسوأ من غيابه.
+update public.deliverables set client_visible    = true                where client_visible    is null;
 update public.deliverables set schedule_status   = 'awaiting_schedule' where schedule_status   is null;
 update public.deliverables set completed_units   = 0                   where completed_units   is null;
 update public.deliverables set recurrence_type   = 'none'              where recurrence_type   is null;
@@ -1382,7 +1404,7 @@ declare
   v_missing text := '';
   c text; f text;
   v_before int; v_after int;
-  v_narrow int; v_seed int; v_anon int; v_null_ct int;
+  v_narrow int; v_seed int; v_anon int; v_null_ct int; v_att smallint;
 begin
   -- (1) الأعمدة الـ18 + الثلاثة على projects
   foreach c in array array[
@@ -1442,8 +1464,17 @@ begin
   if v_missing <> '' then raise exception 'SELF-TEST FAIL — كائنات مفقودة:%', v_missing; end if;
 
   -- (3) القيد الضيّق زال فعلًا والقيد المفتوح حاضر
+  -- ★ مقصور على قيود العمود `type` تمامًا كما في §3: قيد على عمود آخر يصادف
+  --   احتواؤه على video/photo **لا يُسقطه §3 أبدًا** (حلقته تشترط
+  --   v_att = any (conkey))، فمطالبته بالزوال هنا كانت تُنتج فشلًا أبديًّا على
+  --   قاعدة سليمة — تشديدٌ في الدقّة لا تخفيف: أيّ قيد ضيّق حقيقيّ على type
+  --   يذكر العمود في conkey بالضرورة.
+  select a.attnum into v_att from pg_attribute a
+   where a.attrelid = 'public.deliverables'::regclass and a.attname = 'type' and not a.attisdropped;
+  if v_att is null then raise exception 'SELF-TEST FAIL — العمود deliverables.type اختفى'; end if;
   select count(*) into v_narrow from pg_constraint c
    where c.conrelid = 'public.deliverables'::regclass and c.contype='c'
+     and v_att = any (c.conkey)
      and pg_get_constraintdef(c.oid) ilike '%video%' and pg_get_constraintdef(c.oid) ilike '%photo%'
      and pg_get_constraintdef(c.oid) not ilike '%photography%';
   if v_narrow > 0 then raise exception 'SELF-TEST FAIL — القيد الضيّق على type ما زال حيًّا (%)', v_narrow; end if;
@@ -1473,19 +1504,51 @@ begin
                     where schemaname='public' and tablename='deliverable_internal' and policyname=c)
       then raise exception 'SELF-TEST FAIL — سياسة % مفقودة على deliverable_internal', c; end if;
   end loop;
+  -- ⚠️ `ilike` وليس `like` — وهذا سبب فشل التشغيل الأول على الإنتاج.
+  --    `pg_policies.qual` ليست النصّ الذي كتبناه، بل ناتج **إعادة توليد** من
+  --    `pg_get_expr`. ومُفكِّك PostgreSQL يطبع `COALESCE(` **بأحرف كبيرة** دائمًا
+  --    (ruleutils.c)، بينما نكتبها نحن `coalesce(`. فكان `like '%coalesce%'`
+  --    يفشل على سياسة **سليمة تمامًا**. المُعرِّفات (اسم الدالّة، اسم العمود)
+  --    تبقى صغيرة، ولذلك مرّت بقية الفحوص. الإصلاح تصحيح للفحص لا تخفيف له:
+  --    الشرط نفسه، غير حسّاس لحالة الأحرف.
   if exists (select 1 from pg_policies
               where schemaname='public' and tablename='deliverable_internal'
-                and (coalesce(qual,'') not like '%coalesce%'
-                     or coalesce(qual,'') not like '%deliverable_internal_is_staff%'))
+                and (coalesce(qual,'') not ilike '%coalesce%'
+                     or coalesce(qual,'') not ilike '%deliverable_internal_is_staff%'))
     then raise exception 'SELF-TEST FAIL — سياسة على deliverable_internal بلا coalesce/بلا البوّابة ⇒ قد تنهار إلى NULL'; end if;
+
+  -- ★ تشديد: `WITH CHECK` لم تكن مفحوصة إطلاقًا. سياسة الكتابة `for all` تحمل
+  --   `with check` مستقلًّا عن `using`؛ لو كُتب بلا coalesce لَمرّ الفحص القديم.
+  if exists (select 1 from pg_policies
+              where schemaname='public' and tablename='deliverable_internal'
+                and with_check is not null
+                and (with_check not ilike '%coalesce%'
+                     or with_check not ilike '%deliverable_internal_is_staff%'))
+    then raise exception 'SELF-TEST FAIL — WITH CHECK على deliverable_internal بلا coalesce/بلا البوّابة'; end if;
+
+  -- ★★ الفحص الأهمّ: **سلوكيّ لا نصّيّ**. مطابقة النصوص خدعتنا للتوّ؛ استدعاء
+  --    الدالّة لا يُخدع. لو أعادت NULL يومًا لانهار مُسنِد السياسة إلى NULL
+  --    (و`false OR NULL = NULL`) — وهو شكل الحادثة التي جعلت متصلًا غير مُصادَق
+  --    يقرأ بيانات شركة حقيقية. لا تحذف هذا الفحص.
+  --    `null::uuid` صراحةً لا `null` مجرّدًا: NULL بلا نوع قد يُربك مُحلّل الأنواع،
+  --    وما نريده فحصٌ للسلوك لا تشغيلة فاشلة ثانية على الإنتاج بسبب صياغة.
+  if public.deliverable_internal_is_staff(null::uuid) is null
+     or public.deliverable_internal_is_staff('00000000-0000-0000-0000-000000000000'::uuid) is null
+    then raise exception 'SELF-TEST FAIL — deliverable_internal_is_staff تُعيد NULL ⇒ فشل-مفتوح محتمل'; end if;
   select count(*) into v_anon
     from information_schema.role_table_grants
    where table_schema='public' and table_name='deliverable_internal' and grantee in ('anon','PUBLIC');
   if v_anon > 0 then raise exception 'SELF-TEST FAIL — anon/PUBLIC يملك % صلاحية على deliverable_internal', v_anon; end if;
 
   -- (5) الزرع + عدم بقاء content_type فارغًا
-  select count(*) into v_seed from public.deliverable_content_types where is_active;
-  if v_seed < 13 then raise exception 'SELF-TEST FAIL — الزرع ناقص (% نوع مفعّل)', v_seed; end if;
+  -- ★ يُفحص **وجود المفاتيح الثلاثة عشر** لا عددُ المُفعَّل منها: is_active بيانات
+  --   يملكها المالك (§2 لا يدهسها عند إعادة التشغيل بـ on conflict do nothing)،
+  --   فتعطيل المالك لنوع واحد كان سيُسقط ترحيلًا سليمًا تمامًا. والقيمة المضافة
+  --   من انحراف البيانات (§3) تدخل بـ is_active = false فلا تُلبّس العدّ.
+  select count(*) into v_seed from public.deliverable_content_types
+   where key in ('video','photography','design','print','live_stream','event','field_execution',
+                 'presentation','gift','report','digital_content','copywriting','custom');
+  if v_seed < 13 then raise exception 'SELF-TEST FAIL — الزرع ناقص (% من 13 مفتاحًا)', v_seed; end if;
   select count(*) into v_null_ct from public.deliverables where content_type is null;
   if v_null_ct > 0 then raise exception 'SELF-TEST FAIL — % مخرج بلا content_type', v_null_ct; end if;
 
@@ -1504,8 +1567,8 @@ begin
   -- (7) ★ لا منح لـ anon ★
   select count(*) into v_anon
     from information_schema.role_table_grants
-   where table_schema='public' and table_name='deliverable_content_types' and grantee='anon';
-  if v_anon > 0 then raise exception 'SELF-TEST FAIL — anon يملك % صلاحية على الجدول المرجعيّ', v_anon; end if;
+   where table_schema='public' and table_name='deliverable_content_types' and grantee in ('anon','PUBLIC');
+  if v_anon > 0 then raise exception 'SELF-TEST FAIL — anon/PUBLIC يملك % صلاحية على الجدول المرجعيّ', v_anon; end if;
   select count(*) into v_anon
     from information_schema.role_routine_grants
    where routine_schema='public' and grantee='anon'
@@ -1517,7 +1580,7 @@ begin
   if not exists (
     select 1 from pg_policies
      where schemaname='public' and tablename='deliverables' and policyname='deliverables read'
-       and coalesce(qual,'') like '%client_visible%')
+       and coalesce(qual,'') ilike '%client_visible%')
   then raise exception 'SELF-TEST FAIL — سياسة القراءة لا تفرض client_visible.'; end if;
 
   -- (9) التعديل الجماعيّ: قائمة فارغة = بلا أثر · مفتاح خارج القائمة البيضاء يُرفض.
@@ -1525,7 +1588,22 @@ begin
   -- 'not authorized' وهذا **نجاح** بحدّ ذاته (البوّابة تعمل). لذلك نقبل الحالتين:
   -- إمّا الشكل الصحيح بلا أثر، وإمّا رفض التفويض — وأيّ خطأ آخر إخفاق حقيقيّ.
   declare v_out jsonb; v_err text; v_rejected boolean := false;
+          v_body text; v_proved boolean := false;
   begin
+    -- ★★ إثبات بنيويّ **قبل** أيّ نداء ★★
+    --   النداء أدناه يتوقّف عند `auth.uid() is null` في بيئة المالك، فلا يبلغ
+    --   القائمة البيضاء إطلاقًا ⇒ كان الفحص السلوكيّ وحده يمرّ **حتى لو حُذفت
+    --   القائمة كلّها** (يكفيه أن ترفع الدالّة أيّ استثناء). هذا بالضبط شكل
+    --   «فحص يطبع PASS ولا يُثبت شيئًا». نقرأ جسم الدالّة نفسه:
+    --   pg_get_functiondef يُعيد الجسم **كما كُتب** (لا يمرّ بمُفكِّك التعابير
+    --   ruleutils الذي خدعنا في qual)، فمطابقة النصّ هنا موثوقة.
+    v_body := pg_get_functiondef(
+                to_regprocedure('public.large_project_deliverables_bulk_update(uuid[],jsonb,text,boolean)'));
+    if coalesce(v_body,'') not like '%unsupported_patch_key%'
+       or coalesce(v_body,'') not like '%v_allowed%' then
+      raise exception 'SELF-TEST FAIL — القائمة البيضاء لمفاتيح p_patch غائبة من جسم large_project_deliverables_bulk_update';
+    end if;
+
     begin
       v_out := public.large_project_deliverables_bulk_update('{}'::uuid[], '{}'::jsonb, null, true);
       if coalesce(v_out->>'ok','') <> 'true' or coalesce((v_out->>'requested')::int, -1) <> 0 then
@@ -1543,10 +1621,22 @@ begin
       v_out := public.large_project_deliverables_bulk_update(
                  array['00000000-0000-0000-0000-000000000000'::uuid],
                  '{"project_id":"00000000-0000-0000-0000-000000000000"}'::jsonb, 'selftest', true);
-    exception when others then v_rejected := true;
+    exception when others then
+      -- ★ `when others then v_rejected := true` وحده كان يبتلع **أيّ** خطأ ويُعلن
+      --   نجاحًا. نُميّز الآن: رفض القائمة البيضاء = إثبات · رفض التفويض = بيئة
+      --   المالك (مقبول، والإثبات البنيويّ أعلاه يغطّيه) · أيّ خطأ آخر = إخفاق.
+      v_err      := sqlerrm;
+      v_rejected := true;
+      v_proved   := (v_err like '%unsupported_patch_key%');
+      if not v_proved and v_err not like '%not authorized%' then
+        raise exception 'SELF-TEST FAIL — مفتاح خارج القائمة البيضاء رُفض بخطأ غير متوقّع: %', v_err;
+      end if;
     end;
     if not v_rejected then
       raise exception 'SELF-TEST FAIL — مفتاح خارج القائمة البيضاء (project_id) لم يُرفض.';
+    end if;
+    if not v_proved then
+      raise notice 'SELF-TEST: القائمة البيضاء أُثبتت **بنيويًّا** فقط — auth.uid() = NULL في محرّر SQL فالنداء يتوقّف عند البوّابة قبل بلوغها. أعد الاختبار سلوكيًّا من الواجهة بحساب حقيقيّ.';
     end if;
   end;
 
