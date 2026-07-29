@@ -26,6 +26,9 @@ const REG: Record<string, TabDef> = {
   asset_custody: { href: "/client-portal/asset-custody",  ar: "عهدتي المسجلة", en: "My Registered Custody", adminAr: "مخزون الأصول والعهد", adminEn: "Asset Inventory & Custody", staffAr: "عهدتي المسجلة", staffEn: "My Registered Custody" },
   rentals:       { href: "/client-portal/rentals",         ar: "تأجيراتي",      en: "My Rentals", adminAr: "تأجير المعدات", adminEn: "Equipment Rental", staffAr: "تأجير المعدات", staffEn: "Rental" },
   employee:      { href: "/client-portal/employee",      ar: "بوابة الموظف",  en: "Employee Portal", adminAr: "الموارد البشرية", adminEn: "Human Resources" },
+  // مركز التشغيل والإنتاج (Phase 2) — داخليّ بحت: غائب عن مجموعتَي client/lead، والقاعدة
+  // ترفض العميل حتى برابط مباشر (prodops_can_view = is_staff). الطاقم يرى إسناداته هو فقط.
+  operations:    { href: "/client-portal/operations",    ar: "مركز التشغيل", en: "Operations", adminAr: "التشغيل والإنتاج", adminEn: "Production Operations", staffAr: "مهامّي الميدانية", staffEn: "My Field Work" },
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
@@ -34,25 +37,25 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "operations", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "operations", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "operations", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
   sales:       ["employee", "quotes", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
-  editor:      ["employee", "projects", "project_core", "equipment", "asset_custody", "notifications", "profile"],
+  editor:      ["employee", "operations", "projects", "project_core", "equipment", "asset_custody", "notifications", "profile"],
   hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "notifications", "profile"],
   readonly:    ["employee", "projects", "equipment", "asset_custody", "notifications", "profile"],
   finance:     ["employee", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
-  photographer:     ["employee", "equipment", "asset_custody", "projects", "notifications", "profile"],
-  lighting_tech:    ["employee", "equipment", "asset_custody", "notifications", "profile"],
-  camera_assistant: ["employee", "equipment", "asset_custody", "notifications", "profile"],
-  custody_officer:  ["employee", "equipment", "asset_custody", "rentals", "notifications", "profile"],
+  photographer:     ["employee", "operations", "equipment", "asset_custody", "projects", "notifications", "profile"],
+  lighting_tech:    ["employee", "operations", "equipment", "asset_custody", "notifications", "profile"],
+  camera_assistant: ["employee", "operations", "equipment", "asset_custody", "notifications", "profile"],
+  custody_officer:  ["employee", "operations", "equipment", "asset_custody", "rentals", "notifications", "profile"],
   client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "equipment", "rentals", "notifications", "profile"],
   lead:        ["overview", "quotes", "messages", "files", "offers", "equipment", "notifications", "profile"],
 };
