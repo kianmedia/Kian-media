@@ -92,7 +92,7 @@ test("ProjectOps يستورد الشاشة ويُركِّبها بمفتاح م�
   assert.match(OPS, /import ProjectImportPanel from "@\/components\/portal\/ProjectImportPanel"/);
   assert.match(OPS, /type TabKey =[^;]*"import"/, "المفتاح import غير معرَّف في TabKey");
   assert.match(OPS, /\{ k: "import", ar: "[^"]+", en: "[^"]+", group: "\w+" \}/, "المفتاح import غير مسجَّل في TABS");
-  assert.match(OPS, /tab === "import" && canManage && <ProjectImportPanel/, "المفتاح import بلا جسم يُرسم");
+  assert.match(OPS, /tab === "import" && canAdminister && <ProjectImportPanel/, "المفتاح import بلا جسم يُرسم");
   assert.match(OPS, /<ProjectImportPanel projectId=\{projectId\}/, "الشاشة تُركَّب بلا معرّف مشروع");
 });
 
@@ -108,9 +108,13 @@ test("الاستيراد مقصور على الفريق بنفس بوّابة «
   const OPS = read(OPS_PATH);
   const filter = OPS.match(/const visibleTabs = TABS\.filter\([^\n]*\n?/);
   assert.ok(filter, "لم يُعثر على مُصفّي التبويبات");
-  // نفس الشرط حرفيًّا الذي يحرس «المحذوفات»: canManage = isAdminArea || isEditor.
-  assert.match(filter[0], /\(tb\.k !== "import" \|\| canManage\)/, "تبويب الاستيراد بلا بوّابة");
-  assert.match(OPS, /const canManage = caps\.isAdminArea \|\| caps\.isEditor;/, "تغيّر تعريف canManage");
+  // كان الاستيراد على بوّابة «المحذوفات» نفسها (canManage = isAdminArea || isEditor)،
+  // وهذا بالضبط ما جعل المونتير يبلغ الإدخال الجماعيّ. البوّابة الآن canAdminister
+  // (مالك/مدير)، وcanManage يبقى للأسطح التشغيلية وحدها.
+  assert.match(filter[0], /\(tb\.k !== "import" \|\| canAdminister\)/, "تبويب الاستيراد بلا بوّابة إدارية");
+  assert.doesNotMatch(filter[0], /\(tb\.k !== "import" \|\| canManage\)/, "الاستيراد عاد إلى بوّابة تشمل المونتير");
+  assert.match(OPS, /const canAdminister = caps\.isAdminArea;/, "تغيّر تعريف canAdminister");
+  assert.match(OPS, /const canManage = canAdminister \|\| caps\.isEditor;/, "تغيّر تعريف canManage");
   // ولا اختراع صلاحية جديدة داخل الشاشة نفسها.
   const panel = read(PANEL);
   assert.doesNotMatch(panel, /usePortal|caps\.|staff_role/, "الشاشة يجب أن ترث البوّابة من ProjectOps لا أن تخترع واحدة");

@@ -474,7 +474,7 @@ test("ProjectOps: تبديل التجربة للمستقل فقط، ولا يم�
   const fn = OPS.match(/async function toggleExperience\(\)[\s\S]*?\n  \}/)[0];
   assert.match(fn, /projectSetOperatingExperience\(projectId, next\)/, "التبديل لا يمرّ بـRPC");
   assert.doesNotMatch(fn, /pcSetStage|pcSetProgress|pcSetMeta/, "التبديل يمسّ المرحلة أو التقدّم");
-  assert.match(OPS, /hier\?\.project_scope === "standalone" && canManage && exp && \(\s*\n\s*<button onClick=\{\(\) => void toggleExperience\(\)\}/,
+  assert.match(OPS, /hier\?\.project_scope === "standalone" && canAdminister && exp && \(\s*\n\s*<button onClick=\{\(\) => void toggleExperience\(\)\}/,
     "زرّ التبديل يظهر لنطاق مشتقّ أو لمن لا يملك الإدارة");
 });
 

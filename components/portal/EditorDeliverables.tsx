@@ -8,6 +8,8 @@
 // ════════════════════════════════════════════════════════════════════════
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePortal } from "@/components/portal/PortalShell";
+import { trCanDecide } from "@/lib/portal/transitions";
 import { staffAddDeliverable, staffSetDeliverable } from "@/lib/portal/admin";
 import { emitProjectDeliverableEvent } from "@/lib/portal/notifyEmail";
 import { DELIVERABLE_STATUSES } from "@/components/portal/projectMeta";
@@ -16,8 +18,17 @@ import DeliverableNotesPanel from "@/components/portal/DeliverableNotesPanel";
 import type { Deliverable, DeliverableReview as Review, DeliverableType } from "@/lib/portal/types";
 
 // Statuses an editor may set (NO final_delivered / archived).
+// ── تضييق «الإظهار للعميل» و«الاعتماد» ───────────────────────────────────────
+// client_review و approved صارا قرارين إداريّين على الخادم
+// (can_send_to_client_review / can_finalize_deliverable في
+// docs/project_editor_permissions_RUNME.sql §4c). عرضهما للمونتير كان سيُنتج
+// استثناء SQL صريحًا عند كلّ محاولة — أي عطل، لا حدّ صلاحية مفهوم.
+// المالك/المدير (trCanDecide) يرى القائمتين كاملتين كما كان بالضبط.
 const EDITOR_SET = ["draft", "internal_review", "client_review", "revision_requested", "approved"];
 const EDITOR_ADD = ["draft", "internal_review", "client_review"] as const;
+// ما يبقى للمونتير: خطوات التنفيذ وحدها.
+const EDITOR_SET_EXEC = ["draft", "internal_review", "revision_requested"];
+const EDITOR_ADD_EXEC = ["draft", "internal_review"] as const;
 const TYPES: { v: DeliverableType; ar: string; en: string }[] = [
   { v: "video", ar: "فيديو", en: "Video" },
   { v: "photo", ar: "صورة", en: "Image" },
@@ -28,19 +39,38 @@ export default function EditorDeliverables({
   projectId, items, reviews, onChanged,
 }: { projectId: string; items: Deliverable[]; reviews: Review[]; onChanged: () => void }) {
   const { t, isAr } = useI18n();
+  const { caps } = usePortal();
+  // المالك/المدير فقط. المونتير والعميل مستثنيان صراحةً داخل trCanDecide.
+  const canDecide = trCanDecide(caps);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; kind: "ok" | "err"; text: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [preview, setPreview] = useState<{ title: string; url: string | null } | null>(null);
 
-  const setOpts = DELIVERABLE_STATUSES.filter((s) => EDITOR_SET.includes(s.key));
+  const allowedSet = canDecide ? EDITOR_SET : EDITOR_SET_EXEC;
+  const setOpts = DELIVERABLE_STATUSES.filter((s) => allowedSet.includes(s.key));
 
   async function setStatus(d: Deliverable, status: string) {
     if (status === d.status) return;
+    // رفض دفاعيّ: لا نرسل قيمة يرفضها الخادم أصلًا (الخادم يبقى الحدّ الحقيقيّ).
+    if (!allowedSet.includes(status)) {
+      setFlash({ id: d.id, kind: "err", text: t({
+        ar: "هذا القرار إداريّ — سجّل «طلب انتقال» من صفحة المشروع بدلًا منه.",
+        en: "That is a management decision — file a transition request from the project page instead." }) });
+      return;
+    }
     setBusyId(d.id); setFlash(null);
     const r = await staffSetDeliverable({ deliverableId: d.id, status: status as never });
     setBusyId(null);
-    if (!r.ok || !r.data) { setFlash({ id: d.id, kind: "err", text: t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked" : r.error) }); onChanged(); return; }
+    if (!r.ok || !r.data) {
+      // رفض الصلاحية يُسمّى باسمه، ولا يُعرض كعطل عامّ.
+      const denied = !r.ok && /not authorized|forbidden|42501/i.test(String(r.error ?? ""));
+      setFlash({ id: d.id, kind: "err", text: denied
+        ? t({ ar: "لا تملك صلاحية هذا القرار — سجّل «طلب انتقال» بدلًا منه.",
+              en: "You are not allowed to make this decision — file a transition request instead." })
+        : t({ ar: "تعذّر التحديث: ", en: "Update failed: " }) + (r.ok ? "blocked" : r.error) });
+      onChanged(); return;
+    }
     // Batch 9D: editors are the primary preview senders — fire the canonical
     // producer so management/PM/assignee/actor + client are actually notified.
     if (status === "client_review") void emitProjectDeliverableEvent(d.id, "deliverable.preview_sent");
@@ -103,19 +133,22 @@ export default function EditorDeliverables({
         </div>
       )}
 
-      {showAdd && <AddModal projectId={projectId} onClose={() => setShowAdd(false)} onAdded={(id, status) => { setShowAdd(false); if (status === "client_review" && id) void emitProjectDeliverableEvent(id, "deliverable.preview_sent"); onChanged(); }} />}
+      {showAdd && <AddModal projectId={projectId} canDecide={canDecide} onClose={() => setShowAdd(false)} onAdded={(id, status) => { setShowAdd(false); if (status === "client_review" && id) void emitProjectDeliverableEvent(id, "deliverable.preview_sent"); onChanged(); }} />}
       {preview && <PreviewModal title={preview.title} url={preview.url} onClose={() => setPreview(null)} />}
     </div>
   );
 }
 
-function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose: () => void; onAdded: (id: string, status: string) => void }) {
+function AddModal({ projectId, canDecide, onClose, onAdded }: { projectId: string; canDecide: boolean; onClose: () => void; onAdded: (id: string, status: string) => void }) {
   const { t, isAr } = useI18n();
+  const addOpts: readonly string[] = canDecide ? EDITOR_ADD : EDITOR_ADD_EXEC;
   const [title, setTitle] = useState("");
   const [type, setType] = useState<DeliverableType>("video");
   const [previewUrl, setPreviewUrl] = useState("");
   const [vimeoUrl, setVimeoUrl] = useState("");
-  const [status, setStatus] = useState<(typeof EDITOR_ADD)[number]>("client_review");
+  // الافتراضيّ للمونتير «مراجعة داخلية» لا «لدى العميل»: الإنشاء المباشر في
+  // «لدى العميل» كشفٌ للعميل، ويرفضه الخادم الآن. المالك/المدير كما كان.
+  const [status, setStatus] = useState<(typeof EDITOR_ADD)[number]>(canDecide ? "client_review" : "internal_review");
   const [adding, setAdding] = useState(false);
   const [err, setErr] = useState("");
 
@@ -126,7 +159,14 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
     setAdding(true);
     const r = await staffAddDeliverable({ projectId, title: title.trim(), type, previewUrl: previewUrl.trim() || undefined, vimeoUrl: vimeoUrl.trim() || undefined, status });
     setAdding(false);
-    if (!r.ok) { setErr(t({ ar: "تعذّر الإضافة: ", en: "Add failed: " }) + r.error); return; }
+    if (!r.ok) {
+      const denied = /not authorized|forbidden|42501/i.test(String(r.error ?? ""));
+      setErr(denied
+        ? t({ ar: "لا تملك صلاحية البدء بهذه الحالة — أنشئه في «مراجعة داخلية» ثم سجّل «طلب انتقال».",
+              en: "You may not start at this status — create it in internal review, then file a transition request." })
+        : t({ ar: "تعذّر الإضافة: ", en: "Add failed: " }) + r.error);
+      return;
+    }
     onAdded(typeof r.data === "string" ? r.data : "", status);
   }
 
@@ -146,7 +186,7 @@ function AddModal({ projectId, onClose, onAdded }: { projectId: string; onClose:
               </select></div>
             <div><label style={lbl}>{t({ ar: "الحالة", en: "Status" })}</label>
               <select value={status} onChange={(e) => setStatus(e.target.value as (typeof EDITOR_ADD)[number])} style={input}>
-                {EDITOR_ADD.map((s) => { const m = DELIVERABLE_STATUSES.find((x) => x.key === s)!; return <option key={s} value={s} style={{ background: "#0a0a0a" }}>{isAr ? m.ar : m.en}</option>; })}
+                {addOpts.map((s) => { const m = DELIVERABLE_STATUSES.find((x) => x.key === s)!; return <option key={s} value={s} style={{ background: "#0a0a0a" }}>{isAr ? m.ar : m.en}</option>; })}
               </select></div>
           </div>
           <div><label style={lbl}>{t({ ar: "رابط المعاينة", en: "Preview URL" })}</label><input value={previewUrl} onChange={(e) => setPreviewUrl(e.target.value)} type="url" dir="ltr" placeholder="https://youtube.com/... / image / video" style={input} /></div>

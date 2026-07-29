@@ -15,7 +15,7 @@
 // وإذا لم تكن دالّة التعديل الجماعي مطبّقة: الشريط يظهر **معطَّلًا** برسالة صريحة.
 // لا مسار التفافيّ يكتب في الجدول مباشرةً بلا أثر تدقيق.
 // ════════════════════════════════════════════════════════════════════════════
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
   lpBulkApply, lpErr, LP_BULK_LABELS, LP_BULK_REQUIRES, LP_BULK_CONFIRM_THRESHOLD,
@@ -31,8 +31,15 @@ const KINDS: LpBulkKind[] = [
   "set_schedule", "clear_schedule", "move_to_stage", "set_requirements",
 ];
 
+/**
+ * الإجراءات الثلاثة التي ليست تنفيذًا بل **قرارًا**: نقل المخرج بين المراحل،
+ * وتغيير حالته (ومنها «معتمد»/«سُلِّم نهائيًّا»)، وإظهاره للعميل. من لا يملك
+ * القرار لا يراها هنا أصلًا، ويمرّ عبر «طلب انتقال». والحدّ الحقيقيّ على الخادم.
+ */
+const TRANSITION_KINDS: LpBulkKind[] = ["set_status", "set_client_visibility", "move_to_stage"];
+
 export default function LargeProjectBulkBar({
-  ids, caps, stages, staff, onApplied, onClose,
+  ids, caps, stages, staff, onApplied, onClose, requestOnly, onRequestTransition,
 }: {
   ids: string[];
   caps: LpCapabilities;
@@ -41,9 +48,19 @@ export default function LargeProjectBulkBar({
   /** يُسلَّم التقرير إلى الأب ليبقى ظاهرًا بعد اختفاء التحديد (وبالتالي هذا الشريط). */
   onApplied: (outcome: LpBulkOutcome) => void;
   onClose: () => void;
+  /** true ⇒ لا تنفيذ مباشر للقرارات الثلاثة؛ المسار البديل هو الطلب. */
+  requestOnly?: boolean;
+  onRequestTransition?: () => void;
 }) {
   const { t } = useI18n();
+  const kinds = requestOnly === true ? KINDS.filter((k) => !TRANSITION_KINDS.includes(k)) : KINDS;
   const [kind, setKind] = useState<LpBulkKind>("assign_owner");
+  // القدرات تصل بعد أوّل رسم: لو صار الإجراء المختار خارج القائمة، يُعاد ضبطه
+  // بدل أن يبقى محدَّدًا في عنصر لا يعرضه (فيُرسل بضغطة واحدة).
+  useEffect(() => {
+    const allowed = requestOnly === true ? KINDS.filter((k) => !TRANSITION_KINDS.includes(k)) : KINDS;
+    if (!allowed.includes(kind)) setKind(allowed[0] ?? "assign_owner");
+  }, [requestOnly, kind]);
   const [assignee, setAssignee] = useState("");
   const [priority, setPriority] = useState<LpPriority>("normal");
   const [status, setStatus] = useState<LpDeliverableStatus>("internal_review");
@@ -82,6 +99,12 @@ export default function LargeProjectBulkBar({
 
   async function apply() {
     setErr("");
+    // دفاع في العمق: لا تنفيذ مباشر لقرار انتقال في وضع الطلب، حتى لو تسرّبت
+    // الحالة من مسار آخر. (الرفض القاطع على الخادم على أيّ حال.)
+    if (requestOnly === true && TRANSITION_KINDS.includes(kind)) {
+      setErr(t({ ar: "هذا الإجراء يحتاج اعتمادًا — استخدم «طلب انتقال».", en: "This action needs approval — use “request transition”." }));
+      return;
+    }
     const action = build();
     if (!action) { setErr(t({ ar: "أكمل بيانات الإجراء أوّلًا.", en: "Complete the action fields first." })); return; }
     if (!reason.trim()) { setErr(t({ ar: "السبب إلزاميّ — يُسجَّل في أثر التدقيق.", en: "A reason is required for the audit trail." })); return; }
@@ -119,10 +142,27 @@ export default function LargeProjectBulkBar({
         </LpNotice>
       )}
 
+      {requestOnly === true && (
+        <div className="flex items-center gap-2 flex-wrap rounded-lg border border-amber-900 bg-amber-950/30 px-3 py-2">
+          <span className="text-[11px] text-amber-200">
+            {t({
+              ar: "نقل المرحلة وتغيير الحالة والإظهار للعميل تحتاج اعتمادًا — سجّل طلبًا بالسبب.",
+              en: "Stage moves, status changes and client visibility need approval — file a request with a reason.",
+            })}
+          </span>
+          {onRequestTransition && (
+            <button type="button" onClick={onRequestTransition}
+              className="text-[11px] bg-stone-800 border border-amber-800 text-amber-200 rounded-lg px-3 py-1.5 whitespace-nowrap ms-auto">
+              {t({ ar: "طلب انتقال", en: "Request transition" })} (<span dir="ltr">{count}</span>)
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 flex-wrap">
         <select value={kind} onChange={(e) => { setKind(e.target.value as LpBulkKind); setErr(""); }}
           className="bg-stone-950 border border-stone-700 rounded-lg px-2 py-1.5 text-[11px] text-stone-200">
-          {KINDS.map((k) => <option key={k} value={k}>{t(LP_BULK_LABELS[k])}</option>)}
+          {kinds.map((k) => <option key={k} value={k}>{t(LP_BULK_LABELS[k])}</option>)}
         </select>
 
         {kind === "assign_owner" && (

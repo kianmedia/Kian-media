@@ -30,7 +30,9 @@ test("W1: the route renders ProjectOps, and ProjectOps mounts the actions menu",
   assert.ok(/<ProjectActionsMenu/.test(OPS), "menu actually rendered");
   // and it sits in the lifecycle section, beside the bar
   const i = OPS.indexOf("<ProjectActionsMenu");
-  const before = OPS.slice(Math.max(0, i - 1500), i);
+  // النافذة أوسع من 1500: بين شريط المراحل والقائمة يقع الآن مسار «طلب انتقال»
+  // لمن لا يملك قرار النقل. الثابت المُختبَر واحد: القائمة داخل قسم دورة الحياة.
+  const before = OPS.slice(Math.max(0, i - 3000), i);
   assert.ok(/PC_STAGES\.map/.test(before), "rendered right after the stage bar");
 });
 
@@ -78,7 +80,9 @@ test("W8: the linear stage bar is locked while on hold / cancelled / closed", ()
   assert.ok(/export function stageBarLocked/.test(MENU), "helper exists");
   assert.ok(/isAdminState\(coreStage\) \|\| coreStage === "closed"/.test(MENU), "covers all three");
   assert.ok(/const barLocked = stageBarLocked\(core\?\.core_stage\)/.test(OPS), "computed in the page");
-  assert.ok(/disabled=\{busy \|\| !canManage \|\| barLocked\}/.test(OPS), "stage buttons disabled");
+  // canAdminister (مالك/مدير) لا canManage: نقل مرحلة المشروع قرار إداريّ،
+  // والمونتير يمرّ عبر «طلب انتقال» بدل زرّ تنفيذ.
+  assert.ok(/disabled=\{busy \|\| !canAdminister \|\| barLocked\}/.test(OPS), "stage buttons disabled");
   assert.ok(/cursor-not-allowed/.test(OPS), "and visibly disabled");
   assert.ok(/المراحل موقوفة/.test(OPS), "tooltip explains why");
 });

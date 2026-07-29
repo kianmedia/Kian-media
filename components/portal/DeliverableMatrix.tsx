@@ -32,12 +32,18 @@ import {
   lpCard, LpNotice, DeliverableStatusBadge, DeliverableScheduleBadge, DeliverablePriorityBadge,
 } from "@/components/portal/LargeProjectAtoms";
 import LargeProjectBulkBar, { DeliverableBulkReport } from "@/components/portal/LargeProjectBulkBar";
+import { trMustRequest } from "@/lib/portal/transitions";
+import { useTransitionRequests } from "@/components/portal/TransitionAtoms";
+import TransitionRequestModal, { type TrKindOption, type TrTarget } from "@/components/portal/TransitionRequestModal";
 
 const PAGE = 50;
 
 export default function DeliverableMatrix({
-  rows, stages, caps, staff, filters, onFilters, onChanged, truncated,
+  projectId, projectName, rows, stages, caps, staff, filters, onFilters, onChanged, truncated,
 }: {
+  /** المشروع المعروض — لقراءة طلبات الانتقال المعلَّقة وحدها. */
+  projectId: string;
+  projectName?: string | null;
   rows: LpDeliverable[];
   stages: LpStage[];
   caps: LpCapabilities;
@@ -114,6 +120,91 @@ export default function DeliverableMatrix({
   const activeCount = lpFiltersActive(filters);
   const visible = filtered.slice(0, shown);
   const selectedIds = useMemo(() => filtered.filter((d) => selected.has(d.id)).map((d) => d.id), [filtered, selected]);
+
+  // ── مسار «طلب انتقال» ─────────────────────────────────────────────────────
+  // من ينفّذ العمل ولا يملك قرار الانتقال يرى طلبًا بدل زرّ تنفيذ. القرارات
+  // الثلاثة (المرحلة/الحالة/الظهور للعميل) تختفي من الشريط الجماعيّ في وضعه.
+  // طلب المخرَج يُسجَّل على **مشروع المخرَج نفسه** (المرحلة) لا على المشروع
+  // الرئيسيّ — والقائمة على الخادم تُصفّي بـproject_id تمامًا. لذلك تُقرأ مشاريع
+  // الصفوف كلّها، وإلّا غابت شارات المراحل عن لوحة المشروع الكبير.
+  const trProjectIds = useMemo(() => {
+    const s = new Set<string>([projectId]);
+    for (const d of rows) if (d.project_id) s.add(d.project_id);
+    return Array.from(s);
+  }, [projectId, rows]);
+  const tr = useTransitionRequests(trProjectIds, true);
+  const mustRequest = trMustRequest(tr.role);
+  const [reqTargets, setReqTargets] = useState<string[] | null>(null);
+
+  const byId = useMemo(() => {
+    const m = new Map<string, LpDeliverable>();
+    for (const d of rows) m.set(d.id, d);
+    return m;
+  }, [rows]);
+
+  const requestKinds = useMemo<TrKindOption[]>(() => {
+    const st = (id: string | null) => (id ? byId.get(id) ?? null : null);
+    const list: TrKindOption[] = [];
+    if (stages.length > 0) {
+      list.push({
+        kind: "stage",
+        label: "نقل المخرج بين المراحل",
+        hint: "لا يُنقل المخرج عند الإرسال — النقل يقع عند الاعتماد.",
+        options: stages.map((s) => ({ value: s.project_id, label: s.name ?? s.project_id.slice(0, 8) })),
+        from: (tg) => {
+          const d = st(tg.deliverableId);
+          const id = d ? lpStageIdOf(d) : "";
+          return { value: id || null, label: stageName.get(id) ?? "—" };
+        },
+      });
+    }
+    list.push({
+      kind: "status",
+      label: "تغيير حالة المخرج",
+      hint: "«معتمد» و«سُلِّم نهائيًّا» قراران إداريّان — يُطلبان ولا يُنفَّذان هنا.",
+      options: LP_STATUSES.map((s) => ({ value: s, label: LP_STATUS_LABELS[s]?.ar ?? s })),
+      from: (tg) => {
+        const d = st(tg.deliverableId);
+        const v = d ? String(d.status) : "";
+        return { value: v || null, label: LP_STATUS_LABELS[v]?.ar ?? (v || "—") };
+      },
+    });
+    if (caps.columns.client_visible) {
+      list.push({
+        kind: "client_visibility",
+        label: "إظهار المخرج للعميل",
+        hint: "الإظهار للعميل قرار لا خطوة تنفيذ — لا يقع إلا بالاعتماد.",
+        options: [{ value: "true", label: "ظاهر للعميل" }, { value: "false", label: "مخفيّ عن العميل" }],
+        from: (tg) => {
+          const d = st(tg.deliverableId);
+          const v = d?.client_visible === true;
+          return { value: v ? "true" : "false", label: v ? "ظاهر للعميل" : "مخفيّ عن العميل" };
+        },
+      });
+    }
+    return list;
+  }, [stages, byId, stageName, caps.columns.client_visible]);
+
+  const reqTargetRows = useMemo<TrTarget[]>(() => {
+    if (!reqTargets) return [];
+    const out: TrTarget[] = [];
+    for (const id of reqTargets) {
+      const d = byId.get(id);
+      if (!d) continue;
+      out.push({ key: d.id, deliverableId: d.id, projectId: d.project_id, label: d.title ?? d.id.slice(0, 8) });
+    }
+    return out;
+  }, [reqTargets, byId]);
+
+  const openRequest = useCallback((id: string) => setReqTargets([id]), []);
+
+  // شارة «بانتظار الموافقة» على الصفّ: مجموعة تُبنى مرّة، لا مسحٌ للقائمة داخل
+  // كلّ صفّ (عقد الأداء في هذا الملفّ: مئتا مخرج بلا تهدّج).
+  const pendingIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of tr.rows) if (r.status === "pending" && r.deliverable_id) s.add(r.deliverable_id);
+    return s;
+  }, [tr.rows]);
 
   return (
     <div className="space-y-2">
@@ -256,6 +347,10 @@ export default function DeliverableMatrix({
       {selectedIds.length > 0 && (
         <LargeProjectBulkBar
           ids={selectedIds} caps={caps} stages={stages} staff={staff}
+          requestOnly={mustRequest}
+          // التحديد كاملًا لا مقصوصًا: النافذة هي من يقول «تجاوزت الحدّ» بصراحة
+          // بدل أن يُسقط الشريط عناصر بصمت.
+          onRequestTransition={() => setReqTargets(selectedIds)}
           onClose={clearSelection}
           onApplied={(o) => {
             // حتى النجاح الجزئيّ غيّر بيانات ⇒ إعادة التحميل إلزامية لتعكس القائمة الواقع.
@@ -282,6 +377,11 @@ export default function DeliverableMatrix({
               group={lpGroupOf(d)} type={lpTypeOf(d)} showVisibility={!!caps.columns.client_visible}
               details={txt(d.execution_details)} caption={txt(d.proposed_caption)}
               note={txt(d.internal_notes)} sourceKey={txt(d.external_key)}
+              // خصائص بدائية فقط (نصّ/منطقيّ) + دالّة ثابتة الهوية: عقد الأداء
+              // في هذا الملفّ يمنع تمرير كائنات تُبطل memo لكلّ صفّ.
+              reqState={!mustRequest ? "off" : tr.caps === null ? "checking" : tr.caps.request ? "ready" : "unavailable"}
+              reqPending={pendingIds.has(d.id)}
+              onRequest={openRequest}
             />
           ))}
           {shown < filtered.length && (
@@ -291,6 +391,18 @@ export default function DeliverableMatrix({
             </button>
           )}
         </div>
+      )}
+
+      {/* نافذة واحدة مشتركة (صفّ واحد أو تحديد جماعيّ) — لا نسخة لكلّ صفّ. */}
+      {reqTargets && reqTargetRows.length > 0 && (
+        <TransitionRequestModal
+          contextLabel={projectName ?? "—"}
+          kinds={requestKinds}
+          targets={reqTargetRows}
+          pending={tr.pending}
+          onClose={() => setReqTargets(null)}
+          onDone={tr.reload}
+        />
       )}
     </div>
   );
@@ -305,11 +417,16 @@ const txt = (v: unknown): string | null => {
 // ─── صفّ واحد: memo + خصائص بدائية ⇒ لا إعادة رسم للقائمة كلّها عند التحديد ───
 const DeliverableRow = memo(function DeliverableRow({
   d, selected, onToggle, stage, assignee, today, group, type, showVisibility,
-  details, caption, note, sourceKey,
+  details, caption, note, sourceKey, reqState, reqPending, onRequest,
 }: {
   d: LpDeliverable; selected: boolean; onToggle: (id: string) => void;
   stage: string; assignee: string | null; today: string;
   group: string | null; type: string; showVisibility: boolean;
+  /** off = صاحب القرار (يبقى مساره المباشر) · checking/unavailable/ready = الطالب. */
+  reqState: "off" | "checking" | "ready" | "unavailable";
+  /** طلب معلَّق واحد على الأقلّ على هذا المخرج. */
+  reqPending: boolean;
+  onRequest: (id: string) => void;
   /** deliverables.execution_details — «تفاصيل التنفيذ» من ملفّ الخطّة. */
   details: string | null;
   /** deliverables.proposed_caption — «نصّ الوصف المقترح». */
@@ -340,6 +457,22 @@ const DeliverableRow = memo(function DeliverableRow({
             )}
             {lpIsRecurring(d) && (
               <span className="text-[9px] px-1.5 py-0.5 rounded bg-stone-800 text-stone-400">{t({ ar: "متكرّر", en: "Recurring" })}</span>
+            )}
+            {reqPending && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-900 text-amber-200">
+                {t({ ar: "بانتظار الموافقة", en: "Awaiting approval" })}
+              </span>
+            )}
+            {/* الطالب لا يرى زرّ تنفيذ انتقال أصلًا — يرى طلبًا. */}
+            {reqState !== "off" && (
+              <button type="button" onClick={() => onRequest(d.id)}
+                disabled={reqState !== "ready"}
+                title={reqState === "unavailable"
+                  ? t({ ar: "مسار طلبات الانتقال غير مفعَّل بعد (حزمة قاعدة البيانات لم تُطبَّق).", en: "Transition requests are not deployed yet." })
+                  : undefined}
+                className="text-[9px] px-1.5 py-0.5 rounded border border-amber-900 bg-stone-800 text-amber-200 disabled:opacity-40 ms-auto">
+                {reqState === "checking" ? t({ ar: "جارٍ الفحص…", en: "Checking…" }) : t({ ar: "طلب انتقال", en: "Request" })}
+              </button>
             )}
           </div>
           <div className="text-[10px] text-stone-500 truncate mt-0.5">

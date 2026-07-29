@@ -368,6 +368,7 @@ function Loaded({
 
       {tab === "deliverables" && (
         <DeliverableMatrix
+          projectId={snap.project.id} projectName={snap.project.project_name}
           rows={rows} stages={snap.stages} caps={snap.caps} staff={staff}
           filters={filters} onFilters={setFilters} truncated={snap.truncated}
           onChanged={() => void reload()}

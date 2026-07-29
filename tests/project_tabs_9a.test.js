@@ -22,11 +22,14 @@ const tabs = [...tabsBlock.matchAll(/\{ k: "([a-z_]+)", ar: "([^"]+)", en: "([^"
 // كلاهما يعرض LargeProjectDashboard بنقطة دخول مختلفة، وبلا أيّ شرط صلاحية
 // جديد (انظر اختبار «شروط الظهور والصلاحيات لم تتغيّر» أدناه).
 //   · import = شاشة الاستيراد الجماعيّ من ملف (ProjectImportPanel) → مجموعة
-//     delivery، ببوّابة «المحذوفات» نفسها (canManage) لا بنموذج صلاحيات جديد.
+//     delivery، ببوّابة **إدارية** (canAdminister): الإدخال الجماعيّ ممنوع على
+//     المونتير، وكانت بوّابته السابقة (canManage) تشمله.
+//   · transitions = «طلبات الانتقال» → مجموعة control، لمن يطلب أو يقرّر فقط
+//     (لا عميل ولا «مشاهدة فقط»)، وزرّ الاعتماد داخلها محكوم بـtrCanDecide.
 const EXPECTED_KEYS = ["quick", "execution", "reports", "planning", "resources", "governance", "subprojects",
   "program", "program_sla", "closure", "schedule", "tasks", "gantt", "calendar", "team", "deliverables",
   "approvals", "finance", "costs", "risks", "meetings", "shoots", "locations", "tags", "timeline", "activity", "trash",
-  "large", "matrix", "import"];
+  "large", "matrix", "import", "transitions"];
 
 test("كل المفاتيح الأصلية موجودة ولم يتغيّر مفتاح ولا زاد/نقص", () => {
   const keys = tabs.map((x) => x.k);
@@ -41,7 +44,7 @@ test("الترتيب النهائي المعتمد (بالمفاتيح) حسب �
     "execution", "program", "subprojects", "large", "team",                          // أ
     "locations", "meetings", "schedule", "calendar", "planning", "gantt", "resources", // ب
     "tasks", "shoots", "deliverables", "matrix", "import", "approvals", "program_sla", // ج
-    "risks", "governance", "costs", "finance", "reports",                            // د
+    "risks", "governance", "transitions", "costs", "finance", "reports",             // د
     "timeline", "activity", "tags", "closure", "trash"];                             // هـ
   assert.deepEqual(order, expectedOrder, "الترتيب لا يطابق التسلسل المعتمد");
 });
@@ -79,7 +82,9 @@ test("شروط الظهور والصلاحيات لم تتغيّر (لا صلا�
   assert.match(OPS, /tb\.k !== "costs" \|\| caps\.canSeeFinancials/, "فلتر التكاليف المالية تغيّر");
   assert.match(OPS, /tb\.k !== "finance" \|\| isFinance/, "عزل الحسابات تغيّر");
   assert.match(OPS, /tb\.k !== "trash" \|\| canManage/, "فلتر المحذوفات تغيّر");
-  assert.match(OPS, /tb\.k !== "import" \|\| canManage/, "فلتر الاستيراد الجماعيّ تغيّر");
+  // الاستيراد انتقل عمدًا من canManage إلى canAdminister (المونتير لا يستورد).
+  assert.match(OPS, /tb\.k !== "import" \|\| canAdminister/, "فلتر الاستيراد الجماعيّ تغيّر");
+  assert.match(OPS, /tb\.k !== "transitions" \|\| seesTransitions/, "فلتر طلبات الانتقال تغيّر");
   assert.match(OPS, /tb\.k !== "subprojects" \|\| isMaster/, "المشاريع الفرعية للرئيسي فقط تغيّر");
   assert.match(OPS, /tb\.k !== "program" \|\| isMaster/, "إدارة البرنامج للرئيسي فقط تغيّر");
   assert.match(OPS, /tb\.k !== "program_sla" \|\| isMaster/, "الالتزامات للرئيسي فقط تغيّر");

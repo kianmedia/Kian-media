@@ -48,6 +48,11 @@ import { ProjectPrintPack } from "./ProjectPrintPack";
 import { pcEntityDelete } from "@/lib/portal/projectCore";
 import { FinanceTab } from "./ProjectFinance";
 import { pcProgress, pcSetProgress, pcStageAdvance, projectStageReadiness, projectActivityFeed, type ProgressInfo, type StageReadiness, type ActivityEvent } from "@/lib/portal/projectCore";
+import { trCanDecide, trCanRequest, trMustRequest } from "@/lib/portal/transitions";
+import { useTransitionRequests } from "@/components/portal/TransitionAtoms";
+import TransitionApprovalsPanel from "@/components/portal/TransitionApprovalsPanel";
+import TransitionRequestButton from "@/components/portal/TransitionRequestButton";
+import type { TrKindOption } from "@/components/portal/TransitionRequestModal";
 
 const card = "bg-stone-900 border border-stone-800 rounded-xl";
 const inp = "bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:ring-2 focus:ring-red-500";
@@ -56,7 +61,7 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "quick" | "program_sla" | "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash" | "large" | "matrix" | "import";
+type TabKey = "quick" | "program_sla" | "execution" | "reports" | "planning" | "resources" | "governance" | "transitions" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash" | "large" | "matrix" | "import";
 // Batch 9 · Part 1 — التبويبات مرتَّبة حسب دورة العمل ومجمَّعة بصريًّا في خمس مجموعات.
 // **المفاتيح التقنية لم تتغيّر** (الهوية بالـkey لا بالترتيب): الروابط العميقة
 // وشروط الظهور ومكوّنات التبويبات كما هي. غُيِّر الاسم الظاهر فقط حيث كان مضلِّلًا:
@@ -106,6 +111,9 @@ const TABS: { k: TabKey; ar: string; en: string; group: TabGroup }[] = [
   // د) الرقابة والإدارة
   { k: "risks", ar: "المخاطر", en: "Risks", group: "control" },
   { k: "governance", ar: "الحوكمة", en: "Governance", group: "control" },
+  // صندوق قرار «طلبات الانتقال»: يراه الكادر المعنيّ (طالبًا كان أو مقرِّرًا)،
+  // ولا يظهر للعميل ولا لـ«مشاهدة فقط». زرّ الاعتماد داخله محكوم بـtrCanDecide.
+  { k: "transitions", ar: "طلبات الانتقال", en: "Transition requests", group: "control" },
   { k: "costs", ar: "التكاليف", en: "Costs", group: "control" },
   { k: "finance", ar: "حسابات المشروع", en: "Accounts", group: "control" },
   { k: "reports", ar: "التقارير", en: "Reports", group: "control" },
@@ -122,8 +130,28 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   const { t } = useI18n();
   const router = useRouter();
   const { caps, profile } = usePortal();
-  const canManage = caps.isAdminArea || caps.isEditor;
+  // ── بوّابتان لا واحدة ──────────────────────────────────────────────────────
+  // كان هنا مُسنَد واحد `canManage = isAdminArea || isEditor` يعامل المونتير
+  // معاملة المدير في كلّ شيء: منه تبويب «استيراد من ملف» (ممنوع على المونتير
+  // صراحةً)، وتغيير شكل المشروع (ترقية/خفض/تجربة التشغيل)، وشريط المراحل.
+  //
+  //   canAdminister → المالك/المدير فقط. قرارات إدارية تغيّر شكل المشروع أو
+  //                   تنقله بين مراحله أو تُدخل بيانات جماعية. **لا مونتير.**
+  //   canManage     → يبقى كما كان (يشمل المونتير المُسنَد) للأسطح التشغيلية:
+  //                   المهام، التصوير، التحضير، الفريق، المخرجات… تضييقه هنا كان
+  //                   سيمنع المونتير من أداء عمله، وهذا ليس المطلوب.
+  //
+  // سلوك المالك/المدير لم يتغيّر في أيّ سطر: canAdminister = isAdminArea تمامًا.
+  // وهذا كلّه عرض؛ الحدّ الحقيقيّ مسنَدات الخادم وRLS.
+  const canAdminister = caps.isAdminArea;
+  const canManage = canAdminister || caps.isEditor;
   const isFinance = caps.isOwner || profile.staff_role === "finance";   // عزل الحسابات
+  // مسار «طلب انتقال»: من يعمل على المشروع ولا يملك قرار نقله (المونتير مثالًا)
+  // يرى طلبًا بدل زرّ تنفيذ. الطلبات المعلَّقة تُقرأ لهذا الغرض وحده — والمالك/
+  // المدير لا يدفع ثمن أيّ طلب إضافيّ حتى يفتح تبويب «طلبات الانتقال».
+  const mustRequestStage = trMustRequest(caps);
+  const seesTransitions = trCanRequest(caps) || trCanDecide(caps);
+  const trReq = useTransitionRequests(projectId, mustRequestStage);
   // 6A: سياق الهرمية — تبويب «المشاريع الفرعية» يظهر للمشروع الرئيسي فقط.
   const [hier, setHier] = useState<HierarchyContext | null>(null);
   const [addSub, setAddSub] = useState(false);
@@ -198,7 +226,10 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   }, [projectId]);
   const isSimple = exp === "simple";
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
-  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "import" || canManage) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster) && (tb.k !== "program_sla" || isMaster) && (tb.k !== "quick" || isSimple));
+  // «استيراد من ملف» على canAdminister لا canManage: الإدخال الجماعيّ ممنوع على
+  // المونتير صراحةً. «المحذوفات» يبقى على canManage — استرجاع عنصر حذفه المنفِّذ
+  // نفسه عملٌ مشروع، وتضييقه كان سيمنع عملًا لا صلاحيةً.
+  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "import" || canAdminister) && (tb.k !== "transitions" || seesTransitions) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster) && (tb.k !== "program_sla" || isMaster) && (tb.k !== "quick" || isSimple));
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
@@ -381,38 +412,64 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
         <div className="flex items-center justify-between mb-3 gap-2">
           <h3 className="text-sm font-semibold text-white shrink-0">{t({ ar: "دورة حياة المشروع", en: "Project Lifecycle" })}</h3>
           <div className="flex gap-2 flex-wrap">
-            {isMaster && canManage && <button onClick={() => setAddSub(true)} className={`${btnGhost} px-3 py-1.5 text-xs text-sky-300 border-sky-800`}>+ {t({ ar: "إضافة مشروع فرعي", en: "Add subproject" })}</button>}
-            {isMaster && canManage && <button onClick={() => void demoteToStandalone()} className={`${btnGhost} px-3 py-1.5 text-xs text-stone-400`}>{t({ ar: "خفض إلى مستقل", en: "Demote" })}</button>}
+            {/* تغيير شكل المشروع (فرع/ترقية/خفض/تجربة العرض/قالب) قرار إداريّ:
+                canAdminister لا canManage. المالك/المدير كما كانا بالضبط. */}
+            {isMaster && canAdminister && <button onClick={() => setAddSub(true)} className={`${btnGhost} px-3 py-1.5 text-xs text-sky-300 border-sky-800`}>+ {t({ ar: "إضافة مشروع فرعي", en: "Add subproject" })}</button>}
+            {isMaster && canAdminister && <button onClick={() => void demoteToStandalone()} className={`${btnGhost} px-3 py-1.5 text-xs text-stone-400`}>{t({ ar: "خفض إلى مستقل", en: "Demote" })}</button>}
             {exp && <span className="text-[9px] px-1.5 py-1 rounded bg-stone-800 text-stone-400 self-center">{t({ ar: `العرض: ${EXPERIENCE_AR[exp]}`, en: `View: ${exp}` })}</span>}
-            {hier?.project_scope === "standalone" && canManage && exp && (
+            {hier?.project_scope === "standalone" && canAdminister && exp && (
               <button onClick={() => void toggleExperience()} disabled={busy} className={`${btnGhost} px-3 py-1.5 text-xs text-teal-300 border-teal-900`}>
                 {isSimple ? t({ ar: "الإدارة القياسية", en: "Standard view" }) : t({ ar: "تبسيط الإدارة", en: "Simplify" })}
               </button>
             )}
-            {hier?.project_scope === "standalone" && canManage && hier.hierarchy_enabled && (
+            {hier?.project_scope === "standalone" && canAdminister && hier.hierarchy_enabled && (
               <button onClick={() => void promoteToMaster()} className={`${btnGhost} px-3 py-1.5 text-xs text-violet-300 border-violet-800`}>{t({ ar: "ترقية إلى مشروع رئيسي", en: "Promote to master" })}</button>
             )}
             <button onClick={() => setPrintPack(true)} className={`${btnGhost} px-3 py-1.5 text-xs`}>{t({ ar: "طباعة حزمة المشروع", en: "Print Pack" })}</button>
-            {caps.isAdminArea && canManage && <button onClick={() => void saveAsTemplate()} className={`${btnGhost} px-3 py-1.5 text-xs text-amber-300 border-amber-900`}>{t({ ar: "حفظ كقالب", en: "Save as template" })}</button>}
+            {canAdminister && <button onClick={() => void saveAsTemplate()} className={`${btnGhost} px-3 py-1.5 text-xs text-amber-300 border-amber-900`}>{t({ ar: "حفظ كقالب", en: "Save as template" })}</button>}
             {caps.isAdminArea && <TemplateManagerButton projectId={projectId} flash={flash} onApplied={() => { void loadProg(); onChanged?.(); }} />}
           </div>
         </div>
+        {/* نقل مرحلة المشروع قرار إداريّ: الأزرار تعمل لمن يملك القرار فقط، ومن
+            لا يملكه لا يرى زرًّا معطَّلًا يغريه بل مسارًا بديلًا صريحًا: «طلب
+            انتقال». إخفاء الزرّ ليس حدًّا أمنيًّا — الحدّ في project_stage_advance. */}
         <div className="flex flex-wrap gap-1.5">
           {PC_STAGES.map((s, i) => (
-            <button key={s} disabled={busy || !canManage || barLocked} onClick={() => void setStage(s)}
+            <button key={s} disabled={busy || !canAdminister || barLocked} onClick={() => void setStage(s)}
               title={barLocked ? t({ ar: "المراحل موقوفة — استأنف المشروع أو أعد فتحه أولًا.", en: "Stages are locked — resume or reopen the project first." }) : undefined}
-              className={`px-2.5 py-1 rounded-lg text-[11px] border transition ${i === stageIdx ? "bg-red-600 border-red-600 text-white" : i < stageIdx ? "bg-emerald-900/30 border-emerald-800 text-emerald-300" : "bg-stone-800 border-stone-700 text-stone-400"} ${barLocked ? "opacity-40 cursor-not-allowed" : !canManage ? "cursor-default" : "hover:border-stone-500"}`}>
+              className={`px-2.5 py-1 rounded-lg text-[11px] border transition ${i === stageIdx ? "bg-red-600 border-red-600 text-white" : i < stageIdx ? "bg-emerald-900/30 border-emerald-800 text-emerald-300" : "bg-stone-800 border-stone-700 text-stone-400"} ${barLocked ? "opacity-40 cursor-not-allowed" : !canAdminister ? "cursor-default" : "hover:border-stone-500"}`}>
               {t(PC_STAGE_LABELS[s])}
             </button>
           ))}
         </div>
+        {mustRequestStage && !barLocked && core && (
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            <TransitionRequestButton
+              contextLabel={projectName}
+              targets={[{ key: projectId, deliverableId: null, projectId, label: projectName }]}
+              pending={trReq.pending}
+              onDone={trReq.reload}
+              kinds={[{
+                kind: "project_stage",
+                label: "طلب نقل مرحلة المشروع",
+                hint: "لا تتغيّر المرحلة عند الإرسال — التنفيذ يقع عند اعتماد المالك/المدير.",
+                options: PC_STAGES.filter((s) => s !== core.core_stage).map((s) => ({ value: s, label: PC_STAGE_LABELS[s].ar })),
+                from: () => ({ value: core.core_stage, label: PC_STAGE_LABELS[core.core_stage]?.ar ?? core.core_stage }),
+              } as TrKindOption]}
+            />
+            <span className="text-[10px] text-stone-500">
+              {t({ ar: "نقل المرحلة يحتاج اعتمادًا — سجّل طلبًا بالسبب.", en: "Stage moves need approval — file a request with a reason." })}
+            </span>
+          </div>
+        )}
 
         {/* الإجراءات الإدارية: تعليق/استئناف/إلغاء/إعادة فتح — بجانب الشريط لا داخله. */}
         <div className="mt-3 pt-3 border-t border-stone-800">
           <ProjectActionsMenu
             projectId={projectId}
             coreStage={core?.core_stage}
-            canManage={canManage}
+            /* تعليق/استئناف/إلغاء/إعادة فتح: إجراءات إدارية على المشروع نفسه. */
+            canManage={canAdminister}
             isOwner={caps.isOwner}
             flash={flash}
             onChanged={() => { void loadCore(); void loadProg(); router.refresh(); onChanged?.(); }}
@@ -451,7 +508,8 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
             is honored inside that same function, so both surfaces always agree. */}
         <div className="mt-3 border-t border-stone-800 pt-3">
           <ProjectProgressBar projectId={projectId} refreshSignal={progRefresh} />
-          {canManage && (
+          {/* التجاوز اليدويّ للتقدّم موسوم «مدير» أصلًا — فليكن كذلك فعلًا. */}
+          {canAdminister && (
             <button onClick={() => void overrideProgress()} className="text-[11px] text-sky-400 hover:text-sky-300 mt-2">
               {prog?.manual != null ? t({ ar: "تعديل/إلغاء التجاوز اليدوي", en: "Edit/clear manual override" }) : t({ ar: "تجاوز يدوي (مدير)", en: "Manual override" })}
             </button>
@@ -512,7 +570,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       </div>
 
       {tab === "quick" && isSimple && (
-        <QuickProjectPanel projectId={projectId} canManage={canManage} flash={flash}
+        <QuickProjectPanel projectId={projectId} canManage={canAdminister} flash={flash}
           onGoTab={(k) => { if (!visibleTabs.some((x) => x.k === k)) setShowAdvanced(true); pickTab(k as TabKey); }}
           onOpenLifecycle={() => { setShowDetails(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}
           onSwitchedToStandard={() => { setExp("standard"); setShowAdvanced(false); onChanged?.(); }} />
@@ -554,7 +612,8 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {/* الاستيراد الجماعيّ — نفس بوّابة «المحذوفات»: مزدوجة (تصفية التبويب +
           شرط الرسم) فلا يظهر لغير المخوَّل حتى برابط مباشر. قبل تطبيق الـSQL
           تعمل المعاينة وتُظهر اللوحة «الترحيل معلّق» ويُرفض التنفيذ صراحةً. */}
-      {tab === "import" && canManage && <ProjectImportPanel projectId={projectId} projectName={projectName} canManage={canManage} flash={flash} />}
+      {tab === "import" && canAdminister && <ProjectImportPanel projectId={projectId} projectName={projectName} canManage={canAdminister} flash={flash} />}
+      {tab === "transitions" && seesTransitions && <TransitionApprovalsPanel projectId={projectId} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
       {tab === "finance" && isFinance && <FinanceTab projectId={projectId} flash={flash} />}
       {tab === "costs" && <CostsTab projectId={projectId} canManage={canManage} flash={flash} />}
@@ -574,7 +633,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
               {reqPrompt.items.map((it) => <li key={it.key} className="flex items-center gap-2 text-xs text-amber-300"><span className="text-amber-500">•</span>{t({ ar: it.ar, en: it.en })}</li>)}
             </ul>
             <div className="flex gap-2">
-              {canManage && <button disabled={busy} onClick={() => void proceedStage(reqPrompt.stage, PC_STAGES.indexOf(core.core_stage), PC_STAGES.indexOf(reqPrompt.stage))} className={`${btnRed} px-3 py-2 flex-1`}>{t({ ar: "متابعة رغم ذلك", en: "Continue anyway" })}</button>}
+              {canAdminister && <button disabled={busy} onClick={() => void proceedStage(reqPrompt.stage, PC_STAGES.indexOf(core.core_stage), PC_STAGES.indexOf(reqPrompt.stage))} className={`${btnRed} px-3 py-2 flex-1`}>{t({ ar: "متابعة رغم ذلك", en: "Continue anyway" })}</button>}
               <button onClick={() => setReqPrompt(null)} className={`${btnGhost} px-3 py-2`}>{t({ ar: "إلغاء", en: "Cancel" })}</button>
             </div>
           </div>
