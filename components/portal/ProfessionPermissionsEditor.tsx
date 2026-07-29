@@ -3,6 +3,20 @@
 // select-all/clear per group, sensitive warnings, templates, copy-from, and a
 // server READ-BACK after every write so nothing is silently saved. All writes go
 // through authority-checked SECURITY DEFINER RPCs; this UI is convenience only.
+//
+// S4b — EVERY write on this screen is MFA-gated and routed through
+// useSensitiveWrite():
+//   • admin_set_profession_permission   (one checkbox)          — gated directly
+//   • admin_apply_profession_template   (template dropdown)     — gated directly
+//   • admin_copy_profession_permissions (copy-from dropdown)    — gated directly
+//   • admin_bulk_set_profession_permissions (select-all/clear)  — NOT gated itself,
+//     but it delegates in a loop to the gated admin_set_profession_permission, so it
+//     raises mfa_required all the same and would otherwise print that raw token.
+//     It is wrapped for exactly that reason; the whole loop is one transaction, so
+//     a gate abort rolls the group back and the single retry replays it intact.
+// The step-up modal is rendered INSIDE the stop-propagation container: this editor's
+// backdrop closes on click, and a modal mounted outside it would close the whole
+// editor (and lose the admin's place) the moment they clicked the code field.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -10,24 +24,30 @@ import {
   applyProfessionTemplate, copyProfessionPermissions, PERMISSION_CATEGORIES, PROFESSION_TEMPLATES,
   type Permission, type Profession,
 } from "@/lib/portal/professions";
+import { useSensitiveWrite, sensitiveOutcomeMessage, type SensitiveOutcome } from "@/components/portal/useSensitiveWrite";
 
 const inp: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "3px", padding: "6px 9px", color: "#fff", fontSize: "12px", outline: "none", colorScheme: "dark" };
+
+/** Shown inside the step-up modal so the ask has context. */
+const REASON_PERMS = { ar: "تعديل صلاحيات مهنة", en: "changing a profession's permissions" };
 
 export default function ProfessionPermissionsEditor({ profession, allProfessions, onClose }: {
   profession: Profession; allProfessions: Profession[]; onClose: () => void;
 }) {
   const { t, isAr } = useI18n();
+  const sw = useSensitiveWrite();
   const [perms, setPerms] = useState<Permission[]>([]);
   const [granted, setGranted] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Three tones, not two: a cancellation is neither a success nor a server error.
+  const [msg, setMsg] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
 
   const loadGrants = useCallback(async () => {
     const r = await listProfessionPermissionKeys(profession.id);
-    if (r.ok) setGranted(new Set(r.data)); else setMsg({ ok: false, text: r.error });
+    if (r.ok) setGranted(new Set(r.data)); else setMsg({ kind: "err", text: r.error });
   }, [profession.id]);
-  useEffect(() => { void listPermissions().then((r) => { if (r.ok) setPerms(r.data); else setMsg({ ok: false, text: r.error }); }); void loadGrants(); }, [loadGrants]);
+  useEffect(() => { void listPermissions().then((r) => { if (r.ok) setPerms(r.data); else setMsg({ kind: "err", text: r.error }); }); void loadGrants(); }, [loadGrants]);
 
   const filtered = useMemo(() => perms.filter((p) => !q.trim() || p.key.includes(q.toLowerCase()) || p.label_ar.includes(q) || p.label_en.toLowerCase().includes(q.toLowerCase())), [perms, q]);
   const byCat = useMemo(() => {
@@ -36,35 +56,42 @@ export default function ProfessionPermissionsEditor({ profession, allProfessions
     return m;
   }, [filtered]);
 
-  // Toggle one permission, then READ BACK to confirm persistence (no silent save).
-  async function toggle(p: Permission, next: boolean) {
-    if (busy) return; setBusy(true); setMsg(null);
-    const r = await setProfessionPermission(profession.id, p.key, next);
-    if (!r.ok) { setBusy(false); setMsg({ ok: false, text: (isAr ? "تعذّر الحفظ: " : "Save failed: ") + r.error }); return; }
-    await loadGrants(); setBusy(false);
-    setMsg({ ok: true, text: isAr ? "✓ حُفظ وتأكّد من الخادم." : "✓ Saved and confirmed." });
-  }
-  async function groupSet(cat: string, on: boolean) {
-    if (busy) return; setBusy(true); setMsg(null);
-    const keys = (byCat.get(cat) ?? []).filter((p) => p.sensitivity !== "system_only").map((p) => p.key);
-    const r = await bulkSetProfessionPermissions(profession.id, keys, on);
-    if (!r.ok) { setBusy(false); setMsg({ ok: false, text: r.error }); return; }
-    await loadGrants(); setBusy(false); setMsg({ ok: true, text: isAr ? "✓ حُدّثت المجموعة." : "✓ Group updated." });
-  }
-  async function applyTpl(tpl: string) {
-    if (!tpl || busy) return; setBusy(true); setMsg(null);
-    const r = await applyProfessionTemplate(profession.id, tpl);
-    if (!r.ok) { setBusy(false); setMsg({ ok: false, text: r.error }); return; }
-    await loadGrants(); setBusy(false); setMsg({ ok: true, text: isAr ? "✓ طُبّق القالب." : "✓ Template applied." });
-  }
-  async function copyFrom(fromId: string) {
-    if (!fromId || busy) return; setBusy(true); setMsg(null);
-    const r = await copyProfessionPermissions(fromId, profession.id);
-    if (!r.ok) { setBusy(false); setMsg({ ok: false, text: r.error }); return; }
-    await loadGrants(); setBusy(false); setMsg({ ok: true, text: isAr ? "✓ نُسخت الصلاحيات." : "✓ Permissions copied." });
+  const locked = busy || sw.pending;
+
+  /** Single failure path for all four writes — no branch can end silently, and the
+   *  checkboxes snap back to server truth because setMsg always re-renders. */
+  function reportFailure(out: SensitiveOutcome<unknown>) {
+    if (out.status === "cancelled") setMsg({ kind: "warn", text: out.message });
+    else setMsg({ kind: "err", text: sensitiveOutcomeMessage(out, isAr ? "تعذّر الحفظ: " : "Save failed: ") });
   }
 
-  const catLabel = (k: string) => { const c = PERMISSION_CATEGORIES.find((x) => x.key === k); return c ? t(c) : k; };
+  // Toggle one permission, then READ BACK to confirm persistence (no silent save).
+  async function toggle(p: Permission, next: boolean) {
+    if (locked) return; setBusy(true); setMsg(null);
+    const out = await sw.run(() => setProfessionPermission(profession.id, p.key, next), REASON_PERMS);
+    if (out.status !== "ok") { setBusy(false); reportFailure(out); return; }
+    await loadGrants(); setBusy(false);
+    setMsg({ kind: "ok", text: isAr ? "✓ حُفظ وتأكّد من الخادم." : "✓ Saved and confirmed." });
+  }
+  async function groupSet(cat: string, on: boolean) {
+    if (locked) return; setBusy(true); setMsg(null);
+    const keys = (byCat.get(cat) ?? []).filter((p) => p.sensitivity !== "system_only").map((p) => p.key);
+    const out = await sw.run(() => bulkSetProfessionPermissions(profession.id, keys, on), REASON_PERMS);
+    if (out.status !== "ok") { setBusy(false); reportFailure(out); return; }
+    await loadGrants(); setBusy(false); setMsg({ kind: "ok", text: isAr ? "✓ حُدّثت المجموعة." : "✓ Group updated." });
+  }
+  async function applyTpl(tpl: string) {
+    if (!tpl || locked) return; setBusy(true); setMsg(null);
+    const out = await sw.run(() => applyProfessionTemplate(profession.id, tpl), REASON_PERMS);
+    if (out.status !== "ok") { setBusy(false); reportFailure(out); return; }
+    await loadGrants(); setBusy(false); setMsg({ kind: "ok", text: isAr ? "✓ طُبّق القالب." : "✓ Template applied." });
+  }
+  async function copyFrom(fromId: string) {
+    if (!fromId || locked) return; setBusy(true); setMsg(null);
+    const out = await sw.run(() => copyProfessionPermissions(fromId, profession.id), REASON_PERMS);
+    if (out.status !== "ok") { setBusy(false); reportFailure(out); return; }
+    await loadGrants(); setBusy(false); setMsg({ kind: "ok", text: isAr ? "✓ نُسخت الصلاحيات." : "✓ Permissions copied." });
+  }
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 140, background: "rgba(0,0,0,0.82)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "16px", overflowY: "auto" }}>
@@ -76,16 +103,16 @@ export default function ProfessionPermissionsEditor({ profession, allProfessions
 
         <div className="flex gap-2 flex-wrap mb-3">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t({ ar: "بحث في الصلاحيات…", en: "Search permissions…" })} style={{ ...inp, flex: 1, minWidth: "140px" }} />
-          <select disabled={busy} onChange={(e) => { void applyTpl(e.target.value); e.target.value = ""; }} style={{ ...inp, width: "auto" }} defaultValue="">
+          <select disabled={locked} onChange={(e) => { void applyTpl(e.target.value); e.target.value = ""; }} style={{ ...inp, width: "auto" }} defaultValue="">
             <option value="">{t({ ar: "تطبيق قالب…", en: "Apply template…" })}</option>
             {PROFESSION_TEMPLATES.map((tp) => <option key={tp.key} value={tp.key}>{t(tp)}</option>)}
           </select>
-          <select disabled={busy} onChange={(e) => { void copyFrom(e.target.value); e.target.value = ""; }} style={{ ...inp, width: "auto" }} defaultValue="">
+          <select disabled={locked} onChange={(e) => { void copyFrom(e.target.value); e.target.value = ""; }} style={{ ...inp, width: "auto" }} defaultValue="">
             <option value="">{t({ ar: "نسخ من مهنة…", en: "Copy from…" })}</option>
             {allProfessions.filter((p) => p.id !== profession.id).map((p) => <option key={p.id} value={p.id}>{isAr ? p.name_ar : p.name_en}</option>)}
           </select>
         </div>
-        {msg && <p className="f-sans mb-2" style={{ fontSize: "12px", color: msg.ok ? "#7CFC9A" : "#ff8a8e" }}>{msg.text}</p>}
+        {msg && <p className="f-sans mb-2" style={{ fontSize: "12px", color: msg.kind === "ok" ? "#7CFC9A" : msg.kind === "warn" ? "rgba(255,210,138,0.95)" : "#ff8a8e" }}>{msg.text}</p>}
 
         <div style={{ display: "flex", flexDirection: "column", gap: "12px", maxHeight: "62vh", overflowY: "auto" }}>
           {PERMISSION_CATEGORIES.filter((c) => byCat.has(c.key)).map((c) => {
@@ -97,14 +124,14 @@ export default function ProfessionPermissionsEditor({ profession, allProfessions
               <div key={c.key} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "8px 10px" }}>
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <span className="f-sans" style={{ fontSize: "12px", fontWeight: 700, color: c.key === "finance" ? "rgba(255,210,138,0.95)" : c.key === "system" ? "rgba(255,138,142,0.9)" : "#fff" }}>{t(c)}</span>
-                  {!systemOnly && <button disabled={busy} onClick={() => void groupSet(c.key, !allOn)} className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.6)", background: "none", border: "1px solid rgba(255,255,255,0.16)", borderRadius: "3px", padding: "3px 8px", cursor: "pointer" }}>{allOn ? t({ ar: "مسح المجموعة", en: "Clear group" }) : t({ ar: "تحديد الكل", en: "Select all" })}</button>}
+                  {!systemOnly && <button disabled={locked} onClick={() => void groupSet(c.key, !allOn)} className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.6)", background: "none", border: "1px solid rgba(255,255,255,0.16)", borderRadius: "3px", padding: "3px 8px", cursor: "pointer" }}>{allOn ? t({ ar: "مسح المجموعة", en: "Clear group" }) : t({ ar: "تحديد الكل", en: "Select all" })}</button>}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: "3px 10px" }}>
                   {list.map((p) => {
                     const sysOnly = p.sensitivity === "system_only";
                     return (
                       <label key={p.key} className="flex items-center gap-1.5" style={{ fontSize: "11.5px", color: sysOnly ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.82)", opacity: sysOnly ? 0.6 : 1 }} title={p.key}>
-                        <input type="checkbox" disabled={busy || sysOnly} checked={granted.has(p.key)} onChange={(e) => void toggle(p, e.target.checked)} />
+                        <input type="checkbox" disabled={locked || sysOnly} checked={granted.has(p.key)} onChange={(e) => void toggle(p, e.target.checked)} />
                         <span>{isAr ? p.label_ar : p.label_en}
                           {p.sensitivity === "sensitive" && <span title={t({ ar: "صلاحية حساسة — للمالك/السوبر-أدمن", en: "Sensitive — owner/super-admin only" })} style={{ color: "rgba(255,210,138,0.95)" }}> ⚠</span>}
                           {sysOnly && <span style={{ color: "rgba(255,138,142,0.8)" }}> 🔒</span>}
@@ -118,6 +145,9 @@ export default function ProfessionPermissionsEditor({ profession, allProfessions
           })}
         </div>
         <div className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.4)", marginTop: "8px" }}>{t({ ar: "الصلاحيات الحساسة (⚠) يمنحها المالك/السوبر-أدمن فقط. صلاحيات النظام (🔒) لا تُمنح عبر المهن. كل تغيير يُحفظ ويُؤكَّد من الخادم.", en: "Sensitive (⚠) = owner/super-admin only. System (🔒) never grantable via professions. Every change is saved and server-confirmed." })}</div>
+
+        {/* Step-up overlay — inside the stop-propagation box on purpose (see header). */}
+        {sw.stepUpModal}
       </div>
     </div>
   );

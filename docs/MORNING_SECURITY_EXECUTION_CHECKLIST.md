@@ -149,6 +149,43 @@
 
 ---
 
+## 🚨🚨 Phase 4-ب — ثغرة عاشرة · **تسبق كل ما بعدها**
+
+> # `docs/authz_fixD_profiles_direct_write_RUNME.sql`
+>
+> **ليست دالّة — بل غياب `REVOKE`.** لا تمرّ بأيّ RPC، فلا تُغلقها بوّابة MFA على
+> الدوالّ التسع، ولا تُغلقها Fix A ولا Fix B. المهاجم **لا يستدعي شيئًا**:
+>
+> ```
+> PATCH /rest/v1/profiles?id=eq.<معرّفه هو>
+> Authorization: Bearer <أيّ حساب مسجَّل عاديّ>
+> {"staff_role":"super_admin"}
+> ```
+>
+> **سلسلة السبب:** سياسة التحديث الذاتي تسمح بالصفّ (`id = auth.uid()`) · و**RLS لا تعرف
+> الأعمدة إطلاقًا** فلا تمنع عمودًا دون آخر · والمنحة الضيّقة على خمسة أعمدة **لا تُلغي**
+> منحةً واسعة على الجدول · ولا ملفّ من 188 يسحب `UPDATE` على مستوى الجدول.
+>
+> **الأثر لو صحّ:** أيّ حساب مسجَّل يرقّي **نفسه** إلى `super_admin` بطلب واحد،
+> ويصبح `is_owner()` صحيحًا له. هذا يجعل Fix A **بلا معنى عمليًّا** — لماذا يستدعي أحد
+> دالّة محروسة وهو يستطيع الكتابة على الجدول مباشرة؟
+>
+> ### ⚠️ لم أستطع إثباتها حيًّا — ولن أدّعي
+> الإثبات يتطلّب **محاولة تصعيد فعليّة على الإنتاج**، وهي كتابة. لم أفعلها.
+> الدليل من الكود لا من التجربة. **تحقّق أنت أوّلًا بهذا الاستعلام (قراءة فقط):**
+> ```sql
+> select grantee, privilege_type
+>   from information_schema.role_table_grants
+>  where table_schema='public' and table_name='profiles'
+>    and grantee in ('anon','authenticated') and privilege_type='UPDATE';
+> ```
+> **صفر صفوف ⇒ الثغرة غير موجودة** (لا تُشغّل Fix D).
+> **أيّ صفّ ⇒ الثغرة حقيقية** ⇒ شغّل Fix D **قبل S4**، وإلّا فبوّابة MFA تحرس بابًا مفتوحًا.
+>
+> **التراجع:** `docs/authz_fixD_profiles_direct_write_ROLLBACK.sql`
+
+---
+
 ## ⛔⛔ Phase 6 — موقوفة · حاجز مؤكَّد بمراجعة عدائية
 
 > # لا تُشغّل `mfa_write_gate_s4b_RUNME.sql` صباحًا.
@@ -162,8 +199,16 @@
 > `AdminStaff.tsx:57` و`AdminProfessions.tsx:74` يعرضان `r.error` مباشرة، و
 > `client.ts:33` يُرجع حقل `message` حرفيًّا. **المخرج الوحيد وقتها زرّ الطوارئ SQL.**
 >
-> **ما يرفع الحاجز:** ربط `useSensitiveWrite` في `AdminStaff.tsx` و`AdminAccounts.tsx`
-> و`AdminProfessions.tsx` و`ProfessionPicker.tsx`، ثم اختبار الدورة. عمل واجهة لا SQL.
+> ### ✅ الحاجز الأول رُفع — الربط تمّ
+> `useSensitiveWrite` صار مستوردًا في **ستّة** مكوّنات (لا أربعة كما قدّرتُ):
+> `AdminStaff` · `AdminAccounts` · `AdminProfessions` · `ProfessionPicker` ·
+> `ProfessionPermissionsEditor` · `EmployeeAccessModal`.
+>
+> ### ⛔ الحاجز الثاني ما زال قائمًا — إثبات قدرة البوّابة على الرفض
+> `mfa_write_ok()` تفشل **مفتوحة** على كل مسار خطأ عمدًا. لو تعذّر على مالك الدالّة قراءة
+> `auth.mfa_factors` **لما رفضت أحدًا أبدًا** — وفحص نصّي يظلّ يطبع PASS.
+> شغّل `docs/mfa_write_gate_s4_DIAGNOSTIC_RUNME.sql` وأثبت `allowed=false` بجلسة aal1،
+> ثم `_CLEANUP.sql`. **قبل ذلك لا تُشغّل S4b.**
 >
 > **Phases 0–4 غير متأثّرة إطلاقًا** — إصلاحات A و B و C مستقلّة عن MFA ولا تحتاج هذا الربط.
 > نفّذها صباحًا كالمخطّط.

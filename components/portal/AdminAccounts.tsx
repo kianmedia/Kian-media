@@ -6,14 +6,25 @@
 // approved emails. The UI additionally protects those two admin rows (no edits).
 // "Send message" uses adminReplySupport → a real admin message that auto-
 // notifies the client (existing safe path; no email/WhatsApp/push).
+//
+// S4b — SENSITIVE WRITE. admin_set_account is one of the nine MFA-gated RPCs, so
+// patch() runs through useSensitiveWrite(): mfa_required (P0002) opens the step-up
+// modal and retries the SAME call exactly once; a second mfa_required is reported
+// as an error, never a second prompt. Cancelling changes nothing and says so.
+// authorization_denied (P0003) becomes readable bilingual text.
+// adminReplySupport is NOT gated in SQL and is deliberately left untouched.
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { adminListProfiles, adminSetAccount, adminReplySupport, adminListProjects } from "@/lib/portal/admin";
 import AccountLinking from "@/components/portal/AccountLinking";
+import { useSensitiveWrite, sensitiveOutcomeMessage } from "@/components/portal/useSensitiveWrite";
 import type { Profile, AccountStatus, AccountType, ClientLevel, Project } from "@/lib/portal/types";
 
 const PROTECTED_EMAILS = ["kianalebtikar@gmail.com", "manager@kianmedia.com"];
+
+/** Shown inside the step-up modal so the ask has context. */
+const REASON_ACCOUNT = { ar: "تعديل حساب في البوابة", en: "changing a portal account" };
 
 const STATUS_OPTS: { v: AccountStatus; ar: string; en: string }[] = [
   { v: "active",   ar: "نشط",   en: "Active" },
@@ -32,6 +43,7 @@ const LEVEL_OPTS: { v: ClientLevel; ar: string; en: string }[] = [
 
 export default function AdminAccounts() {
   const { t, isAr } = useI18n();
+  const sw = useSensitiveWrite();
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [rows, setRows] = useState<Profile[]>([]);
   const [err, setErr] = useState("");
@@ -55,10 +67,21 @@ export default function AdminAccounts() {
 
   async function patch(p: Profile, fields: { status?: AccountStatus; type?: AccountType; level?: ClientLevel }) {
     setSavingId(p.id); setFlash(null);
-    const r = await adminSetAccount({ userId: p.id, ...fields });
+    // Thunk, not a live promise: the retry re-issues exactly this call.
+    const out = await sw.run(() => adminSetAccount({ userId: p.id, ...fields }), REASON_ACCOUNT);
     setSavingId(null);
-    if (!r.ok || !r.data) {
-      setFlash({ id: p.id, kind: "err", text: t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + (r.ok ? "no row" : r.error) });
+
+    if (out.status === "cancelled") {
+      setFlash({ id: p.id, kind: "err", text: out.message });
+      return;
+    }
+    if (out.status !== "ok") {
+      setFlash({ id: p.id, kind: "err", text: sensitiveOutcomeMessage(out, t({ ar: "تعذّر الحفظ: ", en: "Save failed: " })) });
+      return;
+    }
+    // Report the ORIGINAL result: `false` means the RPC touched no row.
+    if (!out.data) {
+      setFlash({ id: p.id, kind: "err", text: t({ ar: "تعذّر الحفظ: لم يتغيّر أي صفّ.", en: "Save failed: no row changed." }) });
       return;
     }
     setRows((prev) => prev.map((x) => x.id === p.id ? {
@@ -67,7 +90,11 @@ export default function AdminAccounts() {
       account_type: fields.type ?? x.account_type,
       client_level: fields.level ?? x.client_level,
     } : x));
-    setFlash({ id: p.id, kind: "ok", text: t({ ar: "تم الحفظ ✓", en: "Saved ✓" }) });
+    setFlash({
+      id: p.id, kind: "ok",
+      text: t({ ar: "تم الحفظ ✓", en: "Saved ✓" })
+        + (out.steppedUp ? t({ ar: " (بعد تأكيد الهوية)", en: " (after identity confirmation)" }) : ""),
+    });
   }
 
   return (
@@ -91,6 +118,7 @@ export default function AdminAccounts() {
           {rows.map((p) => {
             const isAdmin = p.account_type === "admin";
             const protectedRow = isAdmin || PROTECTED_EMAILS.includes((p.email || "").toLowerCase());
+            const rowBusy = savingId === p.id || sw.pending;
             return (
               <div key={p.id} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "16px 18px" }}>
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -113,15 +141,15 @@ export default function AdminAccounts() {
                   <>
                     <div className="flex flex-wrap items-end gap-3">
                       <Ctrl label={t({ ar: "الحالة", en: "Status" })}>
-                        <Select value={p.account_status} disabled={savingId === p.id} onChange={(v) => patch(p, { status: v as AccountStatus })}
+                        <Select value={p.account_status} disabled={rowBusy} onChange={(v) => patch(p, { status: v as AccountStatus })}
                           opts={STATUS_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
                       </Ctrl>
                       <Ctrl label={t({ ar: "النوع", en: "Type" })}>
-                        <Select value={p.account_type} disabled={savingId === p.id} onChange={(v) => patch(p, { type: v as AccountType })}
+                        <Select value={p.account_type} disabled={rowBusy} onChange={(v) => patch(p, { type: v as AccountType })}
                           opts={TYPE_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
                       </Ctrl>
                       <Ctrl label={t({ ar: "المستوى", en: "Level" })}>
-                        <Select value={p.client_level} disabled={savingId === p.id} onChange={(v) => patch(p, { level: v as ClientLevel })}
+                        <Select value={p.client_level} disabled={rowBusy} onChange={(v) => patch(p, { level: v as ClientLevel })}
                           opts={LEVEL_OPTS.map((o) => ({ value: o.v, label: isAr ? o.ar : o.en }))} />
                       </Ctrl>
                       <button onClick={() => setMsgFor(p)} className="f-sans"
@@ -138,7 +166,7 @@ export default function AdminAccounts() {
                         account={p}
                         projects={projects}
                         isClient={p.account_type === "client"}
-                        convertBusy={savingId === p.id}
+                        convertBusy={rowBusy}
                         onConvert={() => patch(p, { type: "client" })}
                         onProjectsChanged={() => void loadProjects()}
                       />
@@ -154,6 +182,9 @@ export default function AdminAccounts() {
       )}
 
       {msgFor && <MessageModal profile={msgFor} onClose={() => setMsgFor(null)} />}
+
+      {/* Step-up overlay. Renders nothing until a gate asks for aal2. */}
+      {sw.stepUpModal}
     </div>
   );
 }

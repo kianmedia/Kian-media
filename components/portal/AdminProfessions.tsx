@@ -5,6 +5,16 @@
 //   2. Assignment — grant each employee one or more professions.
 // The UI is convenience only; admin_upsert_profession / admin_set_employee_
 // professions re-check authority server-side and audit every change.
+//
+// S4b — SENSITIVE WRITES on this screen: admin_upsert_profession (add + inline
+// edit), admin_delete_profession (both the probe and the confirmed pass) and
+// admin_set_employee_professions. All three are MFA-gated in SQL, so each goes
+// through useSensitiveWrite(): mfa_required opens the step-up modal once and the
+// SAME call is retried exactly once. Cancelling writes nothing and says so; a
+// second mfa_required is an error, not another prompt. The add form keeps what
+// was typed because the modal is an overlay and the fields are only cleared on a
+// confirmed success. Reads (listProfessions / listEmployeesProfessions) are not
+// gated and are untouched.
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -13,8 +23,14 @@ import {
   PERMISSION_KEYS, type Profession, type EmployeeProfessions,
 } from "@/lib/portal/professions";
 import ProfessionPermissionsEditor from "@/components/portal/ProfessionPermissionsEditor";
+import { useSensitiveWrite, sensitiveOutcomeMessage } from "@/components/portal/useSensitiveWrite";
 
 const inp: React.CSSProperties = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "3px", padding: "7px 9px", color: "#fff", fontSize: "12.5px", outline: "none", colorScheme: "dark" };
+
+/** Shown inside the step-up modal so the ask has context. */
+const REASON_CATALOG = { ar: "تعديل كتالوج المهن", en: "editing the profession catalog" };
+const REASON_DELETE = { ar: "حذف/أرشفة مهنة", en: "deleting or archiving a profession" };
+const REASON_ASSIGN = { ar: "إسناد مهن لموظف", en: "assigning professions to an employee" };
 
 export default function AdminProfessions() {
   const { t, isAr } = useI18n();
@@ -41,7 +57,10 @@ export default function AdminProfessions() {
           </button>
         ))}
       </div>
-      {msg && <p className="f-sans mb-3" style={{ fontSize: "12px", color: "#7CFC9A" }}>{msg}</p>}
+      {/* One banner, three tones. It used to be unconditionally green, which would
+          have painted a denial or a cancellation as a success. Success lines start
+          with ✓, advisory/cancelled lines with ⚠, everything else is a failure. */}
+      {msg && <p className="f-sans mb-3" style={{ fontSize: "12px", color: msg.startsWith("✓") ? "#7CFC9A" : msg.startsWith("⚠") ? "rgba(255,210,138,0.95)" : "#ff8a8e" }}>{msg}</p>}
       {tab === "catalog"
         ? <Catalog profs={profs} onChanged={load} setMsg={setMsg} t={t} isAr={isAr} />
         : <Assign profs={profs} emps={emps} onChanged={load} setMsg={setMsg} t={t} isAr={isAr} />}
@@ -54,6 +73,7 @@ type Tf = (m: { ar: string; en: string }) => string;
 const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
 
 function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; onChanged: () => void; setMsg: (s: string) => void; t: Tf; isAr: boolean }) {
+  const sw = useSensitiveWrite();
   const [editorFor, setEditorFor] = useState<Profession | null>(null);
   const [nameAr, setNameAr] = useState("");
   const [nameEn, setNameEn] = useState("");
@@ -65,13 +85,21 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
   async function add() {
     const k = effectiveKey.trim();
     const ar = nameAr.trim(); const en = nameEn.trim();
-    if (busy) return;
+    if (busy || sw.pending) return;
     if (!ar && !en) { setMsg(t({ ar: "أدخل اسم المهنة (عربي أو إنجليزي).", en: "Enter a profession name (Arabic or English)." })); return; }
     if (!k) { setMsg(t({ ar: "المفتاح مطلوب (أحرف إنجليزية/أرقام).", en: "Key required (latin letters/digits)." })); return; }
     if (profs.some((p) => p.key === k)) { setMsg(t({ ar: `المفتاح "${k}" مستخدم بالفعل.`, en: `Key "${k}" already exists.` })); return; }
     setBusy(true);
-    const r = await upsertProfession({ key: k, name_ar: ar || en, name_en: en || ar, is_active: true });
-    if (!r.ok) { setBusy(false); setMsg(t({ ar: "تعذّرت الإضافة: ", en: "Add failed: " }) + r.error); return; }
+    const out = await sw.run(
+      () => upsertProfession({ key: k, name_ar: ar || en, name_en: en || ar, is_active: true }),
+      REASON_CATALOG,
+    );
+    if (out.status !== "ok") {
+      setBusy(false);
+      // The typed name/slug is deliberately NOT cleared — nothing was written.
+      setMsg(out.status === "cancelled" ? "⚠ " + out.message : sensitiveOutcomeMessage(out, t({ ar: "تعذّرت الإضافة: ", en: "Add failed: " })));
+      return;
+    }
     // READ-BACK: do not claim success until the row is actually readable (guards
     // against the missing-grant/RLS false-success). If the insert committed but the
     // row can't be read, surface that instead of a green lie.
@@ -87,19 +115,37 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
     }
   }
   async function save(p: Profession, patch: Partial<Profession>) {
-    const r = await upsertProfession({ id: p.id, ...patch });
-    if (r.ok) onChanged(); else setMsg(t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + r.error);
+    const out = await sw.run(() => upsertProfession({ id: p.id, ...patch }), REASON_CATALOG);
+    if (out.status === "ok") { setMsg(t({ ar: "✓ حُفظ التعديل.", en: "✓ Change saved." })); onChanged(); return; }
+    // setMsg re-renders, which snaps the controlled checkboxes back to server truth.
+    setMsg(out.status === "cancelled" ? "⚠ " + out.message : sensitiveOutcomeMessage(out, t({ ar: "تعذّر الحفظ: ", en: "Save failed: " })));
   }
   async function del(p: Profession) {
-    const r1 = await deleteProfession(p.id, false);
-    if (!r1.ok) { setMsg(t({ ar: "تعذّر الحذف: ", en: "Delete failed: " }) + r1.error); return; }
-    if (r1.data.requires_confirm) {
-      const ok = window.confirm(t({ ar: `هذه المهنة مسندة إلى ${r1.data.employees} موظف و${r1.data.tasks} مهمة. سيتم أرشفتها (إخفاؤها من الإسنادات الجديدة) مع الحفاظ على السجل. متابعة؟`, en: `Assigned to ${r1.data.employees} employees and ${r1.data.tasks} tasks. It will be archived (hidden from new assignments) with history kept. Continue?` }));
-      if (!ok) return;
-      const r2 = await deleteProfession(p.id, true);
-      if (r2.ok) { setMsg(r2.data.archived ? t({ ar: "أُرشفت المهنة.", en: "Profession archived." }) : t({ ar: "حُذفت المهنة.", en: "Profession deleted." })); onChanged(); }
-      else setMsg(r2.error);
-    } else if (r1.data.deleted) { setMsg(t({ ar: "حُذفت المهنة.", en: "Profession deleted." })); onChanged(); }
+    // Pass 1 — the reporting probe. It is the SAME gated RPC, so it can raise
+    // mfa_required; after the step-up the session is aal2 and pass 2 sails through.
+    const out1 = await sw.run(() => deleteProfession(p.id, false), REASON_DELETE);
+    if (out1.status !== "ok") {
+      setMsg(out1.status === "cancelled" ? "⚠ " + out1.message : sensitiveOutcomeMessage(out1, t({ ar: "تعذّر الحذف: ", en: "Delete failed: " })));
+      return;
+    }
+    const r1 = out1.data;
+    if (r1.requires_confirm) {
+      const ok = window.confirm(t({ ar: `هذه المهنة مسندة إلى ${r1.employees} موظف و${r1.tasks} مهمة. سيتم أرشفتها (إخفاؤها من الإسنادات الجديدة) مع الحفاظ على السجل. متابعة؟`, en: `Assigned to ${r1.employees} employees and ${r1.tasks} tasks. It will be archived (hidden from new assignments) with history kept. Continue?` }));
+      if (!ok) { setMsg("⚠ " + t({ ar: "أُلغي الحذف — لم يتغيّر شيء.", en: "Delete cancelled — nothing changed." })); return; }
+      const out2 = await sw.run(() => deleteProfession(p.id, true), REASON_DELETE);
+      if (out2.status !== "ok") {
+        setMsg(out2.status === "cancelled" ? "⚠ " + out2.message : sensitiveOutcomeMessage(out2, t({ ar: "تعذّر الحذف: ", en: "Delete failed: " })));
+        return;
+      }
+      setMsg("✓ " + (out2.data.archived ? t({ ar: "أُرشفت المهنة.", en: "Profession archived." }) : t({ ar: "حُذفت المهنة.", en: "Profession deleted." })));
+      onChanged();
+    } else if (r1.deleted) {
+      setMsg("✓ " + t({ ar: "حُذفت المهنة.", en: "Profession deleted." })); onChanged();
+    } else {
+      // Never silent: the RPC reported neither a delete nor a confirmation need.
+      setMsg("⚠ " + t({ ar: "لم تُحذف المهنة ولم يُطلب تأكيد — لم يتغيّر شيء.", en: "Nothing was deleted and no confirmation was requested — nothing changed." }));
+      onChanged();
+    }
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -110,7 +156,7 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
           <input value={nameAr} onChange={(e) => setNameAr(e.target.value)} placeholder={t({ ar: "الاسم بالعربية (مثل: مصوّر)", en: "Arabic name (e.g. مصوّر)" })} style={inp} />
           <input value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder={t({ ar: "الاسم بالإنجليزية (Photographer)", en: "English name (Photographer)" })} style={inp} dir="ltr" />
           <input value={effectiveKey} onChange={(e) => { setKey(slugify(e.target.value)); setKeyEdited(true); }} placeholder="slug (photographer)" style={{ ...inp, direction: "ltr" }} dir="ltr" />
-          <button onClick={add} disabled={busy} className="btn-red" style={{ opacity: busy ? 0.5 : 1 }}><span>{busy ? "…" : `+ ${t({ ar: "إضافة المهنة", en: "Add profession" })}`}</span></button>
+          <button onClick={add} disabled={busy || sw.pending} className="btn-red" style={{ opacity: busy || sw.pending ? 0.5 : 1 }}><span>{busy || sw.pending ? "…" : `+ ${t({ ar: "إضافة المهنة", en: "Add profession" })}`}</span></button>
         </div>
         <div className="f-sans" style={{ fontSize: "10px", color: "rgba(255,255,255,0.4)", marginTop: "6px" }}>{t({ ar: "المهنة ليست دور النظام — دور الوصول يُضبط من صفحة الموظفين.", en: "A profession is not the system role — access role is set on the Staff page." })}</div>
       </div>
@@ -136,14 +182,14 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
                 </td>
                 {PERMISSION_KEYS.map((pk) => (
                   <td key={pk.key} style={{ ...td, textAlign: "center" }}>
-                    <input type="checkbox" checked={!!(p as unknown as Record<string, boolean>)[pk.key]} onChange={(e) => save(p, { [pk.key]: e.target.checked } as Partial<Profession>)} />
+                    <input type="checkbox" disabled={sw.pending} checked={!!(p as unknown as Record<string, boolean>)[pk.key]} onChange={(e) => save(p, { [pk.key]: e.target.checked } as Partial<Profession>)} />
                   </td>
                 ))}
                 <td style={{ ...td, textAlign: "center" }}>
-                  <input type="checkbox" checked={p.is_active} onChange={(e) => save(p, { is_active: e.target.checked })} />
+                  <input type="checkbox" disabled={sw.pending} checked={p.is_active} onChange={(e) => save(p, { is_active: e.target.checked })} />
                 </td>
                 <td style={{ ...td, textAlign: "center" }}>
-                  <button onClick={() => del(p)} title={t({ ar: "حذف/أرشفة", en: "Delete/archive" })} style={{ background: "none", border: "none", color: "#ff9ea1", cursor: "pointer", fontSize: "13px" }}>🗑</button>
+                  <button onClick={() => del(p)} disabled={sw.pending} title={t({ ar: "حذف/أرشفة", en: "Delete/archive" })} style={{ background: "none", border: "none", color: "#ff9ea1", cursor: sw.pending ? "wait" : "pointer", fontSize: "13px", opacity: sw.pending ? 0.5 : 1 }}>🗑</button>
                 </td>
               </tr>
             ))}
@@ -151,11 +197,15 @@ function Catalog({ profs, onChanged, setMsg, t, isAr }: { profs: Profession[]; o
         </table>
       </div>
       {editorFor && <ProfessionPermissionsEditor profession={editorFor} allProfessions={profs} onClose={() => { setEditorFor(null); onChanged(); }} />}
+
+      {/* Step-up overlay. Renders nothing until a gate asks for aal2. */}
+      {sw.stepUpModal}
     </div>
   );
 }
 
 function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession[]; emps: EmployeeProfessions[]; onChanged: () => void; setMsg: (s: string) => void; t: Tf; isAr: boolean }) {
+  const sw = useSensitiveWrite();
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const active = useMemo(() => profs.filter((p) => p.is_active), [profs]);
@@ -169,10 +219,15 @@ function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession
     setBusy(emp.id);
     const primary = primaryId && ids.includes(primaryId) ? primaryId : ids[0] ?? null;
     const ordered = primary ? [primary, ...ids.filter((x) => x !== primary)] : ids;
-    const r = await setEmployeeProfessions(emp.id, ordered);
+    const out = await sw.run(() => setEmployeeProfessions(emp.id, ordered), REASON_ASSIGN);
     setBusy(null);
-    if (r.ok) { setMsg(t({ ar: "حُدّثت المهن.", en: "Professions updated." })); onChanged(); }
-    else setMsg(r.error);
+    if (out.status === "ok") {
+      setMsg("✓ " + t({ ar: "حُدّثت المهن.", en: "Professions updated." })
+        + (out.steppedUp ? t({ ar: " (بعد تأكيد الهوية)", en: " (after identity confirmation)" }) : ""));
+      onChanged();
+      return;
+    }
+    setMsg(out.status === "cancelled" ? "⚠ " + out.message : sensitiveOutcomeMessage(out, t({ ar: "تعذّر الحفظ: ", en: "Save failed: " })));
   }
   const addProf   = (emp: EmployeeProfessions, pid: string) => save(emp, [...emp.profession_ids, pid], emp.primary_profession_id ?? emp.profession_ids[0] ?? pid);
   const removeProf = (emp: EmployeeProfessions, pid: string) => save(emp, emp.profession_ids.filter((x) => x !== pid), (emp.primary_profession_id === pid ? null : emp.primary_profession_id) ?? null);
@@ -185,6 +240,7 @@ function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession
         const assigned = emp.profession_ids;
         const primaryId = emp.primary_profession_id ?? (assigned.length === 1 ? assigned[0] : null);
         const unassigned = active.filter((p) => !assigned.includes(p.id));
+        const rowBusy = busy === emp.id || sw.pending;
         return (
           <div key={emp.id} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "4px", padding: "11px 13px", opacity: busy === emp.id ? 0.6 : 1 }}>
             <div className="flex items-baseline justify-between gap-2 mb-2">
@@ -202,9 +258,9 @@ function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession
                   const isPrimary = pid === primaryId;
                   return (
                     <span key={pid} className="f-sans inline-flex items-center gap-1.5" style={{ fontSize: "11px", padding: "4px 8px", borderRadius: "3px", border: `1px solid ${isPrimary ? "rgba(124,252,154,0.5)" : "rgba(227,30,36,0.45)"}`, background: isPrimary ? "rgba(124,252,154,0.12)" : "rgba(227,30,36,0.12)", color: "#fff" }}>
-                      <button title={t({ ar: "تعيين كمهنة رئيسية", en: "Set primary" })} onClick={() => makePrimary(emp, pid)} disabled={busy === emp.id} style={{ background: "none", border: "none", cursor: "pointer", color: isPrimary ? "#7CFC9A" : "rgba(255,255,255,0.5)", padding: 0, fontSize: "12px" }}>{isPrimary ? "★" : "☆"}</button>
+                      <button title={t({ ar: "تعيين كمهنة رئيسية", en: "Set primary" })} onClick={() => makePrimary(emp, pid)} disabled={rowBusy} style={{ background: "none", border: "none", cursor: "pointer", color: isPrimary ? "#7CFC9A" : "rgba(255,255,255,0.5)", padding: 0, fontSize: "12px" }}>{isPrimary ? "★" : "☆"}</button>
                       {label(byId.get(pid))}
-                      <button title={t({ ar: "إزالة هذه المهنة", en: "Remove" })} onClick={() => removeProf(emp, pid)} disabled={busy === emp.id} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", padding: 0, fontSize: "13px", lineHeight: 1 }}>×</button>
+                      <button title={t({ ar: "إزالة هذه المهنة", en: "Remove" })} onClick={() => removeProf(emp, pid)} disabled={rowBusy} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", padding: 0, fontSize: "13px", lineHeight: 1 }}>×</button>
                     </span>
                   );
                 })}
@@ -217,7 +273,7 @@ function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession
                 <div className="f-sans" style={{ fontSize: "9.5px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "أضف مهنة", en: "Add a profession" })}</div>
                 <div className="flex gap-1.5 flex-wrap">
                   {unassigned.map((p) => (
-                    <button key={p.id} onClick={() => addProf(emp, p.id)} disabled={busy === emp.id}
+                    <button key={p.id} onClick={() => addProf(emp, p.id)} disabled={rowBusy}
                       className="f-sans" style={{ fontSize: "11px", padding: "4px 10px", borderRadius: "3px", cursor: "pointer", border: "1px solid rgba(255,255,255,0.14)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
                       + {label(p)}
                     </button>
@@ -229,6 +285,9 @@ function Assign({ profs, emps, onChanged, setMsg, t, isAr }: { profs: Profession
         );
       })}
       {filtered.length === 0 && <p className="text-white/40" style={{ fontSize: "12.5px" }}>{t({ ar: "لا موظفين.", en: "No employees." })}</p>}
+
+      {/* Step-up overlay. Renders nothing until a gate asks for aal2. */}
+      {sw.stepUpModal}
     </div>
   );
 }

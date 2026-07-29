@@ -105,9 +105,15 @@ test("S4b refuses to run before its dependencies", () => {
 });
 
 test("S4b preflight and postcheck are read-only", () => {
-  for (const [n, s] of [["preflight", pre], ["postcheck", post]]) {
-    assert.ok(!/\b(insert|update|delete|drop|alter|truncate|create)\b/i.test(s),
-      `${n} must not change anything`);
+  // Statement POSITION, not word-anywhere. The preflight legitimately quotes the
+  // kill-switch command inside a string literal so the operator can copy it; matching
+  // that would flag a helpful message as a write.
+  for (const [n, src] of [["preflight", pre], ["postcheck", post]]) {
+    for (const line of src.split("\n")) {
+      if (/^\s{0,2}(insert|update|delete|drop|alter|truncate|create)\s/i.test(line)) {
+        assert.fail(`${n} contains a write statement: ${line.trim().slice(0, 70)}`);
+      }
+    }
   }
 });
 
@@ -175,17 +181,58 @@ test("S4b closes the bulk-write bypass", () => {
   }
 });
 
-test("S4b the step-up hook is still unwired - Phase 6 must stay blocked", () => {
-  // Recorded as a test so the blocker cannot be forgotten. useSensitiveWrite is the only
-  // path that catches mfa_required and opens the modal; nothing imports it. Applying S4b
-  // before it is wired would leave the owner - the sole factor holder - seeing a raw
-  // "mfa_required" string with no way to step up, recoverable only via the SQL kill switch.
-  const wired = ["AdminStaff", "AdminAccounts", "AdminProfessions", "ProfessionPicker"]
-    .filter((c) => { try { return R(`components/portal/${c}.tsx`).includes("useSensitiveWrite"); }
-                     catch { return false; } });
-  const checklist = R("docs/MORNING_SECURITY_EXECUTION_CHECKLIST.md");
-  if (wired.length === 0) {
-    assert.match(checklist, /موقوفة · حاجز مؤكَّد/,
-      "while the hook is unwired, the checklist MUST block Phase 6");
+// ── Blocker A, now closed: the step-up hook is WIRED to every real call site ──
+// This test used to record the opposite - that nothing imported useSensitiveWrite,
+// so Phase 6 had to stay blocked. It is inverted rather than deleted, because the
+// property that mattered is unchanged: useSensitiveWrite is the ONLY path that
+// catches mfa_required and opens the modal. A call site that writes one of the nine
+// without it leaves the owner - the sole factor holder - staring at a raw
+// "mfa_required" token with no way to step up, recoverable only through the SQL
+// kill switch. So the guard now fails when a call site is UNwired.
+const SENSITIVE_UI = [
+  "AdminStaff",                    // admin_set_staff_role
+  "AdminAccounts",                 // admin_set_account
+  "AdminProfessions",              // admin_upsert_profession, admin_delete_profession, admin_set_employee_professions
+  "ProfessionPicker",              // admin_set_employee_professions
+  "ProfessionPermissionsEditor",   // admin_set_profession_permission, admin_copy_*, admin_apply_*, and the bulk wrapper that inherits the gate
+  "EmployeeAccessModal",           // admin_set_employee_override
+];
+
+test("S4b every sensitive-write call site is wired to the step-up hook", () => {
+  for (const c of SENSITIVE_UI) {
+    const src = R(`components/portal/${c}.tsx`);
+    assert.ok(src.includes("useSensitiveWrite("),
+      `${c}.tsx calls a gated RPC but never invokes useSensitiveWrite() - a P0002 would surface as a raw token`);
+    assert.ok(src.includes("stepUpModal"),
+      `${c}.tsx uses the hook but never renders stepUpModal - the modal could never open`);
   }
+});
+
+test("S4b no component writes a gated RPC wrapper without the hook", () => {
+  // The wrappers in lib/portal that reach the nine gated RPCs (plus the bulk helper,
+  // which delegates in a loop to a gated function and therefore raises mfa_required
+  // too). Any component importing one of these MUST also import the hook.
+  const WRAPPERS = [
+    "adminSetStaffRole", "adminSetAccount", "setEmployeeProfessions", "setEmployeeOverride",
+    "setProfessionPermission", "upsertProfession", "deleteProfession",
+    "copyProfessionPermissions", "applyProfessionTemplate", "bulkSetProfessionPermissions",
+  ];
+  const dir = path.join(root, "components", "portal");
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".tsx"))) {
+    const src = fs.readFileSync(path.join(dir, f), "utf8");
+    const hit = WRAPPERS.filter((w) => new RegExp(`\\b${w}\\s*\\(`).test(src));
+    if (hit.length === 0) continue;
+    assert.ok(src.includes("useSensitiveWrite("),
+      `${f} calls ${hit.join(", ")} without useSensitiveWrite() - mfa_required would reach the user raw`);
+  }
+});
+
+test("S4b the retry-once contract the call sites depend on is still in the hook", () => {
+  // The call sites delegate the whole no-loop / no-swallow contract to the hook. If
+  // any of these disappear, every wired screen silently loses the guarantee.
+  assert.ok(/sensitive_write_retry_failed/.test(HOOK), "a second mfa_required must be an error, not a second prompt");
+  assert.ok(/mfa_session_not_elevated/.test(HOOK), "aal1 after a successful verify must NOT be retried");
+  assert.ok(/mfa_cancelled/.test(HOOK), "cancelling must be reported, and the operation must not run");
+  assert.ok(/role_change_denied/.test(HOOK) && /authorization_denied/.test(HOOK),
+    "P0003 tokens must be translated, not surfaced raw");
 });

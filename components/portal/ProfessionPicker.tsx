@@ -4,23 +4,38 @@
 // via admin_set_employee_professions (RPC re-checks authority + audits). Live from
 // public.professions; archived (inactive) professions are not offered for NEW
 // assignments but existing ones still show.
+//
+// S4b — SENSITIVE WRITE. admin_set_employee_professions is MFA-gated, so save()
+// goes through useSensitiveWrite(): mfa_required opens the step-up modal and the
+// same call is retried exactly once. Cancelling assigns nothing and says so; a
+// P0003 denial becomes readable text instead of the raw `authorization_denied`
+// token that errMessage() would otherwise print. One hook instance per picker,
+// i.e. per employee row — they never contend with each other.
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { setEmployeeProfessions, PERMISSION_KEYS, type Profession } from "@/lib/portal/professions";
 import EmployeeAccessModal from "@/components/portal/EmployeeAccessModal";
+import { useSensitiveWrite, sensitiveOutcomeMessage } from "@/components/portal/useSensitiveWrite";
+
+/** Shown inside the step-up modal so the ask has context. */
+const REASON_ASSIGN = { ar: "إسناد مهن لموظف", en: "assigning professions to an employee" };
 
 export default function ProfessionPicker({ profileId, employeeName, assignedIds, primaryId, professions, systemRole, onChanged }: {
   profileId: string; employeeName?: string; assignedIds: string[]; primaryId?: string | null; professions: Profession[]; systemRole?: string | null; onChanged: () => void;
 }) {
   const { t, isAr } = useI18n();
+  const sw = useSensitiveWrite();
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  // Was an error-only string; a cancellation is not an error, so the note carries
+  // its own tone. Nothing here is ever left blank on a failed path.
+  const [note, setNote] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
   const [showAccess, setShowAccess] = useState(false);
   const byId = new Map(professions.map((p) => [p.id, p]));
   const label = (id: string) => { const p = byId.get(id); return p ? (isAr ? p.name_ar : p.name_en) : id.slice(0, 6); };
   const active = professions.filter((p) => p.is_active);
   const primary = primaryId ?? (assignedIds.length === 1 ? assignedIds[0] : null);
   const unassigned = active.filter((p) => !assignedIds.includes(p.id));
+  const locked = busy || sw.pending;
 
   // Effective access = UNION of capability flags across every assigned ACTIVE
   // profession (mirrors emp_can, which never filters to the primary). For each
@@ -32,12 +47,19 @@ export default function ProfessionPicker({ profileId, employeeName, assignedIds,
   }).filter((x) => x.grantors.length > 0);
 
   async function save(ids: string[], primaryPick: string | null) {
-    setBusy(true); setErr(null);
+    setBusy(true); setNote(null);
     const pr = primaryPick && ids.includes(primaryPick) ? primaryPick : ids[0] ?? null;
     const ordered = pr ? [pr, ...ids.filter((x) => x !== pr)] : ids;
-    const r = await setEmployeeProfessions(profileId, ordered);
+    // Thunk over live state: the single retry re-issues exactly this array.
+    const out = await sw.run(() => setEmployeeProfessions(profileId, ordered), REASON_ASSIGN);
     setBusy(false);
-    if (r.ok) onChanged(); else setErr(r.error);
+    if (out.status === "ok") {
+      if (out.steppedUp) setNote({ kind: "ok", text: t({ ar: "✓ حُدّثت المهن بعد تأكيد الهوية.", en: "✓ Professions updated after identity confirmation." }) });
+      onChanged();
+      return;
+    }
+    if (out.status === "cancelled") { setNote({ kind: "warn", text: out.message }); return; }
+    setNote({ kind: "err", text: sensitiveOutcomeMessage(out, t({ ar: "تعذّر الحفظ: ", en: "Save failed: " })) });
   }
 
   return (
@@ -51,9 +73,9 @@ export default function ProfessionPicker({ profileId, employeeName, assignedIds,
               const isP = id === primary;
               return (
                 <span key={id} className="f-sans inline-flex items-center gap-1.5" style={{ fontSize: "11px", padding: "3px 8px", borderRadius: "3px", border: `1px solid ${isP ? "rgba(124,252,154,0.5)" : "rgba(227,30,36,0.45)"}`, background: isP ? "rgba(124,252,154,0.12)" : "rgba(227,30,36,0.12)", color: "#fff" }}>
-                  <button title={t({ ar: "تعيين رئيسية", en: "Set primary" })} disabled={busy} onClick={() => save(assignedIds, id)} style={{ background: "none", border: "none", cursor: "pointer", color: isP ? "#7CFC9A" : "rgba(255,255,255,0.5)", padding: 0 }}>{isP ? "★" : "☆"}</button>
+                  <button title={t({ ar: "تعيين رئيسية", en: "Set primary" })} disabled={locked} onClick={() => save(assignedIds, id)} style={{ background: "none", border: "none", cursor: "pointer", color: isP ? "#7CFC9A" : "rgba(255,255,255,0.5)", padding: 0 }}>{isP ? "★" : "☆"}</button>
                   {label(id)}
-                  <button title={t({ ar: "إزالة", en: "Remove" })} disabled={busy} onClick={() => save(assignedIds.filter((x) => x !== id), primary === id ? null : primary)} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", padding: 0, fontSize: "13px", lineHeight: 1 }}>×</button>
+                  <button title={t({ ar: "إزالة", en: "Remove" })} disabled={locked} onClick={() => save(assignedIds.filter((x) => x !== id), primary === id ? null : primary)} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", padding: 0, fontSize: "13px", lineHeight: 1 }}>×</button>
                 </span>
               );
             })}
@@ -62,7 +84,7 @@ export default function ProfessionPicker({ profileId, employeeName, assignedIds,
       {unassigned.length > 0 && (
         <div className="flex gap-1.5 flex-wrap">
           {unassigned.map((p) => (
-            <button key={p.id} disabled={busy} onClick={() => save([...assignedIds, p.id], primary)} className="f-sans" style={{ fontSize: "11px", padding: "3px 9px", borderRadius: "3px", cursor: "pointer", border: "1px solid rgba(255,255,255,0.14)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
+            <button key={p.id} disabled={locked} onClick={() => save([...assignedIds, p.id], primary)} className="f-sans" style={{ fontSize: "11px", padding: "3px 9px", borderRadius: "3px", cursor: "pointer", border: "1px solid rgba(255,255,255,0.14)", background: "transparent", color: "rgba(255,255,255,0.6)" }}>
               + {isAr ? p.name_ar : p.name_en}
             </button>
           ))}
@@ -94,7 +116,10 @@ export default function ProfessionPicker({ profileId, employeeName, assignedIds,
           )}
         <div className="f-sans" style={{ fontSize: "9.5px", color: "rgba(255,255,255,0.35)", marginTop: "5px" }}>{t({ ar: "الصلاحيات = اتحاد كل المهن المُسندة؛ المهنة الرئيسية للعرض فقط. لا تمنح أي مهنة صلاحيات المالك/الأدمن.", en: "Capabilities = union of ALL assigned professions; primary is display-only. No profession grants Owner/Admin access." })}</div>
       </div>
-      {err && <p className="f-sans" style={{ fontSize: "11px", color: "#ff8a8e", marginTop: "4px" }}>{err}</p>}
+      {note && <p className="f-sans" style={{ fontSize: "11px", color: note.kind === "ok" ? "#7CFC9A" : note.kind === "warn" ? "rgba(255,210,138,0.95)" : "#ff8a8e", marginTop: "4px" }}>{note.text}</p>}
+
+      {/* Step-up overlay. Renders nothing until a gate asks for aal2. */}
+      {sw.stepUpModal}
     </div>
   );
 }

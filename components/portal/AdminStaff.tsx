@@ -4,6 +4,16 @@
 // (admin_set_staff_role — owner-only, DB-enforced) and assign/unassign staff to
 // projects with kian_* roles (admin_add/remove_project_member — account_type=admin).
 // All writes go through is_admin()/is_owner()-guarded RPCs; no service-role key.
+//
+// S4b — SENSITIVE WRITE. admin_set_staff_role is one of the nine MFA-gated RPCs.
+// It is routed through useSensitiveWrite(): a `mfa_required` (P0002) opens the
+// step-up modal, and the SAME operation is retried EXACTLY ONCE after assurance
+// is re-read from Postgres. Cancelling performs nothing and says so. `P0003`
+// (role_change_denied / authorization_denied) becomes readable bilingual text
+// instead of the raw token errMessage() would surface. The <select> keeps its
+// value because the modal is an overlay — the tree is never unmounted.
+// The other writes on this page (project membership, assignment notes) are NOT
+// gated in SQL and are deliberately left alone.
 // ════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -11,6 +21,7 @@ import { useI18n } from "@/lib/i18n";
 import { listProfessions, listEmployeesProfessions, type Profession } from "@/lib/portal/professions";
 import ProfessionPicker from "@/components/portal/ProfessionPicker";
 import { usePortal } from "@/components/portal/PortalShell";
+import { useSensitiveWrite, sensitiveOutcomeMessage } from "@/components/portal/useSensitiveWrite";
 import {
   adminListProfiles, adminListProjects, adminSetStaffRole,
   adminAddProjectMember, adminRemoveProjectMember, adminListMembershipsForUser,
@@ -22,9 +33,13 @@ import type { Profile, Project, ProjectMember, StaffRole, ProjectMemberRole, Ass
 
 const PROTECTED_EMAILS = ["kianalebtikar@gmail.com", "manager@kianmedia.com", "contact@kianmedia.com"];
 
+/** Shown inside the step-up modal so the ask has context. */
+const REASON_ROLE = { ar: "تغيير دور موظف", en: "changing a staff role" };
+
 export default function AdminStaff() {
   const { t, isAr } = useI18n();
   const { caps } = usePortal();
+  const sw = useSensitiveWrite();
   const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
   const [rows, setRows] = useState<Profile[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -52,11 +67,32 @@ export default function AdminStaff() {
 
   async function setRole(p: Profile, role: StaffRole | null) {
     setSavingId(p.id); setFlash(null);
-    const r = await adminSetStaffRole({ userId: p.id, role });
+    // The op is a THUNK: it is re-invoked verbatim on the single retry, and it
+    // closes over live state, so nothing the admin selected is lost.
+    const out = await sw.run(() => adminSetStaffRole({ userId: p.id, role }), REASON_ROLE);
     setSavingId(null);
-    if (!r.ok || !r.data) { setFlash({ id: p.id, kind: "err", text: t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + (r.ok ? "no row / protected" : r.error) }); return; }
+
+    if (out.status === "cancelled") {
+      // Explicitly visible: the write did NOT happen.
+      setFlash({ id: p.id, kind: "err", text: out.message });
+      return;
+    }
+    if (out.status !== "ok") {
+      setFlash({ id: p.id, kind: "err", text: sensitiveOutcomeMessage(out, t({ ar: "تعذّر الحفظ: ", en: "Save failed: " })) });
+      return;
+    }
+    // ORIGINAL result, not "MFA succeeded": the RPC returns false when no row was
+    // updated (protected account), and that is still a failure to report.
+    if (!out.data) {
+      setFlash({ id: p.id, kind: "err", text: t({ ar: "تعذّر الحفظ: لم يتغيّر أي صفّ (حساب محمي).", en: "Save failed: no row changed (protected account)." }) });
+      return;
+    }
     setRows((prev) => prev.map((x) => x.id === p.id ? { ...x, staff_role: role } : x));
-    setFlash({ id: p.id, kind: "ok", text: t({ ar: "تم تحديث الدور ✓", en: "Role updated ✓" }) });
+    setFlash({
+      id: p.id, kind: "ok",
+      text: t({ ar: "تم تحديث الدور ✓", en: "Role updated ✓" })
+        + (out.steppedUp ? t({ ar: " (بعد تأكيد الهوية)", en: " (after identity confirmation)" }) : ""),
+    });
   }
 
   return (
@@ -107,7 +143,7 @@ export default function AdminStaff() {
                       <div className="f-sans" style={{ fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "5px" }}>{t({ ar: "صلاحية النظام", en: "System Access Role" })}</div>
                       <select
                         value={p.staff_role ?? ""}
-                        disabled={savingId === p.id || protectedRow || !caps.canManageStaff}
+                        disabled={savingId === p.id || sw.pending || protectedRow || !caps.canManageStaff}
                         onChange={(e) => setRole(p, (e.target.value || null) as StaffRole | null)}
                         className="f-sans"
                         style={{ background: "rgba(255,255,255,0.04)", color: "#fff", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "3px", padding: "8px 10px", fontSize: "12.5px", cursor: savingId === p.id ? "wait" : "pointer", colorScheme: "dark", outline: "none", opacity: protectedRow ? 0.5 : 1 }}>
@@ -138,6 +174,9 @@ export default function AdminStaff() {
           })}
         </div>
       )}
+
+      {/* Step-up overlay. Renders nothing until a gate asks for aal2. */}
+      {sw.stepUpModal}
     </div>
   );
 }
