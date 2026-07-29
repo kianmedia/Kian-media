@@ -15,10 +15,18 @@ const tabsBlock = OPS.match(/const TABS[\s\S]*?\n\];/)[0];
 const tabs = [...tabsBlock.matchAll(/\{ k: "([a-z_]+)", ar: "([^"]+)", en: "([^"]+)", group: "([a-z]+)" \}/g)]
   .map((m) => ({ k: m[1], ar: m[2], en: m[3], group: m[4] }));
 
-// المفاتيح الـ27 (الـ26 المعتمدة + quick للمسار السريع) — المجموعة الثابتة الأصلية.
+// المفاتيح الـ29 = الـ27 الأصلية (الـ26 المعتمدة + quick للمسار السريع)
+// + مفتاحا المشاريع الكبيرة المُركَّبان لاحقًا:
+//   · large  = لوحة المشروع الكبير (نظرة عامة)      → مجموعة overview
+//   · matrix = مصفوفة المخرجات (الإدخال الجماعيّ)   → مجموعة delivery
+// كلاهما يعرض LargeProjectDashboard بنقطة دخول مختلفة، وبلا أيّ شرط صلاحية
+// جديد (انظر اختبار «شروط الظهور والصلاحيات لم تتغيّر» أدناه).
+//   · import = شاشة الاستيراد الجماعيّ من ملف (ProjectImportPanel) → مجموعة
+//     delivery، ببوّابة «المحذوفات» نفسها (canManage) لا بنموذج صلاحيات جديد.
 const EXPECTED_KEYS = ["quick", "execution", "reports", "planning", "resources", "governance", "subprojects",
   "program", "program_sla", "closure", "schedule", "tasks", "gantt", "calendar", "team", "deliverables",
-  "approvals", "finance", "costs", "risks", "meetings", "shoots", "locations", "tags", "timeline", "activity", "trash"];
+  "approvals", "finance", "costs", "risks", "meetings", "shoots", "locations", "tags", "timeline", "activity", "trash",
+  "large", "matrix", "import"];
 
 test("كل المفاتيح الأصلية موجودة ولم يتغيّر مفتاح ولا زاد/نقص", () => {
   const keys = tabs.map((x) => x.k);
@@ -30,9 +38,9 @@ test("كل المفاتيح الأصلية موجودة ولم يتغيّر مف
 test("الترتيب النهائي المعتمد (بالمفاتيح) حسب دورة العمل", () => {
   const order = tabs.map((x) => x.k);
   const expectedOrder = ["quick",
-    "execution", "program", "subprojects", "team",                                  // أ
+    "execution", "program", "subprojects", "large", "team",                          // أ
     "locations", "meetings", "schedule", "calendar", "planning", "gantt", "resources", // ب
-    "tasks", "shoots", "deliverables", "approvals", "program_sla",                   // ج
+    "tasks", "shoots", "deliverables", "matrix", "import", "approvals", "program_sla", // ج
     "risks", "governance", "costs", "finance", "reports",                            // د
     "timeline", "activity", "tags", "closure", "trash"];                             // هـ
   assert.deepEqual(order, expectedOrder, "الترتيب لا يطابق التسلسل المعتمد");
@@ -61,8 +69,8 @@ test("خمس مجموعات بصرية بالترتيب، وكل تبويب ين
   for (const g of groups) assert.match(OPS, new RegExp(`${g}: \\{ ar: "[^"]+`), `المجموعة ${g} بلا عنوان`);
   // المجموعات المطلوبة تحوي مفاتيحها الصحيحة
   const byGroup = (g) => tabs.filter((x) => x.group === g).map((x) => x.k);
-  assert.deepEqual(byGroup("overview"), ["quick", "execution", "program", "subprojects", "team"]);
-  assert.deepEqual(byGroup("delivery"), ["tasks", "shoots", "deliverables", "approvals", "program_sla"]);
+  assert.deepEqual(byGroup("overview"), ["quick", "execution", "program", "subprojects", "large", "team"]);
+  assert.deepEqual(byGroup("delivery"), ["tasks", "shoots", "deliverables", "matrix", "import", "approvals", "program_sla"]);
   assert.deepEqual(byGroup("records"), ["timeline", "activity", "tags", "closure", "trash"]);
 });
 
@@ -71,6 +79,7 @@ test("شروط الظهور والصلاحيات لم تتغيّر (لا صلا�
   assert.match(OPS, /tb\.k !== "costs" \|\| caps\.canSeeFinancials/, "فلتر التكاليف المالية تغيّر");
   assert.match(OPS, /tb\.k !== "finance" \|\| isFinance/, "عزل الحسابات تغيّر");
   assert.match(OPS, /tb\.k !== "trash" \|\| canManage/, "فلتر المحذوفات تغيّر");
+  assert.match(OPS, /tb\.k !== "import" \|\| canManage/, "فلتر الاستيراد الجماعيّ تغيّر");
   assert.match(OPS, /tb\.k !== "subprojects" \|\| isMaster/, "المشاريع الفرعية للرئيسي فقط تغيّر");
   assert.match(OPS, /tb\.k !== "program" \|\| isMaster/, "إدارة البرنامج للرئيسي فقط تغيّر");
   assert.match(OPS, /tb\.k !== "program_sla" \|\| isMaster/, "الالتزامات للرئيسي فقط تغيّر");

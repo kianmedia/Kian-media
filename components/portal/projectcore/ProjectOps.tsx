@@ -25,6 +25,8 @@ import { TemplateManagerButton } from "./ProjectTemplates";
 import { projectSaveAsTemplate, tplErr } from "@/lib/portal/projectTemplates";
 import { ScheduleTab, UnifiedCalendarTab, UnifiedGanttTab } from "./ProjectSchedule";
 import PreProductionCenter from "@/components/portal/PreProductionCenter";
+import LargeProjectDashboard from "@/components/portal/LargeProjectDashboard";
+import ProjectImportPanel from "@/components/portal/ProjectImportPanel";
 import ProjectProgressBar from "@/components/portal/ProjectProgressBar";
 import ProjectTasks from "./ProjectTasks";
 import ProjectExecution from "./ProjectExecution";
@@ -54,7 +56,7 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const TASK_STATES: PcTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "cancelled"];
 const PRIORITIES: PcPriority[] = ["low", "normal", "high", "urgent"];
 const PRIO_DOT: Record<PcPriority, string> = { low: "bg-stone-500", normal: "bg-sky-500", high: "bg-amber-500", urgent: "bg-red-500" };
-type TabKey = "quick" | "program_sla" | "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash";
+type TabKey = "quick" | "program_sla" | "execution" | "reports" | "planning" | "resources" | "governance" | "subprojects" | "program" | "closure" | "schedule" | "tasks" | "gantt" | "calendar" | "team" | "deliverables" | "approvals" | "finance" | "costs" | "risks" | "meetings" | "shoots" | "locations" | "tags" | "timeline" | "activity" | "trash" | "large" | "matrix" | "import";
 // Batch 9 · Part 1 — التبويبات مرتَّبة حسب دورة العمل ومجمَّعة بصريًّا في خمس مجموعات.
 // **المفاتيح التقنية لم تتغيّر** (الهوية بالـkey لا بالترتيب): الروابط العميقة
 // وشروط الظهور ومكوّنات التبويبات كما هي. غُيِّر الاسم الظاهر فقط حيث كان مضلِّلًا:
@@ -78,6 +80,7 @@ const TABS: { k: TabKey; ar: string; en: string; group: TabGroup }[] = [
   { k: "execution", ar: "التنفيذ", en: "Execution", group: "overview" },
   { k: "program", ar: "إدارة البرنامج", en: "Program", group: "overview" },
   { k: "subprojects", ar: "المشاريع الفرعية", en: "Subprojects", group: "overview" },
+  { k: "large", ar: "لوحة المشروع الكبير", en: "Large project board", group: "overview" },
   { k: "team", ar: "الفريق", en: "Team", group: "overview" },
   // ب) التخطيط
   { k: "locations", ar: "المواقع", en: "Locations", group: "planning" },
@@ -91,6 +94,13 @@ const TABS: { k: TabKey; ar: string; en: string; group: TabGroup }[] = [
   { k: "tasks", ar: "المهام", en: "Tasks", group: "delivery" },
   { k: "shoots", ar: "جلسات التصوير", en: "Shoots", group: "delivery" },
   { k: "deliverables", ar: "المخرجات", en: "Deliverables", group: "delivery" },
+  // المشاريع الكبيرة: «مصفوفة المخرجات» هي سطح الإدخال الجماعيّ (عشرات/مئات
+  // المخرجات) بفلاتره وشريط إجراءاته؛ تبويب «المخرجات» يبقى للقائمة المفردة.
+  { k: "matrix", ar: "مصفوفة المخرجات", en: "Deliverable matrix", group: "delivery" },
+  // الإدخال الجماعيّ من ملف: نفس بوّابة «المحذوفات» (canManage) — عملية كتابة
+  // لفريق كيان وحده. العميل لا يبلغ الصفحة أصلًا (بوّابة المسار)، وهذا التبويب
+  // لا يوسّع صلاحية أحد.
+  { k: "import", ar: "استيراد من ملف", en: "Bulk import", group: "delivery" },
   { k: "approvals", ar: "الاعتمادات", en: "Approvals", group: "delivery" },
   { k: "program_sla", ar: "الالتزامات والتسليم", en: "Commitments & Delivery", group: "delivery" },
   // د) الرقابة والإدارة
@@ -188,7 +198,7 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
   }, [projectId]);
   const isSimple = exp === "simple";
   // التبويبات المرئية لهذا المستخدم — deep-link لتبويب غير مسموح يسقط إلى «المهام» بدل منطقة فارغة.
-  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster) && (tb.k !== "program_sla" || isMaster) && (tb.k !== "quick" || isSimple));
+  const visibleTabs = TABS.filter((tb) => (tb.k !== "costs" || caps.canSeeFinancials) && (tb.k !== "finance" || isFinance) && (tb.k !== "trash" || canManage) && (tb.k !== "import" || canManage) && (tb.k !== "subprojects" || isMaster) && (tb.k !== "program" || isMaster) && (tb.k !== "program_sla" || isMaster) && (tb.k !== "quick" || isSimple));
   const [core, setCore] = useState<ProjectCore | null>(null);
   const [tab, setTab] = useState<TabKey>((visibleTabs.some((x) => x.k === initialTab) ? initialTab : "tasks") as TabKey);
   // 6A: ?tab=subprojects يُحسم بعد وصول سياق الهرمية (isMaster غير معروف عند أول render).
@@ -535,6 +545,16 @@ export default function ProjectOps({ projectId, projectName, onChanged, initialT
       {tab === "tags" && <TagsTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "team" && <TeamTab projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "deliverables" && <DeliverablesTab projectId={projectId} canManage={canManage} flash={flash} />}
+      {/* المشاريع الكبيرة — نفس بوّابة الصفحة (فريق كيان) ونفس تصفية التبويبات؛
+          لا نموذج صلاحيات جديد. اللوحة نفسها تُركَّب مرّتين بنقطة دخول مختلفة:
+          «large» على النظرة العامة، و«matrix» على سطح الإدخال الجماعيّ مباشرةً.
+          قبل تطبيق الـSQL تعمل بالحقول الأساسية وتُظهر «الترحيل معلّق». */}
+      {tab === "large" && <LargeProjectDashboard projectId={projectId} initialTab="overview" />}
+      {tab === "matrix" && <LargeProjectDashboard projectId={projectId} initialTab="deliverables" />}
+      {/* الاستيراد الجماعيّ — نفس بوّابة «المحذوفات»: مزدوجة (تصفية التبويب +
+          شرط الرسم) فلا يظهر لغير المخوَّل حتى برابط مباشر. قبل تطبيق الـSQL
+          تعمل المعاينة وتُظهر اللوحة «الترحيل معلّق» ويُرفض التنفيذ صراحةً. */}
+      {tab === "import" && canManage && <ProjectImportPanel projectId={projectId} canManage={canManage} flash={flash} />}
       {tab === "approvals" && <ApprovalsTab projectId={projectId} flash={flash} />}
       {tab === "finance" && isFinance && <FinanceTab projectId={projectId} flash={flash} />}
       {tab === "costs" && <CostsTab projectId={projectId} canManage={canManage} flash={flash} />}
