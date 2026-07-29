@@ -9,12 +9,14 @@
 
 | العنصر | الحالة |
 |---|---|
-| Fix A — منع إنشاء Super Admin بلا حدّ | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
-| Fix B — فصل صلاحيات الهوية عن إدارة المشاريع | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
-| Fix C — البوّابات الستّ الفاشلة-مفتوحة | `CODE READY — OWNER SQL APPROVAL REQUIRED` |
+| Fix A | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| S4 Pre | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| Fix B | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| Fix C | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| Public Quote Flow | ⏳ `MANUAL TEST PENDING` |
 | org_admin | `MIGRATION PACKAGE READY — NOT APPROVED FOR PRODUCTION` |
 | S4a — المُسنِد | `CODE READY — NOT APPLIED` |
-| S4b — ربط البوّابات بالسبع | `CODE READY — SQL APPLY AND OWNER ACCEPTANCE REQUIRED` |
+| S4b — ربط البوّابات بالتسع | `CODE READY — PRODUCTION DENIAL PROOF REQUIRED` |
 | MFA login (S3.5) | ✅ `PASS` — مؤكَّدة على الإنتاج بواسطة المالك |
 
 `enforcement_mode` = `enrollment` · لا تغيير.

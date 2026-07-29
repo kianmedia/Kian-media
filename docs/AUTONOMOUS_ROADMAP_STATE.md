@@ -33,7 +33,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **P0** | إغلاق Public Portal Hardening Phase 2 | `DONE` | — | إغلاق توثيقي + إصلاح `favicon.ico` 404؛ tsc نظيف · 767/767 · build exit 0 | — (مُغلقة) | `604d218` | ⏸️ `M-000` | ✅ 13/15 | 767/767 | `M-001` حضور · `M-004` سجلات | 2026-07-27 |
 | **P1** | العمود الفقري: البريد والإشعارات | `BLOCKED_MANUAL` | — | كل المراحل الفرعية P1.0–P1.6 مكتملة ومدفوعة؛ 3 من 3 ملفات SQL مُطبَّقة | **لا شيء منّي** — بانتظار `M-002` نشر Apps Script | `084654f` | ✅ | ✅ SQL · ❌ التسليم | 872/872 | `M-002` نشر Apps Script | 2026-07-27 |
-| **P2** | Privileged Account MFA (TOTP) | `BLOCKED_MANUAL` | **S4: BLOCKED — ROLE MODEL DECISION REQUIRED** | S1/S1b/S2/S3/S3.5 ✅ (S3.5 مؤكَّدة على الإنتاج) · S4a + S4-pre مكتوبان **وغير مربوطين وغير مُطبَّقين** | **مراجعة معمارية فقط** — لا S4b ولا SQL قبل اعتماد نموذج الأدوار | `7b26bab` | ⏸️ `M-000` | S3.5 ✅ · S4 ❌ | 1012/1012 | **قرار المالك في نموذج الأدوار** | 2026-07-28 |
+| **P2** | Privileged Account MFA (TOTP) | `IN_PROGRESS` | **حواجز S4** | ✅ Fix A + s4pre + Fix B + Fix C **مُطبَّقة ومُتحقَّق منها على الإنتاج** · S3.5 PASS | رفع حاجزَي S4: ربط الواجهة + إثبات قدرة البوّابة على الرفض | `d3ede95` | ⏸️ `M-000` | ✅ A/B/C حيّة | 1065/1065 | ربط `useSensitiveWrite` · إثبات الرفض | 2026-07-29 |
 | **P3** | Production Operations V1 | `TODO` | — | — | جرد ما هو موجود قبل إنشاء أي جدول | — | — | — | — | — | — |
 | **P3.1** | Call Sheets | `TODO` | — | — | فحص `shoot_sessions` وأي بنية Call Sheet قائمة | — | — | — | — | — | — |
 | **P3.2** | الجدولة والتعارضات | `TODO` | — | — | إعادة استخدام محرك تعارضات 4B الموجود | — | — | — | — | — | — |
@@ -128,6 +128,31 @@ Migration execution requires separate owner approval.
 - **MFA لا تشمل `org_admin`** — يحتاج موافقة صريحة منفصلة بعد إنشائه واختباره.
 - `is_owner()` **لا تُعاد تعريفها** — 99 موضع استدعاء، 68 منها يعتمد على شمول
   super_admin. الانتقال بإضافة Predicates جديدة ونقل تدريجي.
+
+---
+
+
+## ✅ حالة الإنتاج — 2026-07-29
+
+| العنصر | الحالة |
+|---|---|
+| **Fix A** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| **S4 Pre** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| **Fix B** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` (الدوال السبع · identity_gate=true · projects_gate=false) |
+| **Fix C** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` (الستّ تُعيد boolean صريحًا) |
+| **Public Quote Flow** | ⏳ `MANUAL TEST PENDING` — **لا يُسجَّل PASS** |
+| **Org Admin** | ❌ `NOT APPLIED` |
+| **S4a** | ❌ `CODE READY — NOT APPLIED` |
+| **S4b** | ❌ `CODE READY — PRODUCTION DENIAL PROOF REQUIRED` |
+| **Rollback** | لم يُشغَّل أيّ ملفّ |
+| `enforcement_mode` | `enrollment` (لم يتغيّر) |
+
+**Grants بعد Fix C — مطابقة للمتوقَّع تمامًا:**
+`anon` يملك EXECUTE على `can_manage_quotes` · `can_see_invoices` · `can_see_opportunities` فقط
+(وهو **مقصود** — السحب الأعمى كان سيكسر النماذج العامّة)، ولا يملكه على
+`can_manage_hr` · `can_manage_custody` · `civ_can_manage`. و`authenticated` يملكه على الستّ.
+
+⛔ **لا يُعاد تشغيل A ولا s4pre ولا B ولا C.** مُطبَّقة ومُتحقَّق منها.
 
 ---
 

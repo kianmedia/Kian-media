@@ -204,3 +204,34 @@ supabase-js. ملاحظة: `json:"factors,omitempty"` ⇒ المفتاح **غا�
 السؤال **ليس نظريًّا**: هل تُستدعى أيّ منها في مسار يبلغه زائر غير مُصادَق؟
 هذا ما يحسم «كامن» من «حيّ»، ويجب إثباته قبل اختيار REVOKE أو `false` صريح —
 فالسحب الأعمى قد يكسر نموذج طلب عرض السعر العام.
+
+
+## ✅ حالة الإنتاج — 2026-07-29
+
+| العنصر | الحالة |
+|---|---|
+| **Fix A** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| **S4 Pre** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` |
+| **Fix B** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` (الدوال السبع · identity_gate=true · projects_gate=false) |
+| **Fix C** | ✅ `APPLIED AND VERIFIED ON PRODUCTION` (الستّ تُعيد boolean صريحًا) |
+| **Public Quote Flow** | ⏳ `MANUAL TEST PENDING` — **لا يُسجَّل PASS** |
+| **Org Admin** | ❌ `NOT APPLIED` |
+| **S4a** | ❌ `CODE READY — NOT APPLIED` |
+| **S4b** | ❌ `CODE READY — PRODUCTION DENIAL PROOF REQUIRED` |
+| **Rollback** | لم يُشغَّل أيّ ملفّ |
+| `enforcement_mode` | `enrollment` (لم يتغيّر) |
+
+**Grants بعد Fix C — مطابقة للمتوقَّع تمامًا:**
+`anon` يملك EXECUTE على `can_manage_quotes` · `can_see_invoices` · `can_see_opportunities` فقط
+(وهو **مقصود** — السحب الأعمى كان سيكسر النماذج العامّة)، ولا يملكه على
+`can_manage_hr` · `can_manage_custody` · `civ_can_manage`. و`authenticated` يملكه على الستّ.
+
+⛔ **لا يُعاد تشغيل A ولا s4pre ولا B ولا C.** مُطبَّقة ومُتحقَّق منها.
+
+**ما يعنيه هذا فعليًّا — ثلاث ثغرات أُغلقت على الإنتاج:**
+1. لم يعد أيّ `super_admin` قادرًا على صناعة `super_admin` آخر بلا حدّ (Fix A).
+2. لم يعد أيّ مدير مشروع قادرًا على إعادة كتابة صلاحيات موظف أو إسناد نفسه مهنة حسّاسة (Fix B).
+3. لم تعد أيّ من البوّابات الستّ تُعيد `NULL` فيتخطّاها `if not <pred>` صامتًا (Fix C) —
+   وهو نفس شكل الحادثة التي جعلت متصلًا غير مُصادَق يقرأ بيانات شركة حقيقية.
+
+⏳ **يبقى غير مُثبَت:** تدفّق طلب عرض السعر العامّ بعد Fix C. **لا يُسجَّل PASS** حتى يختبره المالك.
