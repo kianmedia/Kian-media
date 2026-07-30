@@ -9,6 +9,7 @@ import AssetDetailModal from "@/components/portal/custody-inventory/AssetDetailM
 import CustodyPhotoCompletion from "@/components/portal/custody-inventory/CustodyPhotoCompletion";
 import AdminCustodyOperations from "@/components/portal/custody-inventory/AdminCustodyOperations";
 import CustodyLiabilityAdmin from "@/components/portal/custody-inventory/CustodyLiabilityAdmin";
+import AssetReservations from "@/components/portal/custody-inventory/AssetReservations";
 import {
   civGetDashboard, civListAssets, civListCategories, civListLocations, civCreateAsset,
   civSaveAssetPhoto,
@@ -31,11 +32,12 @@ const btnGhost = "rounded-lg bg-stone-800 border border-stone-700 text-stone-200
 const th = "text-right text-[11px] text-stone-500 font-medium px-2 py-1.5";
 const td = "text-right text-xs text-stone-300 px-2 py-1.5 border-t border-stone-800";
 
-type Tab = "dashboard" | "assets" | "photos" | "qr" | "categories" | "locations" | "issue" | "custody" | "liability" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
+type Tab = "dashboard" | "assets" | "photos" | "qr" | "categories" | "locations" | "issue" | "custody" | "reservations" | "liability" | "maintenance" | "audits" | "reports" | "settings" | "enterprise";
 const TABS: { k: Tab; ar: string; adminOnly?: boolean }[] = [
   { k: "dashboard", ar: "لوحة" }, { k: "assets", ar: "الأصول" }, { k: "photos", ar: "استكمال الصور", adminOnly: true },
   { k: "qr", ar: "QR والملصقات" }, { k: "categories", ar: "التصنيفات" },
   { k: "locations", ar: "المواقع" }, { k: "issue", ar: "صرف عهدة" }, { k: "custody", ar: "العهد والإرجاع" },
+  { k: "reservations", ar: "الحجوزات" },
   { k: "liability", ar: "الالتزامات" },
   { k: "maintenance", ar: "الصيانة" }, { k: "audits", ar: "الجرد" }, { k: "reports", ar: "التقارير" },
   { k: "enterprise", ar: "مزايا المنصّة" }, { k: "settings", ar: "الإعدادات" },
@@ -89,6 +91,9 @@ export default function CustodyInventoryConsole() {
     if (tab === "dashboard") void civGetDashboard().then((r) => { if (r.ok) setDash(r.data); });
     if (tab === "assets") void civListAssets(q ? { q } : undefined).then((r) => { if (r.ok) setAssets(r.data); });
     if (tab === "issue") { void loadStaff(); void civListAssets().then((r) => { if (r.ok) setAssets(r.data); }); }
+    // تبويب الحجوزات يحتاج قائمة الأصول للاختيار — بدونها تظهر قائمة فارغة
+    // فتبدو كأنّ لا أصول في النظام.
+    if (tab === "reservations") void civListAssets().then((r) => { if (r.ok) setAssets(r.data); });
     if (tab === "custody") void civListAssignments().then((r) => { if (r.ok) setAssignments(r.data); });
     if (tab === "settings") void civGetSettings().then((r) => setSettings(r.ok ? { ...DEFAULT_CIV_SETTINGS, ...r.data } : DEFAULT_CIV_SETTINGS));
   }, [tab, q, loadRefs, loadStaff]);
@@ -116,6 +121,7 @@ export default function CustodyInventoryConsole() {
       {tab === "locations" && <LocationsTab {...{ locs, busy, setBusy, flash, err, t, reload: loadRefs }} />}
       {tab === "issue" && <IssueTab {...{ assets, staff, busy, setBusy, flash, err, t, onDone: () => setTab("custody") }} />}
       {tab === "custody" && <AdminCustodyOperations />}
+      {tab === "reservations" && <AssetReservations assets={assets.map((a) => ({ id: a.id, asset_code: a.asset_code, asset_name: a.asset_name }))} />}
       {tab === "liability" && <CustodyLiabilityAdmin />}
       {tab === "maintenance" && <MaintenanceTab {...{ assets, busy, setBusy, flash, err, t }} />}
       {tab === "audits" && <AuditsTab {...{ locs, busy, setBusy, flash, err, t }} />}

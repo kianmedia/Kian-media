@@ -12,7 +12,7 @@
 // production debugging cycle hunting an unapplied migration that did not exist.
 //
 // The rule this file enforces: an error message may only assert a cause the
-// evidence actually supports. Nine distinct outcomes, never collapsed:
+// evidence actually supports. Ten distinct outcomes, never collapsed:
 //
 //   PGRST202 / 42883   the FUNCTION is absent            → migration-pending
 //   PGRST204 / PGRST205 PostgREST's schema cache is stale → "reload schema"
@@ -21,6 +21,9 @@
 //                        not applied" — that is what cost the cycle
 //   42P01              the RELATION is absent            → migration-pending
 //   42501 / 403        permission / RLS denial           → NEVER a column story
+//   23P01              an exclusion/BOOKING CONFLICT. Schema applied, caller
+//                      allowed, data collided ⇒ never "migration pending" and
+//                      never "try again" — an unchanged retry re-fails
 //   42601 / PGRST100   the query itself is malformed     → our bug
 //   401                the session is gone
 //   status 0           the network never reached Postgres
@@ -53,6 +56,11 @@ export type PgErrorKind =
   | "missing_table"
   /** 42501 / HTTP 403 / RLS write denial. */
   | "permission_denied"
+  /** 23P01 — an exclusion/booking conflict. The row was REFUSED because another
+   *  row already holds the window. The schema is fine and the caller is allowed;
+   *  retrying unchanged will fail again, so this must never be phrased as either
+   *  «الترحيل معلّق» or «حاول مرة أخرى». */
+  | "conflict"
   /** 42601 / PGRST100 — malformed SQL or malformed PostgREST filter. */
   | "invalid_query"
   /** HTTP 401 — no session, expired or revoked. */
@@ -77,6 +85,8 @@ export type PgVerdict =
   | "our_request"
   /** Authorisation, not schema. */
   | "permission"
+  /** The database and the caller are both fine; the DATA collided. */
+  | "conflict"
   | "auth"
   | "network"
   /** Not a failure at all. */
@@ -197,6 +207,15 @@ export function pgClassify(error: string | null | undefined, status?: number): P
   if (st === 403 || has(/\b42501\b|permission denied|insufficient_privilege|row-level security|violates row-level security|not authorized|not_authorized|admin only/, e)) {
     return build("permission_denied", "permission", has(/\b42501\b/, e) ? "42501" : st === 403 ? "403" : "42501");
   }
+  // 23P01 — a CONFLICT, checked before every schema branch. The booking guards
+  // (civ_guard_reservation, prodops_asset_clash) raise it deliberately to mean
+  // "another row already owns this window". Folding it into "unknown" told the
+  // user «حاول مرة أخرى» — advice that is guaranteed to fail a second time —
+  // and folding it into a schema bucket would blame an applied migration.
+  // Deliberately narrow: 23505 unique violations are NOT swept in here.
+  if (has(/\b23p01\b|exclusion constraint|conflicting key value violates exclusion|civ_double_booking/, e)) {
+    return build("conflict", "conflict", "23P01");
+  }
   if (has(/\bpgrst202\b|\b42883\b|could not find the function|function not found|no function matches/, e)) {
     return build("missing_function", "schema_missing", has(/\b42883\b/, e) ? "42883" : "PGRST202");
   }
@@ -257,6 +276,14 @@ export function pgIsMigrationPending(d: PgDiagnosis | PgErrorKind): boolean {
 /** TRUE when the fault is in the request we sent, not in the database. */
 export function pgIsOurFault(d: PgDiagnosis): boolean {
   return d.verdict === "our_request";
+}
+
+/**
+ * TRUE for 23P01 only. Kept beside pgIsMigrationPending on purpose: the two must
+ * never both be true for the same diagnosis, and a test pins that.
+ */
+export function pgIsConflict(d: PgDiagnosis | PgErrorKind): boolean {
+  return (typeof d === "string" ? d : d.kind) === "conflict";
 }
 
 // ─── developer-facing output ────────────────────────────────────────────────
@@ -352,6 +379,8 @@ export function pgUserMessageAr(d: PgDiagnosis): string {
       return `طلبت الشاشة عمودًا غير موجود في هذا الجدول${d.column ? ` («${d.column}»)` : ""}. هذا خطأ في الاستعلام نفسه غالبًا وليس ترحيلة ناقصة — أبلغ الفريق التقنيّ باسم العمود.${tail}`;
     case "permission_denied":
       return `لا تملك صلاحية هذا الإجراء.${tail}`;
+    case "conflict":
+      return `تعارض: السجلّ محجوز أو مرتبط بفترة متقاطعة. هذه ليست ترحيلة ناقصة ولا عطلًا — غيّر الفترة أو حرّر الحجز القائم، فإعادة المحاولة دون تغيير سترفَض مجددًا.${tail}`;
     case "invalid_query":
       return `طلب غير صالح (خطأ برمجيّ في الواجهة، لا نقص في قاعدة البيانات). أبلغ الفريق التقنيّ.${tail}`;
     case "not_authenticated":
