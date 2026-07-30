@@ -117,6 +117,23 @@ from (select pg_get_functiondef(to_regprocedure('public.mgmt_cache_key(jsonb,boo
 select policyname, qual from pg_policies
 where schemaname = 'public' and tablename = 'mgmt_report_cache';
 
+-- ─── 11b) الجاهزية التشغيلية محسوبة على نافذتها هي ───────────────────────
+-- متوقّع: uses_job_scores = true، subtracts_foreign_window = false،
+--         declares_no_score_basis = true.
+-- الصيغة الملغاة كانت تطرح عدّادات نقص محسوبة على ١٤/٢١ يومًا من مقام ٨ أيام،
+-- وتعدّ المهمّة الناقصة في ثلاثة أوجه ثلاث مرّات ⇒ ٠٪ لفريق جاهز تمامًا.
+select (c ilike '%avg_job_readiness_score%')      as uses_job_scores,
+       (c ilike '%(d->>''missing_crew'')::bigint%') as subtracts_foreign_window,
+       (c ilike '%readiness_not_reported%')       as declares_no_score_basis
+from (select pg_get_functiondef(to_regprocedure('public.mgmt_compute(jsonb)')) as c) s;
+
+-- ─── 11c) عمر النسخة المخبّأة يُقصَّر ولا يُمدَّد ────────────────────────
+-- متوقّع: capped_at_300 = 300، shorten_honoured = 30.
+-- عمر النسخة نافذة قراءة بعد سحب صلاحية في موديول مصدر؛ من يختارها هو النظام
+-- لا المتصل.
+select (public.mgmt_norm_filters('{"ttl_seconds":3600}'::jsonb)->>'ttl_seconds')::int as capped_at_300,
+       (public.mgmt_norm_filters('{"ttl_seconds":30}'::jsonb)->>'ttl_seconds')::int   as shorten_honoured;
+
 -- ─── 12) ★ منصّة المشاريع لم تُمَسّ — ولو بالقراءة ★ ─────────────────────
 -- متوقّع: صفر صفّ.
 select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace

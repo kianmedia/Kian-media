@@ -4,8 +4,8 @@
 -- كلّ قسم مكتوب بحيث تكون النتيجة المتوقّعة صريحة: لا «يبدو أنّه نجح».
 -- ════════════════════════════════════════════════════════════════════════════
 
--- ─── 1) الجداول التسعة عشر موجودة وRLS مفعّلة ────────────────────────────
--- متوقّع: 19 صفًّا، present = true وrls = true في كلّها.
+-- ─── 1) الجداول العشرون موجودة وRLS مفعّلة ───────────────────────────────
+-- متوقّع: 20 صفًّا، present = true وrls = true في كلّها.
 select t.name,
        (to_regclass('public.' || t.name) is not null) as present,
        coalesce((select c.relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -14,7 +14,7 @@ from (values ('crm_settings'),('crm_teams'),('crm_team_members'),('crm_companies
              ('crm_competitors'),('crm_lead_score_rules'),('crm_leads'),('crm_pipelines'),('crm_stages'),
              ('crm_opportunities'),('crm_stage_history'),('crm_activities'),('crm_targets'),
              ('crm_commission_plans'),('crm_commission_assignments'),('crm_commission_records'),
-             ('crm_import_batches'),('crm_audit')) t(name);
+             ('crm_import_batches'),('crm_audit'),('crm_approval_requests')) t(name);
 
 -- ─── 2) لا سياسة كتابة مباشرة على أيّ جدول ────────────────────────────────
 -- متوقّع: صفر صفّ. أيّ صفّ هنا يعني أنّ الكتابة تتجاوز الـRPC.
@@ -164,8 +164,36 @@ select 'frozen_objects' as label,
   (select count(*) from information_schema.columns
      where table_schema = 'public' and table_name = 'quote_requests') as quote_columns;
 
--- ─── 18) عدد الدوالّ المنشأة ─────────────────────────────────────────────
--- متوقّع: 84 دالّة crm_*.
+-- ─── 18) ★★ موافقة المالك على الهدف وقاعدة العمولة ──────────────────────
+-- متوقّع: owner_only = true (المُسنَد يشترط دور المالك)
+--         buyable_with_key = false (لا يمرّ عبر crm_perm — لا يُمنح بمفتاح).
+select (pg_get_functiondef(to_regprocedure('public.crm_can_approve_changes()')) ilike '%crm_is_owner_role%') as owner_only,
+       (pg_get_functiondef(to_regprocedure('public.crm_can_approve_changes()')) ilike '%crm_perm%')          as buyable_with_key,
+       public.crm_can_approve_changes() as approve_without_session;   -- متوقّع: false لا NULL
+
+-- متوقّع: 4 صفوف، gated = true وannounces_pending = true في كلّها.
+select f.sig,
+       (pg_get_functiondef(to_regprocedure(f.sig)) ilike '%crm_can_approve_changes()%') as gated,
+       (pg_get_functiondef(to_regprocedure(f.sig)) ilike '%pending_approval%')          as announces_pending
+from (values ('public.crm_target_upsert(jsonb)'),
+             ('public.crm_target_delete(uuid,text)'),
+             ('public.crm_commission_plan_upsert(jsonb)'),
+             ('public.crm_commission_assign(jsonb)')) f(sig);
+
+-- متوقّع: صفر صفّ — لا طلب معلَّق أنشأته الترحيلة.
+select count(*) as pending_requests from public.crm_approval_requests where status = 'pending';
+
+-- ─── 19) ★★ معاينة الاستيراد تشغيل جافّ ─────────────────────────────────
+-- متوقّع: volatility = 's' (STABLE — PostgreSQL يمنعها من الكتابة)
+--         writes_anything = false · declares_dry_run = true.
+select p.provolatile as volatility,
+       (pg_get_functiondef(p.oid) ~* '(insert\s+into|update\s+public|delete\s+from)') as writes_anything,
+       (pg_get_functiondef(p.oid) ilike '%wrote_nothing%')                            as declares_dry_run
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public' and p.proname = 'crm_import_preview';
+
+-- ─── 20) عدد الدوالّ المنشأة ─────────────────────────────────────────────
+-- متوقّع: 93 دالّة crm_* (84 في الأساس + 9 من عقدَي الاعتماد والمعاينة).
 select count(*) as crm_functions
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname like 'crm\_%';

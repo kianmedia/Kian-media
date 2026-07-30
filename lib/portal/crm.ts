@@ -93,7 +93,32 @@ export function crmReasonAr(reason: string): string {
     case "key_required":            return "مفتاح القاعدة مطلوب.";
     case "adjust_out_of_range":     return "التعديل اليدويّ خارج المدى المسموح (−٥٠ إلى ٥٠).";
     case "override_out_of_range":   return "التجاوز خارج المدى المسموح (٠ إلى ١٠٠).";
+    case "request_not_found":       return "طلب الاعتماد غير موجود.";
+    case "already_decided":         return "الطلب مبتوت بالفعل.";
+    case "invalid_decision":        return "قرار غير معروف.";
+    case "unknown_kind":            return "نوع طلب اعتماد غير معروف.";
+    case "apply_failed":            return "تعذّر تطبيق التغيير — بقي الطلب معلَّقًا ولم يتغيّر شيء.";
+    case "user_and_plan_required":  return "الموظّف وخطّة العمولة مطلوبان.";
     default:                        return "تعذّر تنفيذ الطلب.";
+  }
+}
+
+/** نفس الأسباب بالإنجليزية — الرسالة الحرجة لا تبقى بلغة واحدة. */
+export function crmReasonEn(reason: string): string {
+  switch (reason) {
+    case "duplicate_suspected":     return "A matching record already exists — review it before creating.";
+    case "self_target_denied":      return "You cannot edit your own target.";
+    case "self_commission_denied":  return "You cannot set your own commission.";
+    case "lost_reason_required":    return "A lost reason is required.";
+    case "use_close":               return "Won/Lost are set from the close screen, not by moving the stage.";
+    case "not_open":                return "The opportunity is closed — reopen it before changing the stage.";
+    case "stage_pipeline_mismatch": return "That stage belongs to another pipeline. Nothing changed.";
+    case "idempotency_key_required":return "An import batch key of 8+ characters is required.";
+    case "too_many_rows":           return "Row count exceeds the batch limit (1000).";
+    case "request_not_found":       return "Approval request not found.";
+    case "already_decided":         return "This request has already been decided.";
+    case "apply_failed":            return "The change could not be applied — the request stays pending and nothing changed.";
+    default:                        return "The request could not be completed.";
   }
 }
 
@@ -107,6 +132,8 @@ export interface CrmAccess {
   can_manage_targets: boolean; can_manage_commission: boolean;
   can_view_others_commission: boolean;
   can_import: boolean; is_owner_role: boolean; is_client: boolean;
+  /** ★ اعتماد الأهداف وقواعد العمولات — للمالك وحده، ولا يُمنح بمفتاح صلاحية. */
+  can_approve_changes: boolean; approvals_pending: number;
   quotes_available: boolean; projects_available: boolean;
   message: string | null;
 }
@@ -172,6 +199,97 @@ export const GRADE_AR: Record<string, string> = { hot: "ساخن", warm: "داف
 export const GRADE_COLOR: Record<string, string> = {
   hot: "text-red-300", warm: "text-amber-300", cold: "text-stone-400",
 };
+
+// ─── الإنجليزية ────────────────────────────────────────────────────────────
+// المفاتيح **نفسها** في الخريطتين: أيّ مفتاح ناقص يظهر كما هو (خام) بدل أن
+// يُترجَم تخمينًا. الترجمة الصامتة أسوأ من نصّ إنجليزيّ ظاهر.
+export const LEAD_STATUS_EN: Record<CrmLeadStatus, string> = {
+  new: "New", contacted: "Contacted", working: "Working", qualified: "Qualified",
+  unqualified: "Unqualified", converted: "Converted", dropped: "Dropped",
+};
+export const OPP_STATUS_EN: Record<CrmOppStatus, string> = {
+  open: "Open", won: "Won", lost: "Lost", abandoned: "Abandoned",
+};
+export const SOURCE_EN: Record<string, string> = {
+  website: "Website", referral: "Referral", whatsapp: "WhatsApp", instagram: "Instagram",
+  x: "X", linkedin: "LinkedIn", tiktok: "TikTok", email: "Email", phone: "Phone",
+  walk_in: "Walk-in", event: "Event", campaign: "Campaign", partner: "Partner",
+  existing_client: "Existing client", cold_outreach: "Cold outreach", import: "Import", other: "Other",
+};
+export const BUDGET_EN: Record<string, string> = {
+  unknown: "Unknown", under_10k: "Under 10k", "10k_50k": "10k–50k",
+  "50k_200k": "50k–200k", over_200k: "Over 200k",
+};
+export const AUTHORITY_EN: Record<string, string> = {
+  unknown: "Unknown", gatekeeper: "Gatekeeper", influencer: "Influencer", decision_maker: "Decision maker",
+};
+export const NEED_EN: Record<string, string> = {
+  unknown: "Unknown", low: "Low", medium: "Medium", high: "High",
+};
+export const TIMELINE_EN: Record<string, string> = {
+  unknown: "Unknown", immediate: "Immediate", this_quarter: "This quarter",
+  this_year: "This year", no_timeline: "No timeline",
+};
+export const ACTIVITY_EN: Record<CrmActivityKind, string> = {
+  call: "Call", email: "Email note", meeting: "Meeting", whatsapp_note: "WhatsApp note",
+  follow_up: "Follow-up", note: "Note", demo: "Demo", site_visit: "Site visit",
+};
+export const LOST_REASON_EN: Record<string, string> = {
+  price: "Price", timing: "Timing", scope: "Scope", competitor: "Competitor",
+  no_budget: "No budget", no_response: "No response", internal: "Internal decision", other: "Other",
+};
+export const HANDOFF_EN: Record<CrmHandoffState, string> = {
+  not_ready: "Not ready",
+  ready_for_manual_creation: "Ready for manual project creation",
+  manually_created: "Manual creation recorded",
+  not_applicable: "Not applicable",
+};
+export const GRADE_EN: Record<string, string> = { hot: "Hot", warm: "Warm", cold: "Cold" };
+export const STALE_REASON_EN: Record<string, string> = {
+  no_activity: "No activity", stage_stuck: "Stuck in stage",
+  next_action_overdue: "Next action overdue", no_next_action: "No next action",
+  close_date_passed: "Close date passed",
+};
+export const APPROVAL_KIND_AR: Record<string, string> = {
+  target: "هدف مبيعات", target_delete: "حذف هدف",
+  commission_plan: "قاعدة عمولة", commission_assign: "إسناد خطّة عمولة",
+};
+export const APPROVAL_KIND_EN: Record<string, string> = {
+  target: "Sales target", target_delete: "Target deletion",
+  commission_plan: "Commission rule", commission_assign: "Commission assignment",
+};
+export const APPROVAL_STATUS_AR: Record<string, string> = {
+  pending: "بانتظار المالك", approved: "معتمَد", rejected: "مرفوض", withdrawn: "مسحوب",
+};
+export const APPROVAL_STATUS_EN: Record<string, string> = {
+  pending: "Awaiting owner", approved: "Approved", rejected: "Rejected", withdrawn: "Withdrawn",
+};
+export const IMPORT_DECISION_AR: Record<string, string> = {
+  insert: "سيُدرج", duplicate: "تكرار — لن يُدرج", skip: "صفّ فارغ — يُتخطّى",
+};
+export const IMPORT_DECISION_EN: Record<string, string> = {
+  insert: "Will insert", duplicate: "Duplicate — skipped", skip: "Empty row — skipped",
+};
+export const IMPORT_ISSUE_AR: Record<string, string> = {
+  missing_contact_name: "بلا اسم جهة اتصال", invalid_email: "بريد غير صالح",
+  unusable_phone: "هاتف غير صالح للمطابقة", empty_row: "صفّ فارغ",
+  duplicate_within_file: "مكرّر داخل الملفّ نفسه",
+};
+export const IMPORT_ISSUE_EN: Record<string, string> = {
+  missing_contact_name: "Missing contact name", invalid_email: "Invalid email",
+  unusable_phone: "Phone not usable for matching", empty_row: "Empty row",
+  duplicate_within_file: "Duplicate within this file",
+};
+
+/**
+ * اختيار التسمية حسب اللغة. المفتاح المجهول يُعاد كما هو — لا يُخترع له نصّ.
+ */
+export function crmLabel(
+  ar: Record<string, string>, en: Record<string, string>, key: string, isAr: boolean,
+): string {
+  const m = isAr ? ar : en;
+  return m[key] ?? ar[key] ?? key;
+}
 
 /** صفوف تُمرَّر كما هي — الخادم مصدر أسماء الحقول، لا نعيد تشكيلها. */
 export type CrmRow = Record<string, unknown>;
@@ -293,6 +411,35 @@ export interface CrmLookups {
 export interface CrmCommissionList {
   ok: boolean; rows: CrmRow[]; plans: CrmRow[] | null;
   sees_others: boolean; can_manage_commission: boolean; note: string | null;
+}
+export interface CrmApprovalRow {
+  id: string; kind: string; entity_id: string | null; subject_user_id: string | null;
+  payload: Record<string, unknown>; reason: string | null; status: string;
+  requested_by: string; requested_at: string;
+  decided_by: string | null; decided_at: string | null; decision_note: string | null;
+  applied_entity_id: string | null; apply_error: string | null;
+}
+export interface CrmApprovals {
+  ok: boolean; rows: CrmApprovalRow[]; pending: number;
+  can_approve: boolean; mine_only: boolean; note: string;
+}
+export interface CrmImportPreviewRow {
+  line: number; contact_name: string | null; company_name: string | null;
+  email: string | null; phone: string | null;
+  decision: "insert" | "duplicate" | "skip"; issues: string[]; matches: number;
+  candidates?: CrmDuplicateCandidate[];
+}
+export interface CrmImportPreview {
+  ok: boolean; dry_run: boolean; wrote_nothing: boolean;
+  rows: number; will_insert: number; will_skip_duplicate: number; will_skip_invalid: number;
+  duplicate_within_file: number; already_imported: boolean;
+  previous_batch: { batch_id: string; inserted: number; duplicates: number;
+                    errors: number; created_at: string } | null;
+  result: { rows: CrmImportPreviewRow[] }; note: string;
+}
+/** ناتج كتابة قد تكون معلَّقة على اعتماد المالك بدل أن تكون قد وقعت. */
+export interface CrmWriteOrPending {
+  ok: boolean; id?: string; pending_approval?: boolean; request_id?: string; message?: string;
 }
 export interface CrmExport {
   ok: boolean; entity: string; columns: string[]; rows: (string | number | null)[][];
@@ -478,25 +625,53 @@ export const crmTeamMemberSet = (payload: Record<string, unknown>) =>
   prpc<unknown>("crm_team_member_set", { p_payload: payload })
     .then((r) => toState<{ ok: boolean; team_id: string; user_id: string; removed: boolean }>(r));
 
-/** الخادم يرفض تحرير هدفك أنت (self_target_denied) — لا تُلطَّف الرسالة هنا. */
+/**
+ * الخادم يرفض تحرير هدفك أنت (self_target_denied) — لا تُلطَّف الرسالة هنا.
+ * ★ ولغير المالك يعيد pending_approval: true ولا يغيّر هدفًا. الواجهة **يجب**
+ *   أن تقرأ هذه الراية: عرض «حُفظ» على طلب معلَّق كذبٌ على المستخدم.
+ */
 export const crmTargetUpsert = (payload: Record<string, unknown>) =>
-  prpc<unknown>("crm_target_upsert", { p_payload: payload }).then((r) => toState<{ ok: boolean; id: string }>(r));
+  prpc<unknown>("crm_target_upsert", { p_payload: payload }).then((r) => toState<CrmWriteOrPending>(r));
 
 export const crmTargetDelete = (id: string, reason: string) =>
-  prpc<unknown>("crm_target_delete", { p_id: id, p_reason: reason }).then((r) => toState<{ ok: boolean; id: string }>(r));
+  prpc<unknown>("crm_target_delete", { p_id: id, p_reason: reason }).then((r) => toState<CrmWriteOrPending>(r));
+
+// ─── اعتماد المالك ─────────────────────────────────────────────────────────
+
+export const crmApprovalsList = (filters: Record<string, unknown> = {}) =>
+  prpc<unknown>("crm_approvals_list", { p_filters: filters }).then((r) => toState<CrmApprovals>(r));
+
+/** الاعتماد هو اللحظة الوحيدة التي يقع فيها التغيير. المالك وحده يصل إليها. */
+export const crmApprovalDecide = (id: string, decision: "approved" | "rejected", note?: string) =>
+  prpc<unknown>("crm_approval_decide", { p_id: id, p_decision: decision, p_note: note ?? null })
+    .then((r) => toState<{ ok: boolean; id: string; status: string; applied_entity_id: string | null }>(r));
+
+export const crmApprovalWithdraw = (id: string, reason: string) =>
+  prpc<unknown>("crm_approval_withdraw", { p_id: id, p_reason: reason })
+    .then((r) => toState<{ ok: boolean; id: string; status: string }>(r));
 
 export const crmCommissionRecalc = (oppId: string) =>
   prpc<unknown>("crm_commission_recalc", { p_opp: oppId }).then((r) => toState<CrmRow>(r));
 
+/** ★ قاعدة العمولة تتبع القاعدة نفسها: غير المالك يقترح ولا يغيّر. */
 export const crmCommissionPlanUpsert = (payload: Record<string, unknown>) =>
-  prpc<unknown>("crm_commission_plan_upsert", { p_payload: payload }).then((r) => toState<{ ok: boolean; id: string }>(r));
+  prpc<unknown>("crm_commission_plan_upsert", { p_payload: payload }).then((r) => toState<CrmWriteOrPending>(r));
 
 export const crmCommissionAssign = (payload: Record<string, unknown>) =>
-  prpc<unknown>("crm_commission_assign", { p_payload: payload }).then((r) => toState<{ ok: boolean; id: string }>(r));
+  prpc<unknown>("crm_commission_assign", { p_payload: payload }).then((r) => toState<CrmWriteOrPending>(r));
 
 export const crmCommissionSetStatus = (id: string, status: "draft" | "approved" | "void", note?: string) =>
   prpc<unknown>("crm_commission_set_status", { p_id: id, p_status: status, p_note: note ?? null })
     .then((r) => toState<{ ok: boolean; id: string; status: string }>(r));
+
+/**
+ * ★★ تشغيل جافّ. الدالّة على الخادم STABLE فلا تستطيع الكتابة أصلًا؛ هذا الغلاف
+ *    لا يُنشئ دفعة ولا يستهلك مفتاح التكرار. التنفيذ خطوة منفصلة يقرّرها المستخدم
+ *    بعد أن يرى قرار كلّ صفّ — لا رفع ملفّ = إدراج فوريّ.
+ */
+export const crmImportPreview = (rows: Record<string, unknown>[], idempotencyKey?: string) =>
+  prpc<unknown>("crm_import_preview", { p_rows: rows, p_idempotency_key: idempotencyKey ?? null })
+    .then((r) => toState<CrmImportPreview>(r));
 
 export const crmImportLeads = (rows: Record<string, unknown>[], idempotencyKey: string) =>
   prpc<unknown>("crm_import_leads", { p_rows: rows, p_idempotency_key: idempotencyKey })

@@ -11,6 +11,16 @@
 -- جاهزية التحويل · أهداف المبيعات · أساس العمولات · تنبّؤ · تنبيهات الفرص
 -- الراكدة · لوحة · استيراد/تصدير CSV · تدقيق.
 --
+-- ─── عقدان لا يُلطَّفان ────────────────────────────────────────────────────
+--   ★ موافقة المالك: الهدف وقاعدة العمولة **لا يتغيّران** بمفتاح صلاحية. حامل
+--     crm.manage_targets / crm.manage_commission يقترح، والمالك وحده يعتمد،
+--     والاعتماد هو اللحظة الوحيدة التي يقع فيها التغيير. البوّابة
+--     crm_can_approve_changes() لا تمرّ عبر crm_perm إطلاقًا — لو مرّت لأمكن
+--     منحها ولانتهت «موافقة المالك» إلى منحة إداريّة.
+--   ★ معاينة الاستيراد: crm_import_preview دالّة **STABLE**، فالمنع من كتابة
+--     شيء يأتي من PostgreSQL نفسه لا من حسن النيّة. تعرض قرار كلّ صفّ
+--     (إدراج/تكرار/تخطٍّ) والتكرار داخل الملفّ نفسه قبل أن يُكتب حرف واحد.
+--
 -- ─── الحدّ الفاصل مع منصّة المشاريع: عقد لا أتمتة ─────────────────────────
 -- عند ربح الفرصة **يُسجَّل** أنّها جاهزة لإنشاء عميل/مشروع **يدويًّا**. هذه
 -- الحزمة لا تُنشئ مشروعًا، ولا تكتب في public.projects ولا project_core ولا
@@ -211,6 +221,17 @@ language sql stable security definer set search_path = public as $$
   false);
 $$;
 
+-- ★ اعتماد التغييرات الحسّاسة (هدف · قاعدة عمولة): **المالك وحده**. عمدًا بلا
+--   مفتاح صلاحية — لو كان مفتاحًا لأمكن منحه، ولانتهت «موافقة المالك» إلى منحة
+--   إداريّة. من يحمل crm.manage_targets يقترح فقط؛ الاعتماد لا يُشترى بمفتاح.
+create or replace function public.crm_can_approve_changes() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (auth.uid() is not null) and coalesce(public.is_staff(), false)
+    and coalesce(public.crm_is_owner_role(), false),
+  false);
+$$;
+
 create or replace function public.crm_can_manage_pipeline() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
@@ -239,7 +260,7 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- §3) الجداول — 19 جدولًا، كلّها crm_*.
+-- §3) الجداول — 20 جدولًا، كلّها crm_*.
 --     ملاحظة: المُسنَدات التي تقرأ جداول تأتي بعدها (§4) لأنّ PostgreSQL يتحقّق
 --     من أجسام دوالّ SQL عند الإنشاء؛ تعريفها قبل الجداول يُسقط الترحيلة.
 -- ════════════════════════════════════════════════════════════════════════════
@@ -643,7 +664,15 @@ create unique index if not exists uq_crm_target_period
 create table if not exists public.crm_commission_plans (
   id           uuid primary key default gen_random_uuid(),
   name         text not null check (length(btrim(name)) between 2 and 120),
-  basis        text not null default 'won_value' check (basis in ('won_value','collected_value','gross_margin')),
+  -- ★ أساس واحد فقط، وهو المُنفَّذ فعلًا ★
+  --   كان القيد يقبل 'collected_value' و'gross_margin' بينما
+  --   crm_commission_recalc_core يحسب دائمًا من estimated_value. النتيجة كانت
+  --   سجلّ عمولة **موسومًا** بأنّه على الهامش وقيمته في الحقيقة قيمة الفرصة:
+  --   المالك يعتمد رقمًا يظنّه هامشًا وليس كذلك.
+  --   ولا يجوز «إكمال» المفردتين هنا: gross_margin يستلزم قراءة التكلفة داخل
+  --   موديول المبيعات، وهو بعينه ثقب استنتاج الربح الذي يمنعه جدار المالية،
+  --   وcollected_value يستلزم قراءة التحصيل. تُحذف المفردة إذًا ولا تُنفَّذ.
+  basis        text not null default 'won_value' check (basis = 'won_value'),
   rate_pct     numeric(6,3) not null default 0 check (rate_pct >= 0 and rate_pct <= 100),
   threshold_value numeric(14,2) not null default 0 check (threshold_value >= 0),
   cap_value    numeric(14,2) check (cap_value is null or cap_value >= 0),
@@ -693,6 +722,38 @@ create index if not exists ix_crm_commission_user on public.crm_commission_recor
 comment on table public.crm_commission_records is
   'أساس عمولات محسوب فقط. لا صرف ولا رواتب ولا تكامل ماليّ — وذلك مقصود في هذه المرحلة.';
 
+-- ★ مداواة انحراف القيد ★ — `create table if not exists` لا يغيّر جدولًا قائمًا،
+--   فلو طُبّقت نسخة سابقة من هذه الحزمة لبقي القيد الواسع القديم ولبقيت المفردة
+--   غير المنفَّذة مقبولة. هذه الكتلة تُطبّع الصفوف أوّلًا ثمّ تُضيّق القيد،
+--   وهي عديمة الأثر عند إعادة التشغيل.
+do $basis$
+declare c text;
+begin
+  if to_regclass('public.crm_commission_plans') is null then return; end if;
+
+  -- (١) تطبيع الصفوف: كلّ خطّة موسومة بأساس غير منفَّذ كانت تُحسب فعليًّا على
+  --     قيمة الفرصة، فالتصحيح إعلانُ ذلك لا تغييرُ أيّ رقم عمولة.
+  update public.crm_commission_plans
+     set basis = 'won_value', updated_at = now()
+   where basis is distinct from 'won_value';
+  update public.crm_commission_records
+     set basis = 'won_value'
+   where basis is distinct from 'won_value';
+
+  -- (٢) إسقاط أيّ قيد قديم على basis مهما كان اسمه المولَّد، ثمّ إضافة الضيّق.
+  for c in
+    select con.conname from pg_constraint con
+     where con.conrelid = 'public.crm_commission_plans'::regclass
+       and con.contype = 'c'
+       and pg_get_constraintdef(con.oid) ilike '%basis%'
+  loop
+    execute format('alter table public.crm_commission_plans drop constraint %I', c);
+  end loop;
+
+  alter table public.crm_commission_plans
+    add constraint crm_commission_plans_basis_check check (basis = 'won_value');
+end $basis$;
+
 -- 3.13 دفعات الاستيراد — مفتاح تكرار فريد يجعل إعادة الرفع بلا ازدواج.
 create table if not exists public.crm_import_batches (
   id              uuid primary key default gen_random_uuid(),
@@ -720,6 +781,32 @@ create table if not exists public.crm_audit (
 );
 create index if not exists ix_crm_audit_at on public.crm_audit(created_at desc);
 create index if not exists ix_crm_audit_entity on public.crm_audit(entity_type, entity_id);
+
+-- 3.15 ★ طلبات موافقة المالك — الهدف والعمولة لا يتغيّران بمفتاح صلاحية.
+--      حامل crm.manage_targets يقترح، والمالك وحده يعتمد. الصفّ المعلَّق **ليس**
+--      تغييرًا: لا يُقرأ في أيّ حساب ولا تنبّؤ ولا لوحة — هو نيّة موثَّقة فقط.
+create table if not exists public.crm_approval_requests (
+  id                uuid primary key default gen_random_uuid(),
+  kind              text not null check (kind in ('target','target_delete','commission_plan','commission_assign')),
+  entity_id         uuid,                    -- الكائن المعدَّل، وNULL عند الإنشاء
+  subject_user_id   uuid references auth.users(id) on delete cascade, -- صاحب الهدف/العمولة
+  payload           jsonb not null default '{}'::jsonb,
+  reason            text,
+  status            text not null default 'pending' check (status in ('pending','approved','rejected','withdrawn')),
+  requested_by      uuid not null references auth.users(id) on delete cascade,
+  requested_at      timestamptz not null default now(),
+  decided_by        uuid references auth.users(id),
+  decided_at        timestamptz,
+  decision_note     text,
+  applied_entity_id uuid,
+  apply_error       text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+create index if not exists ix_crm_appr_status on public.crm_approval_requests(status, requested_at desc);
+create index if not exists ix_crm_appr_by     on public.crm_approval_requests(requested_by, requested_at desc);
+comment on table public.crm_approval_requests is
+  'موافقة المالك على الأهداف وقواعد العمولات. الصفّ المعلَّق لا يؤثّر في أيّ رقم — التغيير يقع لحظة الاعتماد فقط.';
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- §4) مُسنَدات الصفّ. لا واحد منها يعيد NULL.
@@ -815,7 +902,7 @@ begin
   foreach t in array array['crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts',
     'crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities',
     'crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments',
-    'crm_commission_records','crm_import_batches','crm_audit'] loop
+    'crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests'] loop
     execute format('alter table public.%I enable row level security', t);
   end loop;
 
@@ -877,6 +964,12 @@ begin
   drop policy if exists crm_audit_read on public.crm_audit;
   create policy crm_audit_read on public.crm_audit for select to authenticated
     using (public.crm_can_manage());
+
+  -- ★ طلبات الاعتماد: المالك يرى الكلّ، ومقدّم الطلب يرى طلبه هو. لا أحد غيرهما
+  --   — الطلب يحمل قيمة هدف أو نسبة عمولة، وهي بيانات حسّاسة قبل الاعتماد وبعده.
+  drop policy if exists crm_approval_requests_read on public.crm_approval_requests;
+  create policy crm_approval_requests_read on public.crm_approval_requests for select to authenticated
+    using (public.crm_can_approve_changes() or (public.crm_can_view() and requested_by = auth.uid()));
 end $rls$;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -890,17 +983,70 @@ begin
   values (auth.uid(), p_action, p_etype, p_eid, coalesce(p_detail, '{}'::jsonb));
 end $$;
 
+-- ─── قيد entity_type على الإشعارات: شكل لا تعداد ──────────────────────────
+-- ★ عيب مثبَت، لا احتياط ★ phase0_migration.sql:285 يحصر
+--   notifications.entity_type في خمس قيم من عهد المشاريع، ولا ترحيلة في
+--   المستودع توسّعه بعدها. وهذا الموديول يكتب 'crm_opportunity' ⇒ القيد يرفع
+--   23514 ⇒ المصيدة داخل crm_notify تبتلعه ⇒ **الإشعار يُفقد بصمت** بينما
+--   تُغلق الفرصة بنجاح ظاهريّ ولا يعلم مالكها.
+--   العلاج نفسه المعتمَد لـnotifications_type_check في 9C: قيد **شكل** لا تعداد.
+--   ⚠️ لا يُطبَّق إلّا إذا كانت كلّ الصفوف القائمة تحترم الشكل الجديد؛ غير ذلك
+--      إشعار صريح والقيد يبقى كما هو — لا إسقاط ترحيلة ولا حذف بيانات.
+--   الكتلة نفسها حرفيًّا في operations_center_RUNME.sql، ومتساوية القوّة الذاتية،
+--   فلا يهمّ أيّ الحزمتين شُغّلت أوّلًا ولا يتنازعان قيدًا واحدًا.
+do $notif_shape$
+declare v_bad bigint := 0; c record;
+begin
+  if to_regclass('public.notifications') is null then
+    raise notice 'CRM: جدول الإشعارات غير موجود — لا إشعارات داخل التطبيق لهذا الموديول.';
+    return;
+  end if;
+  select count(*) into v_bad from public.notifications
+   where entity_type is null or entity_type !~ '^[a-z][a-z0-9_]{2,40}$';
+  if v_bad > 0 then
+    raise notice 'CRM: % صفّ إشعار قائم لا يحترم شكل entity_type — القيد تُرك كما هو، وإشعارات المبيعات قد تُرفض بصمت.', v_bad;
+    return;
+  end if;
+  -- ⚠️ يُزال **كلّ** قيد CHECK يقيّد entity_type مهما كان اسمه، لا الاسم
+  --    القانونيّ وحده. قيدٌ ثانٍ باسم منجرف كان سيبقى يرفض بصمت بينما يبدو
+  --    القيد القانونيّ سليمًا.
+  for c in
+    select con.conname from pg_constraint con
+     where con.conrelid = to_regclass('public.notifications')
+       and con.contype = 'c'
+       and pg_get_constraintdef(con.oid) ilike '%entity_type%'
+  loop
+    execute format('alter table public.notifications drop constraint %I', c.conname);
+    raise notice 'CRM: أُزيل قيد entity_type القديم (%).', c.conname;
+  end loop;
+  alter table public.notifications
+    add constraint notifications_entity_type_check
+    check (entity_type is not null and entity_type ~ '^[a-z][a-z0-9_]{2,40}$');
+end $notif_shape$;
+
 -- إشعار معزول: قيد notifications.type منجرف تاريخيًّا، وفشل الإشعار لا يجوز أن
 -- يُسقط عملية بيعية صحيحة.
+-- ★ لكنّه لا يُبتلَع بصمت ★: الفشل يُكتب في سجلّ الموديول برمز الحالة.
 create or replace function public.crm_notify(p_user uuid, p_type text, p_eid uuid, p_ar text, p_en text)
 returns void language plpgsql security definer set search_path = public as $$
+declare v_ss text; v_msg text;
 begin
   if p_user is null or p_user = auth.uid() then return; end if;
-  if to_regprocedure('public.notify(uuid,text,text,text,uuid,text,text)') is null then return; end if;
+  if to_regprocedure('public.notify(uuid,text,text,text,uuid,text,text)') is null then
+    perform public.crm_log('notify_unavailable', 'crm_opportunity', p_eid,
+      jsonb_build_object('type', p_type, 'reason', 'notify_function_missing'));
+    return;
+  end if;
   begin
     execute 'select public.notify($1,$2,$3,$4,$5,$6,$7)'
       using p_user, 'user', p_type, 'crm_opportunity', p_eid, p_ar, p_en;
-  exception when others then null;                     -- لا يُسقط المعاملة
+  exception when others then                           -- لا يُسقط المعاملة
+    get stacked diagnostics v_ss = returned_sqlstate, v_msg = message_text;
+    begin
+      perform public.crm_log('notify_failed', 'crm_opportunity', p_eid,
+        jsonb_build_object('type', p_type, 'sqlstate', v_ss, 'detail', left(coalesce(v_msg, ''), 200)));
+    exception when others then null;
+    end;
   end;
 end $$;
 
@@ -1288,6 +1434,13 @@ begin
     'can_manage_commission', coalesce(public.crm_can_manage_commission(), false),
     'can_view_others_commission', coalesce(public.crm_can_view_commission(null::uuid), false),
     'can_import',            coalesce(public.crm_can_import(), false),
+    -- ★ اعتماد التغييرات الحسّاسة: راية مستقلّة عن can_manage_* عمدًا. الواجهة
+    --   تُظهر بها «سيُرسَل للاعتماد» بدل «سيُحفَظ» قبل أن يضغط المستخدم.
+    'can_approve_changes',   coalesce(public.crm_can_approve_changes(), false),
+    'approvals_pending',     coalesce((select count(*) from public.crm_approval_requests a
+                                        where a.status = 'pending'
+                                          and (coalesce(public.crm_can_approve_changes(), false)
+                                               or a.requested_by = v_uid)), 0),
     'is_owner_role',         coalesce(public.crm_is_owner_role(), false),
     'is_client',             coalesce(public.crm_is_client(), false),
     'quotes_available',      (to_regclass('public.quote_requests') is not null),
@@ -1892,6 +2045,118 @@ begin
   select coalesce(jsonb_agg(to_jsonb(a) order by a.created_at desc), '[]'::jsonb) into v_rows
   from (select * from public.crm_audit order by created_at desc limit v_limit) a;
   return jsonb_build_object('ok', true, 'rows', v_rows);
+end $$;
+
+-- ★ صندوق اعتماد المالك. SECURITY DEFINER يتجاوز RLS، فالتصفية مكرّرة هنا
+--   صراحةً بنفس قاعدة السياسة — لا يُترك الفرز لسياسة لن تُقيَّم أصلًا.
+create or replace function public.crm_approvals_list(p_filters jsonb default '{}'::jsonb)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v_rows jsonb; v_limit int; v_status text; v_mine boolean; v_pending int;
+begin
+  if not coalesce(public.crm_can_view(), false) then raise exception 'not authorized'; end if;
+  v_mine   := not coalesce(public.crm_can_approve_changes(), false);
+  v_limit  := least(greatest(coalesce((p_filters->>'limit')::int, 100), 1), 300);
+  v_status := nullif(btrim(coalesce(p_filters->>'status', '')), '');
+
+  select coalesce(jsonb_agg(to_jsonb(r) order by r.requested_at desc), '[]'::jsonb) into v_rows
+  from (
+    select a.id, a.kind, a.entity_id, a.subject_user_id, a.payload, a.reason, a.status,
+           a.requested_by, a.requested_at, a.decided_by, a.decided_at, a.decision_note,
+           a.applied_entity_id, a.apply_error
+      from public.crm_approval_requests a
+     where (not v_mine or a.requested_by = auth.uid())
+       and (v_status is null or a.status = v_status)
+     order by a.requested_at desc
+     limit v_limit) r;
+
+  select count(*) into v_pending from public.crm_approval_requests a
+   where a.status = 'pending' and (not v_mine or a.requested_by = auth.uid());
+
+  return jsonb_build_object('ok', true, 'rows', v_rows, 'pending', v_pending,
+    'can_approve', coalesce(public.crm_can_approve_changes(), false), 'mine_only', v_mine,
+    'note', case when v_mine
+      then 'ترى طلباتك أنت فقط. الاعتماد للمالك وحده ولا يُمنح بمفتاح صلاحية.'
+      else 'اعتمادك هنا هو لحظة وقوع التغيير — قبله لم يتغيّر أيّ رقم.' end);
+end $$;
+
+-- ★★ معاينة الاستيراد — تشغيل جافّ. الدالّة **stable**: PostgreSQL نفسه يمنعها
+--    من الكتابة، فالضمانة بنيوية لا وعدًا في تعليق. تُعيد قرار كلّ صفّ قبل أن
+--    يُكتب حرف واحد، وتقول صراحةً إن كان مفتاح الدفعة مستهلَكًا سابقًا.
+create or replace function public.crm_import_preview(p_rows jsonb, p_idempotency_key text default null)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare r jsonb; v_res jsonb := '[]'::jsonb; v_n int; v_i int := 0;
+        v_new int := 0; v_dup int := 0; v_bad int := 0; v_dupc jsonb;
+        v_prev jsonb := null; v_seen_email text[] := '{}'; v_seen_phone text[] := '{}';
+        v_name text; v_email text; v_phone text; v_ne text; v_np text;
+        v_intra int := 0; v_issues text[];
+begin
+  if auth.uid() is null then raise exception 'not authorized'; end if;
+  if not coalesce(public.crm_can_import(), false) then raise exception 'not authorized'; end if;
+  if p_rows is null or jsonb_typeof(p_rows) <> 'array' then
+    return jsonb_build_object('ok', false, 'reason', 'rows_must_be_array');
+  end if;
+  v_n := jsonb_array_length(p_rows);
+  if v_n > 1000 then return jsonb_build_object('ok', false, 'reason', 'too_many_rows', 'max', 1000); end if;
+
+  -- ملاحظة: متغيّر jsonb لا record — record لم يُسنَد إليه صفّ يرفع
+  -- "record is not assigned yet" لحظة قراءة حقل منه، وهو خطأ صامت في الاختبار.
+  if p_idempotency_key is not null and length(btrim(p_idempotency_key)) >= 8 then
+    select jsonb_build_object('batch_id', b.id, 'inserted', b.inserted_count,
+             'duplicates', b.duplicate_count, 'errors', b.error_count, 'created_at', b.created_at)
+      into v_prev
+      from public.crm_import_batches b where b.idempotency_key = btrim(p_idempotency_key);
+  end if;
+
+  for r in select value from jsonb_array_elements(p_rows) loop
+    v_i := v_i + 1;
+    v_issues := '{}';
+    v_name  := nullif(btrim(coalesce(r->>'contact_name', '')), '');
+    v_email := nullif(btrim(coalesce(r->>'email', '')), '');
+    v_phone := nullif(btrim(coalesce(r->>'phone', '')), '');
+    v_ne := public.crm_norm_email(v_email);
+    v_np := public.crm_norm_phone(v_phone);
+
+    if v_name is null then v_issues := v_issues || 'missing_contact_name'; end if;
+    if v_email is not null and v_ne is null then v_issues := v_issues || 'invalid_email'; end if;
+    if v_phone is not null and v_np is null then v_issues := v_issues || 'unusable_phone'; end if;
+    if v_name is null and v_email is null and v_phone is null then v_issues := v_issues || 'empty_row'; end if;
+
+    v_dupc := public.crm_duplicate_core(v_email, v_phone, r->>'company_name', r->>'contact_name', null);
+
+    if 'empty_row' = any(v_issues) then
+      v_bad := v_bad + 1;
+      v_res := v_res || jsonb_build_object('line', v_i, 'contact_name', v_name, 'company_name', r->>'company_name',
+        'email', v_email, 'phone', v_phone, 'decision', 'skip', 'issues', to_jsonb(v_issues), 'matches', 0);
+    elsif coalesce((v_dupc->>'count')::int, 0) > 0 then
+      v_dup := v_dup + 1;
+      v_res := v_res || jsonb_build_object('line', v_i, 'contact_name', v_name, 'company_name', r->>'company_name',
+        'email', v_email, 'phone', v_phone, 'decision', 'duplicate', 'issues', to_jsonb(v_issues),
+        'matches', coalesce((v_dupc->>'count')::int, 0), 'candidates', v_dupc->'candidates');
+    else
+      -- تكرار داخل الملفّ نفسه: لا يراه كشف القاعدة لأنّ الصفّ لم يُدرج بعد،
+      -- لكنّه سيُنتج نسختين عند التنفيذ. يُعلَن هنا لا بعد فوات الأوان.
+      if (v_ne is not null and v_ne = any(v_seen_email)) or (v_np is not null and v_np = any(v_seen_phone)) then
+        v_intra := v_intra + 1;
+        v_issues := v_issues || 'duplicate_within_file';
+      end if;
+      if v_ne is not null then v_seen_email := v_seen_email || v_ne; end if;
+      if v_np is not null then v_seen_phone := v_seen_phone || v_np; end if;
+      v_new := v_new + 1;
+      v_res := v_res || jsonb_build_object('line', v_i, 'contact_name', coalesce(v_name, 'عميل مستورد'),
+        'company_name', r->>'company_name', 'email', v_email, 'phone', v_phone,
+        'decision', 'insert', 'issues', to_jsonb(v_issues), 'matches', 0);
+    end if;
+  end loop;
+
+  return jsonb_build_object('ok', true, 'dry_run', true, 'wrote_nothing', true,
+    'rows', v_n, 'will_insert', v_new, 'will_skip_duplicate', v_dup, 'will_skip_invalid', v_bad,
+    'duplicate_within_file', v_intra,
+    'already_imported', (v_prev is not null),
+    'previous_batch', v_prev,
+    'result', jsonb_build_object('rows', v_res),
+    'note', case when v_prev is not null
+      then 'هذه الدفعة مستوردة سابقًا بنفس المفتاح — التنفيذ سيعيد نتيجتها ولن يُدرج شيئًا.'
+      else 'معاينة فقط: لم يُكتب أيّ صفّ. التنفيذ خطوة منفصلة وصريحة.' end);
 end $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -2768,9 +3033,71 @@ end $$;
 
 -- ★★ الأهداف: الموظّف لا يحرّر هدفه، ولا مديرُ مبيعاتٍ يحرّر هدف نفسه. المالك
 --     وحده يملك ذلك. المنع هنا — لا في الواجهة.
-create or replace function public.crm_target_upsert(p_payload jsonb)
+-- ★★ موافقة المالك — الأساس المشترك.
+--    الطلب المعلَّق **ليس** تغييرًا: لا يُقرأ في هدف ولا تنبّؤ ولا عمولة. لذلك
+--    نواة التطبيق منفصلة عن بوّابة الصلاحية: تُنادى إمّا من المالك مباشرةً، وإمّا
+--    من crm_approval_decide بعد اعتماده. ولا تُمنح لأحد (REVOKE في §12).
+create or replace function public.crm_approval_submit_core(
+  p_kind text, p_entity uuid, p_subject uuid, p_payload jsonb, p_reason text)
+returns uuid language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  insert into public.crm_approval_requests (kind, entity_id, subject_user_id, payload, reason, requested_by)
+  values (p_kind, p_entity, p_subject, coalesce(p_payload, '{}'::jsonb),
+          nullif(btrim(coalesce(p_reason, '')), ''), auth.uid())
+  returning id into v_id;
+  return v_id;
+end $$;
+
+-- نواة تطبيق الهدف. بلا بوّابة صلاحية عمدًا — المنع في المُنادي، وهي داخلية.
+create or replace function public.crm_target_apply_core(p_payload jsonb, p_actor uuid)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_owner uuid; v_start date; v_end date;
+begin
+  v_owner := nullif(btrim(coalesce(p->>'owner_user_id', '')), '')::uuid;
+  v_id    := nullif(btrim(coalesce(p->>'id', '')), '')::uuid;
+  if v_id is not null and v_owner is null then
+    select owner_user_id into v_owner from public.crm_targets where id = v_id and is_deleted = false;
+  end if;
+  if v_owner is null then return jsonb_build_object('ok', false, 'reason', 'owner_required'); end if;
+
+  v_start := nullif(btrim(coalesce(p->>'period_start', '')), '')::date;
+  v_end   := nullif(btrim(coalesce(p->>'period_end', '')), '')::date;
+  if v_id is null then
+    if v_start is null or v_end is null then return jsonb_build_object('ok', false, 'reason', 'period_required'); end if;
+    insert into public.crm_targets (owner_user_id, team_id, period_type, period_start, period_end,
+      target_value, target_count, currency, notes, set_by)
+    values (v_owner, nullif(btrim(coalesce(p->>'team_id', '')), '')::uuid,
+      coalesce(nullif(btrim(coalesce(p->>'period_type', '')), ''), 'month'), v_start, v_end,
+      coalesce(nullif(btrim(coalesce(p->>'target_value', '')), '')::numeric, 0),
+      coalesce(nullif(btrim(coalesce(p->>'target_count', '')), '')::int, 0),
+      coalesce(nullif(btrim(coalesce(p->>'currency', '')), ''), public.crm_setting_text('default_currency', 'SAR')),
+      nullif(btrim(coalesce(p->>'notes', '')), ''), p_actor)
+    on conflict (owner_user_id, period_type, period_start) where is_deleted = false
+    do update set period_end = excluded.period_end, target_value = excluded.target_value,
+      target_count = excluded.target_count, currency = excluded.currency, notes = excluded.notes,
+      set_by = excluded.set_by, updated_at = now()
+    returning id into v_id;
+  else
+    update public.crm_targets set
+      target_value = coalesce(nullif(btrim(coalesce(p->>'target_value', '')), '')::numeric, target_value),
+      target_count = coalesce(nullif(btrim(coalesce(p->>'target_count', '')), '')::int, target_count),
+      period_end   = coalesce(v_end, period_end),
+      notes        = case when p ? 'notes' then nullif(btrim(coalesce(p->>'notes', '')), '') else notes end,
+      set_by = p_actor, updated_at = now()
+    where id = v_id and is_deleted = false;
+    if not found then raise exception 'target_not_found'; end if;
+  end if;
+  perform public.crm_log('target_upsert', 'crm_target', v_id,
+    jsonb_build_object('owner_user_id', v_owner, 'target_value', p->>'target_value', 'applied_by', p_actor));
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- ★ الهدف: من يحمل المفتاح **يقترح**، والمالك وحده **يغيّر**.
+--   الفرق ملموس في الناتج: pending_approval = true ولا صفّ واحد تغيّر.
+create or replace function public.crm_target_upsert(p_payload jsonb)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_owner uuid; v_req uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
   if not coalesce(public.crm_can_manage_targets(), false) then raise exception 'not authorized'; end if;
@@ -2785,41 +3112,24 @@ begin
       'message', 'لا تُحرَّر أهدافك بنفسك. هدفك يضعه المالك أو من يملك صلاحية الأهداف من فوقك.');
   end if;
 
-  v_start := nullif(btrim(coalesce(p->>'period_start', '')), '')::date;
-  v_end   := nullif(btrim(coalesce(p->>'period_end', '')), '')::date;
-  if v_id is null then
-    if v_start is null or v_end is null then return jsonb_build_object('ok', false, 'reason', 'period_required'); end if;
-    insert into public.crm_targets (owner_user_id, team_id, period_type, period_start, period_end,
-      target_value, target_count, currency, notes, set_by)
-    values (v_owner, nullif(btrim(coalesce(p->>'team_id', '')), '')::uuid,
-      coalesce(nullif(btrim(coalesce(p->>'period_type', '')), ''), 'month'), v_start, v_end,
-      coalesce(nullif(btrim(coalesce(p->>'target_value', '')), '')::numeric, 0),
-      coalesce(nullif(btrim(coalesce(p->>'target_count', '')), '')::int, 0),
-      coalesce(nullif(btrim(coalesce(p->>'currency', '')), ''), public.crm_setting_text('default_currency', 'SAR')),
-      nullif(btrim(coalesce(p->>'notes', '')), ''), auth.uid())
-    on conflict (owner_user_id, period_type, period_start) where is_deleted = false
-    do update set period_end = excluded.period_end, target_value = excluded.target_value,
-      target_count = excluded.target_count, currency = excluded.currency, notes = excluded.notes,
-      set_by = excluded.set_by, updated_at = now()
-    returning id into v_id;
-  else
-    update public.crm_targets set
-      target_value = coalesce(nullif(btrim(coalesce(p->>'target_value', '')), '')::numeric, target_value),
-      target_count = coalesce(nullif(btrim(coalesce(p->>'target_count', '')), '')::int, target_count),
-      period_end   = coalesce(v_end, period_end),
-      notes        = case when p ? 'notes' then nullif(btrim(coalesce(p->>'notes', '')), '') else notes end,
-      set_by = auth.uid(), updated_at = now()
-    where id = v_id and is_deleted = false;
-    if not found then raise exception 'target_not_found'; end if;
+  if not coalesce(public.crm_can_approve_changes(), false) then
+    if v_id is null and (nullif(btrim(coalesce(p->>'period_start', '')), '') is null
+                      or nullif(btrim(coalesce(p->>'period_end', '')), '') is null) then
+      return jsonb_build_object('ok', false, 'reason', 'period_required');
+    end if;
+    v_req := public.crm_approval_submit_core('target', v_id, v_owner, p, p->>'request_reason');
+    perform public.crm_log('target_change_requested', 'crm_approval_request', v_req,
+      jsonb_build_object('target_id', v_id, 'owner_user_id', v_owner, 'target_value', p->>'target_value'));
+    return jsonb_build_object('ok', true, 'pending_approval', true, 'request_id', v_req,
+      'message', 'أُرسل الطلب لاعتماد المالك. لم يتغيّر أيّ هدف بعد — التغيير يقع لحظة الاعتماد.');
   end if;
-  perform public.crm_log('target_upsert', 'crm_target', v_id,
-    jsonb_build_object('owner_user_id', v_owner, 'target_value', p->>'target_value'));
-  return jsonb_build_object('ok', true, 'id', v_id);
+
+  return public.crm_target_apply_core(p, auth.uid());
 end $$;
 
 create or replace function public.crm_target_delete(p_id uuid, p_reason text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
-declare v_owner uuid;
+declare v_owner uuid; v_req uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
   if not coalesce(public.crm_can_manage_targets(), false) then raise exception 'not authorized'; end if;
@@ -2829,6 +3139,14 @@ begin
   if v_owner = auth.uid() and not coalesce(public.crm_is_owner_role(), false) then
     return jsonb_build_object('ok', false, 'reason', 'self_target_denied',
       'message', 'لا تحذف هدفك بنفسك.');
+  end if;
+  if not coalesce(public.crm_can_approve_changes(), false) then
+    v_req := public.crm_approval_submit_core('target_delete', p_id, v_owner,
+      jsonb_build_object('id', p_id), p_reason);
+    perform public.crm_log('target_delete_requested', 'crm_approval_request', v_req,
+      jsonb_build_object('target_id', p_id, 'owner_user_id', v_owner, 'reason', btrim(p_reason)));
+    return jsonb_build_object('ok', true, 'pending_approval', true, 'request_id', v_req,
+      'message', 'أُرسل طلب حذف الهدف لاعتماد المالك. الهدف ما زال قائمًا.');
   end if;
   update public.crm_targets set is_deleted = true, updated_at = now() where id = p_id;
   perform public.crm_log('target_delete', 'crm_target', p_id, jsonb_build_object('reason', btrim(p_reason)));
@@ -2881,12 +3199,20 @@ begin
   return v;
 end $$;
 
-create or replace function public.crm_commission_plan_upsert(p_payload jsonb)
+-- نواة تطبيق قاعدة العمولة — داخلية، بلا بوّابة، لا تُمنح لأحد.
+create or replace function public.crm_commission_plan_apply_core(p_payload jsonb, p_actor uuid)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
-declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid;
+declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_basis text;
 begin
-  if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.crm_can_manage_commission(), false) then raise exception 'not authorized'; end if;
+  -- ★ لا أساس إلّا المُنفَّذ ★ — الرفض هنا صريح ومفهوم بدل انتهاك قيد خام،
+  --   ولأنّ حاسبة العمولة تقرأ estimated_value وحدها فأيّ أساس آخر وسمٌ كاذب.
+  v_basis := nullif(btrim(coalesce(p->>'basis', '')), '');
+  if v_basis is not null and v_basis <> 'won_value' then
+    return jsonb_build_object('ok', false, 'reason', 'basis_not_implemented',
+      'requested_basis', v_basis,
+      'message', 'الأساس الوحيد المنفَّذ هو قيمة الفرصة المكسوبة (won_value). '
+              || 'العمولة على الهامش تستلزم قراءة التكلفة داخل المبيعات، وهذا ممنوع بجدار المالية.');
+  end if;
   v_id := nullif(btrim(coalesce(p->>'id', '')), '')::uuid;
   if v_id is null then
     insert into public.crm_commission_plans (name, basis, rate_pct, threshold_value, cap_value, currency, notes, created_by)
@@ -2896,7 +3222,7 @@ begin
       coalesce(nullif(btrim(coalesce(p->>'threshold_value', '')), '')::numeric, 0),
       nullif(btrim(coalesce(p->>'cap_value', '')), '')::numeric,
       coalesce(nullif(btrim(coalesce(p->>'currency', '')), ''), public.crm_setting_text('default_currency', 'SAR')),
-      nullif(btrim(coalesce(p->>'notes', '')), ''), auth.uid())
+      nullif(btrim(coalesce(p->>'notes', '')), ''), p_actor)
     returning id into v_id;
   else
     update public.crm_commission_plans set
@@ -2909,15 +3235,55 @@ begin
     where id = v_id and is_deleted = false;
     if not found then raise exception 'plan_not_found'; end if;
   end if;
-  perform public.crm_log('commission_plan_upsert', 'crm_commission_plan', v_id, p);
+  perform public.crm_log('commission_plan_upsert', 'crm_commission_plan', v_id,
+    p || jsonb_build_object('applied_by', p_actor));
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- ★ قاعدة العمولة تتبع القاعدة نفسها: اقتراح من حامل المفتاح، تغيير من المالك.
+create or replace function public.crm_commission_plan_upsert(p_payload jsonb)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_req uuid;
+begin
+  if auth.uid() is null then raise exception 'not authorized'; end if;
+  if not coalesce(public.crm_can_manage_commission(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.crm_can_approve_changes(), false) then
+    v_req := public.crm_approval_submit_core('commission_plan',
+      nullif(btrim(coalesce(p->>'id', '')), '')::uuid, null, p, p->>'request_reason');
+    perform public.crm_log('commission_plan_change_requested', 'crm_approval_request', v_req,
+      jsonb_build_object('plan_id', p->>'id', 'rate_pct', p->>'rate_pct'));
+    return jsonb_build_object('ok', true, 'pending_approval', true, 'request_id', v_req,
+      'message', 'أُرسلت قاعدة العمولة لاعتماد المالك. لم تتغيّر أيّ نسبة بعد.');
+  end if;
+  return public.crm_commission_plan_apply_core(p, auth.uid());
+end $$;
+
+-- نواة إسناد خطّة عمولة — داخلية.
+create or replace function public.crm_commission_assign_core(p_payload jsonb, p_actor uuid)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_user uuid; v_plan uuid;
+begin
+  v_user := nullif(btrim(coalesce(p->>'user_id', '')), '')::uuid;
+  v_plan := nullif(btrim(coalesce(p->>'plan_id', '')), '')::uuid;
+  if v_user is null or v_plan is null then return jsonb_build_object('ok', false, 'reason', 'user_and_plan_required'); end if;
+  if not exists (select 1 from public.crm_commission_plans where id = v_plan and is_deleted = false) then
+    return jsonb_build_object('ok', false, 'reason', 'plan_not_found');
+  end if;
+  insert into public.crm_commission_assignments (plan_id, user_id, effective_from, effective_to, created_by)
+  values (v_plan, v_user,
+    coalesce(nullif(btrim(coalesce(p->>'effective_from', '')), '')::date, current_date),
+    nullif(btrim(coalesce(p->>'effective_to', '')), '')::date, p_actor)
+  returning id into v_id;
+  perform public.crm_log('commission_assign', 'crm_commission_assignment', v_id,
+    jsonb_build_object('user_id', v_user, 'plan_id', v_plan, 'applied_by', p_actor));
   return jsonb_build_object('ok', true, 'id', v_id);
 end $$;
 
 -- إسناد خطّة عمولة لنفسك ممنوع على غير المالك: من يضع نسبته بنفسه لا يحتاج
--- إلى نظام عمولات أصلًا.
+-- إلى نظام عمولات أصلًا. وإسنادها لغيرك يظلّ اقتراحًا حتى يعتمده المالك.
 create or replace function public.crm_commission_assign(p_payload jsonb)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
-declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_user uuid; v_plan uuid;
+declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_user uuid; v_plan uuid; v_req uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
   if not coalesce(public.crm_can_manage_commission(), false) then raise exception 'not authorized'; end if;
@@ -2928,14 +3294,107 @@ begin
     return jsonb_build_object('ok', false, 'reason', 'self_commission_denied',
       'message', 'لا تُسنِد لنفسك خطّة عمولة. هذا قرار المالك.');
   end if;
-  insert into public.crm_commission_assignments (plan_id, user_id, effective_from, effective_to, created_by)
-  values (v_plan, v_user,
-    coalesce(nullif(btrim(coalesce(p->>'effective_from', '')), '')::date, current_date),
-    nullif(btrim(coalesce(p->>'effective_to', '')), '')::date, auth.uid())
-  returning id into v_id;
-  perform public.crm_log('commission_assign', 'crm_commission_assignment', v_id,
-    jsonb_build_object('user_id', v_user, 'plan_id', v_plan));
-  return jsonb_build_object('ok', true, 'id', v_id);
+  if not coalesce(public.crm_can_approve_changes(), false) then
+    v_req := public.crm_approval_submit_core('commission_assign', v_plan, v_user, p, p->>'request_reason');
+    perform public.crm_log('commission_assign_requested', 'crm_approval_request', v_req,
+      jsonb_build_object('user_id', v_user, 'plan_id', v_plan));
+    return jsonb_build_object('ok', true, 'pending_approval', true, 'request_id', v_req,
+      'message', 'أُرسل إسناد خطّة العمولة لاعتماد المالك. لم يُسنَد شيء بعد.');
+  end if;
+  return public.crm_commission_assign_core(p, auth.uid());
+end $$;
+
+-- ★★ قرار المالك. الاعتماد هو **اللحظة الوحيدة** التي يقع فيها التغيير.
+--    فشل التطبيق لا يُخفى: يُحفظ نصّه في apply_error ويبقى الطلب معلَّقًا.
+create or replace function public.crm_approval_decide(p_id uuid, p_decision text, p_note text default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare r record; v_res jsonb; v_applied uuid;
+begin
+  if auth.uid() is null then raise exception 'not authorized'; end if;
+  if not coalesce(public.crm_can_approve_changes(), false) then raise exception 'not authorized'; end if;
+  if p_decision is null or p_decision not in ('approved','rejected') then
+    return jsonb_build_object('ok', false, 'reason', 'invalid_decision');
+  end if;
+  select * into r from public.crm_approval_requests where id = p_id for update;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'request_not_found'); end if;
+  if r.status <> 'pending' then
+    return jsonb_build_object('ok', false, 'reason', 'already_decided', 'status', r.status);
+  end if;
+
+  if p_decision = 'rejected' then
+    update public.crm_approval_requests
+       set status = 'rejected', decided_by = auth.uid(), decided_at = now(),
+           decision_note = nullif(btrim(coalesce(p_note, '')), ''), updated_at = now()
+     where id = p_id;
+    perform public.crm_log('approval_rejected', 'crm_approval_request', p_id,
+      jsonb_build_object('kind', r.kind, 'note', p_note));
+    return jsonb_build_object('ok', true, 'id', p_id, 'status', 'rejected');
+  end if;
+
+  -- الاعتماد: يُطبَّق باسم المالك المعتمِد، لا باسم مقدّم الطلب.
+  begin
+    if r.kind = 'target' then
+      v_res := public.crm_target_apply_core(r.payload, auth.uid());
+    elsif r.kind = 'target_delete' then
+      update public.crm_targets set is_deleted = true, updated_at = now()
+       where id = r.entity_id and is_deleted = false;
+      v_res := case when found then jsonb_build_object('ok', true, 'id', r.entity_id)
+                    else jsonb_build_object('ok', false, 'reason', 'target_not_found') end;
+    elsif r.kind = 'commission_plan' then
+      v_res := public.crm_commission_plan_apply_core(r.payload, auth.uid());
+    elsif r.kind = 'commission_assign' then
+      v_res := public.crm_commission_assign_core(r.payload, auth.uid());
+    else
+      v_res := jsonb_build_object('ok', false, 'reason', 'unknown_kind');
+    end if;
+  exception when others then
+    update public.crm_approval_requests set apply_error = sqlerrm, updated_at = now() where id = p_id;
+    perform public.crm_log('approval_apply_failed', 'crm_approval_request', p_id,
+      jsonb_build_object('kind', r.kind, 'error', sqlerrm));
+    return jsonb_build_object('ok', false, 'reason', 'apply_failed', 'detail', sqlerrm,
+      'message', 'تعذّر تطبيق التغيير — بقي الطلب معلَّقًا ولم يتغيّر شيء.');
+  end;
+
+  if coalesce((v_res->>'ok')::boolean, false) is not true then
+    update public.crm_approval_requests set apply_error = coalesce(v_res->>'reason', 'unknown'), updated_at = now()
+     where id = p_id;
+    return jsonb_build_object('ok', false, 'reason', coalesce(v_res->>'reason', 'apply_failed'),
+      'message', 'رُفض التطبيق لسبب في محتوى الطلب — بقي معلَّقًا ولم يتغيّر شيء.');
+  end if;
+
+  v_applied := nullif(btrim(coalesce(v_res->>'id', '')), '')::uuid;
+  update public.crm_approval_requests
+     set status = 'approved', decided_by = auth.uid(), decided_at = now(),
+         decision_note = nullif(btrim(coalesce(p_note, '')), ''),
+         applied_entity_id = v_applied, apply_error = null, updated_at = now()
+   where id = p_id;
+  perform public.crm_log('approval_approved', 'crm_approval_request', p_id,
+    jsonb_build_object('kind', r.kind, 'applied_entity_id', v_applied));
+  return jsonb_build_object('ok', true, 'id', p_id, 'status', 'approved', 'applied_entity_id', v_applied);
+end $$;
+
+-- سحب الطلب: صاحبه يسحبه، والمالك يسحب أيّ طلب. لا أحد غيرهما.
+create or replace function public.crm_approval_withdraw(p_id uuid, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  if auth.uid() is null then raise exception 'not authorized'; end if;
+  if not coalesce(public.crm_can_view(), false) then raise exception 'not authorized'; end if;
+  select * into r from public.crm_approval_requests where id = p_id for update;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'request_not_found'); end if;
+  if r.requested_by <> auth.uid() and not coalesce(public.crm_can_approve_changes(), false) then
+    raise exception 'not authorized';
+  end if;
+  if r.status <> 'pending' then
+    return jsonb_build_object('ok', false, 'reason', 'already_decided', 'status', r.status);
+  end if;
+  update public.crm_approval_requests
+     set status = 'withdrawn', decided_by = auth.uid(), decided_at = now(),
+         decision_note = nullif(btrim(coalesce(p_reason, '')), ''), updated_at = now()
+   where id = p_id;
+  perform public.crm_log('approval_withdrawn', 'crm_approval_request', p_id,
+    jsonb_build_object('kind', r.kind, 'reason', p_reason));
+  return jsonb_build_object('ok', true, 'id', p_id, 'status', 'withdrawn');
 end $$;
 
 create or replace function public.crm_commission_set_status(p_id uuid, p_status text, p_note text default null)
@@ -3060,6 +3519,10 @@ begin
     'public.crm_dashboard(jsonb)',
     'public.crm_export(text,jsonb)',
     'public.crm_audit_list(jsonb)',
+    'public.crm_approvals_list(jsonb)',
+    'public.crm_import_preview(jsonb,text)',
+    'public.crm_approval_decide(uuid,text,text)',
+    'public.crm_approval_withdraw(uuid,text)',
     'public.crm_company_upsert(jsonb)',
     'public.crm_contact_upsert(jsonb)',
     'public.crm_competitor_upsert(jsonb)',
@@ -3103,6 +3566,7 @@ begin
     'public.crm_can_view_commission(uuid)',
     'public.crm_can_manage_commission()',
     'public.crm_can_manage_targets()',
+    'public.crm_can_approve_changes()',
     'public.crm_can_manage_pipeline()',
     'public.crm_can_manage_scoring()',
     'public.crm_can_import()',
@@ -3132,6 +3596,10 @@ begin
     'public.crm_visible_leads()',
     'public.crm_visible_opportunities()',
     'public.crm_commission_recalc_core(uuid)',
+    'public.crm_approval_submit_core(text,uuid,uuid,jsonb,text)',
+    'public.crm_target_apply_core(jsonb,uuid)',
+    'public.crm_commission_plan_apply_core(jsonb,uuid)',
+    'public.crm_commission_assign_core(jsonb,uuid)',
     'public.crm_normalize_lead()',
     'public.crm_normalize_contact()',
     'public.crm_normalize_company()',
@@ -3147,7 +3615,7 @@ begin
   foreach t in array array['crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts',
     'crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities',
     'crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments',
-    'crm_commission_records','crm_import_batches','crm_audit'] loop
+    'crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests'] loop
     execute format('revoke all on table public.%I from public', t);
     begin execute format('revoke all on table public.%I from anon', t); exception when undefined_object then null; end;
     execute format('revoke all on table public.%I from authenticated', t);
@@ -3173,7 +3641,7 @@ declare t text; f text; v_def text; v jsonb; v_b boolean; v_n bigint;
   TABLES constant text[] := array['crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts',
     'crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities',
     'crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments',
-    'crm_commission_records','crm_import_batches','crm_audit'];
+    'crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests'];
   WRITE_FNS constant text[] := array[
     'public.crm_company_upsert(jsonb)','public.crm_contact_upsert(jsonb)','public.crm_competitor_upsert(jsonb)',
     'public.crm_lead_upsert(jsonb)','public.crm_lead_set_status(uuid,text,text)','public.crm_lead_score_adjust(jsonb)',
@@ -3185,7 +3653,8 @@ declare t text; f text; v_def text; v jsonb; v_b boolean; v_n bigint;
     'public.crm_settings_set(text,jsonb)','public.crm_team_upsert(jsonb)','public.crm_team_member_set(jsonb)',
     'public.crm_target_upsert(jsonb)','public.crm_target_delete(uuid,text)','public.crm_commission_recalc(uuid)',
     'public.crm_commission_plan_upsert(jsonb)','public.crm_commission_assign(jsonb)',
-    'public.crm_commission_set_status(uuid,text,text)','public.crm_import_leads(jsonb,text)'];
+    'public.crm_commission_set_status(uuid,text,text)','public.crm_import_leads(jsonb,text)',
+    'public.crm_approval_decide(uuid,text,text)','public.crm_approval_withdraw(uuid,text)'];
 begin
   -- (1) الجداول · RLS · لا سياسة كتابة · لا anon
   foreach t in array TABLES loop
@@ -3209,7 +3678,8 @@ begin
     'public.crm_duplicates(jsonb)','public.crm_opportunities_list(jsonb)','public.crm_opportunity_detail(uuid)',
     'public.crm_pipeline_board(jsonb)','public.crm_forecast(jsonb)','public.crm_stale_alerts(jsonb)',
     'public.crm_activities_list(jsonb)','public.crm_targets_list(jsonb)','public.crm_commission_list(jsonb)',
-    'public.crm_dashboard(jsonb)','public.crm_export(text,jsonb)','public.crm_audit_list(jsonb)'] loop
+    'public.crm_dashboard(jsonb)','public.crm_export(text,jsonb)','public.crm_audit_list(jsonb)',
+    'public.crm_approvals_list(jsonb)','public.crm_import_preview(jsonb,text)'] loop
     if to_regprocedure(f) is null then raise exception 'CRM SELF-TEST: الدالّة % لم تُنشأ', f; end if;
     if v_anon and has_function_privilege('anon', f, 'EXECUTE') then
       raise exception 'CRM SELF-TEST: anon يملك EXECUTE على %', f;
@@ -3220,7 +3690,9 @@ begin
   foreach f in array array['public.crm_log(text,text,uuid,jsonb)','public.crm_visible_leads()',
     'public.crm_visible_opportunities()','public.crm_score_core(uuid)','public.crm_readiness_core(uuid)',
     'public.crm_duplicate_core(text,text,text,text,uuid)','public.crm_commission_recalc_core(uuid)',
-    'public.crm_next_code(text)'] loop
+    'public.crm_next_code(text)',
+    'public.crm_approval_submit_core(text,uuid,uuid,jsonb,text)','public.crm_target_apply_core(jsonb,uuid)',
+    'public.crm_commission_plan_apply_core(jsonb,uuid)','public.crm_commission_assign_core(jsonb,uuid)'] loop
     if v_authr and has_function_privilege('authenticated', f, 'EXECUTE') then
       raise exception 'CRM SELF-TEST: authenticated يملك EXECUTE على دالّة داخلية %', f;
     end if;
@@ -3317,6 +3789,28 @@ begin
   if pg_get_functiondef(to_regprocedure('public.crm_commission_set_status(uuid,text,text)')) not ilike '%self_commission_denied%' then
     raise exception 'CRM SELF-TEST: يمكن اعتماد عمولة النفس'; end if;
 
+  -- (10-ب) ★ مفردة الأساس = المُنفَّذ، لا أكثر ★
+  --   ثلاثة فحوص متعاضدة: القيد ضيّق، والكتابة ترفض صراحةً، والحاسبة لا تلمس
+  --   المالية. لو نُفِّذ gross_margin يومًا داخل المبيعات لسقط الفحص الثالث —
+  --   وهذا هو المقصود: العمولة على الهامش تعني تكلفةً داخل موديول المبيعات.
+  if not exists (
+    select 1 from pg_constraint con
+     where con.conrelid = 'public.crm_commission_plans'::regclass and con.contype = 'c'
+       and pg_get_constraintdef(con.oid) ilike '%basis%'
+       and pg_get_constraintdef(con.oid) ilike '%won_value%'
+       and pg_get_constraintdef(con.oid) not ilike '%gross_margin%'
+       and pg_get_constraintdef(con.oid) not ilike '%collected_value%') then
+    raise exception 'CRM SELF-TEST: قيد أساس العمولة ما زال يقبل مفردة غير منفَّذة — سجلّ عمولة يُوسَم بالهامش وقيمته قيمة الفرصة';
+  end if;
+  if pg_get_functiondef(to_regprocedure('public.crm_commission_plan_apply_core(jsonb,uuid)'))
+     not ilike '%basis_not_implemented%' then
+    raise exception 'CRM SELF-TEST: كتابة خطّة العمولة لا ترفض الأساس غير المنفَّذ صراحةً'; end if;
+  v_def := pg_get_functiondef(to_regprocedure('public.crm_commission_recalc_core(uuid)'));
+  if v_def ilike '%fin\_%' or v_def ilike '%finops\_%' then
+    raise exception 'CRM SELF-TEST: حاسبة العمولة تقرأ المالية — التكلفة دخلت المبيعات وانفتح استنتاج الربح'; end if;
+  if v_def not ilike '%estimated_value%' then
+    raise exception 'CRM SELF-TEST: حاسبة العمولة لا تحسب من قيمة الفرصة كما تُعلن'; end if;
+
   -- (11) ★ الأهداف: لا تحرير للهدف الذاتيّ
   if pg_get_functiondef(to_regprocedure('public.crm_target_upsert(jsonb)')) not ilike '%self_target_denied%' then
     raise exception 'CRM SELF-TEST: الموظّف يستطيع تحرير هدفه'; end if;
@@ -3394,7 +3888,81 @@ begin
     end if;
   end loop;
 
-  raise notice 'CRM SELF-TEST: نجح — 19 جدولًا، RLS قراءة فقط، لا anon، مُسنَدات لا تعيد NULL، عمولات معزولة، أهداف غير ذاتية التحرير، والمنصّة لم تُمَسّ.';
+  -- (19) ★★ موافقة المالك على الهدف وقاعدة العمولة — بنيويّة لا وعدًا في وثيقة.
+  v_b := public.crm_can_approve_changes();
+  if v_b is null then raise exception 'CRM SELF-TEST: can_approve_changes أعادت NULL'; end if;
+  if v_b then raise exception 'CRM SELF-TEST: can_approve_changes = true بلا جلسة — fail-open'; end if;
+  -- الاعتماد لا يُشترى بمفتاح: المُسنَد لا يمرّ عبر crm_perm إطلاقًا.
+  v_def := pg_get_functiondef(to_regprocedure('public.crm_can_approve_changes()'));
+  if v_def ilike '%crm_perm%' then
+    raise exception 'CRM SELF-TEST: اعتماد المالك يُمنح بمفتاح صلاحية — لم تعد موافقة مالك';
+  end if;
+  if v_def not ilike '%crm_is_owner_role%' then
+    raise exception 'CRM SELF-TEST: اعتماد التغييرات لا يشترط دور المالك';
+  end if;
+  -- كلّ مسار يغيّر هدفًا أو قاعدة عمولة يمرّ على البوّابة نفسها.
+  foreach f in array array['public.crm_target_upsert(jsonb)','public.crm_target_delete(uuid,text)',
+                           'public.crm_commission_plan_upsert(jsonb)','public.crm_commission_assign(jsonb)'] loop
+    v_def := pg_get_functiondef(to_regprocedure(f));
+    if v_def not ilike '%crm_can_approve_changes()%' then
+      raise exception 'CRM SELF-TEST: % تغيّر هدفًا/عمولة بلا بوّابة اعتماد المالك', f;
+    end if;
+    if v_def not ilike '%pending_approval%' then
+      raise exception 'CRM SELF-TEST: % لا تُبلّغ بصدق أنّ التغيير معلَّق', f;
+    end if;
+  end loop;
+  -- القرار يُطبَّق باسم المعتمِد، ولا يُطبَّق مرّتين.
+  v_def := pg_get_functiondef(to_regprocedure('public.crm_approval_decide(uuid,text,text)'));
+  if v_def not ilike '%already_decided%' then
+    raise exception 'CRM SELF-TEST: قرار الاعتماد يمكن تكراره على الطلب نفسه'; end if;
+  if v_def not ilike '%crm_target_apply_core%' or v_def not ilike '%crm_commission_plan_apply_core%' then
+    raise exception 'CRM SELF-TEST: الاعتماد لا يُطبّق عبر النوى المشتركة'; end if;
+  if exists (select 1 from pg_policies where schemaname = 'public'
+              and tablename = 'crm_approval_requests' and cmd = 'SELECT'
+              and coalesce(qual, '') not ilike '%crm_can_approve_changes%') then
+    raise exception 'CRM SELF-TEST: سياسة قراءة طلبات الاعتماد لا تفرّق المالك عن غيره';
+  end if;
+
+  -- (20) ★★ معاينة الاستيراد تشغيل جافّ فعليّ — الضمانة من PostgreSQL نفسه.
+  -- coalesce إلى قيمة مستحيلة عمدًا: دالّة غائبة يجب أن **تُفشِل** الفحص لا أن
+  -- تجعله يمرّ بـNULL. الفحص الذي ينجح عند غياب هدفه ليس فحصًا.
+  if coalesce((select p.provolatile from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname = 'public' and p.proname = 'crm_import_preview'), 'x') <> 's' then
+    raise exception 'CRM SELF-TEST: crm_import_preview غائبة أو ليست STABLE — لا شيء يمنعها من الكتابة';
+  end if;
+  v_def := pg_get_functiondef(to_regprocedure('public.crm_import_preview(jsonb,text)'));
+  if v_def ~* '(insert\s+into|update\s+public|delete\s+from)' then
+    raise exception 'CRM SELF-TEST: معاينة الاستيراد تكتب — لم تعد معاينة';
+  end if;
+  if v_def not ilike '%wrote_nothing%' then
+    raise exception 'CRM SELF-TEST: المعاينة لا تُصرّح بأنّها لم تكتب شيئًا';
+  end if;
+  if v_def not ilike '%duplicate_within_file%' then
+    raise exception 'CRM SELF-TEST: المعاينة لا تكشف التكرار داخل الملفّ نفسه';
+  end if;
+  -- ⚠️ عمدًا بلا استدعاء حيّ للمعاينة: هي محميّة بـauth.uid()، ومحرّر SQL يعمل
+  --    بـauth.uid() = NULL، فاستدعاؤها هنا يرفع "not authorized" ويُسقط الترحيلة.
+  --    الفحص أعلاه بنيويّ (provolatile + نصّ التعريف) وهو أقوى من نداء واحد.
+
+  -- ★ الإشعار لا يُفقد بصمت ★
+  --   (أ) القيد يقبل entity_type الخاصّ بهذا الموديول فعلًا.
+  --   يُفحص **كلّ** قيد CHECK يقيّد entity_type مهما كان اسمه.
+  select coalesce(string_agg(pg_get_constraintdef(con.oid), ' | '), '') into v_def
+    from pg_constraint con
+   where con.conrelid = to_regclass('public.notifications')
+     and con.contype = 'c'
+     and pg_get_constraintdef(con.oid) ilike '%entity_type%'
+     and pg_get_constraintdef(con.oid) not ilike '%~%'
+     and pg_get_constraintdef(con.oid) not ilike '%crm_opportunity%';
+  if v_def <> '' then
+    raise exception 'CRM SELF-TEST: قيد على notifications.entity_type ما زال تعدادًا لا يقبل crm_opportunity (%). كلّ إشعار مبيعات سيُرفض ويُبتلَع.', v_def;
+  end if;
+  --   (ب) والمصيدة تكتب أثرًا بدل أن تبتلع.
+  v_def := pg_get_functiondef(to_regprocedure('public.crm_notify(uuid,text,uuid,text,text)'));
+  if v_def not ilike '%notify_failed%' then
+    raise exception 'CRM SELF-TEST: فشل الإشعار يُبتلَع بلا أثر'; end if;
+
+  raise notice 'CRM SELF-TEST: نجح — 20 جدولًا، RLS قراءة فقط، لا anon، مُسنَدات لا تعيد NULL، عمولات معزولة، أهداف بموافقة المالك، استيراد بمعاينة جافّة، الإشعار لا يُفقد بصمت، والمنصّة لم تُمَسّ.';
 end $st$;
 
 commit;

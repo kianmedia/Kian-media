@@ -32,7 +32,7 @@ test("(١) كلّ دالّة مالية خارج قائمة الموظّف تش�
   for (const f of GATED_READ_FNS) {
     if (EMPLOYEE_ALLOWED.has(f)) continue;
     const b = funcBody(f);
-    assert.match(b, /finops_can_(view|manage|view_profit|export)\(\)/,
+    assert.match(b, /finops_can_(view_finance_sensitive|manage_finance|view_collections|export_\w+|approve_expense)\(\)/,
       `${f} تُفتح بـcan_request ⇒ يقرؤها كلّ موظّف`);
     assert.ok(!/finops_can_request\(\)/.test(b),
       `${f} تقبل مُسنَد «رفع طلب» كبوّابة قراءة — كلّ موظّف سيراها`);
@@ -85,19 +85,19 @@ test("(٣) الجداول مباشرةً: صفر صفوف للموظّف عدا 
     assert.ok(rls.includes(`'${t}'`), `${t} خارج مجموعة سياسات المركز`);
   }
   // القطع من تعليق المجموعة داخل do$rls$ لا من فهرس الشرح في رأس القسم
-  const iA = rls.indexOf("(أ) بيانات المركز المالي");
-  const iB = rls.indexOf("(ب) ★");
+  const iA = rls.indexOf("(أ) كلّ جدول يحمل تكلفةً");
+  const iB = rls.indexOf("(ب) طلبات الموظّف");
   assert.ok(iA > 0 && iB > iA, "تعذّر عزل كتلة سياسات المركز");
   const centerBlock = rls.slice(iA, iB);
-  assert.match(centerBlock, /using \(public\.finops_can_view\(\)\)/,
-    "سياسة جداول المركز ليست can_view وحدها");
+  assert.match(centerBlock, /using \(public\.finops_can_view_finance_sensitive\(\)\)/,
+    "سياسة الجداول الحسّاسة ليست البوّابة الحسّاسة وحدها");
   assert.ok(!/requested_by|uploaded_by|auth\.uid\(\)/.test(centerBlock),
     "سياسة جداول المركز تحمل شرط ملكية ⇒ تسرّب صفوفًا لموظّف");
   // (ج) طلبات الموظّف: صفّه هو فقط
   assert.match(rls, /fin_expense_requests_read[\s\S]{0,200}requested_by = auth\.uid\(\)/);
   assert.match(rls, /fin_purchase_requests_read[\s\S]{0,200}requested_by = auth\.uid\(\)/);
   // سجلّ التدقيق: إدارة فقط، لا حتى can_view
-  assert.match(rls, /fin_audit_read[\s\S]{0,160}finops_can_manage\(\)/);
+  assert.match(rls, /fin_audit_read[\s\S]{0,200}finops_can_manage_finance\(\)/);
 });
 
 test("(٣ب) الموظّف لا يرى صفوف اعتماد غيره ولا بنود طلب غيره", () => {
@@ -121,8 +121,8 @@ test("(٤) مراجع الموظّف بلا مبالغ ولا ميزانيات �
 });
 
 test("(٥) الواجهة تعطي الموظّف سطحًا مختلفًا لا نسخة مقصوصة", () => {
-  assert.match(CENTER, /if \(!a\.can_view\)[\s\S]{0,400}FinMyRequests/,
-    "الموظّف بلا can_view لا يُوجَّه إلى شاشته الخاصّة");
+  assert.match(CENTER, /if \(!a\.can_view_finance_sensitive\)[\s\S]{0,2000}FinMyRequests/,
+    "الموظّف بلا الوصول الحسّاس لا يُوجَّه إلى شاشته الخاصّة");
   // شاشة الموظّف لا تستدعي أيّ دالّة مركز
   for (const forbidden of ["finDashboard", "finCostsList", "finBudgetsList", "finReceivables",
     "finProfitability", "finLookups", "finAuditList", "finExport", "finSuppliersList",
@@ -159,7 +159,7 @@ test("رفع طلب باسم موظّف آخر مستحيل، وتعديل طل�
 
 test("الموظّف لا يستطيع لمس أيّ جدول غير طلباته حتى عبر الحذف الموحّد", () => {
   const del = funcBody("finops_row_delete");
-  const i = del.indexOf("if not coalesce(public.finops_can_manage(), false) then");
+  const i = del.indexOf("if not coalesce(public.finops_can_manage_finance(), false) then");
   assert.ok(i > 0, "لا فرع لغير الإدارة في الحذف");
   const jEnd = del.indexOf("-- حدود الاعتماد يحذفها المالك", i);
   assert.ok(jEnd > i, "تعذّر عزل فرع غير الإدارة في الحذف");

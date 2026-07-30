@@ -6,11 +6,15 @@
 // لكنّها **لا تعتمد** على ذلك في المنع: كلّ استدعاء لاحق مُبوَّب على الخادم،
 // وإخفاء تبويب ليس تفويضًا. لو زُوّرت الحالة في المتصفّح لعادت 42501 كما هي.
 //
-// ثلاث طبقات رؤية متمايزة عمدًا:
-//   • can_view         → المركز المالي (تكاليف · ميزانيات · ذمم · شراء · مورّدون).
-//   • can_view_profit  → ★ أضيق ★ العقود والإيراد والاشتراكات والهوامش والربحية.
-//   • can_request فقط  → شاشة «طلباتي» وحدها، بلا رقم واحد من مال الشركة.
-// العميل لا يصل إلى هنا إطلاقًا: finops_can_view يشترط is_staff().
+// ★ V1: المالية الحسّاسة للمالك وحده ★ — أربعة أسطح منفصلة، لا سطح واحد
+// تُخفى منه أعمدة (إخفاء عمود ليس تفويضًا، والخادم وحده يفصل):
+//   • can_view_finance_sensitive → المركز كاملًا (تكاليف · ميزانيات · ذمم ·
+//     شراء · مورّدون · عقود · إيراد · ربحية · تصدير شامل). المالك فقط.
+//   • can_view_collections       → سطح التحصيل المستقلّ: عميل · فاتورة ·
+//     مستحقّ · محصَّل · متبقٍّ · حالة · ملاحظات. لا تكلفة ولا ربح ولا ميزانية.
+//   • can_approve_expense        → الاعتمادات وحدها: الطلب الذي يقرّر فيه.
+//   • can_request فقط            → «طلباتي» وحدها، بلا رقم واحد من مال الشركة.
+// العميل لا يصل إلى أيّ منها: كلّ بوّابة تشترط is_staff() على الخادم.
 // ════════════════════════════════════════════════════════════════════════════
 import { useState } from "react";
 import {
@@ -35,6 +39,7 @@ import {
 } from "./FinAtoms";
 import { FORM_SPECS, FinForm, ReasonDialog, type FormSpec } from "./FinForms";
 import FinMyRequests from "./FinMyRequests";
+import FinCollectionsCenter from "./FinCollections";
 
 type TabKey =
   | "dashboard" | "costs" | "budgets" | "purchases" | "receivables"
@@ -70,7 +75,33 @@ export default function FinanceCenter() {
   }
   // موظّف بلا صلاحية مالية: شاشة طلباته وحدها. ليست نسخة مقصوصة من المركز،
   // بل سطح مختلف يقرأ دوالّ أخرى لا تعرف عن مال الشركة شيئًا.
-  if (!a.can_view) {
+  if (!a.can_view_finance_sensitive) {
+    // سطح التحصيل: شاشة قائمة بذاتها تقرأ دالّة مبنيّة لغرضها، ولا تعرف عن
+    // التكاليف ولا الربحية شيئًا — لا في الواجهة ولا في القاعدة.
+    if (a.can_view_collections) {
+      return (
+        <RestrictedSurface
+          message={a.message}
+          extra={a.can_request ? <FinMyRequests /> : null}
+        >
+          <FinCollectionsCenter
+            canRecord={a.can_record_collection}
+            canExport={a.can_export_collections}
+          />
+        </RestrictedSurface>
+      );
+    }
+    // المعتمِد: الاعتمادات وحدها. لا لوحة ولا تكاليف ولا ذمم.
+    if (a.can_approve_expense) {
+      return (
+        <RestrictedSurface
+          message={a.message}
+          extra={a.can_request ? <FinMyRequests /> : null}
+        >
+          <ApprovalsOnly />
+        </RestrictedSurface>
+      );
+    }
     if (!a.can_request) return <Denied message={a.message ?? "لا تملك صلاحية في المركز المالي."} />;
     return (
       <div className="space-y-4">
@@ -82,6 +113,30 @@ export default function FinanceCenter() {
   return <FinanceTabs a={a} />;
 }
 
+/** غلاف يقول للمستخدم حدود سطحه صراحةً بدل أن يتركه يظنّ أنّ الباقي معطوب. */
+function RestrictedSurface({
+  message, children, extra,
+}: { message: string | null; children: React.ReactNode; extra?: React.ReactNode }) {
+  return (
+    <div className="space-y-5">
+      {message && <p className="text-[11px] text-stone-500 leading-6">{message}</p>}
+      {children}
+      {extra && (
+        <div className="border-t border-stone-800 pt-4">
+          <h3 className="text-xs text-stone-400 mb-2">طلباتي</h3>
+          {extra}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** الاعتمادات وحدها — نفس المكوّن، بلا أيّ قدرة إدارية. */
+function ApprovalsOnly() {
+  const [tick, setTick] = useState(0);
+  return <ApprovalsTab canApprove canManage={false} tick={tick} onChange={() => setTick((t) => t + 1)} />;
+}
+
 function FinanceTabs({ a }: { a: FinAccess }) {
   const [tab, setTab] = useState<TabKey>("dashboard");
   const [tick, setTick] = useState(0);
@@ -90,9 +145,9 @@ function FinanceTabs({ a }: { a: FinAccess }) {
   const lookups = look.st?.state === "ok" ? look.st.data : null;
 
   const visible = TABS.filter((t) => {
-    if (t.key === "profit") return a.can_view_profit;
-    if (t.key === "audit" || t.key === "zoho") return a.can_manage;
-    if (t.key === "settings") return a.can_manage;
+    if (t.key === "profit") return a.can_view_finance_sensitive;
+    if (t.key === "audit" || t.key === "zoho") return a.can_manage_finance;
+    if (t.key === "settings") return a.can_manage_finance;
     return true;
   });
 
@@ -118,14 +173,14 @@ function FinanceTabs({ a }: { a: FinAccess }) {
         </div>
       </Scroller>
 
-      {tab === "dashboard" && <DashboardTab tick={tick} canExport={a.can_export} />}
-      {tab === "costs" && <CostsTab lookups={lookups} canManage={a.can_manage} tick={tick} onChange={refresh} />}
-      {tab === "budgets" && <BudgetsTab lookups={lookups} canManage={a.can_manage} tick={tick} onChange={refresh} />}
-      {tab === "purchases" && <PurchasesTab lookups={lookups} canManage={a.can_manage} tick={tick} onChange={refresh} />}
-      {tab === "receivables" && <ReceivablesTab lookups={lookups} canManage={a.can_manage_receivables} tick={tick} onChange={refresh} />}
-      {tab === "profit" && <ProfitTab lookups={lookups} canManage={a.can_manage} tick={tick} onChange={refresh} />}
-      {tab === "approvals" && <ApprovalsTab canApprove={a.can_approve} canManage={a.can_manage} tick={tick} onChange={refresh} />}
-      {tab === "suppliers" && <SuppliersTab lookups={lookups} canManage={a.can_manage} tick={tick} onChange={refresh} />}
+      {tab === "dashboard" && <DashboardTab tick={tick} canExport={a.can_export_sensitive} />}
+      {tab === "costs" && <CostsTab lookups={lookups} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
+      {tab === "budgets" && <BudgetsTab lookups={lookups} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
+      {tab === "purchases" && <PurchasesTab lookups={lookups} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
+      {tab === "receivables" && <ReceivablesTab lookups={lookups} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
+      {tab === "profit" && <ProfitTab lookups={lookups} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
+      {tab === "approvals" && <ApprovalsTab canApprove={a.can_approve_expense} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
+      {tab === "suppliers" && <SuppliersTab lookups={lookups} canManage={a.can_manage_finance} tick={tick} onChange={refresh} />}
       {tab === "settings" && <SettingsTab lookups={lookups} tick={tick} onChange={refresh} />}
       {tab === "audit" && <AuditTab tick={tick} />}
       {tab === "zoho" && <ZohoTab tick={tick} onChange={refresh} />}

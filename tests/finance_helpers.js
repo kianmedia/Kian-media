@@ -61,20 +61,47 @@ const MONEY_TABLES = [
   "fin_purchase_requests", "fin_purchase_orders", "fin_costs",
 ];
 
-/** الجداول التي لا يجوز لغير المالية رؤية صفّ منها إطلاقًا. */
-const FINANCE_ONLY_TABLES = [
+/**
+ * ★ الجداول الحسّاسة ★ — للمالك وحده، بلا استثناء وبلا مفتاح.
+ * كلّ جدول هنا يحمل طرفًا من معادلة (إيراد − تكلفة). منح أيّ دور جدولين منها
+ * = عودة الثغرة المُثبَتة، ولذلك تُختبر القائمة كوحدة واحدة لا جدولًا جدولًا.
+ */
+const SENSITIVE_TABLES = [
   "fin_cost_centers", "fin_expense_categories", "fin_suppliers", "fin_budgets",
-  "fin_budget_lines", "fin_receivables", "fin_collections", "fin_payment_milestones",
-  "fin_approval_thresholds", "fin_purchase_orders", "fin_purchase_order_items", "fin_costs",
+  "fin_budget_lines", "fin_contracts", "fin_revenue", "fin_retainers", "fin_receivables",
+  "fin_collections", "fin_payment_milestones", "fin_approval_thresholds",
+  "fin_purchase_orders", "fin_purchase_order_items", "fin_costs",
 ];
+/** الاسم القديم يبقى مرادفًا كي لا يفقد اختبار قائم معناه. */
+const FINANCE_ONLY_TABLES = SENSITIVE_TABLES;
 
-/** ★ الجداول التي تكشف الهامش ★ — بوّابتها أضيق: can_view_profit. */
+/** جداول طرف الإيراد — صارت ضمن الحسّاس نفسه في V1. */
 const PROFIT_TABLES = ["fin_contracts", "fin_revenue", "fin_retainers"];
 
+/** ★ البوّابة الحسّاسة ومشتقّاتها — لا واحدة منها تُفتح بمفتاح. ★ */
+const SENSITIVE_PREDICATES = [
+  "finops_can_view_finance_sensitive", "finops_can_manage_finance",
+  "finops_can_manage_suppliers", "finops_can_export_sensitive",
+];
+/** بوّابات قابلة للمنح بمفتاح — ولا تلمس أيّ جدول حسّاس. */
+const GRANTABLE_PREDICATES = [
+  "finops_can_view_collections", "finops_can_record_collection",
+  "finops_can_approve_expense", "finops_can_export_collections",
+];
+const LEGACY_PREDICATES = [
+  "finops_can_view", "finops_can_manage", "finops_can_approve",
+  "finops_can_view_profit", "finops_can_manage_receivables", "finops_can_export",
+];
 const PREDICATES = [
-  "finops_perm", "finops_is_finance_role", "finops_can_view", "finops_can_manage",
-  "finops_can_approve", "finops_can_view_profit", "finops_can_manage_receivables",
-  "finops_can_export", "finops_can_request", "finops_is_client",
+  "finops_perm", "finops_is_finance_role", ...SENSITIVE_PREDICATES,
+  ...GRANTABLE_PREDICATES, ...LEGACY_PREDICATES,
+  "finops_can_request", "finops_is_client",
+];
+/** كلّ ما يجب أن يبقى محجوبًا عن دور التحصيل مهما تغيّر الكود. */
+const COST_SIDE_TOKENS = [
+  "fin_costs", "fin_budgets", "fin_budget_lines", "fin_contracts", "fin_revenue",
+  "fin_retainers", "fin_suppliers", "fin_purchase_orders", "fin_purchase_order_items",
+  "finops_profit_core", "finops_variance_core", "finops_contract_state",
 ];
 
 /** دوالّ داخلية لا تُمنح لأحد (منحها يسرّب الهامش أو يتجاوز التدقيق). */
@@ -88,7 +115,8 @@ const READ_FNS = [
   "finops_access", "finops_lookups", "finops_request_lookups", "finops_budgets_list",
   "finops_budget_variance", "finops_costs_list", "finops_suppliers_list",
   "finops_expense_requests_list", "finops_my_requests", "finops_purchase_list",
-  "finops_receivables", "finops_profitability", "finops_dashboard", "finops_audit_list",
+  "finops_receivables", "finops_collections_list", "finops_collections_summary",
+  "finops_profitability", "finops_dashboard", "finops_audit_list",
   "finops_export", "finops_zoho_diagnostic",
 ];
 
@@ -123,6 +151,8 @@ function tableDef(name, src = SQL) {
 module.exports = {
   ROOT, read, SQL, PREFLIGHT, POSTCHECK, ROLLBACK, TS,
   funcBody, funcDecl, section, tableDef,
-  TABLES, MONEY_TABLES, FINANCE_ONLY_TABLES, PROFIT_TABLES,
-  PREDICATES, INTERNAL_FNS, READ_FNS, WRITE_FNS, PUBLIC_FNS, GATED_READ_FNS,
+  TABLES, MONEY_TABLES, FINANCE_ONLY_TABLES, SENSITIVE_TABLES, PROFIT_TABLES,
+  PREDICATES, SENSITIVE_PREDICATES, GRANTABLE_PREDICATES, LEGACY_PREDICATES,
+  COST_SIDE_TOKENS,
+  INTERNAL_FNS, READ_FNS, WRITE_FNS, PUBLIC_FNS, GATED_READ_FNS,
 };

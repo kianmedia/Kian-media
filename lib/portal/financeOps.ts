@@ -26,7 +26,11 @@ export const FIN_MIGRATION_AR =
   "الميزة بانتظار تفعيل قاعدة البيانات — لم يُشغَّل بعد docs/finance_profitability_RUNME.sql. لا يوجد خطأ في صلاحياتك.";
 
 export const FIN_DENIED_AR =
-  "البيانات المالية للشركة مقصورة على المالك وفريق المالية. هذا منع مقصود لا عطل.";
+  "البيانات المالية الحسّاسة (التكاليف والميزانيات والربحية) مقصورة على المالك. هذا منع مقصود لا عطل.";
+
+/** رسالة سطح التحصيل — تقول ما يُتاح وما لا يُتاح بلا مواربة. */
+export const FIN_COLLECTIONS_SCOPE_AR =
+  "صلاحيتك تحصيل: العميل والفاتورة والمستحقّ والمحصَّل والمتبقّي وحالة التحصيل. التكاليف والربحية والميزانيات وأسعار المورّدين مقصورة على المالك.";
 
 export type FinState<T> =
   | { state: "ok"; data: T }
@@ -103,14 +107,24 @@ export function finReasonAr(reason: string): string {
 export interface FinAccess {
   ok: boolean;
   authenticated: boolean;
+  // ★ النموذج الصريح (V1: الحسّاس للمالك وحده) ★
+  can_view_finance_sensitive: boolean;
+  can_manage_finance: boolean;
+  can_manage_suppliers: boolean;
+  can_view_collections: boolean;
+  can_record_collection: boolean;
+  can_approve_expense: boolean;
+  can_export_sensitive: boolean;
+  can_export_collections: boolean;
+  can_request: boolean;
+  is_client: boolean;
+  // أسماء متوارثة — مرادفات يعيدها الخادم للتوافق، لا صلاحية إضافية.
   can_view: boolean;
   can_manage: boolean;
   can_approve: boolean;
   can_view_profit: boolean;
   can_manage_receivables: boolean;
   can_export: boolean;
-  can_request: boolean;
-  is_client: boolean;
   user_id: string | null;
   message: string | null;
 }
@@ -120,7 +134,7 @@ export type FinCostType =
   | "production_purchase" | "logistics" | "software" | "other";
 export type FinCommitment = "committed" | "actual";
 export type FinExportDataset =
-  | "costs" | "receivables" | "collections" | "budget_lines"
+  | "costs" | "receivables" | "collections" | "collections_queue" | "budget_lines"
   | "expense_requests" | "purchase_orders" | "revenue";
 export type FinDeleteKind =
   | "cost_center" | "category" | "supplier" | "budget" | "budget_line" | "contract"
@@ -242,6 +256,23 @@ export interface FinReceivables {
     overdue_gross: number; overdue_count: number;
     aging: Record<string, number>;
   };
+  note: string;
+}
+/**
+ * ★ قائمة التحصيل ★ — سطح مبنيّ لغرضه لا نسخة مقصوصة من الذمم.
+ * ما فيه هو كلّ ما يراه دور التحصيل: عميل · مرجع فاتورة · مستحقّ · استحقاق ·
+ * محصَّل · متبقٍّ · حالة · ملاحظات. لا تكلفة ولا ربح ولا ميزانية ولا مورّد —
+ * لا هنا ولا عبر أيّ جدول، فالوصول الجدوليّ لهذا الدور ملغًى في القاعدة.
+ */
+export interface FinCollections {
+  ok: boolean;
+  rows: FinRow[];
+  totals: {
+    due_gross: number; collected_gross: number; outstanding_gross: number;
+    overdue_gross: number; overdue_count: number; open_count: number;
+    aging: Record<string, number>;
+  };
+  scope: "collections_only";
   note: string;
 }
 export interface FinProfitability {
@@ -396,7 +427,16 @@ export const finPurchaseList = (filters: Record<string, unknown> = {}) =>
 export const finReceivables = (filters: Record<string, unknown> = {}) =>
   prpc<unknown>("finops_receivables", { p_filters: filters }).then((r) => toState<FinReceivables>(r));
 
-/** ★ أضيق بوّابة ★ — يُرفض على الخادم بلا finance_ops.view_profit. */
+/** قائمة التحصيل — بوّابة finance_ops.collections_view. لا تلمس تكلفةً. */
+export const finCollectionsList = (filters: Record<string, unknown> = {}) =>
+  prpc<unknown>("finops_collections_list", { p_filters: filters })
+    .then((r) => toState<FinCollections>(r));
+
+export const finCollectionsSummary = () =>
+  prpc<unknown>("finops_collections_summary", {})
+    .then((r) => toState<{ ok: boolean; totals: FinCollections["totals"]; note: string }>(r));
+
+/** ★ أضيق بوّابة ★ — الربحية للمالك وحده على الخادم. */
 export const finProfitability = (filters: Record<string, unknown> = {}) =>
   prpc<unknown>("finops_profitability", { p_filters: filters }).then((r) => toState<FinProfitability>(r));
 

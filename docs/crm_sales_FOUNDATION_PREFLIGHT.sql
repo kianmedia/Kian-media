@@ -93,7 +93,17 @@ select
   (current_setting('standard_conforming_strings') = 'on') as standard_strings_on,
   (upper(current_setting('server_encoding')) = 'UTF8') as utf8_encoding;
 
--- ─── 10) قيد notifications.type — يفسّر لماذا الإشعار معزول باستثناء ─────
+-- ─── 10) ★ من يملك اعتماد الأهداف والعمولات؟ اعرفه قبل التشغيل ──────────
+-- الاعتماد يمرّ بـcrm_is_owner_role() = is_owner() OR is_admin() — ولا يُمنح
+-- بمفتاح صلاحية إطلاقًا. إن كان is_admin() واسعًا عندك (كلّ موظّفي الإدارة مثلًا)
+-- فهؤلاء كلّهم معتمِدون فعليًّا، وهذا قرار تشغيليّ يجب أن تراه **قبل** التشغيل
+-- لا بعد أوّل هدف يُعتمَد بلا علمك.
+-- متوقّع: توثيقيّ — اقرأ الشرطين وقرّر.
+select f.sig, pg_get_functiondef(to_regprocedure(f.sig)) as definition
+from (values ('public.is_owner()'), ('public.is_admin()')) f(sig)
+where to_regprocedure(f.sig) is not null;
+
+-- ─── 11) قيد notifications.type — يفسّر لماذا الإشعار معزول باستثناء ─────
 -- متوقّع: توثيقيّ. قيد قديم لن يقبل crm_opportunity_won، ولذلك crm_notify
 -- تبتلع الفشل حتى لا تسقط صفقة صحيحة بسبب إشعار.
 select conname, pg_get_constraintdef(oid) as def

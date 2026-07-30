@@ -136,8 +136,10 @@ test("التصدير من الواجهة: مجموعات الخادم نفسها
   for (const d of uiSets.filter((k) => serverSets.includes(k))) {
     assert.ok(serverSets.includes(d), `مجموعة تصدير ${d} غير معروفة للخادم`);
   }
+  const COLLECTIONS_UI = read("components/portal/finance/FinCollections.tsx");
   for (const d of serverSets) {
-    assert.ok(CENTER.includes(`"${d}"`), `مجموعة ${d} معرَّفة في الخادم وغائبة عن الواجهة`);
+    assert.ok(CENTER.includes(`"${d}"`) || COLLECTIONS_UI.includes(`"${d}"`),
+      `مجموعة ${d} معرَّفة في الخادم وغائبة عن الواجهة`);
   }
   assert.match(TS, /finExportCsv/, "لا بناء CSV");
   assert.match(CENTER, /URL\.createObjectURL/, "لا تنزيل فعليّ للملفّ");

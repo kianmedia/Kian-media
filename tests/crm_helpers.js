@@ -48,7 +48,7 @@ const TABLES = [
   "crm_competitors", "crm_lead_score_rules", "crm_leads", "crm_pipelines", "crm_stages",
   "crm_opportunities", "crm_stage_history", "crm_activities", "crm_targets",
   "crm_commission_plans", "crm_commission_assignments", "crm_commission_records",
-  "crm_import_batches", "crm_audit",
+  "crm_import_batches", "crm_audit", "crm_approval_requests",
 ];
 
 /** المُسنَدات — كلّها يجب أن تعيد boolean صريحًا ولا تعيد NULL أبدًا. */
@@ -58,7 +58,7 @@ const PREDICATES = [
   "crm_can_manage_targets", "crm_can_manage_pipeline", "crm_can_manage_scoring",
   "crm_can_import", "crm_can_view_team", "crm_can_see_owner", "crm_can_read_lead",
   "crm_can_edit_lead", "crm_can_read_opportunity", "crm_can_edit_opportunity",
-  "crm_can_read_activity",
+  "crm_can_read_activity", "crm_can_approve_changes",
 ];
 
 /** كلّ دالّة كتابة عامّة: بوّابة جلسة + منع صريح + تدقيق. */
@@ -71,14 +71,14 @@ const WRITE_FNS = [
   "crm_score_rule_upsert", "crm_settings_set", "crm_team_upsert", "crm_team_member_set",
   "crm_target_upsert", "crm_target_delete", "crm_commission_recalc",
   "crm_commission_plan_upsert", "crm_commission_assign", "crm_commission_set_status",
-  "crm_import_leads",
+  "crm_import_leads", "crm_approval_decide", "crm_approval_withdraw",
 ];
 
 const READ_FNS = [
   "crm_access", "crm_lookups", "crm_leads_list", "crm_lead_detail", "crm_duplicates",
   "crm_opportunities_list", "crm_opportunity_detail", "crm_pipeline_board", "crm_forecast",
   "crm_stale_alerts", "crm_activities_list", "crm_targets_list", "crm_commission_list",
-  "crm_dashboard", "crm_export", "crm_audit_list",
+  "crm_dashboard", "crm_export", "crm_audit_list", "crm_approvals_list", "crm_import_preview",
 ];
 
 /** الدوالّ الداخلية — لا تُمنح لـauthenticated ولا لـanon. */
@@ -87,6 +87,8 @@ const INTERNAL_FNS = [
   "crm_setting_int", "crm_setting_text", "crm_project_label", "crm_quote_ref",
   "crm_next_code", "crm_score_core", "crm_duplicate_core", "crm_readiness_core",
   "crm_visible_leads", "crm_visible_opportunities", "crm_commission_recalc_core",
+  "crm_approval_submit_core", "crm_target_apply_core", "crm_commission_plan_apply_core",
+  "crm_commission_assign_core",
 ];
 
 /** أسماء أشياء منصّة المشاريع التي لا يجوز أن تُكتب من هنا. */

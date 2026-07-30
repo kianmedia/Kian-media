@@ -35,12 +35,21 @@
 -- أيّ لمسة على ماليات المنصّة.
 --
 -- ─── الصلاحيات: هذا أخطر موديول في البرنامج ────────────────────────────────
---   المالك/الأدمن            → كلّ شيء.
---   دور المالية (staff_role='finance') أو مفتاح صريح → المركز المالي.
+--   ★ قاعدة V1 الحاكمة: لا يُمنح دورٌ واحد جدولين يمكن طرح أحدهما من الآخر
+--     لاستنتاج الربحية. القسمة أدناه مشتقّة من هذه القاعدة لا من الشاشات.
+--   المالك (is_owner)        → كلّ شيء: التكاليف · الملتزَم به · الميزانيات ·
+--                              مجمل الربح · صافي الربح التقديريّ · الهوامش ·
+--                              تكاليف الطاقم والمستقلّين · أسعار المورّدين ·
+--                              مشتريات الإنتاج · الذمم · التصدير الشامل.
+--   موظّف التحصيل المصرَّح     → العميل · رقم/مرجع الفاتورة · المستحقّ · تاريخ
+--                              الاستحقاق · المحصَّل · المتبقّي · الحالة ·
+--                              ملاحظات التحصيل. **ولا شيء غير ذلك**، وعبر
+--                              finops_collections_list وحدها: لا وصول جدوليّ.
+--   المعتمِد                  → الطلب الذي يقرّر فيه لا غير.
 --   الموظّف العاديّ           → **طلب الصرف الخاصّ به وحده**: يرفعه ويرى حالته.
---                              لا ميزانية، لا تكاليف غيره، لا هوامش، لا ربحية.
 --   العميل / الزائر           → **لا شيء إطلاقًا**. لا قراءة ولا كتابة ولا وجود.
---   الافتراض العمليّ: الواجهة ستُتجاوَز. المنع هنا في القاعدة وحدها.
+--   الافتراض العمليّ: الواجهة ستُتجاوَز، وPostgREST سيُستدعى مباشرةً. المنع
+--   هنا في القاعدة وحدها، وإخفاء تبويب ليس تفويضًا.
 --
 -- ─── قواعد ملزمة ──────────────────────────────────────────────────────────
 --   • كلّ مُسنَد يعيد boolean صريحًا ولا يعيد NULL أبدًا (حادثة fail-open سابقة).
@@ -101,13 +110,19 @@ begin
   insert into public.permissions (key, category, sensitivity, sort_order, label_ar, label_en)
   select v.key, 'finance', v.sens, v.ord, v.ar, v.en
   from (values
-    (1300,'finance_ops.view',               'sensitive','عرض المركز المالي',            'View finance centre'),
-    (1310,'finance_ops.manage',             'sensitive','إدارة البيانات المالية',        'Manage finance data'),
-    (1320,'finance_ops.approve',            'sensitive','اعتماد الطلبات المالية',        'Approve finance requests'),
-    (1330,'finance_ops.view_profit',        'sensitive','عرض الربحية والهوامش',          'View profitability & margins'),
-    (1340,'finance_ops.manage_receivables', 'sensitive','إدارة الذمم والتحصيل',          'Manage receivables & collection'),
-    (1350,'finance_ops.export',             'sensitive','تصدير البيانات المالية',        'Export financial data'),
-    (1360,'finance_ops.request',            'normal',   'رفع طلب صرف شخصيّ',             'Submit own expense request')
+    -- ★ مفاتيح V1 القابلة للمنح فعلًا — وهي وحدها التي تفتح شيئًا ★
+    (1300,'finance_ops.collections_view',   'sensitive','عرض قائمة التحصيل (بلا تكاليف ولا ربحية)', 'View collections queue (no costs, no profit)'),
+    (1310,'finance_ops.collections_record', 'sensitive','تسجيل تحصيل ومتابعة سداد',      'Record a collection payment'),
+    (1320,'finance_ops.export_collections', 'sensitive','تصدير قائمة التحصيل وحدها',     'Export the collections queue only'),
+    (1330,'finance_ops.approve',            'sensitive','اعتماد طلبات الصرف والشراء',    'Approve expense & purchase requests'),
+    (1340,'finance_ops.request',            'normal',   'رفع طلب صرف شخصيّ',             'Submit own expense request'),
+    -- ★ مفاتيح مُعطَّلة عمدًا في V1 — منحُها لا يفتح شيئًا، والاسم يقول ذلك ★
+    --   السبب في §2: المالية الحسّاسة للمالك وحده، ولا مفتاح يتجاوز ذلك.
+    (1390,'finance_ops.view',               'sensitive','[معطَّل في V1 — للمالك وحده] عرض المركز المالي',   '[Disabled in V1 — owner only] View finance centre'),
+    (1391,'finance_ops.manage',             'sensitive','[معطَّل في V1 — للمالك وحده] إدارة البيانات المالية','[Disabled in V1 — owner only] Manage finance data'),
+    (1392,'finance_ops.view_profit',        'sensitive','[معطَّل في V1 — للمالك وحده] عرض الربحية والهوامش',  '[Disabled in V1 — owner only] View profitability'),
+    (1393,'finance_ops.manage_receivables', 'sensitive','[معطَّل في V1 — للمالك وحده] إدارة الذمم',          '[Disabled in V1 — owner only] Manage receivables'),
+    (1394,'finance_ops.export',             'sensitive','[معطَّل في V1 — للمالك وحده] التصدير المالي الشامل','[Disabled in V1 — owner only] Comprehensive export')
   ) as v(ord, key, sens, ar, en)
   on conflict (key) do update set
     category = excluded.category, sensitivity = excluded.sensitivity,
@@ -117,6 +132,32 @@ end $perm$;
 -- ════════════════════════════════════════════════════════════════════════════
 -- §2) المُسنَدات — خاصّة بالموديول. لا واحد منها يعيد NULL.
 --     ⚠️ لا تُبنى على can_manage_projects: مدير المشاريع ليس مديرًا ماليًّا.
+--
+-- ★★ نموذج V1: «المالية الحسّاسة للمالك وحده» ★★
+-- المبدأ الحاكم — وهو أهمّ سطر في هذا الملفّ:
+--   **لا يُمنح دورٌ واحد جدولين يمكن طرح أحدهما من الآخر لاستنتاج الربحية.**
+-- الثغرة المُثبَتة في النسخة السابقة: حاملُ finance_ops.view كان يقرأ
+-- fin_receivables.amount_net (إيراد مفوتَر) ويقرأ fin_costs، فيطرح ويحصل على
+-- هامش تقريبيّ بلا مفتاح الربحية. البوّابة التي بُنيت لحماية الهامش كانت
+-- تُلتَفّ من حولها بجمعٍ بسيط. عولجت بإعادة اشتقاق القسمة من المبدأ لا برقعة:
+--
+--   المالك (is_owner) وحده يرى: التكاليف · الملتزَم به · الميزانيات · مجمل
+--   الربح · صافي الربح التقديريّ · الربحية والهوامش · تكاليف الموظّفين
+--   والمستقلّين · أسعار المورّدين · مشتريات الإنتاج · الذمم بكامل حقولها ·
+--   التصدير المالي الشامل.
+--
+--   موظّف التحصيل المصرَّح له يرى **فقط**: العميل · رقم/مرجع الفاتورة · المبلغ
+--   المستحقّ · تاريخ الاستحقاق · ما حُصِّل · المتبقّي · حالة التحصيل · ملاحظات
+--   التحصيل. ولا يرى: fin_costs ولا الربح ولا الهامش ولا أسعار المورّدين ولا
+--   تكاليف الطاقم ولا الميزانيات ولا اللوحة المالية الكاملة.
+--
+-- وسيلة التنفيذ: موظّف التحصيل **لا يملك وصولًا جدوليًّا أصلًا** — لا سطر واحد
+-- من fin_receivables يصله عبر RLS. ما يصله يمرّ بدالّة مبنيّة لغرضه
+-- (finops_collections_list) تُعيد قائمة أعمدة بيضاء مكتوبة حرفيًّا. فحتى لو
+-- استُدعيت PostgREST مباشرةً على أيّ جدول ماليّ، النتيجة صفر صفوف.
+-- ⚠️ ولا يُمنح finance_ops.collections_view وfinance_ops.approve لشخص واحد إن
+--    أردت الفصل تامًّا: قائمة الاعتماد تحمل مبالغ مصروف (تكلفة). القاعدة تسمح
+--    بالجمع لأنّ الاعتماد يستحيل بلا رؤية المبلغ، والمصفوفة تنصّ على الفصل.
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- جسر مكتشَف إلى محرّك الصلاحيات. غيابه = false (fail-closed) لا استثناء.
@@ -133,81 +174,147 @@ exception when others then
   return false;                                        -- fail-closed، لا fail-open
 end $$;
 
--- دور المالية المُعلَن في الملفّ الشخصيّ. مطابق لشكل civ_can_finance() القائم.
+-- دور المالية المُعلَن في الملفّ الشخصيّ. يبقى معرَّفًا للتوافق **ولا يُستعمل
+-- في أيّ بوّابة**: قيد CHECK على profiles.staff_role لا يسمح بالقيمة 'finance'
+-- أصلًا (super_admin·manager·support·editor·sales·hr·readonly)، فبناء صلاحية
+-- عليه كان بوّابةً ميتة تُقرأ كأنّها حيّة. البوّابات أدناه تقول is_owner صراحةً.
 create or replace function public.finops_is_finance_role() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce((auth.uid() is not null) and coalesce(public.staff_role(), '') = 'finance', false);
 $$;
 
--- من يفتح المركز المالي أصلًا. العميل والزائر خارج البوّابة بنيويًّا.
-create or replace function public.finops_can_view() returns boolean
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★ (١) البوّابة الحسّاسة — المالك وحده. لا مفتاح، ولا دور، ولا استثناء.      ★
+--   is_owner() = account_type='admin' (الحسابان المحميّان) أو staff_role='super_admin'.
+--   لاحظ ما ليس هنا: لا finops_perm ولا staff_role. غيابهما **مقصود** ومُختبَر
+--   ثابتًا في §9: أيّ مفتاح يُمنح لاحقًا لا يستطيع فتح هذه البوّابة.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.finops_can_view_finance_sensitive() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
     (auth.uid() is not null)
     and coalesce(public.is_staff(), false)
-    and (coalesce(public.is_owner(), false)
-      or coalesce(public.is_admin(), false)
-      or coalesce(public.finops_is_finance_role(), false)
-      or coalesce(public.finops_perm('finance_ops.view'), false)),
+    and coalesce(public.is_owner(), false),
   false);
 $$;
 
-create or replace function public.finops_can_manage() returns boolean
+-- الكتابة في البيانات الحسّاسة (تكاليف · ميزانيات · عقود · إيراد · اشتراكات ·
+-- ذمم · أوامر شراء · مراكز تكلفة · بنود · حدود اعتماد · Zoho): المالك وحده.
+create or replace function public.finops_can_manage_finance() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
     (auth.uid() is not null)
-    and coalesce(public.is_staff(), false)
-    and (coalesce(public.is_owner(), false)
-      or coalesce(public.is_admin(), false)
-      or coalesce(public.finops_is_finance_role(), false)
-      or coalesce(public.finops_perm('finance_ops.manage'), false)),
+    and coalesce(public.finops_can_view_finance_sensitive(), false),
   false);
 $$;
 
-create or replace function public.finops_can_approve() returns boolean
+-- المورّدون: الاسم والسعر الافتراضيّ وبيانات السداد في جدول واحد، وسعر المورّد
+-- تكلفةٌ صريحة. لذلك إدارتهم داخل البوّابة الحسّاسة ولا تُمنح بمفتاح في V1.
+create or replace function public.finops_can_manage_suppliers() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (auth.uid() is not null)
+    and coalesce(public.finops_can_view_finance_sensitive(), false),
+  false);
+$$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★ (٢) بوّابتا التحصيل — قابلتان للمنح، ولا تلمسان تكلفةً واحدة.            ★
+--   ما تفتحانه: finops_collections_list / _summary / _export فقط. لا وصول
+--   جدوليّ: RLS لا تمنح موظّف التحصيل صفًّا واحدًا من أيّ جدول ماليّ.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.finops_can_view_collections() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
     (auth.uid() is not null)
     and coalesce(public.is_staff(), false)
-    and (coalesce(public.is_owner(), false)
-      or coalesce(public.is_admin(), false)
-      or coalesce(public.finops_is_finance_role(), false)
+    and (coalesce(public.finops_can_view_finance_sensitive(), false)
+      or coalesce(public.finops_perm('finance_ops.collections_view'), false)),
+  false);
+$$;
+
+create or replace function public.finops_can_record_collection() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (auth.uid() is not null)
+    and coalesce(public.is_staff(), false)
+    and (coalesce(public.finops_can_view_finance_sensitive(), false)
+      or coalesce(public.finops_perm('finance_ops.collections_record'), false)),
+  false);
+$$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★ (٣) اعتماد المصروف — مفتاح مستقلّ. المعتمِد يرى مبلغ الطلب الذي يعتمده،
+--   ولا يرى سجلّ التكاليف ولا الميزانيات ولا الذمم: لا يجتمع لديه طرفا الطرح.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.finops_can_approve_expense() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (auth.uid() is not null)
+    and coalesce(public.is_staff(), false)
+    and (coalesce(public.finops_can_view_finance_sensitive(), false)
       or coalesce(public.finops_perm('finance_ops.approve'), false)),
   false);
 $$;
 
--- ★ الربحية والهوامش: أضيق بوّابة في النظام. الموظّف لا يراها بأيّ حال.
-create or replace function public.finops_can_view_profit() returns boolean
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★ (٤) التصدير مقسوم: شامل للمالك، وقائمة تحصيل وحدها لمن يُمنح مفتاحها.   ★
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.finops_can_export_sensitive() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
     (auth.uid() is not null)
-    and coalesce(public.is_staff(), false)
-    and (coalesce(public.is_owner(), false)
-      or coalesce(public.is_admin(), false)
-      or coalesce(public.finops_is_finance_role(), false)
-      or coalesce(public.finops_perm('finance_ops.view_profit'), false)),
+    and coalesce(public.finops_can_view_finance_sensitive(), false),
   false);
 $$;
 
-create or replace function public.finops_can_manage_receivables() returns boolean
+create or replace function public.finops_can_export_collections() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce(
     (auth.uid() is not null)
-    and (coalesce(public.finops_can_manage(), false)
-      or coalesce(public.finops_perm('finance_ops.manage_receivables'), false)),
+    and coalesce(public.finops_can_view_collections(), false)
+    and (coalesce(public.finops_can_view_finance_sensitive(), false)
+      or coalesce(public.finops_perm('finance_ops.export_collections'), false)),
   false);
+$$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★ (٥) أسماء متوارثة — تُبقى للتوافق وتُعاد تعريفها على المعنى الأضيق.      ★
+--   كانت هذه الأسماء تحمل المعنى الواسع الذي أنتج الثغرة. لم تُحذف لأنّ حزمًا
+--   أخرى تشير إليها (executive_reporting)، لكنّها الآن **مرادفات** لا تفتح
+--   أكثر ممّا يفتحه النموذج الجديد. لا تكتب بوّابةً جديدة عليها: استعمل
+--   الأسماء الصريحة أعلاه.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.finops_can_view() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(public.finops_can_view_finance_sensitive(), false);
+$$;
+
+create or replace function public.finops_can_manage() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(public.finops_can_manage_finance(), false);
+$$;
+
+create or replace function public.finops_can_approve() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(public.finops_can_approve_expense(), false);
+$$;
+
+create or replace function public.finops_can_view_profit() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(public.finops_can_view_finance_sensitive(), false);
+$$;
+
+-- ★ تحوّل جوهريّ: إنشاء ذمّة/دفعة عقد = كتابة إيراد مفوتَر ⇒ حسّاس (المالك).
+--   تسجيل تحصيل ⇒ finops_can_record_collection. لم يعودا مفتاحًا واحدًا.
+create or replace function public.finops_can_manage_receivables() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(public.finops_can_manage_finance(), false);
 $$;
 
 create or replace function public.finops_can_export() returns boolean
 language sql stable security definer set search_path = public as $$
-  select coalesce(
-    (auth.uid() is not null)
-    and coalesce(public.finops_can_view(), false)
-    and (coalesce(public.is_owner(), false)
-      or coalesce(public.is_admin(), false)
-      or coalesce(public.finops_is_finance_role(), false)
-      or coalesce(public.finops_perm('finance_ops.export'), false)),
-  false);
+  select coalesce(public.finops_can_export_sensitive(), false);
 $$;
 
 -- الموظّف: يرفع طلب صرفه هو ويرى حالته. لا شيء غير ذلك.
@@ -807,10 +914,19 @@ end $fk$;
 -- ════════════════════════════════════════════════════════════════════════════
 -- §4) RLS — تفعيل على كلّ جدول، وسياسات **قراءة فقط**.
 --     لا سياسة INSERT/UPDATE/DELETE على أيّ جدول: كلّ كتابة عبر RPC.
---     ثلاث طبقات رؤية متمايزة عمدًا:
---       (أ) بيانات المركز        → finops_can_view()        (مالك/مالية)
---       (ب) العقود والإيراد والاشتراكات → finops_can_view_profit()  (أضيق: الهامش)
---       (ج) طلب الموظّف نفسه      → requested_by = auth.uid()  (صفّه هو لا غير)
+--
+--     ★ ثلاث طبقات، وواحدة منها ليست هنا ★
+--       (أ) كلّ جدول ماليّ         → finops_can_view_finance_sensitive()  (المالك)
+--       (ب) صفّ الموظّف نفسه       → requested_by = auth.uid()، ومعه المعتمِد
+--       (ج) موظّف التحصيل          → **لا سياسة له إطلاقًا**. لا يقرأ جدولًا.
+--
+--     ⚠️ الطبقة (ج) هي الإصلاح: القسمة القديمة أعطت حاملَ finance_ops.view
+--     جدولَي fin_receivables وfin_costs معًا، والطرح بينهما يقارب الهامش بلا
+--     مفتاح ربحية. لا يكفي تضييق عمود ولا حجب لوحة: ما دام الوصول جدوليًّا،
+--     تُلتَفّ كلّ بوّابة عبر PostgREST مباشرةً. لذلك أُلغي وصول التحصيل
+--     الجدوليّ من أصله، ويمرّ عبر finops_collections_list وحدها (§6).
+--     النتيجة القابلة للاختبار: من يملك مفاتيح التحصيل ولا يملك is_owner()
+--     يرى **صفر صفوف** في أيّ جدول fin_* عبر أيّ استدعاء مباشر.
 -- ════════════════════════════════════════════════════════════════════════════
 do $rls$
 declare t text;
@@ -823,67 +939,66 @@ begin
     execute format('alter table public.%I enable row level security', t);
   end loop;
 
-  -- (أ) بيانات المركز المالي: المالك/المالية فقط.
+  -- (أ) كلّ جدول يحمل تكلفةً أو إيرادًا أو سعرًا أو ذمّة: المالك وحده.
+  --     ولاحظ أنّ fin_receivables وfin_collections وfin_payment_milestones هنا
+  --     ولم يُترك أيّ منها لبوّابة التحصيل: الوصول الجدوليّ إليها هو نصف
+  --     معادلة الهامش، ولن يُمنح لمن يملك — أو يستطيع أن يبلغ — النصف الآخر.
   foreach t in array array['fin_cost_centers','fin_expense_categories','fin_suppliers','fin_budgets',
-    'fin_budget_lines','fin_receivables','fin_collections','fin_payment_milestones',
-    'fin_approval_thresholds','fin_purchase_orders','fin_purchase_order_items','fin_costs'] loop
+    'fin_budget_lines','fin_contracts','fin_revenue','fin_retainers','fin_receivables',
+    'fin_collections','fin_payment_milestones','fin_approval_thresholds',
+    'fin_purchase_orders','fin_purchase_order_items','fin_costs'] loop
     execute format('drop policy if exists %I on public.%I', t || '_read', t);
-    execute format('create policy %I on public.%I for select to authenticated using (public.finops_can_view())',
-                   t || '_read', t);
+    execute format(
+      'create policy %I on public.%I for select to authenticated using (public.finops_can_view_finance_sensitive())',
+      t || '_read', t);
   end loop;
 
-  -- (ب) ★ ما يكشف الهامش: بوّابة أضيق ★ — قيمة العقد والإيراد المعترَف به
-  --     والاشتراكات، والهامش المحسوب في finops_profit_core، كلّها خلف
-  --     finance_ops.view_profit ولا تصل حاملَ finance_ops.view وحده.
-  --
-  --     ⚠️ متبقٍّ مُعلَن، لا تدّعِ غيره: حاملُ finance_ops.view يرى الذمم
-  --     (fin_receivables.amount_net = إيراد مفوتَر) ويرى fin_costs، فيستطيع
-  --     تقدير هامش تقريبيّ بالطرح. هذا مقبول لأنّ finance_ops.view نفسه مفتاح
-  --     حسّاس يمنحه المالك لموظّف مالية، ولأنّ إدارة التحصيل تتعطّل بدونه.
-  --     ما لا يستطيعه: قيمة العقد، الإيراد المعترَف به، الاشتراكات، ونسب
-  --     الهامش الرسمية. الموظّف العاديّ والعميل لا يبلغان أيًّا من الطرفين:
-  --     كلا الجدولين خلف finops_can_view() وهي is_staff + مفتاح صريح.
-  --     التفاصيل: docs/FINANCE_ROLE_MATRIX.md §المتبقّي المقبول.
-  foreach t in array array['fin_contracts','fin_revenue','fin_retainers'] loop
-    execute format('drop policy if exists %I on public.%I', t || '_read', t);
-    execute format('create policy %I on public.%I for select to authenticated using (public.finops_can_view_profit())',
-                   t || '_read', t);
-  end loop;
-
-  -- (ج) طلبات الموظّف: المالية ترى الكلّ، والموظّف يرى **صفّه هو** فقط.
+  -- (ب) طلبات الموظّف: المالك يرى الكلّ، والمعتمِد يرى ما يعتمده، والموظّف
+  --     يرى **صفّه هو** فقط. مبلغ الطلب ليس سجلّ تكاليف: صفّ واحد يخصّ قرارًا.
   drop policy if exists fin_expense_requests_read on public.fin_expense_requests;
   create policy fin_expense_requests_read on public.fin_expense_requests for select to authenticated
-    using (public.finops_can_view() or requested_by = auth.uid());
+    using (public.finops_can_view_finance_sensitive()
+        or public.finops_can_approve_expense()
+        or requested_by = auth.uid());
 
   drop policy if exists fin_purchase_requests_read on public.fin_purchase_requests;
   create policy fin_purchase_requests_read on public.fin_purchase_requests for select to authenticated
-    using (public.finops_can_view() or requested_by = auth.uid());
+    using (public.finops_can_view_finance_sensitive()
+        or public.finops_can_approve_expense()
+        or requested_by = auth.uid());
 
   drop policy if exists fin_expense_approvals_read on public.fin_expense_approvals;
   create policy fin_expense_approvals_read on public.fin_expense_approvals for select to authenticated
-    using (public.finops_can_view()
+    using (public.finops_can_view_finance_sensitive()
+        or public.finops_can_approve_expense()
         or exists (select 1 from public.fin_expense_requests r
                     where r.id = request_id and r.requested_by = auth.uid()));
 
   drop policy if exists fin_purchase_request_items_read on public.fin_purchase_request_items;
   create policy fin_purchase_request_items_read on public.fin_purchase_request_items for select to authenticated
-    using (public.finops_can_view()
+    using (public.finops_can_view_finance_sensitive()
+        or public.finops_can_approve_expense()
         or exists (select 1 from public.fin_purchase_requests r
                     where r.id = request_id and r.requested_by = auth.uid()));
 
-  -- المرفقات: المالية، أو من رفع الملفّ بنفسه (إيصاله هو).
+  -- المرفقات: المالك، أو من رفع الملفّ بنفسه (إيصاله هو)، أو المعتمِد لمرفق
+  --   طلبٍ فقط. لا يُفتح مرفق تكلفة ولا عقد ولا ذمّة لغير المالك، لأنّ اسم
+  --   الملفّ نفسه يسرّب رقمًا أحيانًا.
   drop policy if exists fin_attachments_read on public.fin_attachments;
   create policy fin_attachments_read on public.fin_attachments for select to authenticated
-    using (public.finops_can_view() or uploaded_by = auth.uid());
+    using (public.finops_can_view_finance_sensitive()
+        or uploaded_by = auth.uid()
+        or (public.finops_can_approve_expense()
+            and entity_type in ('expense_request','purchase_request')));
 
-  -- التدقيق وصندوق الصادر: الإدارة المالية فقط.
+  -- التدقيق وصندوق الصادر: المالك وحده — سجلّ التدقيق يحمل المبالغ في detail.
   drop policy if exists fin_audit_read on public.fin_audit;
   create policy fin_audit_read on public.fin_audit for select to authenticated
-    using (public.finops_can_manage());
+    using (public.finops_can_manage_finance());
 
   drop policy if exists fin_zoho_outbox_read on public.fin_zoho_outbox;
   create policy fin_zoho_outbox_read on public.fin_zoho_outbox for select to authenticated
-    using (public.finops_can_manage());
+    using (public.finops_can_manage_finance());
 end $rls$;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -1080,7 +1195,7 @@ begin
 end $$;
 
 -- ★ محرّك الربحية ★ — داخليّ بحت. لا يُمنح لأحد، ولا يُستدعى إلّا من غلاف
---   يفحص finops_can_view_profit() أوّلًا. صافي الربح **تقديريّ** ويُعلن ذلك.
+--   يفحص البوّابة الحسّاسة أوّلًا. صافي الربح **تقديريّ** ويُعلن ذلك.
 create or replace function public.finops_profit_core(p_project uuid, p_from date, p_to date)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v_rev numeric := 0; v_rev_net numeric := 0; v_direct numeric := 0; v_direct_net numeric := 0;
@@ -1142,20 +1257,35 @@ returns jsonb language sql stable security definer set search_path = public as $
   select jsonb_build_object(
     'ok', true,
     'authenticated', (auth.uid() is not null),
+    -- الأسماء الصريحة للنموذج الجديد
+    'can_view_finance_sensitive', coalesce(public.finops_can_view_finance_sensitive(), false),
+    'can_manage_finance',         coalesce(public.finops_can_manage_finance(), false),
+    'can_manage_suppliers',       coalesce(public.finops_can_manage_suppliers(), false),
+    'can_view_collections',       coalesce(public.finops_can_view_collections(), false),
+    'can_record_collection',      coalesce(public.finops_can_record_collection(), false),
+    'can_approve_expense',        coalesce(public.finops_can_approve_expense(), false),
+    'can_export_sensitive',       coalesce(public.finops_can_export_sensitive(), false),
+    'can_export_collections',     coalesce(public.finops_can_export_collections(), false),
+    'can_request',                coalesce(public.finops_can_request(), false),
+    'is_client',                  coalesce(public.finops_is_client(), false),
+    -- أسماء متوارثة تُبقيها الواجهة القديمة حيّة (مرادفات، لا صلاحية إضافية)
     'can_view',              coalesce(public.finops_can_view(), false),
     'can_manage',            coalesce(public.finops_can_manage(), false),
     'can_approve',           coalesce(public.finops_can_approve(), false),
     'can_view_profit',       coalesce(public.finops_can_view_profit(), false),
     'can_manage_receivables',coalesce(public.finops_can_manage_receivables(), false),
     'can_export',            coalesce(public.finops_can_export(), false),
-    'can_request',           coalesce(public.finops_can_request(), false),
-    'is_client',             coalesce(public.finops_is_client(), false),
     'user_id', auth.uid(),
     'message', case
       when auth.uid() is null then 'سجّل الدخول للوصول إلى المركز المالي.'
       when coalesce(public.finops_is_client(), false) then 'المركز المالي داخليّ بالكامل ولا يُتاح لحسابات العملاء.'
-      when not coalesce(public.finops_can_view(), false) and coalesce(public.finops_can_request(), false)
-        then 'تستطيع رفع طلب صرفك ومتابعته. البيانات المالية للشركة مقصورة على المالك والمالية.'
+      when coalesce(public.finops_can_view_finance_sensitive(), false) then null
+      when coalesce(public.finops_can_view_collections(), false)
+        then 'صلاحيتك تحصيل: العميل والفاتورة والمستحقّ والمحصَّل والمتبقّي. التكاليف والربحية والميزانيات مقصورة على المالك — وهذا منع مقصود لا عطل.'
+      when coalesce(public.finops_can_approve_expense(), false)
+        then 'صلاحيتك اعتماد الطلبات: ترى الطلب الذي تقرّر فيه لا غير. لا تكاليف ولا ذمم ولا ربحية.'
+      when coalesce(public.finops_can_request(), false)
+        then 'تستطيع رفع طلب صرفك ومتابعته. البيانات المالية للشركة مقصورة على المالك.'
       else null end);
 $$;
 
@@ -1163,7 +1293,7 @@ $$;
 create or replace function public.finops_lookups()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   return jsonb_build_object(
     'ok', true,
     'cost_centers', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'code', code,
@@ -1204,7 +1334,7 @@ create or replace function public.finops_budgets_list(p_filters jsonb default '{
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb; v_status text; v_project uuid;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v_status  := nullif(btrim(coalesce(f->>'status','')), '');
   v_project := nullif(btrim(coalesce(f->>'project_id','')), '')::uuid;
   select coalesce(jsonb_agg(x order by x->>'code' desc), '[]'::jsonb) into v_rows from (
@@ -1226,7 +1356,7 @@ create or replace function public.finops_budget_variance(p_budget uuid)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v jsonb;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v := public.finops_variance_core(p_budget);
   if coalesce((v->>'found')::boolean, false) is not true then
     return jsonb_build_object('ok', false, 'reason', coalesce(v->>'reason','row_not_found'));
@@ -1239,7 +1369,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb;
         v_from date; v_to date; v_project uuid; v_type text; v_commit text; v_limit int;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v_from    := nullif(btrim(coalesce(f->>'from','')), '')::date;
   v_to      := nullif(btrim(coalesce(f->>'to','')), '')::date;
   v_project := nullif(btrim(coalesce(f->>'project_id','')), '')::uuid;
@@ -1275,7 +1405,7 @@ create or replace function public.finops_suppliers_list(p_filters jsonb default 
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb; v_q text;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v_q := nullif(btrim(coalesce(f->>'q','')), '');
   select coalesce(jsonb_agg(x order by x->>'name'), '[]'::jsonb) into v_rows from (
     select jsonb_build_object('id', s.id, 'code', s.code, 'name', s.name, 'legal_name', s.legal_name,
@@ -1298,7 +1428,12 @@ create or replace function public.finops_expense_requests_list(p_filters jsonb d
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb; v_status text; v_limit int;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  -- المالك، أو المعتمِد الذي لا يستطيع أن يقرّر في مبلغ لا يراه. وهذا كلّ ما
+  -- يراه المعتمِد: طلبات الصرف. لا fin_costs ولا ذمم ⇒ لا طرفَي طرح.
+  if not (coalesce(public.finops_can_view_finance_sensitive(), false)
+       or coalesce(public.finops_can_approve_expense(), false)) then
+    raise exception 'not authorized';
+  end if;
   v_status := nullif(btrim(coalesce(f->>'status','')), '');
   v_limit  := least(greatest(coalesce(nullif(btrim(coalesce(f->>'limit','')), '')::int, 200), 1), 1000);
   select coalesce(jsonb_agg(x order by x->>'created_at' desc), '[]'::jsonb) into v_rows from (
@@ -1357,8 +1492,12 @@ end $$;
 create or replace function public.finops_purchase_list(p_filters jsonb default '{}'::jsonb)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_req jsonb; v_po jsonb; v_status text;
+        v_sensitive boolean := coalesce(public.finops_can_view_finance_sensitive(), false);
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not (coalesce(public.finops_can_view_finance_sensitive(), false)
+       or coalesce(public.finops_can_approve_expense(), false)) then
+    raise exception 'not authorized';
+  end if;
   v_status := nullif(btrim(coalesce(f->>'status','')), '');
   select coalesce(jsonb_agg(x order by x->>'created_at' desc), '[]'::jsonb) into v_req from (
     select jsonb_build_object('id', r.id, 'request_no', r.request_no, 'title', r.title,
@@ -1390,8 +1529,13 @@ begin
           'line_net', i.line_net, 'line_gross', i.line_gross) order by i.line_no)
         from public.fin_purchase_order_items i where i.po_id = o.id and i.is_deleted = false), '[]'::jsonb)) as x
     from public.fin_purchase_orders o where o.is_deleted = false
+    -- ★ أمر الشراء يحمل سعر المورّد = تكلفة شراء إنتاج ⇒ للمالك وحده. المعتمِد
+    --   يرى الطلب الذي يقرّر فيه، ولا يرى دفتر أوامر الشراء ولا أسعار المورّدين.
+    and v_sensitive
   ) s;
-  return jsonb_build_object('ok', true, 'requests', v_req, 'purchase_orders', v_po);
+  return jsonb_build_object('ok', true, 'requests', v_req,
+    'purchase_orders', case when v_sensitive then v_po else '[]'::jsonb end,
+    'purchase_orders_masked', (not v_sensitive));
 end $$;
 
 -- الذمم والتحصيل والمتأخّرات — الحالة مشتقّة لكلّ صفّ.
@@ -1400,7 +1544,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb; v_only_overdue boolean;
         v_project uuid; v_totals jsonb;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v_only_overdue := coalesce(nullif(btrim(coalesce(f->>'only_overdue','')), '')::boolean, false);
   v_project := nullif(btrim(coalesce(f->>'project_id','')), '')::uuid;
 
@@ -1442,14 +1586,116 @@ begin
     'note', 'حالة التحصيل والمتأخّر مشتقّتان من الدفعات المسجَّلة، لا من عمود محفوظ.');
 end $$;
 
--- ★ الربحية ★ — أضيق بوّابة. الاستدعاء بلا finops_can_view_profit يُرفض هنا،
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★★ سطح التحصيل — مبنيّ لغرضه، لا نسخة مقصوصة من الذمم ★★
+--
+-- هذه هي الإجابة العملية على المبدأ: موظّف التحصيل لا يُمنح وصولًا جدوليًّا إلى
+-- fin_receivables (ولا إلى غيره)، ويُعطى الحدّ الأدنى عبر هذه الدالّة وحدها.
+-- قائمة الأعمدة مكتوبة **حرفيًّا** أدناه، فما ليس فيها لا يخرج مهما تغيّر
+-- الجدول لاحقًا (select * كان سيسرّب أوّل عمود يُضاف).
+--
+--   يخرج: العميل · رقم/مرجع الفاتورة · تاريخ الإصدار والاستحقاق · المستحقّ ·
+--          الضريبة كحقل مستقلّ · المحصَّل · المتبقّي · الحالة · التقادم ·
+--          ملاحظات التحصيل ودفعاته.
+--   لا يخرج: أيّ تكلفة · ميزانية · عقد أو قيمته · إيراد معترَف به · اشتراك ·
+--          هامش أو ربح · مورّد أو سعره · مركز تكلفة · ملاحظات الذمّة الداخلية
+--          (notes قد تحمل تعليقًا عن التكلفة) · معرّف المشروع أو اسمه.
+--
+-- ملاحظة صريحة عن amount_net: الضريبة حقل مستقلّ في هذا البرنامج، وعرض
+-- المستحقّ بلا تفصيل ضريبته يكسر ذلك ويمنع مطابقة سند القبض. وبما أنّ
+-- net = gross − vat فالإبقاء عليه لا يضيف تسريبًا. المهمّ أنّ الطرف الآخر من
+-- معادلة الهامش (التكلفة) لا يبلغه هذا الدور بأيّ طريق.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.finops_collections_list(p_filters jsonb default '{}'::jsonb)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb; v_totals jsonb;
+        v_only_overdue boolean; v_status text; v_q text;
+begin
+  if not coalesce(public.finops_can_view_collections(), false) then raise exception 'not authorized'; end if;
+  v_only_overdue := coalesce(nullif(btrim(coalesce(f->>'only_overdue','')), '')::boolean, false);
+  v_status := nullif(btrim(coalesce(f->>'collection_status','')), '');
+  v_q      := nullif(btrim(coalesce(f->>'q','')), '');
+
+  select coalesce(jsonb_agg(x order by (x->>'days_overdue')::int desc nulls last), '[]'::jsonb)
+    into v_rows from (
+    select (jsonb_build_object(
+        'id', r.id,
+        'doc_no', r.doc_no,                       -- رقم الفاتورة الداخليّ
+        'invoice_ref', coalesce(nullif(btrim(coalesce(r.zoho_invoice_id,'')), ''), r.doc_no),
+        'title', r.title,
+        'client_label', r.client_label,
+        'issue_date', r.issue_date,
+        'due_date', r.due_date,
+        'currency', r.currency,
+        'amount_net', r.amount_net,               -- = gross − vat (لا يضيف تسريبًا)
+        'vat_amount', r.vat_amount,               -- ★ الضريبة حقل مستقلّ ★
+        'amount_due_gross', r.amount_gross,
+        'doc_status', r.status,
+        'collection_notes', coalesce((select jsonb_agg(jsonb_build_object(
+              'id', c.id, 'collected_on', c.collected_on, 'currency', c.currency,
+              'amount_net', c.amount_net, 'vat_amount', c.vat_amount,
+              'amount_gross', c.amount_gross, 'method', c.method,
+              'reference', c.reference, 'note', c.note) order by c.collected_on desc)
+            from public.fin_collections c
+           where c.receivable_id = r.id and c.is_deleted = false), '[]'::jsonb))
+      -- الحالة والمتبقّي والتقادم: مشتقّة من الدفعات، لا أعمدة محفوظة.
+      || (public.finops_receivable_state(r.id) - 'found')) as x
+    from public.fin_receivables r
+    where r.is_deleted = false
+      and r.status in ('open','written_off')        -- المسودّة والملغاة ليست عملًا تحصيليًّا
+      and (v_q is null
+           or r.client_label ilike '%'||v_q||'%'
+           or r.doc_no       ilike '%'||v_q||'%'
+           or coalesce(r.zoho_invoice_id,'') ilike '%'||v_q||'%')
+  ) s
+  where ((not v_only_overdue) or coalesce((x->>'is_overdue')::boolean, false))
+    and (v_status is null or x->>'collection_status' = v_status);
+
+  select jsonb_build_object(
+      'due_gross',        coalesce(round(sum((e->>'gross')::numeric), 2), 0),
+      'collected_gross',  coalesce(round(sum((e->>'collected')::numeric), 2), 0),
+      'outstanding_gross',coalesce(round(sum((e->>'outstanding')::numeric), 2), 0),
+      'overdue_gross',    coalesce(round(sum(case when coalesce((e->>'is_overdue')::boolean, false)
+                                                  then (e->>'outstanding')::numeric else 0 end), 2), 0),
+      'overdue_count',    coalesce(count(*) filter (where coalesce((e->>'is_overdue')::boolean, false)), 0),
+      'open_count',       coalesce(count(*), 0),
+      'aging', jsonb_build_object(
+        'current', coalesce(round(sum(case when e->>'aging_bucket' = 'current' then (e->>'outstanding')::numeric else 0 end), 2), 0),
+        'd1_30',   coalesce(round(sum(case when e->>'aging_bucket' = '1_30'   then (e->>'outstanding')::numeric else 0 end), 2), 0),
+        'd31_60',  coalesce(round(sum(case when e->>'aging_bucket' = '31_60'  then (e->>'outstanding')::numeric else 0 end), 2), 0),
+        'd61_90',  coalesce(round(sum(case when e->>'aging_bucket' = '61_90'  then (e->>'outstanding')::numeric else 0 end), 2), 0),
+        'over_90', coalesce(round(sum(case when e->>'aging_bucket' = 'over_90' then (e->>'outstanding')::numeric else 0 end), 2), 0)))
+    into v_totals
+  from jsonb_array_elements(v_rows) e;
+
+  return jsonb_build_object('ok', true, 'rows', v_rows,
+    'totals', coalesce(v_totals, jsonb_build_object('due_gross', 0, 'collected_gross', 0,
+      'outstanding_gross', 0, 'overdue_gross', 0, 'overdue_count', 0, 'open_count', 0,
+      'aging', jsonb_build_object('current', 0, 'd1_30', 0, 'd31_60', 0, 'd61_90', 0, 'over_90', 0))),
+    'scope', 'collections_only',
+    'note', 'قائمة تحصيل فقط: لا تكاليف ولا ميزانيات ولا ربحية. الحالة والمتبقّي مشتقّان من الدفعات المسجَّلة.');
+end $$;
+
+-- ملخّص التحصيل — نفس البوّابة، أرقام تشغيلية بحتة، ولا رقم تكلفة واحد.
+create or replace function public.finops_collections_summary()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  if not coalesce(public.finops_can_view_collections(), false) then raise exception 'not authorized'; end if;
+  v := public.finops_collections_list(jsonb_build_object());
+  return jsonb_build_object('ok', true, 'totals', v->'totals',
+    'scope', 'collections_only',
+    'note', 'لوحة التحصيل ليست اللوحة المالية: لا مصروف ولا ميزانية ولا هامش.');
+end $$;
+
+-- ★ الربحية ★ — أضيق بوّابة. الاستدعاء بلا الوصول الحسّاس يُرفض هنا،
 --   لا في الواجهة، ولا يُعاد أيّ رقم إيراد ولو مجمَّعًا.
 create or replace function public.finops_profitability(p_filters jsonb default '{}'::jsonb)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_from date; v_to date; v_project uuid;
         v_by_project jsonb;
 begin
-  if not coalesce(public.finops_can_view_profit(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v_from    := nullif(btrim(coalesce(f->>'from','')), '')::date;
   v_to      := nullif(btrim(coalesce(f->>'to','')), '')::date;
   v_project := nullif(btrim(coalesce(f->>'project_id','')), '')::uuid;
@@ -1495,7 +1741,7 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_from date; v_to date;
         v_out jsonb; v_recv jsonb; v_actual numeric := 0; v_committed numeric := 0;
 begin
-  if not coalesce(public.finops_can_view(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_view_finance_sensitive(), false) then raise exception 'not authorized'; end if;
   v_from := coalesce(nullif(btrim(coalesce(f->>'from','')), '')::date, date_trunc('year', current_date)::date);
   v_to   := coalesce(nullif(btrim(coalesce(f->>'to','')), '')::date, current_date);
 
@@ -1535,12 +1781,14 @@ begin
         'created_at', r.created_at) order by r.created_at)
       from public.fin_expense_requests r where r.is_deleted = false and r.status = 'submitted'), '[]'::jsonb));
 
-  if coalesce(public.finops_can_view_profit(), false) then
+  -- دفاع في العمق: اللوحة نفسها حسّاسة، والحارس هنا يبقى صريحًا كي لا يفتحها
+  -- توسيعٌ مستقبليّ لبوّابة اللوحة على الربحية بالتبعية.
+  if coalesce(public.finops_can_view_finance_sensitive(), false) then
     v_out := v_out || jsonb_build_object('profit_visible', true,
       'profit', public.finops_profit_core(null, v_from, v_to));
   else
     v_out := v_out || jsonb_build_object('profit_visible', false, 'profit', null,
-      'profit_message', 'الربحية والهوامش مقصورة على المالك وفريق المالية.');
+      'profit_message', 'الربحية والهوامش مقصورة على المالك وحده.');
   end if;
   return v_out;
 end $$;
@@ -1549,7 +1797,7 @@ create or replace function public.finops_audit_list(p_filters jsonb default '{}'
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare f jsonb := coalesce(p_filters, '{}'::jsonb); v_rows jsonb; v_limit int;
 begin
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_limit := least(greatest(coalesce(nullif(btrim(coalesce(f->>'limit','')), '')::int, 100), 1), 500);
   select coalesce(jsonb_agg(x order by x->>'created_at' desc), '[]'::jsonb) into v_rows from (
     select jsonb_build_object('id', a.id, 'action', a.action, 'entity_type', a.entity_type,
@@ -1567,14 +1815,38 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare v_rows jsonb; v_cols jsonb;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_export(), false) then raise exception 'not authorized'; end if;
   if p_dataset is null or p_dataset not in
-     ('costs','receivables','collections','budget_lines','expense_requests','purchase_orders','revenue') then
+     ('costs','receivables','collections','collections_queue','budget_lines',
+      'expense_requests','purchase_orders','revenue') then
     raise exception 'unknown_dataset';
   end if;
-  if p_dataset = 'revenue' and not coalesce(public.finops_can_view_profit(), false) then
-    raise exception 'not authorized';
+  -- ★ صلاحية التصدير مقسومة ★
+  --   collections_queue → قائمة التحصيل وحدها، بمفتاحها المستقلّ.
+  --   ما عداها          → تصدير ماليّ شامل ⇒ المالك وحده.
+  -- الترتيب مقصود: فحص المجموعة أوّلًا ثمّ البوّابة المناسبة لها، لا بوّابة
+  -- واحدة عريضة في الأعلى تفتح كلّ شيء لمن يملك أضيق مفتاح.
+  if p_dataset = 'collections_queue' then
+    if not coalesce(public.finops_can_export_collections(), false) then
+      raise exception 'not authorized';
+    end if;
+    v_cols := '["invoice_ref","client_label","title","issue_date","due_date","currency","amount_net","vat_amount","amount_due_gross","collection_status","collected","outstanding","days_overdue","aging_bucket"]'::jsonb;
+    select coalesce(jsonb_agg(jsonb_build_object(
+        'invoice_ref', e->>'invoice_ref', 'client_label', e->>'client_label',
+        'title', e->>'title', 'issue_date', e->>'issue_date', 'due_date', e->>'due_date',
+        'currency', e->>'currency', 'amount_net', e->>'amount_net', 'vat_amount', e->>'vat_amount',
+        'amount_due_gross', e->>'amount_due_gross', 'collection_status', e->>'collection_status',
+        'collected', e->>'collected', 'outstanding', e->>'outstanding',
+        'days_overdue', e->>'days_overdue', 'aging_bucket', e->>'aging_bucket')), '[]'::jsonb)
+      into v_rows
+      from jsonb_array_elements((public.finops_collections_list(p_filters))->'rows') e;
+    perform public.finops_log('export', 'collections_queue', null,
+      jsonb_build_object('rows', jsonb_array_length(coalesce(v_rows, '[]'::jsonb)), 'filters', p_filters));
+    return jsonb_build_object('ok', true, 'dataset', p_dataset, 'columns', v_cols,
+      'rows', coalesce(v_rows, '[]'::jsonb), 'scope', 'collections_only',
+      'note', 'قائمة تحصيل فقط. الضريبة عمود مستقلّ، ولا عمود تكلفة ولا ربح في هذا الملفّ.');
   end if;
+
+  if not coalesce(public.finops_can_export_sensitive(), false) then raise exception 'not authorized'; end if;
 
   if p_dataset = 'costs' then
     v_cols := '["cost_no","cost_type","commitment","title","incurred_on","currency","amount_net","vat_rate","vat_amount","amount_gross","status"]'::jsonb;
@@ -1628,7 +1900,7 @@ create or replace function public.finops_zoho_diagnostic()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v_pending int := 0; v_failed int := 0; v_held int := 0;
 begin
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   select count(*) filter (where status = 'pending'),
          count(*) filter (where status = 'failed'),
          count(*) filter (where status = 'held')
@@ -1661,7 +1933,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_id := coalesce(nullif(btrim(coalesce(p->>'id','')), '')::uuid, gen_random_uuid());
   insert into public.fin_cost_centers as t (id, code, name_ar, name_en, kind, parent_id,
     owner_user_id, notes, is_active, created_by)
@@ -1698,7 +1970,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_id := coalesce(nullif(btrim(coalesce(p->>'id','')), '')::uuid, gen_random_uuid());
   insert into public.fin_expense_categories as t (id, key, name_ar, name_en, cost_nature,
     is_capex, default_vat_rate, sort_order, is_active, created_by)
@@ -1724,7 +1996,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_bank text;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_bank := nullif(btrim(coalesce(p->>'bank_ref','')), '');
   -- ★ لا رقم حساب كامل في القاعدة ★: أيّ سلسلة تشبه IBAN أو رقم حساب تُرفض،
   --   فتسريب جدول المورّدين لا يسلّم بيانات دفع صالحة للاستعمال.
@@ -1809,7 +2081,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_status text; v_old text;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_status := coalesce(nullif(btrim(coalesce(p->>'status','')), ''), 'draft');
   if v_status not in ('draft','active','locked','closed') then raise exception 'invalid_status'; end if;
   v_id := nullif(btrim(coalesce(p->>'id','')), '')::uuid;
@@ -1856,7 +2128,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_budget uuid; m jsonb; v_bstatus text;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_budget := nullif(btrim(coalesce(p->>'budget_id','')), '')::uuid;
   if v_budget is null then raise exception 'budget_required'; end if;
   select status into v_bstatus from public.fin_budgets where id = v_budget and is_deleted = false;
@@ -1887,8 +2159,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not (coalesce(public.finops_can_manage(), false)
-          and coalesce(public.finops_can_view_profit(), false)) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   m := public.finops_money(p, 15);
   v_id := coalesce(nullif(btrim(coalesce(p->>'id','')), '')::uuid, gen_random_uuid());
   insert into public.fin_contracts as t (id, contract_no, title, client_label, client_id, project_id,
@@ -1925,8 +2196,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not (coalesce(public.finops_can_manage(), false)
-          and coalesce(public.finops_can_view_profit(), false)) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   m := public.finops_money(p, 15);
   v_id := coalesce(nullif(btrim(coalesce(p->>'id','')), '')::uuid, gen_random_uuid());
   insert into public.fin_revenue as t (id, revenue_no, revenue_type, contract_id, project_id,
@@ -1963,8 +2233,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not (coalesce(public.finops_can_manage(), false)
-          and coalesce(public.finops_can_view_profit(), false)) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   m := public.finops_money(p, 15);
   v_id := coalesce(nullif(btrim(coalesce(p->>'id','')), '')::uuid, gen_random_uuid());
   insert into public.fin_retainers as t (id, contract_id, title, client_label, project_id,
@@ -1999,7 +2268,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb; v_coll numeric := 0;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage_receivables(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   m := public.finops_money(p, 15);
   v_id := nullif(btrim(coalesce(p->>'id','')), '')::uuid;
   if v_id is not null then
@@ -2054,7 +2323,8 @@ declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_recv uuid; m j
         v_state jsonb; v_outstanding numeric; v_self numeric := 0; v_owner uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage_receivables(), false) then raise exception 'not authorized'; end if;
+  -- ★ تسجيل التحصيل هو الكتابة الوحيدة المتاحة لدور التحصيل ★
+  if not coalesce(public.finops_can_record_collection(), false) then raise exception 'not authorized'; end if;
   v_recv := nullif(btrim(coalesce(p->>'receivable_id','')), '')::uuid;
   if v_recv is null then raise exception 'receivable_required'; end if;
   v_state := public.finops_receivable_state(v_recv);
@@ -2107,7 +2377,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage_receivables(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   m := public.finops_money(p, 15);
   v_id := coalesce(nullif(btrim(coalesce(p->>'id','')), '')::uuid, gen_random_uuid());
   insert into public.fin_payment_milestones as t (id, contract_id, project_id, title, sort_order,
@@ -2139,7 +2409,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb; v_commit text; v_type text;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_commit := coalesce(nullif(btrim(coalesce(p->>'commitment','')), ''), 'actual');
   if v_commit not in ('committed','actual') then raise exception 'invalid_commitment'; end if;
   v_type := coalesce(nullif(btrim(coalesce(p->>'cost_type','')), ''), 'other');
@@ -2259,7 +2529,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare r record; v_th jsonb; v_cost uuid; v_nature text; v_step int;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_approve(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_approve_expense(), false) then raise exception 'not authorized'; end if;
   if p_action is null or p_action not in ('approved','rejected','returned') then
     raise exception 'invalid_action';
   end if;
@@ -2330,7 +2600,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare r record;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   select * into r from public.fin_expense_requests where id = p_id and is_deleted = false;
   if not found then raise exception 'row_not_found'; end if;
   if r.status <> 'approved' then
@@ -2363,7 +2633,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare r record;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_approve(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_approve_expense(), false) then raise exception 'not authorized'; end if;
   select * into r from public.fin_expense_requests where id = p_id and is_deleted = false;
   if not found then raise exception 'row_not_found'; end if;
   if not r.needs_second_approval then
@@ -2442,10 +2712,10 @@ begin
   select requested_by, status into v_owner, v_status
     from public.fin_purchase_requests where id = v_req and is_deleted = false;
   if v_owner is null then raise exception 'row_not_found'; end if;
-  if not (coalesce(public.finops_can_manage(), false) or v_owner = auth.uid()) then
+  if not (coalesce(public.finops_can_manage_finance(), false) or v_owner = auth.uid()) then
     raise exception 'not authorized';
   end if;
-  if v_status not in ('draft','submitted') and not coalesce(public.finops_can_manage(), false) then
+  if v_status not in ('draft','submitted') and not coalesce(public.finops_can_manage_finance(), false) then
     raise exception 'not authorized';
   end if;
   v_qty   := coalesce(nullif(btrim(coalesce(p->>'quantity','')), '')::numeric, 1);
@@ -2485,7 +2755,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare r record; v_th jsonb;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_approve(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_approve_expense(), false) then raise exception 'not authorized'; end if;
   if p_action is null or p_action not in ('approved','rejected') then raise exception 'invalid_action'; end if;
   if p_action = 'rejected' and length(btrim(coalesce(p_note, ''))) < 3 then raise exception 'reason_required'; end if;
   select * into r from public.fin_purchase_requests where id = p_id and is_deleted = false;
@@ -2517,7 +2787,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; m jsonb; v_old text;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   if nullif(btrim(coalesce(p->>'supplier_id','')), '') is null then raise exception 'supplier_required'; end if;
   m := public.finops_money(p, 15);
   v_id := nullif(btrim(coalesce(p->>'id','')), '')::uuid;
@@ -2565,7 +2835,7 @@ declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_po uuid; v_sta
         v_qty numeric; v_price numeric; v_rate numeric; v_vat numeric; v_recv numeric;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_po := nullif(btrim(coalesce(p->>'po_id','')), '')::uuid;
   if v_po is null then raise exception 'po_required'; end if;
   select status into v_status from public.fin_purchase_orders where id = v_po and is_deleted = false;
@@ -2610,7 +2880,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare r record; v_cost uuid;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   if p_status is null or p_status not in
      ('issued','partially_received','received','closed','cancelled') then
     raise exception 'invalid_status';
@@ -2679,8 +2949,15 @@ begin
   if v_type is null or v_entity is null then raise exception 'entity_required'; end if;
   if nullif(btrim(coalesce(p->>'file_url','')), '') is null then raise exception 'file_required'; end if;
 
-  if coalesce(public.finops_can_manage(), false) then
+  if coalesce(public.finops_can_manage_finance(), false) then
     v_ok := true;
+  elsif v_type = 'collection' then
+    -- سند القبض: موظّف التحصيل يرفق إيصال الدفعة التي سجّلها. مرفق واحد على
+    -- صفّ تحصيل قائم — ولا يفتح له ذلك قراءة أيّ جدول ماليّ (RLS لم تتغيّر).
+    v_ok := coalesce(public.finops_can_record_collection(), false)
+            and exists (select 1 from public.fin_collections
+                         where id = v_entity and is_deleted = false
+                           and recorded_by = auth.uid());
   elsif v_type = 'expense_request' then
     v_ok := exists (select 1 from public.fin_expense_requests
                      where id = v_entity and requested_by = auth.uid() and is_deleted = false);
@@ -2732,7 +3009,7 @@ begin
   if v_tbl is null then raise exception 'unknown_kind'; end if;
 
   -- الحذف إداريّ افتراضًا. الاستثناء الوحيد: صاحب طلب ما زال مسوّدة/مُرسَلًا.
-  if not coalesce(public.finops_can_manage(), false) then
+  if not coalesce(public.finops_can_manage_finance(), false) then
     if v_tbl in ('fin_expense_requests','fin_purchase_requests') then
       execute format('select requested_by, status from public.%I where id = $1 and is_deleted = false', v_tbl)
         into v_owner, v_status using p_id;
@@ -2774,7 +3051,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare p jsonb := coalesce(p_payload, '{}'::jsonb); v_id uuid; v_event text;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   v_event := nullif(btrim(coalesce(p->>'event_type','')), '');
   if v_event is null then raise exception 'event_required'; end if;
   v_id := gen_random_uuid();
@@ -2794,7 +3071,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare v_n int := 0;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
-  if not coalesce(public.finops_can_manage(), false) then raise exception 'not authorized'; end if;
+  if not coalesce(public.finops_can_manage_finance(), false) then raise exception 'not authorized'; end if;
   update public.fin_zoho_outbox
      set status = 'pending', attempt_count = attempt_count + 1,
          last_error = nullif(btrim(coalesce(p_note, '')), ''), updated_at = now()
@@ -2825,6 +3102,8 @@ begin
     'public.finops_my_requests(jsonb)',
     'public.finops_purchase_list(jsonb)',
     'public.finops_receivables(jsonb)',
+    'public.finops_collections_list(jsonb)',
+    'public.finops_collections_summary()',
     'public.finops_profitability(jsonb)',
     'public.finops_dashboard(jsonb)',
     'public.finops_audit_list(jsonb)',
@@ -2858,6 +3137,14 @@ begin
     'public.finops_zoho_outbox_enqueue(jsonb)',
     'public.finops_zoho_outbox_replay(uuid,text)',
     -- المُسنَدات: تُقيَّم داخل سياسات RLS بدور المُنادي، فلا بدّ من EXECUTE له.
+    'public.finops_can_view_finance_sensitive()',
+    'public.finops_can_manage_finance()',
+    'public.finops_can_manage_suppliers()',
+    'public.finops_can_view_collections()',
+    'public.finops_can_record_collection()',
+    'public.finops_can_approve_expense()',
+    'public.finops_can_export_sensitive()',
+    'public.finops_can_export_collections()',
     'public.finops_can_view()',
     'public.finops_can_manage()',
     'public.finops_can_approve()',
@@ -2969,7 +3256,13 @@ begin
     'public.finops_purchase_list(jsonb)','public.finops_receivables(jsonb)',
     'public.finops_profitability(jsonb)','public.finops_dashboard(jsonb)',
     'public.finops_audit_list(jsonb)','public.finops_export(text,jsonb)',
-    'public.finops_zoho_diagnostic()','public.finops_can_view()','public.finops_can_manage()',
+    'public.finops_zoho_diagnostic()',
+    'public.finops_collections_list(jsonb)','public.finops_collections_summary()',
+    'public.finops_can_view_finance_sensitive()','public.finops_can_manage_finance()',
+    'public.finops_can_manage_suppliers()','public.finops_can_view_collections()',
+    'public.finops_can_record_collection()','public.finops_can_approve_expense()',
+    'public.finops_can_export_sensitive()','public.finops_can_export_collections()',
+    'public.finops_can_view()','public.finops_can_manage()',
     'public.finops_can_approve()','public.finops_can_view_profit()',
     'public.finops_can_manage_receivables()','public.finops_can_export()',
     'public.finops_can_request()','public.finops_is_client()','public.finops_is_finance_role()',
@@ -2995,6 +3288,31 @@ begin
 
   -- (3) المُسنَدات لا تعيد NULL — **استدعاء حيّ آمن**: لا بوّابة فيها، وauth.uid()
   --     يساوي NULL هنا، فالنتيجة الصحيحة false. لو أعادت NULL انهار fail-closed.
+  -- النموذج الجديد أوّلًا: كلّ مُسنَد يعيد boolean صريحًا وfalse بلا جلسة.
+  v_b := public.finops_can_view_finance_sensitive();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_view_finance_sensitive أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_view_finance_sensitive = true بلا جلسة — تسريب مالية'; end if;
+  v_b := public.finops_can_manage_finance();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_manage_finance أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_manage_finance = true بلا جلسة'; end if;
+  v_b := public.finops_can_manage_suppliers();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_manage_suppliers أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_manage_suppliers = true بلا جلسة'; end if;
+  v_b := public.finops_can_view_collections();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_view_collections أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_view_collections = true بلا جلسة'; end if;
+  v_b := public.finops_can_record_collection();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_record_collection أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_record_collection = true بلا جلسة'; end if;
+  v_b := public.finops_can_approve_expense();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_approve_expense أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_approve_expense = true بلا جلسة'; end if;
+  v_b := public.finops_can_export_sensitive();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_export_sensitive أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_export_sensitive = true بلا جلسة'; end if;
+  v_b := public.finops_can_export_collections();
+  if v_b is null then raise exception 'FIN SELF-TEST: can_export_collections أعادت NULL'; end if;
+  if v_b then raise exception 'FIN SELF-TEST: can_export_collections = true بلا جلسة'; end if;
   v_b := public.finops_can_view();     if v_b is null then raise exception 'FIN SELF-TEST: can_view أعادت NULL'; end if;
   if v_b then raise exception 'FIN SELF-TEST: can_view = true بلا جلسة — fail-open'; end if;
   v_b := public.finops_can_manage();   if v_b is null then raise exception 'FIN SELF-TEST: can_manage أعادت NULL'; end if;
@@ -3010,7 +3328,7 @@ begin
   if v_b then raise exception 'FIN SELF-TEST: can_request = true بلا جلسة'; end if;
   v_b := public.finops_is_client();    if v_b is null then raise exception 'FIN SELF-TEST: is_client أعادت NULL'; end if;
   v_b := public.finops_is_finance_role(); if v_b is null then raise exception 'FIN SELF-TEST: is_finance_role أعادت NULL'; end if;
-  v_b := public.finops_perm('finance_ops.view'); if v_b is null then raise exception 'FIN SELF-TEST: perm أعادت NULL'; end if;
+  v_b := public.finops_perm('finance_ops.collections_view'); if v_b is null then raise exception 'FIN SELF-TEST: perm أعادت NULL'; end if;
   if v_b then raise exception 'FIN SELF-TEST: perm = true بلا جلسة'; end if;
   v_b := public.finops_perm(null);     if v_b is null then raise exception 'FIN SELF-TEST: perm(NULL) أعادت NULL'; end if;
 
@@ -3021,6 +3339,12 @@ begin
     raise exception 'FIN SELF-TEST: access تمنح can_view بلا جلسة'; end if;
   if coalesce((v->>'can_view_profit')::boolean, true) is not false then
     raise exception 'FIN SELF-TEST: access تمنح can_view_profit بلا جلسة'; end if;
+  foreach f in array array['can_view_finance_sensitive','can_manage_finance','can_view_collections',
+    'can_record_collection','can_approve_expense','can_export_sensitive','can_export_collections'] loop
+    if v->f is null then raise exception 'FIN SELF-TEST: access لا تُعلن %', f; end if;
+    if coalesce((v->>f)::boolean, true) is not false then
+      raise exception 'FIN SELF-TEST: access تمنح % بلا جلسة', f; end if;
+  end loop;
 
   -- (5) بوّابات مكتوبة فعلًا داخل كلّ دالّة كتابة (فحص نصّيّ لا استدعاء حيّ)
   foreach f in array WRITE_FNS loop
@@ -3037,8 +3361,13 @@ begin
     'public.finops_costs_list(jsonb)','public.finops_suppliers_list(jsonb)',
     'public.finops_expense_requests_list(jsonb)','public.finops_purchase_list(jsonb)',
     'public.finops_receivables(jsonb)','public.finops_dashboard(jsonb)'] loop
-    if pg_get_functiondef(to_regprocedure(f)) not ilike '%finops_can_view()%' then
-      raise exception 'FIN SELF-TEST: % بلا بوّابة المركز', f;
+    if pg_get_functiondef(to_regprocedure(f)) not ilike '%finops_can_view_finance_sensitive()%' then
+      raise exception 'FIN SELF-TEST: % بلا البوّابة الحسّاسة', f;
+    end if;
+  end loop;
+  foreach f in array array['public.finops_collections_list(jsonb)','public.finops_collections_summary()'] loop
+    if pg_get_functiondef(to_regprocedure(f)) not ilike '%finops_can_view_collections()%' then
+      raise exception 'FIN SELF-TEST: % بلا بوّابة التحصيل', f;
     end if;
   end loop;
   if pg_get_functiondef(to_regprocedure('public.finops_access()')) ilike '%raise exception%' then
@@ -3046,10 +3375,11 @@ begin
   end if;
 
   -- (7) ★ العميل مستبعد بنيويًّا ★ وبوّابات الموديول مستقلّة عن صلاحية المشاريع
-  v_def := pg_get_functiondef(to_regprocedure('public.finops_can_view()'));
-  if v_def not ilike '%is_staff%' then raise exception 'FIN SELF-TEST: بوّابة العرض لا تستبعد العميل'; end if;
-  foreach f in array array['public.finops_can_view()','public.finops_can_manage()',
-    'public.finops_can_approve()','public.finops_can_view_profit()','public.finops_can_request()'] loop
+  v_def := pg_get_functiondef(to_regprocedure('public.finops_can_view_finance_sensitive()'));
+  if v_def not ilike '%is_staff%' then raise exception 'FIN SELF-TEST: البوّابة الحسّاسة لا تستبعد العميل'; end if;
+  foreach f in array array['public.finops_can_view_finance_sensitive()',
+    'public.finops_can_view_collections()','public.finops_can_record_collection()',
+    'public.finops_can_approve_expense()','public.finops_can_request()'] loop
     if pg_get_functiondef(to_regprocedure(f)) not ilike '%is_staff%' then
       raise exception 'FIN SELF-TEST: % لا تشترط كون المستخدم موظّفًا', f; end if;
     if pg_get_functiondef(to_regprocedure(f)) ilike '%can_manage_projects%' then
@@ -3144,15 +3474,15 @@ begin
 
   -- (12) ★ بوّابة الهامش أضيق فعلًا ★ — في الدوالّ وفي سياسات RLS معًا
   if pg_get_functiondef(to_regprocedure('public.finops_profitability(jsonb)'))
-       not ilike '%finops_can_view_profit()%' then
-    raise exception 'FIN SELF-TEST: الربحية بلا بوّابتها الخاصّة'; end if;
+       not ilike '%finops_can_view_finance_sensitive()%' then
+    raise exception 'FIN SELF-TEST: الربحية بلا البوّابة الحسّاسة'; end if;
   if pg_get_functiondef(to_regprocedure('public.finops_dashboard(jsonb)'))
        not ilike '%profit_visible%' then
     raise exception 'FIN SELF-TEST: اللوحة لا تُصرّح بحجب الربحية'; end if;
   foreach t in array array['fin_revenue','fin_contracts','fin_retainers'] loop
     if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = t
-                    and qual ilike '%finops_can_view_profit%') then
-      raise exception 'FIN SELF-TEST: سياسة % لا تستعمل بوّابة الربحية', t; end if;
+                    and qual ilike '%finops_can_view_finance_sensitive%') then
+      raise exception 'FIN SELF-TEST: سياسة % لا تستعمل البوّابة الحسّاسة', t; end if;
   end loop;
   if not exists (select 1 from pg_policies where schemaname = 'public'
                   and tablename = 'fin_expense_requests' and qual ilike '%requested_by = auth.uid()%') then
@@ -3160,11 +3490,13 @@ begin
 
   -- (13) التصدير مُبوَّب ومُدقَّق، ولا SQL حرّ من الواجهة
   v_def := pg_get_functiondef(to_regprocedure('public.finops_export(text,jsonb)'));
-  if v_def not ilike '%finops_can_export()%' then raise exception 'FIN SELF-TEST: التصدير بلا بوّابة'; end if;
   if v_def not ilike '%unknown_dataset%'     then raise exception 'FIN SELF-TEST: التصدير يقبل مجموعة غير معروفة'; end if;
   if v_def not ilike '%finops_log%'          then raise exception 'FIN SELF-TEST: التصدير غير مُدقَّق'; end if;
-  if v_def not ilike '%finops_can_view_profit()%' then
-    raise exception 'FIN SELF-TEST: تصدير الإيراد بلا بوّابة الربحية'; end if;
+  -- ★ الصلاحية مقسومة فعلًا: بوّابة شاملة + بوّابة قائمة تحصيل، لا واحدة تكفي للكلّ
+  if v_def not ilike '%finops_can_export_sensitive()%' then
+    raise exception 'FIN SELF-TEST: التصدير الشامل بلا بوّابته'; end if;
+  if v_def not ilike '%finops_can_export_collections()%' then
+    raise exception 'FIN SELF-TEST: تصدير التحصيل بلا مفتاحه المستقلّ — الصلاحية غير مقسومة'; end if;
 
   -- (14) ★ حارس تجميد منصّة المشاريع ★ — لا دالّة من الموديول تكتب في المنصّة
   for v_def in
@@ -3243,7 +3575,87 @@ begin
     raise exception 'FIN SELF-TEST: التعديل يقيس المبلغ الجديد على متبقٍّ يتضمّن المبلغ القديم';
   end if;
 
-  raise notice 'FIN SELF-TEST: نجح — ٢٢ جدولًا · RLS قراءة فقط · لا anon · مُسنَدات لا تعيد NULL · الضريبة حقل مستقلّ والإجمالي مولَّد · الهامش خلف بوّابته · Zoho غير متّصل بالتصميم · والمنصّة لم تُمَسّ.';
+  -- ════════════════════════════════════════════════════════════════════════
+  -- (20) ★★ الثابتة الأهمّ: لا دور يجمع طرفَي معادلة الهامش ★★
+  --      كلّ فحص هنا ثابت (pg_policies + pg_get_functiondef) ولا يستدعي دالّة
+  --      محميّة، لأنّ auth.uid() = NULL في محرّر SQL.
+  -- ════════════════════════════════════════════════════════════════════════
+
+  -- (20-أ) كلّ جدول يحمل تكلفةً أو إيرادًا أو ذمّة خلف البوّابة الحسّاسة وحدها.
+  --        وجود finops_can_view_collections في qual أيّ منها = عودة الثغرة.
+  foreach t in array array['fin_costs','fin_receivables','fin_collections','fin_budgets',
+    'fin_budget_lines','fin_contracts','fin_revenue','fin_retainers','fin_suppliers',
+    'fin_purchase_orders','fin_purchase_order_items','fin_payment_milestones'] loop
+    if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = t
+                    and qual ilike '%finops_can_view_finance_sensitive%') then
+      raise exception 'FIN SELF-TEST: سياسة % لا تستعمل البوّابة الحسّاسة', t; end if;
+    if exists (select 1 from pg_policies where schemaname = 'public' and tablename = t
+                and (qual ilike '%can_view_collections%' or qual ilike '%can_record_collection%'
+                  or qual ilike '%collections_view%')) then
+      raise exception 'FIN SELF-TEST: ★ الثغرة عادت ★ — دور التحصيل يملك وصولًا جدوليًّا إلى %', t; end if;
+    if exists (select 1 from pg_policies where schemaname = 'public' and tablename = t
+                and qual ilike '%finops_perm%') then
+      raise exception 'FIN SELF-TEST: سياسة % تُفتح بمفتاح مباشر بدل البوّابة الحسّاسة', t; end if;
+  end loop;
+
+  -- (20-ب) البوّابة الحسّاسة تقول is_owner صراحةً، ولا يفتحها مفتاح ولا دور.
+  v_def := pg_get_functiondef(to_regprocedure('public.finops_can_view_finance_sensitive()'));
+  if v_def not ilike '%is_owner()%' then
+    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة لا تشترط المالك'; end if;
+  if v_def ilike '%finops_perm%' then
+    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة تُفتح بمفتاح — V1 للمالك وحده'; end if;
+  if v_def ilike '%staff_role%' then
+    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة تُفتح بدور وظيفيّ'; end if;
+  foreach f in array array['public.finops_can_manage_finance()','public.finops_can_manage_suppliers()',
+    'public.finops_can_export_sensitive()','public.finops_can_view_profit()','public.finops_can_view()',
+    'public.finops_can_manage()','public.finops_can_manage_receivables()','public.finops_can_export()'] loop
+    v_def := pg_get_functiondef(to_regprocedure(f));
+    if v_def not ilike '%finops_can_view_finance_sensitive()%' then
+      raise exception 'FIN SELF-TEST: % لا تنحدر من البوّابة الحسّاسة', f; end if;
+    if v_def ilike '%finops_perm%' then
+      raise exception 'FIN SELF-TEST: % تُفتح بمفتاح مباشر — طريق جانبيّ إلى الحسّاس', f; end if;
+  end loop;
+
+  -- (20-ج) سطح التحصيل لا يلمس تكلفةً ولا ميزانية ولا عقدًا ولا إيرادًا ولا
+  --        محرّك ربح — فحص نصّيّ على جسم الدالّة نفسها.
+  foreach f in array array['public.finops_collections_list(jsonb)',
+    'public.finops_collections_summary()'] loop
+    v_def := pg_get_functiondef(to_regprocedure(f));
+    foreach t in array array['fin_costs','fin_budgets','fin_budget_lines','fin_contracts',
+      'fin_revenue','fin_retainers','fin_suppliers','fin_purchase_orders','fin_purchase_order_items',
+      'finops_profit_core','finops_variance_core','finops_contract_state'] loop
+      if v_def ilike '%' || t || '%' then
+        raise exception 'FIN SELF-TEST: سطح التحصيل % يقرأ % — طرف التكلفة يصل دور التحصيل', f, t;
+      end if;
+    end loop;
+    if v_def ilike '%select *%' then
+      raise exception 'FIN SELF-TEST: % تستعمل select * — أوّل عمود يُضاف يتسرّب', f; end if;
+    if v_def ilike '%r.notes%' then
+      raise exception 'FIN SELF-TEST: % تُخرج ملاحظات الذمّة الداخلية', f; end if;
+    if v_def ilike '%cost_center_id%' or v_def ilike '%contract_id%' then
+      raise exception 'FIN SELF-TEST: % تُخرج ربطًا بمركز تكلفة أو عقد', f; end if;
+  end loop;
+
+  -- (20-د) الكتابة المتاحة لدور التحصيل واحدة فقط: تسجيل الدفعة.
+  --        أيّ دالّة كتابة أخرى تذكر can_record_collection = توسيع صامت.
+  for v_def, v_err in
+    select p.proname, pg_get_functiondef(p.oid) from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname like 'finops%'
+  loop
+    if v_err ilike '%finops_can_record_collection()%'
+       and v_def not in ('finops_collection_record','finops_can_record_collection',
+                         'finops_access','finops_attachment_add') then
+      raise exception 'FIN SELF-TEST: % تعترف ببوّابة التحصيل خارج مسارها المحدَّد', v_def;
+    end if;
+  end loop;
+
+  -- (20-هـ) لا VIEW في الموديول يتجاوز RLS (view يملكه postgres يقرأ كلّ شيء).
+  if exists (select 1 from pg_views where schemaname = 'public' and viewname like 'fin\_%') then
+    raise exception 'FIN SELF-TEST: يوجد VIEW باسم fin_* — العروض تتجاوز RLS وتفتح طريقًا جانبيًّا';
+  end if;
+
+  raise notice 'FIN SELF-TEST: نجح — ٢٢ جدولًا · RLS قراءة فقط · لا anon · مُسنَدات لا تعيد NULL · الضريبة حقل مستقلّ والإجمالي مولَّد · المالية الحسّاسة للمالك وحده ودور التحصيل بلا وصول جدوليّ · Zoho غير متّصل بالتصميم · والمنصّة لم تُمَسّ.';
 end $st$;
 
 commit;
@@ -3252,8 +3664,15 @@ notify pgrst, 'reload schema';
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- بعد التشغيل: finance_profitability_POSTCHECK.sql
--- المنح: امنح دور المالية (staff_role='finance') أو المفاتيح finance_ops.* من
---   شاشة الصلاحيات. لا شيء يُمنح تلقائيًّا هنا، ولا يُشتقّ من دور مشاريع.
+-- المنح: المالية الحسّاسة (تكاليف · ميزانيات · ربحية · مورّدون · ذمم · تصدير
+--   شامل) **للمالك وحده في V1**، ولا مفتاح يفتحها — المفاتيح المعطَّلة موسومة
+--   بذلك في كتالوج الصلاحيات. القابل للمنح فعلًا:
+--     finance_ops.collections_view   → قائمة التحصيل (بلا تكلفة ولا ربح)
+--     finance_ops.collections_record → تسجيل دفعة تحصيل + إرفاق سند القبض
+--     finance_ops.export_collections → تصدير قائمة التحصيل وحدها
+--     finance_ops.approve            → اعتماد طلبات الصرف والشراء
+--     finance_ops.request            → رفع طلب صرف شخصيّ
+--   ولا شيء يُشتقّ من دور مشاريع، ولا من staff_role.
 -- الحدود: اضبط fin_approval_thresholds بحساب المالك — قبل ضبطها كلّ مبلغ
 --   يتطلّب اعتماد المالك (افتراض مقصود، لا عطل).
 -- التفاصيل: docs/FINANCE_GO_LIVE_GUIDE.md · docs/FINANCE_ROLE_MATRIX.md

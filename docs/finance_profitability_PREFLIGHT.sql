@@ -17,7 +17,8 @@ select 'public.profiles' as obj, (to_regclass('public.profiles') is not null) as
 
 -- ─── 2) الاعتمادات الاختيارية — الحزمة تكتشفها ولا تفترضها ────────────────
 -- متوقّع: توثيقيّ. الغياب مسموح ويُغيّر السلوك بصدق:
---   • permissions/emp_has_permission غائب ⇒ المالك/الأدمن ودور المالية فقط.
+--   • permissions/emp_has_permission غائب ⇒ المالك وحده (وهو الافتراض في V1
+--     أصلًا: المالية الحسّاسة owner-only ولا مفتاح يفتحها).
 --   • projects غائب ⇒ الربط بالمشروع معطّل (اختياريّ أصلًا) ولا مفاتيح خارجية.
 --   • custody_purchase_requests غائب ⇒ حقل المرجع يبقى فارغًا، ولا يُدّعى تكامل.
 select o.name, (to_regclass(o.name) is not null) as present
@@ -51,7 +52,7 @@ from (values ('public.civ_can_finance()'), ('public.can_see_invoices()')) f(sig)
 
 -- ─── 5) مفاتيح الصلاحيات: finance.* القائمة تبقى كما هي ──────────────────
 -- متوقّع: قائمة مفاتيح finance.* الحالية. احتفظ بها وقارنها في POSTCHECK:
--- الحزمة تضيف finance_ops.* فقط ولا تعدّل أيّ مفتاح قائم.
+-- الحزمة تضيف/تعيد وسم finance_ops.* فقط ولا تعدّل أيّ مفتاح finance.* قائم.
 select key, category, sensitivity, sort_order from public.permissions
 where key like 'finance%' order by sort_order;
 

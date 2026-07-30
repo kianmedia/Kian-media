@@ -701,17 +701,71 @@ begin
   values (auth.uid(), p_action, p_etype, p_eid, p_job, coalesce(p_detail, '{}'::jsonb));
 end $$;
 
+-- ─── قيد entity_type على الإشعارات: شكل لا تعداد ──────────────────────────
+-- ★ عيب مثبَت، لا احتياط ★ phase0_migration.sql:285 يحصر
+--   notifications.entity_type في خمس قيم من عهد المشاريع
+--   ('profile','company','quote_request','project','deliverable')، ولا ترحيلة
+--   في المستودع توسّعه بعدها. وهذا الموديول يكتب 'ops_job' ⇒ القيد يرفع 23514
+--   ⇒ المصيدة داخل prodops_notify تبتلعه ⇒ **الإشعار يُفقد بصمت** بينما تُكمل
+--   العملية بنجاح ظاهريّ. هذا هو «النجاح المزوَّر» بعينه.
+--   العلاج هو نفسه المعتمَد لـnotifications_type_check في 9C: قيد **شكل** لا
+--   تعداد، فيكتب كلّ موديول مفرداته بلا تنسيق مع غيره ولا سباق على قيد واحد.
+--   ⚠️ لا يُطبَّق إلّا إذا كانت كلّ الصفوف القائمة تحترم الشكل الجديد. غير ذلك:
+--      إشعار صريح، والقيد يُترك كما هو — لا إسقاط ترحيلة ولا حذف بيانات.
+do $notif_shape$
+declare v_bad bigint := 0; c record;
+begin
+  if to_regclass('public.notifications') is null then
+    raise notice 'OPS: جدول الإشعارات غير موجود — لا إشعارات داخل التطبيق لهذا الموديول.';
+    return;
+  end if;
+  select count(*) into v_bad from public.notifications
+   where entity_type is null or entity_type !~ '^[a-z][a-z0-9_]{2,40}$';
+  if v_bad > 0 then
+    raise notice 'OPS: % صفّ إشعار قائم لا يحترم شكل entity_type — القيد تُرك كما هو، وإشعارات التشغيل قد تُرفض بصمت. عالِج الصفوف ثمّ أعد التشغيل.', v_bad;
+    return;
+  end if;
+  -- ⚠️ يُزال **كلّ** قيد CHECK يقيّد entity_type مهما كان اسمه، لا الاسم
+  --    القانونيّ وحده. قيدٌ ثانٍ باسم منجرف (…_check1 مثلًا) كان سيبقى يرفض
+  --    بصمت بينما يبدو القيد القانونيّ سليمًا — وهذا الاختباء بالضبط هو العطب.
+  for c in
+    select con.conname from pg_constraint con
+     where con.conrelid = to_regclass('public.notifications')
+       and con.contype = 'c'
+       and pg_get_constraintdef(con.oid) ilike '%entity_type%'
+  loop
+    execute format('alter table public.notifications drop constraint %I', c.conname);
+    raise notice 'OPS: أُزيل قيد entity_type القديم (%).', c.conname;
+  end loop;
+  alter table public.notifications
+    add constraint notifications_entity_type_check
+    check (entity_type is not null and entity_type ~ '^[a-z][a-z0-9_]{2,40}$');
+end $notif_shape$;
+
 -- إشعار معزول: قيد notifications.type منجرف تاريخيًّا، وفشل الإشعار
 -- لا يجوز أن يُسقط عملية تشغيلية صحيحة.
+-- ★ لكنّه لا يُبتلَع بصمت ★: الفشل يُكتب في سجلّ الموديول برمز الحالة، فلا
+--   يعود «لم يصل الإشعار» سؤالًا بلا جواب.
 create or replace function public.prodops_notify(p_user uuid, p_type text, p_eid uuid, p_ar text, p_en text)
 returns void language plpgsql security definer set search_path = public as $$
+declare v_ss text; v_msg text;
 begin
   if p_user is null or p_user = auth.uid() then return; end if;
-  if to_regprocedure('public.notify(uuid,text,text,text,uuid,text,text)') is null then return; end if;
+  if to_regprocedure('public.notify(uuid,text,text,text,uuid,text,text)') is null then
+    perform public.prodops_log('notify_unavailable', 'ops_job', p_eid, p_eid,
+      jsonb_build_object('type', p_type, 'reason', 'notify_function_missing'));
+    return;
+  end if;
   begin
     execute 'select public.notify($1,$2,$3,$4,$5,$6,$7)'
       using p_user, 'user', p_type, 'ops_job', p_eid, p_ar, p_en;
-  exception when others then null;                     -- لا يُسقط المعاملة
+  exception when others then                            -- لا يُسقط المعاملة
+    get stacked diagnostics v_ss = returned_sqlstate, v_msg = message_text;
+    begin
+      perform public.prodops_log('notify_failed', 'ops_job', p_eid, p_eid,
+        jsonb_build_object('type', p_type, 'sqlstate', v_ss, 'detail', left(coalesce(v_msg, ''), 200)));
+    exception when others then null;                    -- التدقيق لا يُسقط شيئًا أيضًا
+    end;
   end;
 end $$;
 
@@ -2821,7 +2875,26 @@ begin
   if v_def not ilike '%verified_by%' or v_def not ilike '%auth.uid()%' then
     raise exception 'OPS SELF-TEST: مُوقِّع التحقّق لا يُؤخذ من الجلسة'; end if;
 
-  raise notice 'OPS SELF-TEST: نجح — 20 جدولًا، RLS قراءة فقط، لا anon، مُسنَدات لا تعيد NULL، منع الحجز المزدوج بمُشغِّل، والمنصّة لم تُمَسّ.';
+  -- (17) ★ الإشعار لا يُفقد بصمت ★
+  --      (أ) القيد يقبل entity_type الخاصّ بهذا الموديول فعلًا.
+  --      يُفحص **كلّ** قيد CHECK يقيّد entity_type مهما كان اسمه: قيدٌ منجرف
+  --      الاسم يرفض بصمت بينما يبدو القيد القانونيّ سليمًا.
+  select coalesce(string_agg(pg_get_constraintdef(con.oid), ' | '), '') into v_def
+    from pg_constraint con
+   where con.conrelid = to_regclass('public.notifications')
+     and con.contype = 'c'
+     and pg_get_constraintdef(con.oid) ilike '%entity_type%'
+     and pg_get_constraintdef(con.oid) not ilike '%~%'
+     and pg_get_constraintdef(con.oid) not ilike '%ops_job%';
+  if v_def <> '' then
+    raise exception 'OPS SELF-TEST: قيد على notifications.entity_type ما زال تعدادًا لا يقبل ops_job (%). كلّ إشعار تشغيل سيُرفض ويُبتلَع. نظّف الصفوف المخالفة للشكل ثمّ أعد التشغيل.', v_def;
+  end if;
+  --      (ب) والمصيدة تكتب أثرًا بدل أن تبتلع.
+  v_def := pg_get_functiondef(to_regprocedure('public.prodops_notify(uuid,text,uuid,text,text)'));
+  if v_def not ilike '%notify_failed%' then
+    raise exception 'OPS SELF-TEST: فشل الإشعار يُبتلَع بلا أثر — «لم يصل الإشعار» يبقى سؤالًا بلا جواب'; end if;
+
+  raise notice 'OPS SELF-TEST: نجح — 20 جدولًا، RLS قراءة فقط، لا anon، مُسنَدات لا تعيد NULL، منع الحجز المزدوج بمُشغِّل، الإشعار لا يُفقد بصمت، والمنصّة لم تُمَسّ.';
 end $st$;
 
 commit;

@@ -59,16 +59,17 @@ where to_regprocedure(f.sig) is not null;
 
 -- ─── 6) المُسنَدات لا تعيد NULL (تشغيل بدور postgres ⇒ auth.uid() = NULL) ─
 -- متوقّع: صفّ واحد، كلّ الأعمدة = false (ولا واحد NULL).
-select public.finops_can_view()               as can_view,
-       public.finops_can_manage()             as can_manage,
-       public.finops_can_approve()            as can_approve,
-       public.finops_can_view_profit()        as can_view_profit,
-       public.finops_can_manage_receivables() as can_manage_receivables,
-       public.finops_can_export()             as can_export,
-       public.finops_can_request()            as can_request,
-       public.finops_is_client()              as is_client,
-       public.finops_is_finance_role()        as is_finance_role,
-       public.finops_perm('finance_ops.view') as perm;
+select public.finops_can_view_finance_sensitive() as can_view_finance_sensitive,
+       public.finops_can_manage_finance()         as can_manage_finance,
+       public.finops_can_manage_suppliers()       as can_manage_suppliers,
+       public.finops_can_view_collections()       as can_view_collections,
+       public.finops_can_record_collection()      as can_record_collection,
+       public.finops_can_approve_expense()        as can_approve_expense,
+       public.finops_can_export_sensitive()       as can_export_sensitive,
+       public.finops_can_export_collections()     as can_export_collections,
+       public.finops_can_request()                as can_request,
+       public.finops_is_client()                  as is_client,
+       public.finops_perm('finance_ops.collections_view') as perm;
 
 -- ─── 7) مِجَسّ الكشف يعمل ويُعلن انعدام القدرة بدل التظاهر ────────────────
 -- متوقّع: ok = true وauthenticated = false وكلّ القدرات false.
@@ -108,11 +109,42 @@ select public.finops_receivable_state('00000000-0000-0000-0000-000000000000') as
 -- متوقّع: basis = net_of_vat وis_estimate = true.
 select public.finops_profit_core(null, null, null) as profit_probe;
 
--- ─── 10) ★ بوّابة الهامش أضيق من بوّابة المركز ★ ─────────────────────────
--- متوقّع: 3 صفوف، uses_profit_gate = true (fin_revenue · fin_contracts · fin_retainers).
-select tablename, policyname, (qual ilike '%finops_can_view_profit%') as uses_profit_gate
+-- ─── 10) ★★ الثابتة الأهمّ: لا دور يجمع طرفَي معادلة الهامش ★★ ──────────
+-- متوقّع: 12 صفًّا، sensitive_gate = true وcollections_gate = false في كلّها.
+-- أيّ صفّ فيه collections_gate = true يعني عودة الثغرة المُثبَتة: وصول جدوليّ
+-- لدور التحصيل إلى طرفٍ من معادلة (إيراد − تكلفة).
+select tablename, policyname,
+       (qual ilike '%finops_can_view_finance_sensitive%') as sensitive_gate,
+       (qual ilike '%can_view_collections%' or qual ilike '%can_record_collection%') as collections_gate,
+       (qual ilike '%finops_perm%') as opened_by_raw_key
 from pg_policies
-where schemaname = 'public' and tablename in ('fin_revenue','fin_contracts','fin_retainers');
+where schemaname = 'public'
+  and tablename in ('fin_costs','fin_receivables','fin_collections','fin_budgets','fin_budget_lines',
+                    'fin_contracts','fin_revenue','fin_retainers','fin_suppliers',
+                    'fin_purchase_orders','fin_purchase_order_items','fin_payment_milestones')
+order by tablename;
+
+-- متوقّع: owner_only = true وopened_by_key = false وopened_by_role = false.
+select
+  (pg_get_functiondef(to_regprocedure('public.finops_can_view_finance_sensitive()')) ilike '%is_owner()%') as owner_only,
+  (pg_get_functiondef(to_regprocedure('public.finops_can_view_finance_sensitive()')) ilike '%finops_perm%') as opened_by_key,
+  (pg_get_functiondef(to_regprocedure('public.finops_can_view_finance_sensitive()')) ilike '%staff_role%') as opened_by_role;
+
+-- متوقّع: صفر صفّ — سطح التحصيل لا يذكر جدول تكلفة ولا ميزانية ولا عقدًا ولا
+-- إيرادًا ولا محرّك ربح. صفّ واحد هنا = طرفا الطرح اجتمعا في دور واحد.
+select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in ('finops_collections_list','finops_collections_summary')
+  and pg_get_functiondef(p.oid) ~* '(fin_costs|fin_budgets|fin_budget_lines|fin_contracts|fin_revenue|fin_retainers|fin_suppliers|fin_purchase_order|finops_profit_core|finops_variance_core|finops_contract_state)';
+
+-- متوقّع: صفر صفّ — لا VIEW باسم fin_* (العروض يملكها postgres وتتجاوز RLS).
+select viewname from pg_views where schemaname = 'public' and viewname like 'fin\_%';
+
+-- متوقّع: صفّ واحد، split_export = true (بوّابتان مستقلّتان في دالّة التصدير).
+select
+  (pg_get_functiondef(to_regprocedure('public.finops_export(text,jsonb)')) ilike '%finops_can_export_sensitive()%'
+   and pg_get_functiondef(to_regprocedure('public.finops_export(text,jsonb)')) ilike '%finops_can_export_collections()%')
+  as split_export;
 
 -- متوقّع: صفّان، allows_own_row = true (الموظّف يرى طلبه هو فقط).
 select tablename, policyname, (qual ilike '%requested_by = auth.uid()%') as allows_own_row
@@ -131,7 +163,8 @@ select
      ilike '%is_owner()%') as thresholds_owner_only;
 
 -- ─── 12) مفاتيح الصلاحيات دخلت الكتالوج القائم (إن كان مطبَّقًا) ──────────
--- متوقّع: 7 صفوف finance_ops.* إن كان جدول permissions موجودًا، وإلّا صفر.
+-- متوقّع: 10 صفوف finance_ops.*: خمسة قابلة للمنح، وخمسة موسومة
+-- «[معطَّل في V1 — للمالك وحده]» ومنحُها لا يفتح شيئًا (والفحص أعلاه يثبته).
 select key, category, sensitivity from public.permissions
 where key like 'finance_ops.%' order by sort_order;
 

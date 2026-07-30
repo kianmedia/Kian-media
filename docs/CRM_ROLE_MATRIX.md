@@ -28,6 +28,20 @@
 مدير المبيعات ليس بالضرورة مخوّلًا بالرواتب. الفصل يُفحص في §13 من الترحيلة
 وفي `tests/crm_commission_isolation.test.js`.
 
+### ★ ما ليس مفتاحًا: اعتماد المالك
+
+`crm_can_approve_changes()` **ليست** صلاحية في الكتالوج ولا تُمنح لأحد. هي
+`is_owner() OR is_admin()` فقط، وهي البوّابة الوحيدة التي **يقع عندها** تغيير هدف
+مبيعات أو قاعدة عمولة.
+
+> لو كان الاعتماد مفتاحًا لأمكن منحه، ولانتهت «موافقة المالك» إلى منحة إداريّة
+> تُعطى مرّة وتُنسى. لذلك لا يوجد `crm.approve` في الكتالوج، والترحيلة تفشل إن
+> ظهر `crm_perm` داخل تعريف المُسنَد.
+
+مَن يحمل `crm.manage_targets` أو `crm.manage_commission` **يقترح** فقط: الاستدعاء
+يعود بـ`pending_approval: true` ولا يتغيّر صفّ واحد. راجع
+`docs/CRM_MANUAL_ACCEPTANCE.md` §٣ للاختبار اليدويّ.
+
 ---
 
 ## ٢) من يرى ماذا
@@ -71,13 +85,32 @@
   نسبته هو تصله داخل سجلّه هو.
 * `crm_export` لا يُخرج أعمدة عمولة أو نِسَب في أيّ كيان — التصدير ليس بابًا خلفيًّا.
 
-### ب) الموظّف لا يحرّر هدفه ولا عمولته
+### ب) الموظّف لا يحرّر هدفه ولا عمولته، وحاملُ المفتاح لا يعتمد
 
 * `crm_target_upsert` و`crm_target_delete`: إن كان `owner_user_id = auth.uid()`
   ولم تكن الجلسة للمالك/الأدمن ⇒ `self_target_denied`.
 * `crm_commission_assign`: إسناد خطّة لنفسك ⇒ `self_commission_denied`.
 * `crm_commission_set_status`: اعتماد عمولتك أنت ⇒ `self_commission_denied`.
 * الأربعة مفحوصة في §13 من الترحيلة وفي POSTCHECK §14.
+
+**والطبقة الثانية (اعتماد المالك):** المسارات الأربعة أدناه تمرّ كلّها على
+`crm_can_approve_changes()`، وغير المالك يخرج منها بطلب معلَّق لا بتغيير:
+
+| المسار | نوع الطلب | ماذا يعود لغير المالك |
+|---|---|---|
+| `crm_target_upsert` | `target` | `pending_approval: true` + `request_id` |
+| `crm_target_delete` | `target_delete` | `pending_approval: true` + الهدف باقٍ |
+| `crm_commission_plan_upsert` | `commission_plan` | `pending_approval: true` + لا نسبة تغيّرت |
+| `crm_commission_assign` | `commission_assign` | `pending_approval: true` + لا إسناد وقع |
+
+* **الطلب المعلَّق ليس تغييرًا:** لا يُقرأ في `crm_targets_list` ولا في
+  `crm_forecast` ولا في أيّ حساب عمولة. هو نيّة موثَّقة فقط.
+* `crm_approval_decide(id, 'approved'|'rejected', note)` للمالك وحده، بقفل صفّ،
+  ولا يُتّخذ مرّتين (`already_decided`)، ويُطبَّق **باسم المعتمِد**.
+* فشل التطبيق لا يُخفى: يُحفظ في `apply_error` ويبقى الطلب معلَّقًا.
+* `crm_approval_withdraw` لصاحب الطلب أو للمالك — لا لطرف ثالث.
+* رؤية الطلبات: المالك يرى الكلّ، وصاحب الطلب يرى طلبه هو. الطلب يحمل قيمة هدف
+  أو نسبة عمولة، وهي بيانات حسّاسة قبل الاعتماد وبعده.
 
 ### ج) العميل لا يملك أيّ وصول
 
@@ -98,6 +131,7 @@
 
 | الجدول | سياسة القراءة |
 |---|---|
+| `crm_approval_requests` | `crm_can_approve_changes()` **أو** (`crm_can_view()` و`requested_by = auth.uid()`) |
 | `crm_leads` · `crm_opportunities` | `crm_can_see_owner(owner_user_id)` |
 | `crm_stage_history` | `crm_can_read_opportunity(opportunity_id)` |
 | `crm_activities` | قراءة الأب (عميل محتمل أو فرصة) |

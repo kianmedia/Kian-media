@@ -34,7 +34,7 @@ const REG: Record<string, TabDef> = {
   // موظّف المبيعات يرى سجلّاته هو؛ رؤية الفريق مفتاح مستقلّ لا يمنحه هذا التبويب.
   crm:           { href: "/client-portal/crm",           ar: "المبيعات",     en: "Sales", adminAr: "المبيعات وعلاقات العملاء", adminEn: "Sales & CRM", staffAr: "مبيعاتي", staffEn: "My Sales" },
   // المركز المالي (Phase 4) — داخليّ بحت وأخطر سطح في البرنامج: غائب عن مجموعتَي
-  // client/lead، والقاعدة ترفض العميل حتى برابط مباشر (finops_can_view = is_staff
+  // client/lead، والقاعدة ترفض العميل حتى برابط مباشر (finops_can_view_finance_sensitive = is_staff+is_owner
   // + دور مالية أو مفتاح finance_ops.* صريح). الموظّف العاديّ يرى «طلباتي» فقط:
   // لا ميزانية ولا تكاليف غيره ولا هامش. التبويب ليس تفويضًا — المنع في القاعدة.
   finance_ops:   { href: "/client-portal/finance",       ar: "طلباتي المالية", en: "My Finance Requests", adminAr: "المالية والربحية", adminEn: "Finance & Profitability", staffAr: "طلباتي المالية", staffEn: "My Finance Requests" },
@@ -68,7 +68,7 @@ const SETS: Record<ViewRole, string[]> = {
   hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   readonly:    ["employee", "projects", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   // دور المالية: التبويب هنا يفتح المركز كاملًا **إن** منحته القاعدة ذلك. لا يشتقّ
-  // هذا السطر صلاحية: finops_can_view هي الفاصل، وهذا مجرّد مدخل في التنقّل.
+  // هذا السطر ليس صلاحية: البوّابات في القاعدة هي الفاصل، وهذا مجرّد مدخل تنقّل.
   finance:     ["employee", "finance_ops", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
   photographer:     ["employee", "operations", "equipment", "asset_custody", "projects", "finance_ops", "notifications", "profile"],
   lighting_tech:    ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],

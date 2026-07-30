@@ -278,3 +278,57 @@ test("PREFLIGHT يفحص الاعتمادات وقدرات الخادم التي
   assert.match(PREFLIGHT, /table_name = 'quote_requests'/, "PREFLIGHT لا يفحص أعمدة طلبات الأسعار");
   assert.match(PREFLIGHT, /'project_name','title','name'/, "PREFLIGHT لا يقرأ اسم عمود المشروع");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// أساس العمولة — المفردة تساوي المُنفَّذ.
+//
+// كان القيد يقبل 'gross_margin' و'collected_value' بينما الحاسبة تحسب دائمًا
+// من estimated_value: سجلّ عمولة يُوسَم بالهامش وقيمته قيمة الفرصة، فيعتمد
+// المالك رقمًا يظنّه شيئًا وهو شيء آخر. ولا يجوز «إكمال» المفردة: العمولة على
+// الهامش تستلزم قراءة التكلفة داخل موديول المبيعات — وهو ثقب استنتاج الربح
+// نفسه الذي يمنعه جدار المالية. لذلك تُضيَّق المفردة ويُحرَس التضييق هنا.
+// ════════════════════════════════════════════════════════════════════════════
+test("أساس العمولة: القيد لا يقبل إلّا الأساس المُنفَّذ فعلًا", () => {
+  const m = SQL.match(/create table if not exists public\.crm_commission_plans[\s\S]*?\n\);/);
+  assert.ok(m, "تعذّر إيجاد تعريف crm_commission_plans");
+  const decl = m[0];
+  const line = decl.split("\n").find((l) => /^\s*basis\s+text/.test(l));
+  assert.ok(line, "لا عمود basis في crm_commission_plans");
+  assert.match(line, /check\s*\(\s*basis\s*=\s*'won_value'\s*\)/,
+    "قيد basis ليس مقصورًا على won_value");
+  assert.doesNotMatch(line, /gross_margin|collected_value/,
+    "قيد basis ما زال يقبل مفردة غير منفَّذة");
+});
+
+test("أساس العمولة: الكتابة ترفض الأساس غير المنفَّذ صراحةً لا بانتهاك قيد خام", () => {
+  const body = funcBody("crm_commission_plan_apply_core");
+  assert.match(body, /basis_not_implemented/,
+    "crm_commission_plan_apply_core لا ترفض الأساس غير المنفَّذ برسالة مفهومة");
+});
+
+test("أساس العمولة: الحاسبة لا تقرأ المالية — التكلفة لا تدخل المبيعات", () => {
+  const body = funcBody("crm_commission_recalc_core");
+  assert.doesNotMatch(body, /\bfin_[a-z_]+/,
+    "حاسبة العمولة تقرأ جدولًا ماليًّا — استنتاج الربح انفتح من جهة المبيعات");
+  assert.doesNotMatch(body, /finops_/,
+    "حاسبة العمولة تستدعي المالية — استنتاج الربح انفتح من جهة المبيعات");
+  assert.match(body, /estimated_value/,
+    "حاسبة العمولة لا تحسب من قيمة الفرصة كما تُعلن");
+});
+
+test("أساس العمولة: SELF-TEST يحرس التضييق داخل القاعدة أيضًا", () => {
+  const st = selfTest();
+  assert.match(st, /basis_not_implemented/, "SELF-TEST لا يفحص رفض الأساس غير المنفَّذ");
+  assert.match(st, /crm_commission_recalc_core/, "SELF-TEST لا يفحص جدار المالية في الحاسبة");
+});
+
+test("أساس العمولة: الترحيلة تُداوي انحراف القيد على جدول قائم", () => {
+  // create table if not exists لا يغيّر جدولًا موجودًا، فلو طُبّقت نسخة أقدم
+  // لبقي القيد الواسع. لا بدّ من كتلة مداواة صريحة.
+  assert.match(SQL, /do \$basis\$[\s\S]*?end \$basis\$;/,
+    "لا كتلة مداواة لقيد الأساس — إعادة التطبيق تُبقي القيد الواسع");
+  const heal = SQL.match(/do \$basis\$[\s\S]*?end \$basis\$;/)[0];
+  assert.match(heal, /drop constraint/i, "المداواة لا تُسقط القيد القديم");
+  assert.match(heal, /update public\.crm_commission_plans/,
+    "المداواة لا تُطبّع الصفوف قبل التضييق — الـALTER سيفشل على بيانات قائمة");
+});

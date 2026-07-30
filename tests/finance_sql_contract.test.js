@@ -81,11 +81,11 @@ test("كلّ دالّة كتابة: بوّابة جلسة + منع صريح + ت
 test("كلّ دالّة قراءة تُغلق قبل أن تقرأ صفًّا — والمِجَسّ وحده لا يرفع استثناء", () => {
   for (const f of GATED_READ_FNS) {
     const b = funcBody(f);
-    assert.match(b, /if not coalesce\(public\.finops_can_/,
+    assert.match(b, /if not \(?coalesce\(public\.finops_can_/,
       `${f} لا تفحص بوّابة قبل القراءة`);
     assert.match(b, /raise exception 'not authorized'/, `${f} لا ترفع منعًا`);
     // البوّابة أوّل ما يُنفَّذ: لا استعلام قبلها
-    const gate = b.indexOf("if not coalesce(public.finops_can_");
+    const gate = b.search(/if not \(?coalesce\(public\.finops_can_/);
     const firstSelect = b.search(/\bselect\b/i);
     assert.ok(firstSelect === -1 || gate < firstSelect,
       `${f} تقرأ صفوفًا قبل فحص الصلاحية`);
@@ -187,8 +187,8 @@ test("مفاتيح الصلاحيات تُضاف إلى الكتالوج الق�
 
 test("المرفقات والتدقيق: التدقيق للإدارة، والمرفق لصاحبه أو للمالية", () => {
   const rls = section("-- §4) RLS");
-  assert.match(rls, /fin_audit_read[\s\S]{0,160}finops_can_manage\(\)/,
-    "سجلّ التدقيق مقروء لغير الإدارة المالية");
+  assert.match(rls, /fin_audit_read[\s\S]{0,200}finops_can_manage_finance\(\)/,
+    "سجلّ التدقيق مقروء لغير المالك");
   assert.match(rls, /fin_attachments_read[\s\S]{0,200}uploaded_by = auth\.uid\(\)/,
     "المرفق غير مقيّد برافعه");
 });

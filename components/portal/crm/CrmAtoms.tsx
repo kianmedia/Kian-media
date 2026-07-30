@@ -8,6 +8,16 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type CrmState } from "@/lib/portal/crm";
+import { useI18n } from "@/lib/i18n";
+
+/**
+ * لغة الوحدة. تُبنى على مزوّد الموقع القائم (lib/i18n) ولا يُخترع مبدّل ثانٍ:
+ * لغتان في التطبيق نفسه تتباعدان خلال أسبوع. `t` تُرجع العربية عند غياب المزوّد.
+ */
+export function useCrmT() {
+  const { t, isAr, lang } = useI18n();
+  return { t, isAr, lang };
+}
 
 export const card = "bg-stone-900 border border-stone-800 rounded-xl";
 
@@ -20,12 +30,13 @@ export const fieldCls =
   "w-full min-h-[44px] bg-stone-950 border border-stone-700 rounded-lg px-3 py-2 " +
   "text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-stone-500";
 
-export function Spinner({ label = "جارٍ التحميل" }: { label?: string }) {
+export function Spinner({ label }: { label?: string }) {
+  const { t } = useCrmT();
   return (
     <div className="py-10 text-center">
       <div
         className="inline-block w-5 h-5 border-2 border-stone-600 border-t-transparent rounded-full animate-spin"
-        aria-label={label}
+        aria-label={label ?? t({ ar: "جارٍ التحميل", en: "Loading" })}
       />
     </div>
   );
@@ -33,37 +44,51 @@ export function Spinner({ label = "جارٍ التحميل" }: { label?: string 
 
 /** الشاشة التي يراها المالك حين يُنشر الكود قبل تشغيل الـSQL. ليست خطأ. */
 export function MigrationPending({ message }: { message: string }) {
+  const { t } = useCrmT();
   return (
     <div className={`${card} p-5 text-center space-y-3`} role="status">
       <div className="text-2xl" aria-hidden>🗄️</div>
-      <h3 className="text-stone-100 text-base font-medium">الميزة بانتظار تفعيل قاعدة البيانات</h3>
+      <h3 className="text-stone-100 text-base font-medium">
+        {t({ ar: "الميزة بانتظار تفعيل قاعدة البيانات", en: "Waiting for the database migration" })}
+      </h3>
       <p className="text-sm text-stone-400 leading-7 max-w-md mx-auto">{message}</p>
       <p className="text-xs text-stone-500 leading-6 max-w-md mx-auto">
-        شغّل الحزمة بالترتيب: PREFLIGHT ← RUNME ← POSTCHECK. هذه ليست مشكلة في حسابك
-        ولا في صلاحياتك.
+        {t({
+          ar: "شغّل الحزمة بالترتيب: PREFLIGHT ← RUNME ← POSTCHECK. هذه ليست مشكلة في حسابك ولا في صلاحياتك.",
+          en: "Run the package in order: PREFLIGHT → RUNME → POSTCHECK. This is not a problem with your account or your permissions.",
+        })}
       </p>
     </div>
   );
 }
 
 export function Denied({ message }: { message: string }) {
+  const { t } = useCrmT();
   return (
     <div className={`${card} p-5 text-center space-y-3`} role="alert">
       <div className="text-2xl" aria-hidden>🔒</div>
-      <h3 className="text-stone-100 text-base font-medium">لا تملك صلاحية</h3>
+      <h3 className="text-stone-100 text-base font-medium">
+        {t({ ar: "لا تملك صلاحية", en: "You do not have permission" })}
+      </h3>
       <p className="text-sm text-stone-400 leading-7 max-w-md mx-auto">{message}</p>
       <p className="text-xs text-stone-500 leading-6">
-        صلاحيات المبيعات تُمنح بمفاتيح صريحة (crm.view · crm.manage) من شاشة الصلاحيات.
+        {t({
+          ar: "صلاحيات المبيعات تُمنح بمفاتيح صريحة (crm.view · crm.manage) من شاشة الصلاحيات.",
+          en: "CRM access is granted by explicit keys (crm.view · crm.manage) from the permissions screen.",
+        })}
       </p>
     </div>
   );
 }
 
 export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useCrmT();
   return (
     <div className={`${card} p-5 text-center space-y-3`} role="alert">
       <p className="text-sm text-red-300 leading-7">{message}</p>
-      {onRetry && <button className={btnGhost} onClick={onRetry}>إعادة المحاولة</button>}
+      {onRetry && (
+        <button className={btnGhost} onClick={onRetry}>{t({ ar: "إعادة المحاولة", en: "Retry" })}</button>
+      )}
     </div>
   );
 }
@@ -99,6 +124,7 @@ export function useCrmLoad<T>(
   timeoutMs = 20000,
 ): { st: CrmState<T> | null; reload: () => void } {
   const [st, setSt] = useState<CrmState<T> | null>(null);
+  const { t } = useCrmT();
   const seq = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
@@ -123,8 +149,9 @@ export function useCrmLoad<T>(
       setSt({
         state: "error",
         message: e instanceof Error && e.message === "crm_timeout"
-          ? "انتهت المهلة — الشبكة بطيئة أو الخادم لا يستجيب."
-          : "تعذّر تنفيذ الطلب.",
+          ? t({ ar: "انتهت المهلة — الشبكة بطيئة أو الخادم لا يستجيب.",
+                en: "Timed out — the network is slow or the server is not responding." })
+          : t({ ar: "تعذّر تنفيذ الطلب.", en: "The request could not be completed." }),
       });
     } finally { if (timer) clearTimeout(timer); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -195,7 +222,7 @@ export function Section({
       <div className="flex items-center gap-2 px-4 py-3">
         <button
           type="button"
-          className="flex-1 text-right min-h-[44px] flex items-center gap-2"
+          className="flex-1 text-start min-h-[44px] flex items-center gap-2"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
         >
@@ -243,10 +270,14 @@ export function Scroller({ children }: { children: ReactNode }) {
   return <div className="overflow-x-auto -mx-4 px-4">{children}</div>;
 }
 
-/** ملاحظة عقد ثابتة: تُعرض حيث يظنّ المستخدم أنّ شيئًا سيُنشأ تلقائيًّا. */
+/**
+ * ملاحظة عقد ثابتة: تُعرض حيث يظنّ المستخدم أنّ شيئًا سيُنشأ تلقائيًّا.
+ * الحدّ والحشو على جانب **البداية** (`border-s` / `ps`): يمين في العربية،
+ * ويسار في الإنجليزية. استعمال `border-r`/`pr` هنا كان يقلب الشكل في LTR.
+ */
 export function ContractNote({ children }: { children: ReactNode }) {
   return (
-    <p className="text-[11px] text-stone-500 leading-6 border-r-2 border-stone-700 pr-3">
+    <p className="text-[11px] text-stone-500 leading-6 border-s-2 border-stone-700 ps-3">
       {children}
     </p>
   );

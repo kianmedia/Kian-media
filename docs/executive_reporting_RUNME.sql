@@ -394,7 +394,12 @@ begin
   end loop;
   if array_length(v_ok, 1) is null then v_ok := public.mgmt_departments(); end if;
 
-  v_ttl := least(greatest(coalesce(nullif(btrim(coalesce(f->>'ttl_seconds', '')), '')::int, 300), 0), 3600);
+  -- ★ سقف العمر ٣٠٠ ثانية، والمتصل يستطيع تقصيره لا تمديده ★
+  --   عمر النسخة المخبّأة هو **نافذة قراءة بعد سحب الصلاحية**: مفتاح الذاكرة
+  --   يتضمّن قدرة الحسّاسية، فسحب الملكية يُبطل النسخة فورًا — لكنّ سحب صلاحية
+  --   في موديول مصدر (التشغيل مثلًا) لا يغيّر المفتاح، فتبقى أرقامه معروضة حتى
+  --   انتهاء العمر. سقف ٣٦٠٠ كان يجعل تلك النافذة ساعةً **يختارها المتصل نفسه**.
+  v_ttl := least(greatest(coalesce(nullif(btrim(coalesce(f->>'ttl_seconds', '')), '')::int, 300), 0), 300);
 
   return jsonb_build_object(
     'from', v_from, 'to', v_to,
@@ -437,7 +442,7 @@ declare
   v_alerts jsonb   := '[]'::jsonb;
   e_comms  jsonb; e_ops jsonb; e_conf jsonb; e_cal jsonb; e_crm jsonb; e_leads jsonb; e_fin jsonb;
   d        jsonb;
-  v_n      numeric; v_c bigint; v_lb boolean; v_min timestamptz;
+  v_n      numeric; v_c bigint; v_jobs bigint; v_lb boolean; v_min timestamptz;
   OWNER_AR constant text := 'مؤشّر حسّاس: مقصور على المالك. هذا منع مقصود، والقيمة ليست صفرًا بل محجوبة.';
   OWNER_EN constant text := 'Sensitive KPI: owner-only. Deliberate denial — the value is withheld, not zero.';
   OFF_AR   constant text := 'خارج نطاق المرشّح المختار (القسم غير محدَّد في هذا العرض).';
@@ -487,25 +492,52 @@ begin
                'production', 'docs/operations_center_RUNME.sql');
     if (e_ops->>'state') = 'ok' then
       d := (e_ops->'data')->'counters';
-      -- الجاهزية التشغيلية: نسبة المهامّ القادمة الخالية من نقص مُعلَن.
-      -- ★ لا تُحسب حين لا توجد مهامّ ★ — «١٠٠٪ جاهز» بلا مهمّة رقم فارغ يطمئن كذبًا.
-      v_c := coalesce((d->>'today')::bigint, 0) + coalesce((d->>'next_7_days')::bigint, 0);
-      if v_c = 0 then
+      -- ★ الجاهزية = متوسّط درجات جاهزية المهامّ في النافذة نفسها ★
+      --   الصيغة السابقة كانت: (اليوم + ٧ أيام) − (نقص طاقم + نقص معدّات + نقص
+      --   تصاريح) ÷ (اليوم + ٧ أيام). وهي خاطئة من وجهين معًا:
+      --     (١) البسط والمقام من **نافذتين مختلفتين**: عدّادات النقص في مركز
+      --         التشغيل محسوبة على ١٤ يومًا (الطاقم والمعدّات) و٢١ يومًا
+      --         (التصاريح)، بينما المقام ٨ أيام. المطروح يستطيع أن يتجاوز المقام.
+      --     (٢) المهمّة الناقصة في ثلاثة أوجه تُطرَح **ثلاث مرّات**.
+      --   النتيجة العملية: ٣ مهامّ جاهزة تمامًا هذا الأسبوع، و٥ مهامّ ناقصة طاقمًا
+      --   بعد أسبوعين ⇒ الجاهزية ٠٪ وتنبيه «جاهزية منخفضة» بشدّة عالية. رقم
+      --   يصحّ حسابيًّا ويكذب دلاليًّا — وهو ما تُوجد هذه اللوحة لمنعه.
+      --   الصفوف نفسها تحمل readiness لكلّ مهمّة (من prodops_readiness_core،
+      --   وهي ثمانية فحوص مطلوبة على الأقلّ)، وهي المقياس الصحيح: النافذة نفسها،
+      --   وبلا ازدواج عدّ.
+      select count(*),
+             count(*) filter (where nullif(x->>'readiness', '') is not null),
+             round(avg(nullif(x->>'readiness', '')::numeric), 1)
+        into v_jobs, v_c, v_n
+        from (
+          select e as x from jsonb_array_elements(coalesce((e_ops->'data')->'today', '[]'::jsonb)) e
+          union all
+          select e as x from jsonb_array_elements(coalesce((e_ops->'data')->'next_7_days', '[]'::jsonb)) e
+        ) s;
+      if coalesce(v_jobs, 0) = 0 then
+        -- ★ لا تُحسب حين لا توجد مهامّ ★ — «١٠٠٪ جاهز» بلا مهمّة رقم فارغ يطمئن كذبًا.
         v_kpis := v_kpis || public.mgmt_kpi('operational_readiness','production','percent', false,
           'no_basis','no_scheduled_jobs',
           'لا مهامّ مجدولة في نافذة الموديول (اليوم + ٧ أيام) — لا أساس لحساب نسبة جاهزية. هذا ليس ١٠٠٪.',
           'No scheduled jobs in the module window (today + 7 days) — no basis for a readiness percentage. This is not 100%.',
           null, null, 'module_default');
+      elsif coalesce(v_c, 0) = 0 or v_n is null then
+        -- مهامّ موجودة ولا درجة جاهزية لواحدة منها: هذا «لا نعرف» لا «صفر».
+        v_kpis := v_kpis || public.mgmt_kpi('operational_readiness','production','percent', false,
+          'no_basis','readiness_not_reported',
+          'مركز التشغيل لم يُعِد درجة جاهزية لأيّ مهمّة في النافذة — لا أساس للنسبة. هذا ليس صفرًا.',
+          'The operations centre reported no readiness score for any job in the window — no basis for a percentage. This is not a zero.',
+          null, null, 'module_default');
       else
-        v_n := round(100.0 * greatest(v_c - (
-                 coalesce((d->>'missing_crew')::bigint, 0)
-               + coalesce((d->>'missing_equipment')::bigint, 0)
-               + coalesce((d->>'missing_permits')::bigint, 0)), 0) / v_c, 1);
         v_kpis := v_kpis || public.mgmt_kpi('operational_readiness','production','percent', false,
           'ok', null, null, null, v_n, v_c, 'module_default',
-          jsonb_build_object('jobs_in_window', v_c,
+          jsonb_build_object(
+            'basis', 'avg_job_readiness_score',
+            'jobs_in_window', v_jobs, 'scored_jobs', v_c,
             'missing_crew', d->'missing_crew', 'missing_equipment', d->'missing_equipment',
-            'missing_permits', d->'missing_permits', 'media_not_backed_up', d->'media_not_backed_up'));
+            'missing_permits', d->'missing_permits', 'media_not_backed_up', d->'media_not_backed_up',
+            'counters_window_note_ar', 'عدّادات النقص أعلاه محسوبة على نافذة مركز التشغيل (١٤ يومًا للطاقم والمعدّات و٢١ للتصاريح) لا على نافذة هذه النسبة (اليوم + ٧ أيام)، ولا تُطرَح منها.',
+            'counters_window_note_en', 'The shortage counters above use the operations centre''s own window (14 days for crew and equipment, 21 for permits), not this percentage''s window (today + 7 days). They are not subtracted from it.'));
       end if;
     else
       v_kpis := v_kpis || public.mgmt_kpi('operational_readiness','production','percent', false,
@@ -1390,6 +1422,25 @@ begin
   v := public.mgmt_norm_filters('{}'::jsonb);
   if jsonb_array_length(v->'departments') <> 4 then
     raise exception 'MGMT SELF-TEST: الافتراض ليس «كلّ الأقسام»'; end if;
+  -- المتصل يقصّر عمر النسخة ولا يمدّده: تمديده = نافذة قراءة بعد سحب الصلاحية
+  v := public.mgmt_norm_filters('{"ttl_seconds":3600}'::jsonb);
+  if (v->>'ttl_seconds')::int > 300 then
+    raise exception 'MGMT SELF-TEST: المتصل مدّد عمر النسخة المخبّأة إلى % ثانية — يقرأ بعد سحب صلاحيته',
+      v->>'ttl_seconds'; end if;
+  v := public.mgmt_norm_filters('{"ttl_seconds":30}'::jsonb);
+  if (v->>'ttl_seconds')::int <> 30 then
+    raise exception 'MGMT SELF-TEST: التقصير الطوعيّ للعمر لا يسري'; end if;
+
+  -- (18b) ★ الجاهزية لا تُبنى بطرح عدّادات من نافذة أخرى ★
+  --       فحص يستطيع أن يفشل: الصيغة القديمة كانت تطرح عدّادات ١٤/٢١ يومًا من
+  --       مقام ٨ أيام وتعدّ المهمّة الواحدة ثلاث مرّات ⇒ ٠٪ لفريق جاهز.
+  v_def := pg_get_functiondef(to_regprocedure('public.mgmt_compute(jsonb)'));
+  if v_def not ilike '%avg_job_readiness_score%' then
+    raise exception 'MGMT SELF-TEST: الجاهزية لا تُحسب من متوسّط درجات المهامّ في النافذة نفسها'; end if;
+  if v_def ilike '%(d->>''missing_crew'')::bigint%' then
+    raise exception 'MGMT SELF-TEST: الجاهزية ما زالت تطرح عدّادات النقص من مقام نافذة أخرى'; end if;
+  if v_def not ilike '%readiness_not_reported%' then
+    raise exception 'MGMT SELF-TEST: غياب درجات الجاهزية يُقرأ صفرًا بدل «لا أساس»'; end if;
 
   -- (19) التنبيهات لا تُبنى على مؤشّر ليس ok، وتُعلن العمى بدل الصمت عنه
   v := public.mgmt_alerts_from(jsonb_build_array(

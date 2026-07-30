@@ -25,19 +25,18 @@ const PAGE = read("app/client-portal/finance/page.tsx");
 test("(١) كلّ دالّة قراءة مالية تُغلق على العميل قبل قراءة صفّ", () => {
   for (const f of GATED_READ_FNS) {
     const b = funcBody(f);
-    assert.match(b, /if not coalesce\(public\.finops_can_(view|manage|request|export)/,
-      `${f} بلا بوّابة`);
+    assert.match(b, /public\.finops_can_\w+\(\)/, `${f} بلا بوّابة`);
+    assert.match(b, /not authorized/, `${f} لا ترفع منعًا صريحًا`);
   }
-  // والبوّابات كلّها تستبعد العميل: إمّا بـis_staff مباشرةً، أو بتركيب فوق
-  // بوّابة تشترطها (can_export فوق can_view، وmanage_receivables فوق can_manage).
-  for (const p of ["finops_can_view", "finops_can_manage", "finops_can_approve",
-    "finops_can_view_profit", "finops_can_request"]) {
+  // البوّابات الأساسية تستبعد العميل بـis_staff مباشرةً، والمشتقّة تُركَّب فوقها.
+  for (const p of ["finops_can_view_finance_sensitive", "finops_can_view_collections",
+    "finops_can_record_collection", "finops_can_approve_expense", "finops_can_request"]) {
     assert.match(funcBody(p), /is_staff\(\)/, `${p} لا تستبعد العميل مباشرةً`);
   }
-  for (const [p, base] of [["finops_can_export", "finops_can_view"],
-    ["finops_can_manage_receivables", "finops_can_manage"]]) {
-    assert.match(funcBody(p), new RegExp(`public\\.${base}\\(\\)`),
-      `${p} لا تُركَّب فوق ${base} ⇒ قد تتجاوز شرط is_staff`);
+  for (const p of ["finops_can_manage_finance", "finops_can_manage_suppliers",
+    "finops_can_export_sensitive", "finops_can_export_collections"]) {
+    assert.match(funcBody(p), /public\.finops_can_view_(finance_sensitive|collections)\(\)/,
+      `${p} لا تُركَّب فوق بوّابة تشترط is_staff ⇒ قد تتجاوز استبعاد العميل`);
   }
 });
 
@@ -46,8 +45,7 @@ test("(١ب) كلّ دالّة كتابة مالية مغلقة على العم�
     const b = funcBody(f);
     assert.match(b, /not authorized/, `${f} لا ترفع منعًا`);
     // كلّ كتابة تمرّ بمُسنَد من مُسنَدات الموديول (كلّها تشترط is_staff)
-    assert.match(b, /finops_can_(manage|approve|request|manage_receivables)\(\)|is_owner\(\)/,
-      `${f} بلا مُسنَد يستبعد العميل`);
+    assert.match(b, /finops_can_\w+\(\)|is_owner\(\)/, `${f} بلا مُسنَد يستبعد العميل`);
   }
 });
 
@@ -61,7 +59,7 @@ test("(٢) لا سياسة قراءة تربط صفًّا ماليًّا بال�
   const policies = rls.match(/using \([^)]*\)/g) || [];
   assert.ok(policies.length >= 5, "عدد السياسات أقلّ من المتوقّع — هل حُذفت سياسات؟");
   for (const p of policies) {
-    assert.match(p, /finops_can_(view|manage|view_profit)\(\)|requested_by = auth\.uid\(\)|uploaded_by = auth\.uid\(\)|request_id/,
+    assert.match(p, /finops_can_(view_finance_sensitive|manage_finance|approve_expense)\(\)|requested_by = auth\.uid\(\)|uploaded_by = auth\.uid\(\)|request_id|entity_type in/,
       `سياسة بشرط غير معروف قد تسمح لعميل: ${p}`);
   }
 });
@@ -117,7 +115,7 @@ test("(٤ب) الشاشة تقول للعميل السبب ولا تعرض تب�
 
 test("العميل لا يصل إلى الربحية بأيّ طريق — الطبقات الثلاث معًا", () => {
   // الدالّة
-  assert.match(funcBody("finops_profitability"), /finops_can_view_profit\(\)/);
+  assert.match(funcBody("finops_profitability"), /finops_can_view_finance_sensitive\(\)/);
   // الجداول
   const rls = section("-- §4) RLS");
   assert.match(rls, /fin_revenue/, "جدول الإيراد خارج السياسات");

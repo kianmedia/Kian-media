@@ -42,8 +42,8 @@ test("الموديول يملك مُسنَداته: لا اعتماد على can
 });
 
 test("كلّ بوّابة عرض تشترط كون المستخدم موظّفًا — العميل خارج بنيويًّا", () => {
-  for (const p of ["finops_can_view", "finops_can_manage", "finops_can_approve",
-    "finops_can_view_profit", "finops_can_request"]) {
+  for (const p of ["finops_can_view_finance_sensitive", "finops_can_view_collections",
+    "finops_can_record_collection", "finops_can_approve_expense", "finops_can_request"]) {
     assert.match(funcBody(p), /is_staff\(\)/, `${p} لا تشترط is_staff`);
     assert.match(funcBody(p), /auth\.uid\(\) is not null/, `${p} لا تشترط جلسة`);
   }
@@ -51,31 +51,34 @@ test("كلّ بوّابة عرض تشترط كون المستخدم موظّفً
     "تعريف العميل ليس «ليس موظّفًا»");
 });
 
-test("★ بوّابة الهامش أضيق فعلًا ★ — في الدوالّ وفي سياسات RLS معًا", () => {
-  // ١) الربحية لها بوّابتها الخاصّة
-  assert.match(funcBody("finops_profitability"), /finops_can_view_profit\(\)/,
-    "الربحية تُفتح ببوّابة العرض العامّة");
-  // ٢) والجداول التي تكشف طرف الإيراد لها السياسة الأضيق
+test("★ الربحية وطرفا معادلتها خلف بوّابة المالك ★ — في الدوالّ وفي RLS معًا", () => {
+  // ١) الربحية خلف البوّابة الحسّاسة
+  assert.match(funcBody("finops_profitability"), /finops_can_view_finance_sensitive\(\)/,
+    "الربحية تُفتح ببوّابة أوسع من بوّابة المالك");
+  // ٢) وجداول طرف الإيراد وطرف التكلفة في المجموعة نفسها — لا قسمة بينهما
   const rls = section("-- §4) RLS");
-  for (const t of PROFIT_TABLES) {
-    assert.ok(rls.includes(`'${t}'`), `${t} خارج مجموعة سياسات الهامش`);
+  for (const t of [...PROFIT_TABLES, "fin_costs", "fin_receivables"]) {
+    assert.ok(rls.includes(`'${t}'`), `${t} خارج مجموعة السياسات الحسّاسة`);
   }
-  assert.match(rls, /finops_can_view_profit\(\)\)'?,?\s*\n?\s*t \|\| '_read'/,
-    "سياسات جداول الهامش لا تستعمل بوّابة الربحية");
+  assert.match(rls, /finops_can_view_finance_sensitive\(\)\)'?,?[\s\S]{0,60}t \|\| '_read'/,
+    "سياسات الجداول الحسّاسة لا تستعمل البوّابة الحسّاسة");
   // ٣) واللوحة تُصرّح بالحجب بدل إعادة أصفار
   const dash = funcBody("finops_dashboard");
   assert.match(dash, /'profit_visible', false/, "اللوحة لا تُصرّح بحجب الربحية");
   assert.match(dash, /'profit', null/, "اللوحة تُعيد ربحية صفرية بدل حجب صريح");
-  // ٤) وتصدير الإيراد مُبوَّب مرّتين
-  assert.match(funcBody("finops_export"), /p_dataset = 'revenue' and not coalesce\(public\.finops_can_view_profit/,
-    "تصدير الإيراد يمرّ ببوّابة العرض وحدها");
+  // ٤) والتصدير مقسوم ببوّابتين مستقلّتين
+  const exp = funcBody("finops_export");
+  assert.match(exp, /finops_can_export_sensitive\(\)/, "التصدير الشامل بلا بوّابته");
+  assert.match(exp, /finops_can_export_collections\(\)/,
+    "تصدير التحصيل بلا مفتاح مستقلّ — الصلاحية غير مقسومة");
 });
 
-test("كتابة طرف الإيراد تتطلّب بوّابة الهامش أيضًا — لا كتابة عمياء", () => {
-  for (const f of ["finops_contract_upsert", "finops_revenue_upsert", "finops_retainer_upsert"]) {
+test("كتابة طرف الإيراد للمالك وحده — لا كتابة عمياء ولا كتابة بمفتاح", () => {
+  for (const f of ["finops_contract_upsert", "finops_revenue_upsert", "finops_retainer_upsert",
+    "finops_receivable_upsert", "finops_cost_upsert", "finops_budget_upsert"]) {
     const b = funcBody(f);
-    assert.match(b, /finops_can_manage\(\)[\s\S]{0,80}finops_can_view_profit\(\)/,
-      `${f} تسمح بكتابة إيراد لمن لا يرى الهامش`);
+    assert.match(b, /finops_can_manage_finance\(\)/,
+      `${f} تسمح بكتابة طرف من معادلة الهامش لغير المالك`);
   }
 });
 
