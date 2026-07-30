@@ -110,6 +110,40 @@ const nextConfig = {
         source: "/admin/:path*",
         headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
       },
+
+      // ── PWA V1 ────────────────────────────────────────────────────────────
+      {
+        // The service worker script must NEVER be served from a stale cache.
+        // A CDN-cached sw.js is how a fixed worker fails to reach the users who
+        // already have the broken one: the browser re-checks this URL on every
+        // navigation, and if the answer comes from cache the fix never lands.
+        //
+        // Service-Worker-Allowed is belt-and-braces: /sw.js already gets root
+        // scope by its own location, but the header makes the intent explicit
+        // and survives the file being moved.
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control",         value: "no-cache, no-store, must-revalidate, max-age=0" },
+          { key: "Service-Worker-Allowed", value: "/" },
+          { key: "Content-Type",          value: "application/javascript; charset=utf-8" },
+          { key: "X-Robots-Tag",          value: "noindex, nofollow" },
+        ],
+      },
+      {
+        // The manifest is public and tiny; revalidate hourly so an icon or name
+        // change reaches installed users without a hard refresh.
+        source: "/manifest.webmanifest",
+        headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
+      },
+      {
+        // The offline fallback is precached by the worker; it must not also be
+        // held indefinitely by the HTTP cache, or a stale copy outlives a fix.
+        source: "/offline",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
+          { key: "X-Robots-Tag",  value: "noindex, nofollow" },
+        ],
+      },
     ];
   },
 };

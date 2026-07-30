@@ -1456,71 +1456,303 @@ begin
   execute 'revoke all on function public.comms_outbox_guard() from public, anon, authenticated';
 end $grants$;
 
--- ─── 13.b THE anon PRIVILEGES THE PREFLIGHT FOUND ON THE LEGACY TABLES ──────
--- PREFLIGHT §5 reported anon holding REFERENCES, TRIGGER and TRUNCATE on
--- public.notifications, notification_events, notification_preferences,
--- notification_delivery_log and email_deliveries.
+-- ─── 13.b ANONYMOUS DIRECT TABLE ACCESS → ZERO ──────────────────────────────
+-- SCOPE: public.notifications, notification_events, notification_preferences,
+-- notification_delivery_log, email_deliveries, EVERY public.comms_* table, and
+-- the SEQUENCES those tables own. Grantees: anon AND PUBLIC.
 --
--- SOURCE, established from the repo rather than assumed: not one of the 263 SQL
--- files in docs/ grants anything to anon on any of those five tables, and the
--- repo already documents the real origin —
+-- WHAT CHANGED, AND WHY. An earlier pass revoked only REFERENCES, TRIGGER and
+-- TRUNCATE and deliberately left SELECT / INSERT / UPDATE / DELETE in place on
+-- the reasoning that "a public form might need them". That reasoning is now
+-- retired: a privilege that no caller exercises is not a spare capability, it is
+-- a standing hole that survives every review because nothing fails when it is
+-- abused. The revoke below removes EVERY privilege type instead.
+--
+-- SOURCE OF THE RESIDUE, established from the repo rather than assumed: not one
+-- SQL file in docs/ grants anything to anon on any of these tables. The origin is
 --   docs/authz_fixD_profiles_direct_write_RUNME.sql:34
 --     "grant all on all tables in schema public to anon, authenticated;"
--- which every Supabase project is created with. ALL expands to exactly SELECT,
--- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER; an earlier cleanup
--- removed the four CRUD verbs and left these three behind. That is the residue.
+-- which every Supabase project is created with.
 --
--- IS THERE A GENUINE ANONYMOUS CALLER? Checked before revoking anything:
---   • the only anonymous path that touches these tables is
---     public.submit_opportunity_request(...) (opportunities_center_RUNME.sql:117,
---     public_portal_rate_limit_RUNME.sql:195), granted to anon and used by the
---     PUBLIC opportunities form. It is SECURITY DEFINER and inserts through
---     public.notify(), so it runs as its owner and needs NO table grant at all.
---   • no browser module selects or writes any of these five tables directly
---     (grep of lib/, app/, components/ for .from("notifications") etc. → none).
--- Nothing legitimate depends on anon's table privileges here.
+-- IS THERE A GENUINE ANONYMOUS CALLER? Re-checked against the working tree
+-- before widening the revoke, because this is the step that would break a public
+-- form if the answer were yes:
+--   • DIRECT TABLE ACCESS FROM JAVASCRIPT: none. A grep across app/, lib/ and
+--     components/ for .from('notifications' | 'notification_events' |
+--     'notification_preferences' | 'notification_delivery_log' |
+--     'email_deliveries' | 'comms_*') returns ZERO hits outside tests/.
+--   • THE ROUTES THAT DO TOUCH THIS DATA — app/api/comms/process,
+--     app/api/comms/legacy-notify, app/api/integrations/project/notify,
+--     .../notify-admin, app/api/cron/notify-email and lib/server/notifyEvent.ts —
+--     all go through lib/server/supabaseAdmin (rpcAsUser / rpcAsService /
+--     selectAsService / patchAsService). Those are server-side identities. Not
+--     one of them is the anon role, so not one of them loses anything here.
+--     THE CRON ROUTE WAS CHECKED SPECIFICALLY: app/api/cron/notify-email imports
+--     rpcAsService only — it is service_role, never anon.
+--   • THE PUBLIC FORMS — the opportunities page and the quote request — reach
+--     this data through exactly ONE anonymous entry point:
+--     public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)
+--     (opportunities_center_RUNME.sql:117, public_portal_rate_limit_RUNME.sql:195).
+--     It is SECURITY DEFINER with `set search_path = public`, so its INSERT into
+--     opportunity_requests and its public.notify() fan-out both execute as the
+--     function OWNER. It needs NO table privilege of any kind, and it is a
+--     FUNCTION grant, which §13.c below leaves untouched.
+--   • THE PUBLIC CASE-STUDY SURFACE (cs_public_index / cs_public_study /
+--     cs_public_slugs, case_studies_platform_RUNME.sql:2611) is anon-granted but
+--     reads case-study tables only; it never touches a notification table.
+-- CONCLUSION: nothing legitimate depends on anon's table privileges here, so
+-- nothing is being routed through a new RPC — there is nothing to route.
 --
--- WHY THESE THREE MATTER, ordered by severity:
+-- WHY EACH TYPE MATTERS, so this is not a ritual:
 --   TRUNCATE   — row level security does NOT apply to TRUNCATE. anon holding it
 --                means the public browser key can empty the notification tables.
+--   DELETE     — RLS applies, but a permissive policy anywhere makes it real.
+--   INSERT     — forge a notification into someone else's inbox.
+--   SELECT     — read recipients and message bodies.
+--   UPDATE     — rewrite a delivery record into a false "delivered".
 --   TRIGGER    — attach a trigger to a table privileged code writes.
 --   REFERENCES — create a foreign key that constrains other people's deletes.
+--   USAGE      — on a SEQUENCE, not on a table. Handled separately below,
+--                because `revoke all on table` does not reach a sequence and a
+--                cleanup that forgets sequences leaves nextval() callable.
 --
--- The revoke below names ONLY these three privilege types, on ONLY these five
--- legacy tables. SELECT / INSERT / UPDATE / DELETE are deliberately NOT touched:
--- removing a privilege a public form might rely on is not this file's business,
--- and the POSTCHECK reports them under an allowlist instead of silently killing
--- them here.
-do $anon_legacy$
-declare t text; v_left text;
+-- FUNCTION EXECUTE IS NOT TOUCHED IN THIS BLOCK. Table privileges and routine
+-- privileges live in different catalogues and are revoked by different
+-- statements; mixing them is how a table cleanup silently kills an allowlisted
+-- public RPC. §13.c handles functions, separately and explicitly.
+do $anon_tables$
+declare
+  t text;
+  v_targets text[];
+  v_left text;
+  v_seq record;
+  v_nseq int := 0;
+  v_priv text;
+  v_preserved text := '';
 begin
-  foreach t in array array['notifications','notification_events','notification_preferences',
-                           'notification_delivery_log','email_deliveries'] loop
-    if to_regclass('public.' || t) is null then
+  -- The five legacy tables, plus every comms_* table that actually exists.
+  select array(
+    select x from unnest(array['notifications','notification_events',
+                               'notification_preferences','notification_delivery_log',
+                               'email_deliveries']) x
+    union
+    -- ::text explicitly: relname is `name`, and a UNION of name with text relies
+    -- on implicit resolution. 'p' as well as 'r' so a partitioned table is not
+    -- silently skipped.
+    select c.relname::text
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like 'comms\_%'
+  ) into v_targets;
+
+  foreach t in array v_targets loop
+    if to_regclass('public.' || quote_ident(t)) is null then
       raise notice 'ANON REVOKE — public.% is absent, skipped', t;
       continue;
     end if;
-    -- Both grantees: a privilege held via PUBLIC is not removed by revoking
-    -- from anon, and vice versa. Revoking one and calling it done is how a
-    -- privilege survives a cleanup that reports success.
-    execute format('revoke references, trigger, truncate on table public.%I from anon', t);
-    execute format('revoke references, trigger, truncate on table public.%I from public', t);
+
+    -- ★ PRESERVE authenticated BEFORE REVOKING PUBLIC ★
+    -- Exactly the hazard §13.c already handles for FUNCTIONS, which applies to
+    -- TABLES for the same reason and was previously only ASSUMED away here.
+    -- `authenticated` is a MEMBER of PUBLIC, so `revoke ... from public` removes
+    -- any privilege authenticated holds ONLY by inheritance. One real caller
+    -- depends on that: lib/portal/account.ts reads and PATCHes
+    -- notification_preferences directly through PostgREST with a user JWT.
+    --
+    -- The comment block above argues the stock Supabase grant names
+    -- `authenticated` directly, so this loop should be a no-op. It is kept
+    -- because "should be a no-op" is not a guarantee, and the failure mode is
+    -- silent: the migration reports success and the preferences screen starts
+    -- returning empty a day later. has_table_privilege() reports the EFFECTIVE
+    -- privilege — inherited ones included — so re-granting it changes nothing
+    -- authenticated could not already do. This WIDENS NOTHING: it can only
+    -- restate access that exists at this instant, and it runs per table inside
+    -- the same transaction as the revoke that would have removed it.
+    foreach v_priv in array array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] loop
+      if has_table_privilege('authenticated', format('public.%I', t), v_priv)
+         and not exists (select 1 from information_schema.role_table_grants
+                          where table_schema = 'public' and table_name = t
+                            and grantee = 'authenticated' and privilege_type = v_priv) then
+        execute format('grant %s on table public.%I to authenticated', v_priv, t);
+        v_preserved := v_preserved || ' ' || t || ':' || v_priv;
+      end if;
+    end loop;
+
+    -- Two statements, not one. A privilege held via PUBLIC is NOT removed by
+    -- revoking from anon, and vice versa. Revoking one grantee and reporting
+    -- success is exactly how a privilege survives a cleanup.
+    --
+    -- `revoke all` is the catch-all so a privilege type a future PostgreSQL adds
+    -- is covered without editing this file. The explicit list that follows names
+    -- the seven table privilege types that exist today, so the intent is legible
+    -- in the file and does not depend on how ALL happens to expand.
+    execute format('revoke all privileges on table public.%I from anon', t);
+    execute format('revoke all privileges on table public.%I from public', t);
+    execute format('revoke select, insert, update, delete, truncate, references, trigger
+                      on table public.%I from anon', t);
+    execute format('revoke select, insert, update, delete, truncate, references, trigger
+                      on table public.%I from public', t);
   end loop;
 
-  -- Report, do not remove, whatever else anon still holds. The POSTCHECK turns
-  -- this into an allowlist assertion across ALL privilege types.
+  -- SEQUENCES. `revoke all on table` does not reach them. An identity column
+  -- (comms_audit.id is `bigint generated always as identity`) owns a sequence,
+  -- and USAGE/SELECT/UPDATE on a sequence are separate privileges. Discovered
+  -- through pg_depend rather than by guessing a _id_seq naming convention.
+  for v_seq in
+    select distinct s.relname as seqname
+      from pg_class s
+      join pg_namespace sn on sn.oid = s.relnamespace
+      join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass
+      join pg_class tb on tb.oid = d.refobjid
+      join pg_namespace tn on tn.oid = tb.relnamespace
+     where s.relkind = 'S' and sn.nspname = 'public' and tn.nspname = 'public'
+       and d.deptype in ('a','i')
+       and tb.relname::text = any (v_targets)
+  loop
+    v_nseq := v_nseq + 1;
+    execute format('revoke all privileges on sequence public.%I from anon', v_seq.seqname);
+    execute format('revoke all privileges on sequence public.%I from public', v_seq.seqname);
+    execute format('revoke usage, select, update on sequence public.%I from anon', v_seq.seqname);
+    execute format('revoke usage, select, update on sequence public.%I from public', v_seq.seqname);
+  end loop;
+  raise notice 'ANON REVOKE — % owned sequence(s) stripped of USAGE/SELECT/UPDATE.', v_nseq;
+
+  -- VERIFY IN THE SAME TRANSACTION. No privilege_type filter: a check that
+  -- enumerates the four CRUD verbs is a denylist wearing an allowlist's name,
+  -- and that is precisely how REFERENCES/TRIGGER/TRUNCATE went unnoticed here.
   select string_agg(distinct table_name || ':' || privilege_type, ', ')
     into v_left
     from information_schema.role_table_grants
    where table_schema = 'public' and grantee in ('anon','PUBLIC')
-     and table_name in ('notifications','notification_events','notification_preferences',
-                        'notification_delivery_log','email_deliveries');
-  if v_left is null then
-    raise notice 'ANON REVOKE — anon/PUBLIC now hold NO privilege of any type on the five legacy notification tables.';
-  else
-    raise notice 'ANON REVOKE — REFERENCES/TRIGGER/TRUNCATE removed. STILL HELD (not touched by this file, review in the POSTCHECK): %', v_left;
+     and table_name::text = any (v_targets);
+  if v_left is not null then
+    raise exception 'HUB FAIL: anon/PUBLIC still hold table privilege(s) after the revoke: %', v_left;
   end if;
-end $anon_legacy$;
+  raise notice 'ANON REVOKE — anon/PUBLIC now hold NO table privilege of ANY type on % communications table(s).',
+               array_length(v_targets, 1);
+  if v_preserved <> '' then
+    raise notice 'ANON REVOKE — authenticated held these ONLY VIA PUBLIC and they were re-granted directly first '
+                 '(no widening; the account preferences screen would otherwise have broken silently):%', v_preserved;
+  else
+    raise notice 'ANON REVOKE — authenticated held every privilege directly; nothing needed preserving.';
+  end if;
+
+  -- VERIFY THE OTHER DIRECTION TOO. A cleanup that closes anon and quietly
+  -- closes the one legitimate logged-in caller is not a success.
+  if to_regclass('public.notification_preferences') is not null
+     and not (has_table_privilege('authenticated', 'public.notification_preferences', 'SELECT')
+              and has_table_privilege('authenticated', 'public.notification_preferences', 'UPDATE')) then
+    raise exception 'HUB FAIL: the revoke stripped authenticated of SELECT/UPDATE on notification_preferences — '
+                    'lib/portal/account.ts reads and PATCHes it with a user JWT and would break.';
+  end if;
+end $anon_tables$;
+
+-- ─── 13.c THE PUBLIC-CALLABLE FUNCTION ALLOWLIST ────────────────────────────
+-- Separate statement class, separate catalogue, separate block — on purpose.
+-- Nothing above touched EXECUTE, and nothing here touches a table privilege.
+--
+-- THE ALLOWLIST, by name AND signature. Exactly one entry:
+--   public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)
+-- It qualifies on every count the standard requires:
+--   SECURITY DEFINER      — yes, with `set search_path = public` pinned.
+--   payload-validated     — p_type checked against a closed 10-value list,
+--                           p_full_name required non-blank, p_consent must be true.
+--   rate-limited          — public_portal_rate_limit_RUNME.sql wraps it in
+--                           rl_consume() before any row is written.
+--   no caller-selected recipient — the caller cannot name who gets notified. The
+--                           recipient set is derived server-side from
+--                           profiles.staff_role matched against the request type;
+--                           no parameter reaches public.notify()'s target.
+--   grants no table access — being SECURITY DEFINER, it runs as its owner; anon
+--                           holds nothing on any table it writes.
+-- NOTHING in the communications surface is allowlisted. The revoke below is
+-- therefore total for that surface.
+--
+-- WHY authenticated IS GRANTED BEFORE PUBLIC IS REVOKED, and why that is not a
+-- widening: PostgreSQL grants EXECUTE to PUBLIC on every newly created function,
+-- and `authenticated` is a member of PUBLIC. If a staff-facing RPC has only ever
+-- held that default grant, a bare `revoke ... from public` would take it away
+-- from logged-in staff too and break the admin UI. Re-granting to authenticated
+-- first preserves exactly the access authenticated already had — it adds none.
+-- ONE HONEST SIDE EFFECT: that access stops being implicit (via PUBLIC) and
+-- becomes an explicit grant. The effective permission is identical today, but a
+-- future `revoke ... from public` will no longer remove it. That is stated here
+-- rather than discovered later.
+-- Tightening `authenticated` is a different question with a different blast
+-- radius and is NOT in this phase's scope.
+do $anon_functions$
+declare
+  r record;
+  v_allowlist text[] := array[
+    'submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)'
+  ];
+  v_sig text;
+  v_n int := 0;
+  v_left text;
+  v_secdef boolean;
+  v_cfg text;
+begin
+  for r in
+    select p.oid,
+           p.proname,
+           pg_get_function_identity_arguments(p.oid) as args,
+           p.prosecdef,
+           coalesce(array_to_string(p.proconfig, ','), '') as cfg
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'comms\_%'
+         or p.proname like 'notification%'
+         or p.proname like 'notify%')
+  loop
+    v_sig := r.proname || '(' || r.args || ')';
+    if v_sig = any (v_allowlist) then
+      raise notice 'FUNCTION ALLOWLIST — public.% is allowlisted, left as is', v_sig;
+      continue;
+    end if;
+    if not has_function_privilege('anon', r.oid, 'EXECUTE') then
+      continue;  -- already closed; nothing to preserve, nothing to revoke
+    end if;
+    -- Preserve what authenticated/service_role hold via PUBLIC, then close anon.
+    execute format('grant execute on function public.%I(%s) to authenticated, service_role', r.proname, r.args);
+    execute format('revoke execute on function public.%I(%s) from public', r.proname, r.args);
+    execute format('revoke execute on function public.%I(%s) from anon',   r.proname, r.args);
+    v_n := v_n + 1;
+  end loop;
+  raise notice 'FUNCTION ALLOWLIST — EXECUTE closed to anon/PUBLIC on % communications function(s).', v_n;
+
+  -- The allowlisted RPC must still be callable, and must still deserve to be.
+  -- If the public opportunities form is dead, that is a failure of this file.
+  if to_regprocedure('public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)') is not null then
+    if not has_function_privilege('anon',
+         'public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)', 'EXECUTE') then
+      raise exception 'HUB FAIL: the allowlisted public RPC lost anon EXECUTE — the opportunities form is broken';
+    end if;
+    -- Dedicated scalars, NOT the loop's record variable: `select into` rebinds a
+    -- record's fields to the select list's output names, so reusing `r` here
+    -- would silently read a differently-shaped row.
+    select p.prosecdef, coalesce(array_to_string(p.proconfig, ','), '')
+      into v_secdef, v_cfg
+      from pg_proc p
+     where p.oid = 'public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)'::regprocedure;
+    if not coalesce(v_secdef, false) then
+      raise exception 'HUB FAIL: the allowlisted public RPC is not SECURITY DEFINER';
+    end if;
+    if coalesce(v_cfg, '') not ilike '%search_path%' then
+      raise exception 'HUB FAIL: the allowlisted public RPC has no pinned search_path';
+    end if;
+  else
+    raise notice 'FUNCTION ALLOWLIST — submit_opportunity_request absent on this database; nothing to preserve.';
+  end if;
+
+  -- No unallowlisted communications function may remain anon-callable.
+  select string_agg(distinct routine_name, ', ') into v_left
+    from information_schema.routine_privileges
+   where routine_schema = 'public' and grantee in ('anon','PUBLIC')
+     and (routine_name like 'comms\_%' or routine_name like 'notification%'
+       or routine_name like 'notify%');
+  if v_left is not null then
+    raise exception 'HUB FAIL: anon/PUBLIC still hold EXECUTE on communications function(s): %', v_left;
+  end if;
+end $anon_functions$;
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- §90 SELF-TESTS — STATIC ONLY.
@@ -1784,19 +2016,52 @@ begin
     raise exception 'HUB FAIL: comms_settle accepts a delivered outcome without delivery evidence';
   end if;
 
-  -- (9d) THE anon PRIVILEGES §13.b REVOKED ARE ACTUALLY GONE.
-  --      Only the three types this file revoked are fatal here; a residual
-  --      SELECT/INSERT is a pre-existing condition that must be REPORTED, not
-  --      used to abort an unrelated migration. The POSTCHECK holds the full
-  --      allowlist across all privilege types.
+  -- (9d) ANONYMOUS DIRECT TABLE ACCESS IS ZERO — ACROSS ALL PRIVILEGE TYPES.
+  --      NO privilege_type filter. The previous version of this assertion named
+  --      REFERENCES/TRIGGER/TRUNCATE and treated a residual SELECT or INSERT as
+  --      "a pre-existing condition to report". That is what let CRUD sit here.
+  --      §13.b now revokes everything, so anything left is a failure.
   select count(*) into v_n
     from information_schema.role_table_grants
    where table_schema = 'public' and grantee in ('anon','PUBLIC')
-     and privilege_type in ('REFERENCES','TRIGGER','TRUNCATE')
-     and table_name in ('notifications','notification_events','notification_preferences',
-                        'notification_delivery_log','email_deliveries');
+     and (table_name like 'comms\_%'
+       or table_name in ('notifications','notification_events','notification_preferences',
+                         'notification_delivery_log','email_deliveries'));
   if v_n > 0 then
-    raise exception 'HUB FAIL: anon/PUBLIC still holds % REFERENCES/TRIGGER/TRUNCATE grant(s) on the legacy notification tables', v_n;
+    raise exception 'HUB FAIL: anon/PUBLIC still hold % table privilege(s) of some type on the communications tables', v_n;
+  end if;
+
+  -- (9d-ii) NON-VACUITY. If the catalogue view returns nothing for anon
+  --         ANYWHERE in public, the check above passes because it is blind, not
+  --         because the tables are clean. anon legitimately holds privileges on
+  --         other public tables, so an empty result means the probe is broken.
+  select count(*) into v_n
+    from information_schema.role_table_grants
+   where table_schema = 'public' and grantee in ('anon','PUBLIC');
+  if v_n = 0 then
+    raise exception 'HUB FAIL: the anon privilege probe returned nothing anywhere in public — the check is vacuous, not passing';
+  end if;
+
+  -- (9d-iii) SEQUENCES. Revoking table privileges never touches a sequence.
+  select count(*) into v_n
+    from information_schema.usage_privileges u
+   where u.object_schema = 'public' and u.object_type = 'SEQUENCE'
+     and u.grantee in ('anon','PUBLIC')
+     and exists (
+       select 1
+         from pg_class s
+         join pg_namespace sn on sn.oid = s.relnamespace
+         join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass
+         join pg_class tb on tb.oid = d.refobjid
+        where s.relkind = 'S' and sn.nspname = 'public'
+          and s.relname::text = u.object_name::text
+          and d.deptype in ('a','i')
+          and (tb.relname::text like 'comms\_%'
+            or tb.relname::text in ('notifications','notification_events',
+                                    'notification_preferences','notification_delivery_log',
+                                    'email_deliveries')));
+  if v_n > 0 then
+    raise exception 'HUB FAIL: anon/PUBLIC still hold % privilege(s) on sequences owned by the communications tables', v_n;
   end if;
 
   -- (10) CHANNELS SHIP SAFE: nothing may send after this migration.

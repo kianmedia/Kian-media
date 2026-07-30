@@ -48,8 +48,14 @@ const daysAgo = (n: number): string => {
 };
 
 const ORDER: Record<ExecDepartment, string[]> = {
-  communications: ["notifications_pending", "notifications_failed"],
-  production: ["operational_readiness", "resource_conflicts", "upcoming_jobs"],
+  communications: [
+    "notifications_pending", "notifications_failed",
+    "ai_knowledge_approved", "ai_leads_pending_review",
+  ],
+  production: [
+    "operational_readiness", "resource_conflicts", "upcoming_jobs",
+    "live_sessions_active", "live_open_incidents",
+  ],
   sales: ["new_leads", "pipeline_value", "weighted_forecast", "stalled_opportunities"],
   finance: ["expenses", "commitments", "overdue_collections", "estimated_profitability"],
 };

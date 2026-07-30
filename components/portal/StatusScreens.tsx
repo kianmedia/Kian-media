@@ -2,6 +2,19 @@
 // Account-status gates: blocked = full-stop screen; inactive = read-only banner.
 import { useI18n } from "@/lib/i18n";
 import { logout } from "@/lib/portal/auth";
+import { onSignOutClearCaches } from "@/lib/pwa/privateCache";
+
+// PWA · LOGOUT — this is the SECOND sign-out button in the portal. The first
+// (PortalShell.signOut) already destroys the service-worker caches and forgets
+// the remembered identity. This one is reached by a suspended account, which is
+// exactly the account whose device is most likely to be handed to someone else,
+// so it must do the same thing. Best-effort: a purge failure must never trap a
+// user in a session they asked to leave, so the reload happens either way.
+async function signOutAndPurge(): Promise<void> {
+  await logout();
+  try { await onSignOutClearCaches(); } catch { /* non-blocking */ }
+  window.location.reload();
+}
 
 const WA = "https://wa.me/966503422999";
 
@@ -25,7 +38,7 @@ export function BlockedScreen() {
         <a href={WA} target="_blank" rel="noopener noreferrer" className="btn-wa" style={{ justifyContent: "center" }}>
           <span>{t({ ar: "تواصل عبر واتساب", en: "Contact on WhatsApp" })}</span>
         </a>
-        <button onClick={() => { void logout().then(() => window.location.reload()); }} className="btn-ghost" style={{ justifyContent: "center" }}>
+        <button onClick={() => { void signOutAndPurge(); }} className="btn-ghost" style={{ justifyContent: "center" }}>
           <span>{t({ ar: "تسجيل الخروج", en: "Sign Out" })}</span>
         </button>
       </div>

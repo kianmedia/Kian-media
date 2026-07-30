@@ -96,12 +96,14 @@ const INTERNAL_FNS = [
 /** الواجهة العامّة المُبوَّبة. */
 const GATED_FNS = ["mgmt_sources", "mgmt_dashboard", "mgmt_refresh", "mgmt_export"];
 
-/** المؤشّرات الثلاثة عشر. */
+/** المؤشّرات السبعة عشر (١٣ أصليّة + ٤ أضيفت في التدقيق النهائيّ). */
 const KPI_KEYS = [
   "notifications_pending", "notifications_failed", "operational_readiness",
   "resource_conflicts", "upcoming_jobs", "new_leads", "pipeline_value",
   "weighted_forecast", "stalled_opportunities", "expenses", "commitments",
   "overdue_collections", "estimated_profitability",
+  "live_sessions_active", "live_open_incidents",
+  "ai_knowledge_approved", "ai_leads_pending_review",
 ];
 
 /** المؤشّرات الحسّاسة — المالك وحده، ولا مفتاح لها. */
@@ -116,6 +118,8 @@ const SOURCES = [
   { module: "production", sig: "public.prodops_dashboard(jsonb)", runme: "docs/operations_center_RUNME.sql" },
   { module: "sales", sig: "public.crm_dashboard(jsonb)", runme: "docs/crm_sales_FOUNDATION_RUNME.sql" },
   { module: "finance", sig: "public.finops_dashboard(jsonb)", runme: "docs/finance_profitability_RUNME.sql" },
+  { module: "live_operations", sig: "public.liveops_session_list(jsonb)", runme: "docs/live_operations_dashboard_RUNME.sql" },
+  { module: "ai_assistant", sig: "public.ai_admin_overview()", runme: "docs/kian_ai_assistant_RUNME.sql" },
 ];
 
 /** أسماء منصّة المشاريع المجمَّدة — لا يجوز أن تظهر في أيّ ملفّ من هذه الحزمة. */

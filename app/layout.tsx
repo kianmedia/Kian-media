@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import "./globals.css";
+import PwaProvider from "@/components/pwa/PwaProvider";
 
 const GA_ID = "G-2XZ60NZSSV";
 const SITE = "https://kianmedia.com";
@@ -42,6 +43,22 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
   alternates: { canonical: SITE },
   formatDetection: { telephone: true },
+
+  // ─── PWA installation metadata ──────────────────────────────────────────
+  // The manifest link tag is injected by Next from app/manifest.ts — do NOT
+  // add a second one here or the document ships two tags that can disagree
+  // after a rename, and the browser picks whichever it saw first.
+  //
+  // iOS ignores the manifest for the home-screen title, the standalone flag and
+  // the status-bar colour; it reads these apple-* tags instead. Without them an
+  // installed iPhone icon is labelled with the truncated <title> and the app
+  // opens in a browser view rather than standalone.
+  applicationName: "كيان | Kian",
+  appleWebApp: {
+    capable: true,
+    title: "كيان | Kian",
+    statusBarStyle: "black-translucent",
+  },
 };
 
 // ─── Structured data: LocalBusiness + Organization ──────────────────────────
@@ -153,6 +170,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           `}
         </Script>
         {children}
+
+        {/* PWA runtime: registration, update indicator, offline notice, install
+            prompt. Mounted last and rendering only fixed overlays, so it cannot
+            shift or intercept any existing page content. */}
+        <PwaProvider />
       </body>
     </html>
   );

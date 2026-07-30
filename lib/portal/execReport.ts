@@ -257,6 +257,13 @@ export const KPI_LABEL: Record<string, { ar: string; en: string }> = {
   commitments:             { ar: "الالتزامات",             en: "Commitments" },
   overdue_collections:     { ar: "تحصيلات متأخّرة",        en: "Overdue collections" },
   estimated_profitability: { ar: "ربحية تقديرية",          en: "Estimated profitability" },
+  // ★ العمليات المباشرة ومساعد كيان — عدّ إداريّ غير حسّاس فقط.
+  //   لا مفتاح بثّ ولا عنوان شبكة ولا نصّ محادثة يعبر إلى هنا؛ المصدر نفسه
+  //   (liveops_session_list / ai_admin_overview) لا يُخرج أيًّا منها أصلًا.
+  live_sessions_active:    { ar: "جلسات بثّ على الهواء",   en: "Live sessions on air" },
+  live_open_incidents:     { ar: "حوادث بثّ مفتوحة",       en: "Open live incidents" },
+  ai_knowledge_approved:   { ar: "مصادر معرفة معتمدة",     en: "Approved knowledge sources" },
+  ai_leads_pending_review: { ar: "مسوّدات عملاء بانتظار مراجعة", en: "Lead drafts awaiting review" },
 };
 
 export const DEPARTMENT_LABEL: Record<string, { ar: string; en: string }> = {

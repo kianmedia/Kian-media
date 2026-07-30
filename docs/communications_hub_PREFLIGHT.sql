@@ -14,6 +14,12 @@
 --      can be judged afterwards (the answer must be: none — the hub does not
 --      touch email_deliveries).
 --
+-- §5 additionally baselines ANONYMOUS EXPOSURE across every privilege type, on
+-- tables AND on sequences, and proves the probe is not vacuous. The RUNME takes
+-- anon/PUBLIC direct table access to ZERO — including the four CRUD verbs an
+-- earlier pass left in place — so this baseline is what that change is measured
+-- against. §5d names the single anonymous caller that must survive it.
+--
 -- Nothing here is fatal. Read the NOTICEs, then run the RUNME.
 -- ════════════════════════════════════════════════════════════════════════════
 
@@ -106,6 +112,83 @@ where table_schema = 'public' and grantee in ('anon','PUBLIC')
         'email_deliveries','notification_delivery_log'))
 order by 2, 3;
 
+-- ─── 5b) THE SAME QUESTION FOR SEQUENCES ───────────────────────────────────
+-- `revoke all on table` does NOT reach a sequence, and a sequence carries its
+-- own USAGE / SELECT / UPDATE privileges. comms_audit.id is
+-- `bigint generated always as identity`, so at least one sequence exists here.
+-- A cleanup that reports "no table privileges" while anon still holds USAGE on
+-- the owned sequence has not finished the job.
+select 'anon_grant_on_notification_sequence' as check_kind,
+       u.object_schema || '.' || u.object_name as name,
+       u.grantee || ' ' || u.privilege_type as state
+from information_schema.usage_privileges u
+where u.object_schema = 'public' and u.object_type = 'SEQUENCE'
+  and u.grantee in ('anon','PUBLIC')
+  and exists (
+    select 1
+      from pg_class s
+      join pg_namespace sn on sn.oid = s.relnamespace
+      join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass
+      join pg_class tb on tb.oid = d.refobjid
+     where s.relkind = 'S' and sn.nspname = 'public'
+       and s.relname::text = u.object_name::text
+       and d.deptype in ('a','i')
+       and (tb.relname::text like 'comms\_%'
+         or tb.relname::text in ('notifications','notification_events',
+                                 'notification_preferences','notification_delivery_log',
+                                 'email_deliveries')))
+order by 2, 3;
+
+-- ─── 5c) PROVE THE PROBE IS NOT BLIND (non-vacuity) ─────────────────────────
+-- §5 and §5b are "expect zero rows" checks. A zero-row result proves nothing if
+-- the catalogue query itself is wrong — a typo'd grantee name, an unsupported
+-- view — because a broken query also returns zero. anon legitimately holds
+-- privileges on OTHER public tables in this database, so the count below must be
+-- greater than zero. If it is zero, §5 is vacuous and must be fixed, not trusted.
+do $preflight_nonvacuity$
+declare v_any bigint; v_types text;
+begin
+  select count(*) into v_any
+    from information_schema.role_table_grants
+   where table_schema = 'public' and grantee in ('anon','PUBLIC');
+  select string_agg(distinct privilege_type, ', ' order by privilege_type) into v_types
+    from information_schema.role_table_grants
+   where table_schema = 'public' and grantee in ('anon','PUBLIC');
+  if v_any = 0 then
+    raise notice 'NON-VACUITY — ⚠️ anon/PUBLIC hold NOTHING anywhere in public. §5 cannot distinguish "clean" from "blind". Verify the probe before trusting it.';
+  else
+    raise notice 'NON-VACUITY — the probe sees % anon/PUBLIC grant(s) elsewhere in public, across types: %. §5 is therefore a real observation.', v_any, v_types;
+  end if;
+end $preflight_nonvacuity$;
+
+-- ─── 5d) THE DEPENDENCY THIS PHASE IS ABOUT: IS THERE AN ANONYMOUS CALLER? ──
+-- The RUNME revokes ALL anon table privileges, including SELECT/INSERT/UPDATE/
+-- DELETE that an earlier pass deliberately left behind. That is only safe if no
+-- anonymous caller uses them. Proven in the repo, restated here so the operator
+-- can see the dependency before running anything:
+--   • no browser module reads or writes these tables directly (zero .from(...)
+--     hits in app/, lib/, components/);
+--   • every server route uses lib/server/supabaseAdmin (service_role or a user
+--     JWT) — including app/api/cron/notify-email, which is rpcAsService only;
+--   • the one anonymous entry point, submit_opportunity_request, is SECURITY
+--     DEFINER and needs no table grant.
+-- The block below checks the LIVE database for the piece that must be true after
+-- the migration: that RPC must exist and keep its anon EXECUTE.
+do $preflight_public_caller$
+declare v_oid oid;
+begin
+  v_oid := to_regprocedure('public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)');
+  if v_oid is null then
+    raise notice 'PUBLIC CALLER — submit_opportunity_request is ABSENT on this database. Nothing anonymous reaches the notification tables.';
+    return;
+  end if;
+  raise notice 'PUBLIC CALLER — submit_opportunity_request present · SECURITY DEFINER = % · anon EXECUTE = % · pinned search_path = %',
+    (select prosecdef from pg_proc where oid = v_oid),
+    has_function_privilege('anon', v_oid, 'EXECUTE'),
+    (select coalesce(array_to_string(proconfig, ','), '') ilike '%search_path%' from pg_proc where oid = v_oid);
+  raise notice 'PUBLIC CALLER — all three must still read true in the POSTCHECK. The RUNME revokes TABLE privileges only; it never touches this FUNCTION grant.';
+end $preflight_public_caller$;
+
 -- ─── 6) PROVENANCE COLUMNS — only relevant if comms_outbox already exists ───
 -- The RUNME adds source_kind / is_legacy_mirror / delivery_mode / provider_state
 -- and backfills them. If the table is already there WITHOUT them, that backfill
@@ -151,6 +234,82 @@ begin
       from public.comms_outbox $q$ into v_txt;
   raise notice 'FORGED-SUCCESS BASELINE — %', v_txt;
 end $preflight_forged$;
+
+-- ─── 8) ★ THE DEPENDENCY THE PUBLIC REVOKE RESTS ON ★ ──────────────────────
+-- §13.b of the RUNME revokes EVERY table privilege from anon AND from PUBLIC on
+-- the five legacy notification tables. `authenticated` is a MEMBER of PUBLIC,
+-- so that revoke is only safe if authenticated holds its OWN direct grant.
+--
+-- ONE LEGITIMATE authenticated CALLER EXISTS and it reads a legacy table
+-- directly through PostgREST, not through an RPC:
+--   lib/portal/account.ts:32  pget  notification_preferences?user_id=eq...
+--   lib/portal/account.ts:42  ppatch notification_preferences?user_id=eq...
+-- Both send `Bearer <session.access_token>`, so they execute as `authenticated`.
+-- If that role's SELECT/UPDATE were inherited via PUBLIC rather than granted
+-- directly, the revoke would silently break the account preferences screen —
+-- and it would break it AFTER the migration reported success.
+--
+-- The RUNME no longer relies on that assumption (it preserves the effective
+-- privilege before revoking PUBLIC), but the assumption is still PROVEN here so
+-- the operator sees the real state of the database before touching it.
+-- Read the NOTICE: `via_public_only` naming any table is the interesting case.
+do $preflight_authenticated$
+declare
+  t text;
+  v_direct text := '';
+  v_via_public text := '';
+  v_absent text := '';
+  v_privs text[] := array['SELECT','INSERT','UPDATE','DELETE'];
+  p text;
+  v_has_direct boolean;
+  v_has_effective boolean;
+begin
+  foreach t in array array['notifications','notification_events','notification_preferences',
+                           'notification_delivery_log','email_deliveries']
+  loop
+    if to_regclass('public.' || quote_ident(t)) is null then
+      v_absent := v_absent || ' ' || t;
+      continue;
+    end if;
+    foreach p in array v_privs loop
+      -- DIRECT grant: the grantee column literally says 'authenticated'.
+      v_has_direct := exists (
+        select 1 from information_schema.role_table_grants
+         where table_schema = 'public' and table_name = t
+           and grantee = 'authenticated' and privilege_type = p);
+      -- EFFECTIVE privilege: true even when it is only inherited from PUBLIC.
+      v_has_effective := has_table_privilege('authenticated', format('public.%I', t), p);
+
+      if v_has_effective and not v_has_direct then
+        v_via_public := v_via_public || ' ' || t || ':' || p;
+      elsif v_has_direct then
+        v_direct := v_direct || ' ' || t || ':' || p;
+      end if;
+    end loop;
+  end loop;
+
+  if v_absent <> '' then
+    raise notice 'AUTHENTICATED DEPENDENCY — absent table(s), nothing to prove:%', v_absent;
+  end if;
+  raise notice 'AUTHENTICATED DEPENDENCY — held DIRECTLY (survives a PUBLIC revocation untouched):%',
+               coalesce(nullif(v_direct, ''), ' (none)');
+  if v_via_public <> '' then
+    raise notice 'AUTHENTICATED DEPENDENCY — ⚠️ held ONLY VIA PUBLIC:%', v_via_public;
+    raise notice 'AUTHENTICATED DEPENDENCY — ⚠️ a bare PUBLIC revocation WOULD have removed these. '
+                 '§13.b of the RUNME re-grants them to authenticated FIRST, so the account '
+                 'preferences screen (lib/portal/account.ts) keeps working. No action needed here.';
+  else
+    raise notice 'AUTHENTICATED DEPENDENCY — nothing is held only via PUBLIC. The revocation is a no-op for authenticated.';
+  end if;
+
+  -- Non-vacuity: prove the probe can actually SEE a privilege, so an all-clear
+  -- is not simply a query that matches nothing.
+  if not has_table_privilege('authenticated', 'public.profiles', 'SELECT')
+     and to_regclass('public.profiles') is not null then
+    raise notice 'AUTHENTICATED DEPENDENCY — ⚠️ probe saw NO privilege even on public.profiles; '
+                 'treat the all-clear above as UNPROVEN and investigate before running the RUNME.';
+  end if;
+end $preflight_authenticated$;
 
 do $preflight_done$
 begin

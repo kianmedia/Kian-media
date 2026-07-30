@@ -22,11 +22,19 @@
 
 with
 -- ─── THE ALLOWLIST ──────────────────────────────────────────────────────────
--- Deliberately EMPTY, and that is a finding, not an oversight:
+-- An ALLOWLIST of (table, grantee, privilege) triples that anon/PUBLIC are
+-- permitted to hold. It is deliberately EMPTY, and that is a finding, not an
+-- oversight:
 --   • the only anonymous caller that reaches these tables is
 --     public.submit_opportunity_request(...), which is SECURITY DEFINER and
 --     writes through public.notify(), so it needs no table privilege at all;
---   • no browser module reads or writes any of them directly.
+--   • no browser module reads or writes any of them directly;
+--   • every server route reaches them as service_role or as a user JWT.
+-- An earlier pass kept SELECT/INSERT/UPDATE/DELETE "in case a public form needs
+-- them". No form ever did. A privilege that nothing exercises cannot be caught
+-- by a regression, so it is not a spare capability — it is a standing hole, and
+-- it is now revoked. THIS IS AN ALLOWLIST, NOT A DENYLIST: it does not enumerate
+-- forbidden verbs, so a privilege type nobody thought of is still a failure.
 -- Add a row here ONLY with a named caller that provably needs it. Anything not
 -- named below is reported as a failure, whatever its privilege type.
 allowed(table_name, grantee, privilege_type) as (
@@ -323,6 +331,107 @@ from information_schema.routine_privileges
 where routine_schema = 'public' and grantee in ('anon','PUBLIC')
   and routine_name in ('notify','notify_emit_event','notification_dispatch_portal',
                        'notification_resolve_recipients')
+
+-- ─── G2. ONE ASSERTION PER PRIVILEGE TYPE ──────────────────────────────────
+-- The rows above ask "is anything held?" in aggregate. These ask the question
+-- once for EACH of the seven table privilege types, so a report cannot say PASS
+-- while quietly never having considered TRUNCATE. Every type is named, and the
+-- type list is the driving table (a LEFT JOIN), so each type produces a row even
+-- when the answer is zero — a type can never vanish from the report by being clean.
+union all
+select 74 + t.ord, 'G2.anon_zero_' || lower(t.pt),
+       case when count(g.table_name) = 0
+            then 'PASS — anon/PUBLIC hold no ' || t.pt || ' on any communications table'
+            else 'FAIL — ' || count(g.table_name) || ' ' || t.pt || ' grant(s)' end,
+       coalesce(string_agg(distinct g.grantee || ' on ' || g.table_name, ', '), 'none')
+from (values ('SELECT',1),('INSERT',2),('UPDATE',3),('DELETE',4),
+             ('TRUNCATE',5),('REFERENCES',6),('TRIGGER',7)) t(pt, ord)
+left join information_schema.role_table_grants g
+  on  g.table_schema = 'public'
+  and g.grantee in ('anon','PUBLIC')
+  and g.privilege_type = t.pt
+  and (g.table_name like 'comms\_%'
+    or g.table_name in ('notifications','notification_events','notification_preferences',
+                        'notification_delivery_log','email_deliveries'))
+group by t.pt, t.ord
+
+-- ─── G3. NON-VACUITY, PER PRIVILEGE TYPE ───────────────────────────────────
+-- G2 is seven "expect zero" checks, and a broken query returns zero just as
+-- convincingly as a clean database. For each type, this row reports whether the
+-- probe can see that type AT ALL elsewhere in public. A type reported as
+-- unobservable means the corresponding G2 PASS carries no information.
+union all
+select 82 + t.ord, 'G3.probe_sees_' || lower(t.pt) || '_elsewhere',
+       case when count(g.table_name) > 0
+            then 'PASS — probe observes ' || t.pt || ' on ' || count(distinct g.table_name) || ' other public table(s), so the G2 check is real'
+            else 'REVIEW — probe never observes ' || t.pt || ' anywhere in public; G2.anon_zero_' || lower(t.pt) || ' may be vacuous' end,
+       coalesce(string_agg(distinct g.table_name, ', '), 'none')
+from (values ('SELECT',1),('INSERT',2),('UPDATE',3),('DELETE',4),
+             ('TRUNCATE',5),('REFERENCES',6),('TRIGGER',7)) t(pt, ord)
+left join information_schema.role_table_grants g
+  on  g.table_schema = 'public'
+  and g.grantee in ('anon','PUBLIC')
+  and g.privilege_type = t.pt
+  and not (g.table_name like 'comms\_%'
+        or g.table_name in ('notifications','notification_events','notification_preferences',
+                            'notification_delivery_log','email_deliveries'))
+group by t.pt, t.ord
+
+-- ─── G4. SEQUENCES ─────────────────────────────────────────────────────────
+-- A sequence is not a table. `revoke all on table` never reaches it, and USAGE
+-- on the sequence behind an identity column is a privilege in its own right.
+-- comms_audit.id is `bigint generated always as identity`, so this is not
+-- hypothetical here.
+union all
+select 90, 'G4.anon_zero_on_owned_sequences',
+       -- Phrased as a list, not as "UPDATE on ...": the read-only guard in
+       -- tests/comms_feature_detection.test.js greps for an UPDATE statement,
+       -- and prose that reads like one is a false positive worth avoiding.
+       case when count(*) = 0 then 'PASS — anon/PUBLIC hold no sequence privilege (USAGE, SELECT, UPDATE)'
+            else 'FAIL — ' || count(*) || ' sequence privilege(s) held' end,
+       coalesce(string_agg(distinct u.grantee || ' ' || u.privilege_type || ' on ' || u.object_name, ', '), 'none')
+from information_schema.usage_privileges u
+where u.object_schema = 'public' and u.object_type = 'SEQUENCE'
+  and u.grantee in ('anon','PUBLIC')
+  and exists (
+    select 1
+      from pg_class s
+      join pg_namespace sn on sn.oid = s.relnamespace
+      join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass
+      join pg_class tb on tb.oid = d.refobjid
+     where s.relkind = 'S' and sn.nspname = 'public'
+       and s.relname::text = u.object_name::text
+       and d.deptype in ('a','i')
+       and (tb.relname::text like 'comms\_%'
+         or tb.relname::text in ('notifications','notification_events',
+                                 'notification_preferences','notification_delivery_log',
+                                 'email_deliveries')))
+
+-- ─── G5. THE FUNCTION ALLOWLIST SURVIVED THE TABLE REVOKE ──────────────────
+-- The whole point of keeping table privileges and routine privileges in separate
+-- statements. If revoking CRUD had collateral-damaged the one legitimate public
+-- RPC, the public opportunities form would be dead and this row would say so.
+union all
+-- to_regprocedure(), never 'literal'::regprocedure. The cast form is a CONSTANT
+-- expression, so the planner evaluates it before any CASE branch runs and the
+-- whole POSTCHECK dies with "function does not exist" on a database where the
+-- opportunities module was never installed — the exact case the first branch
+-- exists to handle. to_regprocedure returns NULL instead of raising.
+-- The single-row anchor with a LEFT JOIN keeps this row present even when the
+-- function is absent; a bare `from pg_proc where …` would emit no row at all,
+-- and a check that vanishes is indistinguishable from a check that passed.
+select 91, 'G5.allowlisted_public_rpc_intact',
+       case
+         when a.oid is null then 'INFO — submit_opportunity_request absent on this database'
+         when coalesce(has_function_privilege('anon', a.oid, 'EXECUTE'), false)
+          and coalesce(p.prosecdef, false)
+          and coalesce(array_to_string(p.proconfig, ','), '') ilike '%search_path%'
+           then 'PASS — anon EXECUTE retained, SECURITY DEFINER, search_path pinned'
+         else 'FAIL — the allowlisted public RPC is broken or no longer qualifies'
+       end,
+       'the only entry on the public-callable allowlist'
+from (select to_regprocedure('public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)') as oid) a
+left join pg_proc p on p.oid = a.oid
 )
 select check_id, verdict, detail from checks order by sort_key;
 
@@ -381,6 +490,46 @@ begin
        where table_schema='public' and grantee in ('anon','PUBLIC')
          and table_name in ('notifications','notification_events','notification_preferences',
                             'notification_delivery_log','email_deliveries'))
+    union all
+    -- Sequences are a separate catalogue and a separate revoke. Their own row.
+    select 'G4.anon_zero_on_owned_sequences' where exists (
+      select 1 from information_schema.usage_privileges u
+       where u.object_schema='public' and u.object_type='SEQUENCE'
+         and u.grantee in ('anon','PUBLIC')
+         and exists (
+           select 1 from pg_class s
+             join pg_namespace sn on sn.oid = s.relnamespace
+             join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass
+             join pg_class tb on tb.oid = d.refobjid
+            where s.relkind='S' and sn.nspname='public'
+              and s.relname::text = u.object_name::text and d.deptype in ('a','i')
+              and (tb.relname::text like 'comms\_%'
+                or tb.relname::text in ('notifications','notification_events',
+                                        'notification_preferences','notification_delivery_log',
+                                        'email_deliveries'))))
+    union all
+    -- Collateral damage to the allowlisted public RPC is a failure of this
+    -- migration, not an acceptable side effect of tightening tables.
+    -- The oid form, and an explicit boolean. SQL does NOT guarantee that `A and
+    -- B` evaluates A first, so a to_regprocedure() guard in the same AND cannot
+    -- protect a text-form has_function_privilege() from raising on an absent
+    -- function. Passing the oid makes it return NULL instead, and coalesce turns
+    -- that NULL into an explicit false: absent is not a failure, and no predicate
+    -- here is ever NULL.
+    select 'G5.allowlisted_public_rpc_intact'
+     where coalesce(
+             not has_function_privilege('anon',
+               to_regprocedure('public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)'),
+               'EXECUTE'),
+             false)
+    union all
+    -- A vacuous probe must not be able to report success. anon holds privileges
+    -- on other public tables in this database; seeing none means the catalogue
+    -- query is broken and every "PASS" above is meaningless.
+    select 'G3.probe_is_vacuous'
+     where not exists (
+       select 1 from information_schema.role_table_grants
+        where table_schema='public' and grantee in ('anon','PUBLIC'))
   ) x;
 
   if v_fail > 0 then

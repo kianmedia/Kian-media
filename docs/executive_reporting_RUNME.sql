@@ -43,7 +43,7 @@
 
 -- ─── §0) PREFLIGHT صلب — الاعتمادات التي لا تُحاكى ─────────────────────────
 do $pre$
-declare miss text := ''; n int := 0;
+declare miss text := ''; n int := 0; n_opt int := 0;
 begin
   if to_regclass('public.profiles')       is null then miss := miss || ' profiles'; end if;
   if to_regprocedure('public.is_staff()') is null then miss := miss || ' is_staff()'; end if;
@@ -66,8 +66,21 @@ begin
   if to_regprocedure('public.finops_dashboard(jsonb)') is null then
     raise notice 'MGMT: المالية غير مطبَّقة — المؤشّرات المالية ستُعرض «غير متاح» لا صفرًا.'; n := n + 1;
   end if;
+  -- ★ المصدران المضافان في التدقيق النهائيّ — اختياريّان كسابقيهما تمامًا.
+  --   يُعدّان في n_opt لا في n كي يبقى شرط «لا مصدر واحد مطبَّق» (n = 4)
+  --   محسوبًا على المصادر الأربعة الأساسية نفسها ولا يتغيّر معناه.
+  if to_regprocedure('public.liveops_session_list(jsonb)') is null then
+    raise notice 'MGMT: العمليات المباشرة غير مطبَّقة — مؤشّرا البثّ سيُعرضان «غير متاح» لا صفرًا.'; n_opt := n_opt + 1;
+  end if;
+  if to_regprocedure('public.ai_admin_overview()') is null then
+    raise notice 'MGMT: مساعد كيان غير مطبَّق — مؤشّرا المعرفة والمسوّدات سيُعرضان «غير متاح» لا صفرًا.'; n_opt := n_opt + 1;
+  end if;
   if n = 4 then
     raise notice 'MGMT: لا مصدر واحد مطبَّق. اللوحة ستعمل وتقول ذلك صراحةً — وهذا أصدق من لوحة أصفار.';
+  end if;
+  if n_opt > 0 then
+    raise notice 'MGMT: % من الموديولين الإضافيّين (العمليات المباشرة · مساعد كيان) غير مطبَّق. '
+                 'هذه الحزمة تعمل بدونهما، ومؤشّراتهما تُعلن الغياب باسم ملفّ التشغيل.', n_opt;
   end if;
   if to_regprocedure('public.emp_has_permission(uuid,text)') is null then
     raise notice 'MGMT: محرّك الصلاحيات غير مطبَّق — المالك وحده يرى اللوحة حتى تشغيله (فشل مغلق).';
@@ -441,6 +454,7 @@ declare
   v_kpis   jsonb   := '[]'::jsonb;
   v_alerts jsonb   := '[]'::jsonb;
   e_comms  jsonb; e_ops jsonb; e_conf jsonb; e_cal jsonb; e_crm jsonb; e_leads jsonb; e_fin jsonb;
+  e_live   jsonb; e_ai jsonb;
   d        jsonb;
   v_n      numeric; v_c bigint; v_jobs bigint; v_lb boolean; v_min timestamptz;
   OWNER_AR constant text := 'مؤشّر حسّاس: مقصور على المالك. هذا منع مقصود، والقيمة ليست صفرًا بل محجوبة.';
@@ -478,10 +492,59 @@ begin
       v_kpis := v_kpis || public.mgmt_kpi('notifications_failed','communications','count', false,
         e_comms->>'state', e_comms->>'reason', e_comms->>'message_ar', e_comms->>'message_en');
     end if;
+
+    -- ── مساعد كيان — عدّان إداريّان فقط ───────────────────────────────────
+    -- ⚠️ ما لا يُقرأ هنا، عمدًا: نصّ سؤال، نصّ جواب، محتوى محادثة، بيانات
+    --    متواصل. المؤشّران عدّان على الحوكمة: كم مصدرًا معتمَدًا، وكم مسوّدة
+    --    عميل محتمَل تنتظر مراجعة إنسان. لا شيء منهما يقول إنّ المساعد يعمل:
+    --    ai_admin_overview تُرفق provider ودائمًا external_calls = 0.
+    -- ⚠️ ai_admin_overview لا ترفع استثناء عند المنع بل تُعيد
+    --    state = not_permitted لكلّ قسم — تُترجَم هنا إلى restricted صراحةً
+    --    كي لا يُقرأ المنع صفرًا.
+    e_ai := public.mgmt_read_jsonb('public.ai_admin_overview()', 'public.ai_admin_overview()', null,
+              'ai_assistant', 'docs/kian_ai_assistant_RUNME.sql');
+    if (e_ai->>'state') = 'ok'
+       and ((e_ai->'data')->'knowledge'->>'state') = 'ok' then
+      v_c := coalesce((((e_ai->'data')->'knowledge')->>'approved')::bigint, 0);
+      v_kpis := v_kpis || public.mgmt_kpi('ai_knowledge_approved','communications','count', false,
+        'ok', null, null, null, v_c::numeric, v_c, 'current_state',
+        jsonb_build_object('in_review', ((e_ai->'data')->'knowledge')->'in_review',
+                           'expiring_30d', ((e_ai->'data')->'knowledge')->'expiring_30d',
+                           'assistant_enabled', ((e_ai->'data')->'provider')->'enabled',
+                           'external_calls', ((e_ai->'data')->'provider_calls')->'external_calls'));
+    elsif (e_ai->>'state') = 'ok' then
+      v_kpis := v_kpis || public.mgmt_kpi('ai_knowledge_approved','communications','count', false,
+        'restricted','not_authorized',
+        'سجلّ معرفة المساعد رفض قراءتك: لا تملك صلاحية فيه. هذا منع مقصود لا صفر.',
+        'The assistant knowledge base refused this reader: you lack permission there. A denial, not a zero.');
+    else
+      v_kpis := v_kpis || public.mgmt_kpi('ai_knowledge_approved','communications','count', false,
+        e_ai->>'state', e_ai->>'reason', e_ai->>'message_ar', e_ai->>'message_en');
+    end if;
+
+    if (e_ai->>'state') = 'ok'
+       and ((e_ai->'data')->'leads'->>'state') = 'ok' then
+      v_c := coalesce((((e_ai->'data')->'leads')->>'pending')::bigint, 0);
+      v_kpis := v_kpis || public.mgmt_kpi('ai_leads_pending_review','communications','count', false,
+        'ok', null, null, null, v_c::numeric, v_c, 'current_state',
+        jsonb_build_object('note_ar','مسوّدات لا عملاء: لا شيء يدخل المبيعات قبل مراجعة إنسان.'));
+    elsif (e_ai->>'state') = 'ok' then
+      v_kpis := v_kpis || public.mgmt_kpi('ai_leads_pending_review','communications','count', false,
+        'restricted','not_authorized',
+        'مسوّدات المساعد رفضت قراءتك: مراجعة المسوّدات صلاحية مستقلّة. هذا منع مقصود لا صفر.',
+        'Assistant lead drafts refused this reader: reviewing drafts is a separate permission. A denial, not a zero.');
+    else
+      v_kpis := v_kpis || public.mgmt_kpi('ai_leads_pending_review','communications','count', false,
+        e_ai->>'state', e_ai->>'reason', e_ai->>'message_ar', e_ai->>'message_en');
+    end if;
   else
     v_kpis := v_kpis || public.mgmt_kpi('notifications_pending','communications','count', false,
       'filtered_out','department_not_selected', OFF_AR, OFF_EN);
     v_kpis := v_kpis || public.mgmt_kpi('notifications_failed','communications','count', false,
+      'filtered_out','department_not_selected', OFF_AR, OFF_EN);
+    v_kpis := v_kpis || public.mgmt_kpi('ai_knowledge_approved','communications','count', false,
+      'filtered_out','department_not_selected', OFF_AR, OFF_EN);
+    v_kpis := v_kpis || public.mgmt_kpi('ai_leads_pending_review','communications','count', false,
       'filtered_out','department_not_selected', OFF_AR, OFF_EN);
   end if;
 
@@ -590,11 +653,45 @@ begin
         e_cal->>'state', e_cal->>'reason', e_cal->>'message_ar', e_cal->>'message_en',
         null, null, 'filtered');
     end if;
+    -- ── العمليات المباشرة (live ops) — عدّان تشغيليّان لا أكثر ─────────────
+    -- ⚠️ ما لا يُقرأ هنا، عمدًا: مفاتيح البثّ، عناوين الشبكة، الأرقام
+    --    التسلسلية، الملاحظات الداخلية، أسباب الحوادث الجذرية، والتكاليف.
+    --    هذه الحزمة **لا تمنح رؤية جديدة**: liveops_session_list تُنادى تحت
+    --    هويّة القارئ نفسه، وبوّابتها liveops_can_view() تُقيَّم عليه، فالعميل
+    --    والزائر يحصلان على restricted لا على رقم.
+    -- ⚠️ ولا يُشتقّ من هنا أيّ ادّعاء «قياس»: عدّ الجلسات وعدّ الحوادث
+    --    المفتوحة إدخال بشريّ، تمامًا كما يقوله liveops_client_payload.
+    e_live := public.mgmt_read_jsonb('public.liveops_session_list(jsonb)',
+                'public.liveops_session_list($1)', '{}'::jsonb,
+                'live_operations', 'docs/live_operations_dashboard_RUNME.sql');
+    if (e_live->>'state') = 'ok' then
+      select count(*) filter (where x->>'status' in ('live','rehearsal','paused','degraded','interrupted')),
+             coalesce(sum(coalesce((x->>'open_incidents')::bigint, 0))
+                        filter (where x->>'status' in ('live','rehearsal','paused','degraded','interrupted')), 0)
+        into v_c, v_jobs
+        from jsonb_array_elements(coalesce((e_live->'data')->'rows', '[]'::jsonb)) x;
+
+      v_kpis := v_kpis || public.mgmt_kpi('live_sessions_active','production','count', false,
+        'ok', null, null, null, v_c::numeric, v_c, 'current_state',
+        jsonb_build_object('counts_statuses', 'live/rehearsal/paused/degraded/interrupted',
+                           'telemetry_connected', false));
+      v_kpis := v_kpis || public.mgmt_kpi('live_open_incidents','production','count', false,
+        'ok', null, null, null, v_jobs::numeric, v_jobs, 'current_state',
+        jsonb_build_object('scope', 'open incidents on sessions that are on air now',
+                           'telemetry_connected', false));
+    else
+      v_kpis := v_kpis || public.mgmt_kpi('live_sessions_active','production','count', false,
+        e_live->>'state', e_live->>'reason', e_live->>'message_ar', e_live->>'message_en');
+      v_kpis := v_kpis || public.mgmt_kpi('live_open_incidents','production','count', false,
+        e_live->>'state', e_live->>'reason', e_live->>'message_ar', e_live->>'message_en');
+    end if;
   else
     v_kpis := v_kpis
       || public.mgmt_kpi('operational_readiness','production','percent', false,'filtered_out','department_not_selected', OFF_AR, OFF_EN)
       || public.mgmt_kpi('resource_conflicts','production','count', false,'filtered_out','department_not_selected', OFF_AR, OFF_EN)
-      || public.mgmt_kpi('upcoming_jobs','production','count', false,'filtered_out','department_not_selected', OFF_AR, OFF_EN);
+      || public.mgmt_kpi('upcoming_jobs','production','count', false,'filtered_out','department_not_selected', OFF_AR, OFF_EN)
+      || public.mgmt_kpi('live_sessions_active','production','count', false,'filtered_out','department_not_selected', OFF_AR, OFF_EN)
+      || public.mgmt_kpi('live_open_incidents','production','count', false,'filtered_out','department_not_selected', OFF_AR, OFF_EN);
   end if;
 
   -- ── المبيعات ────────────────────────────────────────────────────────────
@@ -897,7 +994,9 @@ begin
       ('communications','public.comms_health()','public.comms_can_view()','docs/communications_hub_RUNME.sql'),
       ('production','public.prodops_dashboard(jsonb)','public.prodops_can_view()','docs/operations_center_RUNME.sql'),
       ('sales','public.crm_dashboard(jsonb)','public.crm_can_view()','docs/crm_sales_FOUNDATION_RUNME.sql'),
-      ('finance','public.finops_dashboard(jsonb)','public.finops_can_view()','docs/finance_profitability_RUNME.sql')
+      ('finance','public.finops_dashboard(jsonb)','public.finops_can_view()','docs/finance_profitability_RUNME.sql'),
+      ('live_operations','public.liveops_session_list(jsonb)','public.liveops_can_view()','docs/live_operations_dashboard_RUNME.sql'),
+      ('ai_assistant','public.ai_admin_overview()','public.ai_can_view_knowledge()','docs/kian_ai_assistant_RUNME.sql')
     ) t(module, sig, gate, runme)
   loop
     v_auth := null;
@@ -1163,7 +1262,12 @@ declare
   KPI_KEYS   constant text[] := array['notifications_pending','notifications_failed',
     'operational_readiness','resource_conflicts','upcoming_jobs','new_leads','pipeline_value',
     'weighted_forecast','stalled_opportunities','expenses','commitments','overdue_collections',
-    'estimated_profitability'];
+    'estimated_profitability',
+    -- ★ العمليات المباشرة ومساعد كيان — أضيفا في التدقيق النهائيّ.
+    --   كلاهما عدّ غير حسّاس، وكلاهما يُقرأ عبر mgmt_read_jsonb فيبقى غياب
+    --   الموديول «غير مطبَّق» لا صفرًا، ويبقى منع القارئ «ممنوع» لا صفرًا.
+    'live_sessions_active','live_open_incidents',
+    'ai_knowledge_approved','ai_leads_pending_review'];
 begin
   -- (1) الجدولان موجودان، RLS مفعّلة، ولا سياسة كتابة على أيّهما
   foreach t in array TABLES loop

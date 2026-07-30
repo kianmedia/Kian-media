@@ -237,28 +237,48 @@ test("every provenance column and constraint is asserted before the migration co
 
 // ═══ 3. THE anon CHECK IS A TRUE ALLOWLIST ══════════════════════════════════
 
-test("the RUNME revokes exactly the three privilege types found, on exactly the five tables", () => {
-  const blk = RUNME.slice(RUNME.indexOf("do $anon_legacy$"), RUNME.indexOf("end $anon_legacy$"));
-  assert.match(blk, /revoke references, trigger, truncate on table public\.%I from anon/, "revoked from anon");
-  assert.match(blk, /revoke references, trigger, truncate on table public\.%I from public/,
-    "and from PUBLIC — a privilege held via PUBLIC is not removed by revoking from anon");
+// ⚠️ POLICY REVERSAL, DELIBERATE. These two tests previously asserted the
+// OPPOSITE: that §13.b revoked ONLY REFERENCES/TRIGGER/TRUNCATE and left the
+// four CRUD verbs alone "in case a public form needs one". The owner has retired
+// that reasoning — no caller ever used those privileges, and a privilege nothing
+// exercises cannot be caught by a regression, so it is a standing hole rather
+// than a spare capability. The tests are INVERTED rather than deleted, so the
+// old policy cannot quietly come back. Per-type coverage and its non-vacuity
+// proofs live in tests/comms_anon_zero_access.test.js.
+test("the RUNME revokes EVERY privilege type, on the legacy tables and on comms_*", () => {
+  const blk = RUNME.slice(RUNME.indexOf("do $anon_tables$"), RUNME.indexOf("end $anon_tables$"));
+  for (const g of ["anon", "public"]) {
+    assert.ok(
+      new RegExp(`revoke all privileges on table public\\.%I from ${g}`).test(blk),
+      `all privileges revoked from ${g} — a privilege held via PUBLIC is not removed by revoking from anon`
+    );
+    assert.ok(
+      new RegExp(`revoke select, insert, update, delete, truncate, references, trigger\\s+on table public\\.%I from ${g}`).test(blk),
+      `the seven types are also named explicitly for ${g}, so the intent does not depend on how ALL expands`
+    );
+  }
   for (const t of ["notifications", "notification_events", "notification_preferences",
                    "notification_delivery_log", "email_deliveries"])
     assert.ok(blk.includes(`'${t}'`), `${t} is named`);
-  // SELECT/INSERT/UPDATE/DELETE are deliberately NOT revoked here.
-  assert.ok(!/revoke[^\n]*\b(select|insert|update|delete)\b/i.test(blk),
-    "no CRUD verb is revoked — a public form may legitimately need one");
-  assert.match(RUNME, /SECURITY DEFINER and inserts through/,
-    "the file records WHY: the one anonymous caller needs no table privilege");
+  assert.ok(/relname like 'comms\\_%'/.test(blk), "comms_* tables are discovered from the catalogue");
+  // The retired stance must not reappear.
+  assert.ok(!/SELECT \/ INSERT \/ UPDATE \/ DELETE are deliberately NOT touched/.test(RUNME),
+    "the 'CRUD left in place on purpose' rationale is retired and must not return");
+  assert.match(RUNME, /SECURITY DEFINER/,
+    "the file records WHY this is safe: the one anonymous caller needs no table privilege");
 });
 
-test("the RUNME self-test proves the revoke worked, and only for what it revoked", () => {
+test("the RUNME self-test proves the revoke worked, for every type, and cannot pass vacuously", () => {
   const st = RUNME.slice(RUNME.indexOf("-- (9d)"), RUNME.indexOf("-- (10)"));
-  assert.match(st, /privilege_type in \('REFERENCES','TRIGGER','TRUNCATE'\)/,
-    "it asserts the three types this file removed");
-  assert.match(st, /raise exception 'HUB FAIL: anon\/PUBLIC still holds/, "and aborts if any survived");
-  assert.match(st, /pre-existing condition that must be REPORTED/,
-    "an unrelated residual grant is reported, not used to abort an unrelated migration");
+  assert.ok(!/privilege_type in \('REFERENCES','TRIGGER','TRUNCATE'\)/.test(st),
+    "the three-type filter is gone — it was a denylist wearing an allowlist's name");
+  assert.ok(!/privilege_type\s+in\s*\(/i.test(st),
+    "the self-test must not filter on privilege_type at all");
+  assert.match(st, /raise exception 'HUB FAIL: anon\/PUBLIC still hold/, "it aborts if any survived");
+  assert.match(st, /the check is vacuous, not passing/,
+    "a probe that sees nothing anywhere must abort rather than report success");
+  assert.match(st, /sequences owned by the communications tables/,
+    "sequences are checked separately — revoking table privileges never reaches them");
 });
 
 test("the POSTCHECK anon check is an ALLOWLIST across ALL privilege types", () => {
@@ -345,13 +365,27 @@ test("RUNME stays transactional, idempotent, and incapable of sending", () => {
 
 test("PREFLIGHT, POSTCHECK and AFTER_FAILURE_VERIFY write nothing at all", () => {
   const forbidden = /\b(insert into|update\s+public\.|delete from|truncate|drop\s+(table|function|trigger)|create\s+(table|function|trigger|index)|grant\s|revoke\s|alter table)\b/i;
+  // A privilege NAME inside single quotes is DATA, not a statement: the read-only
+  // files drive their per-type checks from a literal list that necessarily
+  // contains 'TRUNCATE'. Neutralise exactly that shape — a lone quoted keyword —
+  // and nothing else, so a real `truncate public.x` is still caught. The
+  // detection is narrowed to what it was always meant to mean, not weakened:
+  // no statement can hide inside a single quoted word.
+  const dataLiterals = /'(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|REFERENCES|TRIGGER|USAGE|EXECUTE)'/gi;
+  const scrub = (s) => code(s).replace(dataLiterals, "''");
   for (const [name, src] of [["PREFLIGHT", PRE], ["AFTER_FAILURE_VERIFY", VERIFY]]) {
-    const c = code(src);
+    const c = scrub(src);
     assert.ok(!forbidden.test(c), `${name} contains a write statement`);
     assert.ok(!/\bbegin;|\bcommit;/i.test(c), `${name} opens no transaction`);
   }
   // The POSTCHECK's only non-SELECT is the final verdict block, which raises.
-  assert.ok(!forbidden.test(code(POST)), "POSTCHECK contains a write statement");
+  assert.ok(!forbidden.test(scrub(POST)), "POSTCHECK contains a write statement");
+
+  // Non-vacuity: the scrubbing must not have disarmed the detector.
+  assert.ok(forbidden.test(scrub("truncate public.notifications;")),
+    "a real TRUNCATE statement must still be detected after scrubbing data literals");
+  assert.ok(forbidden.test(scrub("revoke all on table public.x from anon;")),
+    "a real REVOKE must still be detected");
 });
 
 test("AFTER_FAILURE_VERIFY is one result set, absence-safe, and proves the six claims", () => {

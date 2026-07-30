@@ -19,6 +19,8 @@ import { listMyOpportunityRequests } from "@/lib/opportunities";
 import { syncProjectsForCurrentUser } from "@/lib/portal/projects";
 import AuthTabs from "@/components/portal/AuthTabs";
 import { BlockedScreen, InactiveBanner } from "@/components/portal/StatusScreens";
+import PortalMobileNav from "@/components/portal/PortalMobileNav";
+import { noteActiveUser, onSignOutClearCaches } from "@/lib/pwa/privateCache";
 
 // Signup form fields stashed locally until the first confirmed login,
 // then synced into the (trigger-created) profile row.
@@ -74,6 +76,13 @@ export default function PortalShell({ children, wide = false }: { children: Reac
     setPhase("loading");
     const session = await getValidSession();
     if (!session) { setPhase("auth"); return; }
+
+    // PWA · USER SWITCH. Runs BEFORE the first byte of account data is fetched:
+    // if the identity behind this browser changed, every PWA cache is destroyed
+    // first, so a second employee on a shared device can never be served
+    // anything stored while the first one was signed in. Best-effort and never
+    // blocking — a cache that refuses to clear must not stop a login.
+    try { await noteActiveUser(session.user_id); } catch { /* non-blocking */ }
 
     const r = await getMyProfile();
     if (!r.ok) {
@@ -175,6 +184,12 @@ export default function PortalShell({ children, wide = false }: { children: Reac
 
   const signOut = useCallback(async () => {
     await logout();
+    // PWA · LOGOUT. The session is gone from localStorage, but a service-worker
+    // cache is separate storage that outlives it — so it is destroyed here too,
+    // and the remembered identity is forgotten so the next login is compared
+    // against nothing. Best-effort: a failure here must never trap a user in a
+    // session they asked to leave.
+    try { await onSignOutClearCaches(); } catch { /* non-blocking */ }
     setProfile(null);
     setPhase("auth");
   }, []);
@@ -230,9 +245,9 @@ export default function PortalShell({ children, wide = false }: { children: Reac
     <Ctx.Provider value={{ profile: p, caps: cps, hasMyOpportunities: hasMyOpps, readOnly, reload: bootstrap, signOut }}>
       {readOnly && <InactiveBanner />}
 
-      {/* ─── Tab bar ─── */}
+      {/* ─── Tab bar (desktop/tablet; hidden <768px in favour of PortalMobileNav) ─── */}
       <div className={wrap}>
-        <div className="flex flex-wrap items-center gap-2 mb-10" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "14px" }}>
+        <div className="pt-tabbar flex flex-wrap items-center gap-2 mb-10" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "14px" }}>
           {tabs.map((tab) => {
             const active = pathname === tab.href;
             return (
@@ -273,7 +288,19 @@ export default function PortalShell({ children, wide = false }: { children: Reac
         </div>
       </div>
 
-      <div className={wrap}>{children}</div>
+      <div className={`${wrap} pt-shell-body`}>{children}</div>
+
+      {/* ─── Mobile navigation (<768px) ───
+          Rendered next to the strip above, never instead of it by a separate
+          condition: one CSS breakpoint decides which of the two is visible, so
+          there is no state in which a phone has no navigation at all. */}
+      <PortalMobileNav
+        tabs={tabs}
+        pathname={pathname}
+        unread={unread}
+        label={t}
+        onSignOut={() => void signOut()}
+      />
     </Ctx.Provider>
   );
 }

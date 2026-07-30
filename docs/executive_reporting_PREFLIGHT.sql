@@ -37,7 +37,14 @@ from (values
   ('public.crm_can_view()',            'sales',          'docs/crm_sales_FOUNDATION_RUNME.sql'),
   ('public.finops_dashboard(jsonb)',   'finance',        'docs/finance_profitability_RUNME.sql'),
   ('public.finops_can_view()',         'finance',        'docs/finance_profitability_RUNME.sql'),
-  ('public.finops_can_view_profit()',  'finance',        'docs/finance_profitability_RUNME.sql')
+  ('public.finops_can_view_profit()',  'finance',        'docs/finance_profitability_RUNME.sql'),
+  -- ★ المصدران المضافان في التدقيق النهائيّ ★ اختياريّان تمامًا: غيابهما يعرض
+  --   مؤشّراتهما «غير متاح — الموديول غير مطبَّق» باسم ملفّ التشغيل، ولا يمنع
+  --   تشغيل هذه الحزمة ولا يُنقص مؤشّرًا آخر.
+  ('public.liveops_session_list(jsonb)', 'live_operations', 'docs/live_operations_dashboard_RUNME.sql'),
+  ('public.liveops_can_view()',          'live_operations', 'docs/live_operations_dashboard_RUNME.sql'),
+  ('public.ai_admin_overview()',         'ai_assistant',    'docs/kian_ai_assistant_RUNME.sql'),
+  ('public.ai_can_view_knowledge()',     'ai_assistant',    'docs/kian_ai_assistant_RUNME.sql')
 ) f(sig, module, runme)
 order by f.module, f.sig;
 

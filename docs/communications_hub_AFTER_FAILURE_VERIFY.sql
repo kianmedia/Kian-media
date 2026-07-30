@@ -275,9 +275,10 @@ select 163, 'V7.anon_privilege_types_anywhere_in_public', 'INFO',
                   where table_schema = 'public' and grantee in ('anon','PUBLIC')), 'none')
 
 union all
--- Named so the reader can see WHY the CRUD verbs are not being revoked here:
--- the one genuine anonymous caller is SECURITY DEFINER and needs no table
--- privilege. If this row is empty, the public opportunities form is broken.
+-- The one genuine anonymous caller is SECURITY DEFINER and needs no table
+-- privilege, which is why revoking every CRUD verb above cannot harm it. If this
+-- row reads ABSENT, the public opportunities form is broken and the table
+-- revoke has done collateral damage it was specifically designed not to do.
 select 164, 'V7.anon_execute_on_the_one_genuine_public_caller',
        case when count(*) > 0 then 'PRESENT — the public opportunities form can still submit'
             else 'ABSENT — the public opportunities form would fail' end,
@@ -285,5 +286,48 @@ select 164, 'V7.anon_execute_on_the_one_genuine_public_caller',
 from information_schema.routine_privileges
 where routine_schema = 'public' and grantee in ('anon','PUBLIC')
   and routine_name = 'submit_opportunity_request'
+
+union all
+-- ─── V7b. SEQUENCES — the catalogue a table-only sweep never reads ─────────
+select 165, 'V7.anon_on_sequences_owned_by_those_tables',
+       case when count(*) = 0 then 'CLEAN — anon/PUBLIC hold no sequence privilege'
+            else 'PRESENT — ' || count(*) || ' sequence privilege(s) held' end,
+       coalesce(string_agg(distinct u.grantee || ' ' || u.privilege_type || ' on ' || u.object_name, ', '), 'none')
+from information_schema.usage_privileges u
+where u.object_schema = 'public' and u.object_type = 'SEQUENCE'
+  and u.grantee in ('anon','PUBLIC')
+  and exists (
+    select 1
+      from pg_class s
+      join pg_namespace sn on sn.oid = s.relnamespace
+      join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass
+      join pg_class tb on tb.oid = d.refobjid
+     where s.relkind = 'S' and sn.nspname = 'public'
+       and s.relname::text = u.object_name::text
+       and d.deptype in ('a','i')
+       and (tb.relname::text like 'comms\_%'
+         or tb.relname::text in ('notifications','notification_events',
+                                 'notification_preferences','notification_delivery_log',
+                                 'email_deliveries')))
+
+union all
+-- ─── V7c. ONE ROW PER PRIVILEGE TYPE, ALWAYS EMITTED ──────────────────────
+-- Driven by the type list, so a type is reported even when it is clean. A
+-- diagnostic that omits the types it found nothing for cannot be distinguished
+-- from a diagnostic that never looked.
+select 166 + t.ord, 'V7.anon_' || lower(t.pt) || '_on_communications_tables',
+       case when count(g.table_name) = 0 then 'CLEAN — no ' || t.pt
+            else 'PRESENT — ' || count(g.table_name) || ' ' || t.pt || ' grant(s)' end,
+       coalesce(string_agg(distinct g.grantee || ' on ' || g.table_name, ', '), 'none')
+from (values ('SELECT',1),('INSERT',2),('UPDATE',3),('DELETE',4),
+             ('TRUNCATE',5),('REFERENCES',6),('TRIGGER',7)) t(pt, ord)
+left join information_schema.role_table_grants g
+  on  g.table_schema = 'public'
+  and g.grantee in ('anon','PUBLIC')
+  and g.privilege_type = t.pt
+  and (g.table_name like 'comms\_%'
+    or g.table_name in ('notifications','notification_events','notification_preferences',
+                        'notification_delivery_log','email_deliveries'))
+group by t.pt, t.ord
 )
 select claim, verdict, detail from rows_out order by sort_key;

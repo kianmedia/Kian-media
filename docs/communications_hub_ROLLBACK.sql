@@ -24,6 +24,17 @@
 -- WHAT THIS DOES **NOT** TOUCH (deliberately — the hub never owned them):
 --   • public.notifications, public.notification_preferences
 --   • public.notification_events, public.email_deliveries       ← the legacy queue
+--
+-- ⚠️ THIS ROLLBACK DOES NOT RESTORE ANONYMOUS ACCESS, AND THAT IS INTENTIONAL.
+-- RUNME §13.b takes anon/PUBLIC direct table access on the notification tables
+-- and their sequences to zero. Undoing the hub does NOT re-grant it. Those
+-- privileges came from the stock Supabase "grant all ... to anon" and were never
+-- used by any caller — no browser module reads those tables directly, and the one
+-- anonymous entry point (submit_opportunity_request) is SECURITY DEFINER and
+-- needs no table grant. Re-granting them on the way out would silently reopen a
+-- security hole as the side effect of removing an unrelated feature. If you
+-- genuinely need them back, grant them deliberately, by name, with the caller
+-- that requires them written down.
 --   • public.notification_delivery_log
 --   • notification_resolve_recipients / notify_emit_event / pc_event_emit
 --   • every existing sender in lib/server/*.ts

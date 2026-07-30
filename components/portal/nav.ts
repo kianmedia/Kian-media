@@ -29,6 +29,20 @@ const REG: Record<string, TabDef> = {
   // مركز التشغيل والإنتاج (Phase 2) — داخليّ بحت: غائب عن مجموعتَي client/lead، والقاعدة
   // ترفض العميل حتى برابط مباشر (prodops_can_view = is_staff). الطاقم يرى إسناداته هو فقط.
   operations:    { href: "/client-portal/operations",    ar: "مركز التشغيل", en: "Operations", adminAr: "التشغيل والإنتاج", adminEn: "Production Operations", staffAr: "مهامّي الميدانية", staffEn: "My Field Work" },
+  // العمليات المباشرة (المرحلة أ) — داخليّة بحتة: غائبة عن مجموعتَي client/lead،
+  // والقاعدة ترفض العميل حتى برابط مباشر (liveops_can_view = موظّف فقط، وهي
+  // تستبعد حساب العميل صراحةً في سطرها الثاني). سطح العميل ليس تبويبًا هنا
+  // إطلاقًا: هو صفحة عامّة منفصلة (/live-status) تُفتح برمز يُسلَّم يدويًّا.
+  // ⛔ ولا يغيّر العميل حالة جلسة بحال: المنع في دالّة القاعدة وفي مُشغِّل
+  //    BEFORE UPDATE يعيد الحساب من القاعدة، لا في هذا السطر.
+  live_ops:      { href: "/client-portal/live-operations", ar: "العمليات المباشرة", en: "Live Operations", adminAr: "العمليات المباشرة", adminEn: "Live Operations", staffAr: "العمليات المباشرة", staffEn: "Live Operations" },
+  // مساعد كيان (المرحلة C) — داخليّ بحت: غائب عن مجموعتَي client/lead، والقاعدة
+  // ترفض العميل حتى برابط مباشر (ai_can_use_internal = موظّف ضمن دور مساعد؛ وغير
+  // الموظّف يُصنَّف 'client' فلا يبلغ الداخليّ أبدًا). السطح العامّ ليس تبويبًا
+  // هنا إطلاقًا: هو صفحة عامّة منفصلة (/assistant) لا تصل إلّا إلى معرفة عامّة
+  // معتمَدة وتُنشئ مسوّدة تنتظر إنسانًا.
+  // ⛔ ولا يمنح هذا السطر شيئًا: المساعد قراءة فقط، ولا ينفّذ إجراءً ولا يرسل.
+  ai_assistant:  { href: "/client-portal/assistant",      ar: "مساعد كيان",   en: "Kian Assistant", adminAr: "مساعد كيان", adminEn: "Kian Assistant", staffAr: "مساعد كيان", staffEn: "Kian Assistant" },
   // وحدة المبيعات (Phase 3) — داخليّة بحتة: غائبة عن مجموعتَي client/lead،
   // والقاعدة ترفض العميل حتى برابط مباشر (crm_can_view = is_staff + مفتاح صريح).
   // موظّف المبيعات يرى سجلّاته هو؛ رؤية الفريق مفتاح مستقلّ لا يمنحه هذا التبويب.
@@ -64,26 +78,26 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "accounts", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
-  sales:       ["employee", "crm", "quotes", "quoting", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
-  editor:      ["employee", "operations", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  sales:       ["employee", "crm", "ai_assistant", "quotes", "quoting", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  editor:      ["employee", "operations", "live_ops", "ai_assistant", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   readonly:    ["employee", "projects", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   // دور المالية: التبويب هنا يفتح المركز كاملًا **إن** منحته القاعدة ذلك. لا يشتقّ
   // هذا السطر ليس صلاحية: البوّابات في القاعدة هي الفاصل، وهذا مجرّد مدخل تنقّل.
-  finance:     ["employee", "finance_ops", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
-  photographer:     ["employee", "operations", "equipment", "asset_custody", "projects", "finance_ops", "notifications", "profile"],
-  lighting_tech:    ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
-  camera_assistant: ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  finance:     ["employee", "finance_ops", "ai_assistant", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
+  photographer:     ["employee", "operations", "live_ops", "equipment", "asset_custody", "projects", "finance_ops", "notifications", "profile"],
+  lighting_tech:    ["employee", "operations", "live_ops", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  camera_assistant: ["employee", "operations", "live_ops", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   custody_officer:  ["employee", "operations", "equipment", "asset_custody", "rentals", "finance_ops", "notifications", "profile"],
   client:      ["overview", "projects", "production_credits", "quotes", "messages", "files", "invoices", "offers", "equipment", "rentals", "notifications", "profile"],
   lead:        ["overview", "quotes", "messages", "files", "offers", "equipment", "notifications", "profile"],

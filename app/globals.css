@@ -485,3 +485,30 @@ html, body {
 }
 
 
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PWA V1 — portal navigation on small screens.
+
+   One breakpoint owns the swap: below 768px the wrapping desktop tab strip
+   is hidden and the fixed bottom bar (components/portal/PortalMobileNav.tsx)
+   takes over. Both are always rendered by PortalShell, so there is no state
+   in which a phone ends up with no navigation.
+
+   The body padding reserves room for the fixed bar plus the iOS home
+   indicator, so the last row of a table is never trapped underneath it.
+   ═══════════════════════════════════════════════════════════════════════ */
+.pt-mnav { display: none; }
+
+@media (max-width: 767px) {
+  .pt-tabbar { display: none !important; }
+  .pt-mnav   { display: flex; }
+  .pt-shell-body { padding-bottom: calc(74px + env(safe-area-inset-bottom, 0px)); }
+}
+
+.pt-mnav-item:active { background: rgba(255,255,255,0.05); }
+
+/* Installed (standalone) window: no browser chrome, so the top of the page is
+   flush against the status bar on iOS. */
+@media (display-mode: standalone) {
+  body { overscroll-behavior-y: none; }
+}
