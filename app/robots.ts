@@ -24,6 +24,11 @@ export default function robots(): MetadataRoute.Robots {
           "/client-portal/",  // the whole authenticated portal
           "/admin/",          // admin screens
           "/quick-access/",   // token/shortcut entry surface
+          // Secure document grants. The token lives in the URL fragment, which a
+          // crawler never sends anywhere, so there is nothing here to index —
+          // only an empty shell. Disallowed so the page never appears in search
+          // results as a "Kian document portal" and invites token guessing.
+          "/secure-document",
         ],
       },
     ],

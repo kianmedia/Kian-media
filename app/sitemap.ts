@@ -7,9 +7,19 @@
 //
 // Static list on purpose: these routes are statically known, so there is no query and
 // no chance of leaking a private URL into a public file.
+//
+// ── ONE deliberate exception: published case studies ────────────────────────
+// cs_public_slugs() returns slugs ONLY for studies that are published, past their
+// publish_at, not archived, permission-cleared and behind the owner's public switch —
+// the same gate the public page uses. It returns no other column: no id, no storage
+// path, no draft, no preview token (there is no such token in this system at all).
+// If the migration is unapplied, the switch is off, or the network fails, the helper
+// returns [] and this file degrades to exactly the static list it was before.
+// A private URL cannot reach this file, because a non-public study has no slug here.
 // ════════════════════════════════════════════════════════════════════════════
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/site";
+import { publicCaseStudySlugs } from "@/lib/server/publicCaseStudies";
 
 /** Public routes only. changeFrequency/priority are hints, not guarantees. */
 const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[number]["changeFrequency"]; priority: number }[] = [
@@ -22,12 +32,31 @@ const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[numb
   { path: "/terms",           changeFrequency: "yearly",  priority: 0.3 },
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const lastModified = new Date();
-  return PUBLIC_ROUTES.map((r) => ({
+  const base: MetadataRoute.Sitemap = PUBLIC_ROUTES.map((r) => ({
     url: `${SITE_URL}${r.path}`,
     lastModified,
     changeFrequency: r.changeFrequency,
     priority: r.priority,
   }));
+
+  // Never throws: publicCaseStudySlugs() swallows every failure and returns [].
+  const studies = await publicCaseStudySlugs();
+  if (studies.length === 0) return base;   // feature off / unapplied / nothing published
+
+  return [
+    ...base,
+    { url: `${SITE_URL}/case-studies`, lastModified, changeFrequency: "weekly", priority: 0.8 },
+    ...studies.map((s) => {
+      // A malformed date must not throw during sitemap generation — fall back.
+      const d = s.updated_at ? new Date(s.updated_at) : null;
+      return {
+        url: `${SITE_URL}/case-studies/${s.slug}`,
+        lastModified: d && !Number.isNaN(d.getTime()) ? d : lastModified,
+        changeFrequency: "monthly" as const,
+        priority: 0.6,
+      };
+    }),
+  ];
 }

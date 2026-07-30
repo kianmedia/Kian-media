@@ -1,0 +1,179 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- docs/case_studies_platform_ROLLBACK.sql — ★ للطوارئ وحدها ★
+--
+-- ⚠️ اقرأ هذا القسم كاملًا قبل إزالة أيّ تعليق. كلّ سطر هدم هنا **معلَّق**
+--    عمدًا: التراجع قرار لا حادث، ولا يجوز أن يُشغَّل هذا الملفّ بالخطأ.
+--
+-- ═══ ماذا تفقد فعلًا ═══════════════════════════════════════════════════════
+-- هذا ليس تراجعًا نظيفًا. إسقاط جداول هذه الوحدة **يحذف تاريخًا حقيقيًّا**:
+--
+--  ١) cs_versions — تاريخ التحرير كلّه: من غيّر ماذا ومتى وبأيّ ملخّص، وأيّ
+--     نسخة اعتُمدت وأيّها نُشرت. هذا هو الدليل على أنّ ما نُشر مرّ بمراجعة.
+--     ⛔ لا يمكن إعادة بنائه من أيّ مصدر آخر. حذفه يعني أنّك لن تستطيع لاحقًا
+--        إثبات ما كان منشورًا في تاريخ معيّن — وهذا سؤال قانونيّ لا تقنيّ.
+--
+--  ٢) cs_permissions — سجلّ إذن العميل: حالته، مرجعه المكتوب، جهة الاتّصال،
+--     ما أُذِن به بالضبط (اسم/شعار/أرقام/شهادة)، قيود السرّية، وحظر النشر.
+--     ⛔ **هذا سجلّ موافقة طرف ثالث.** حذفه يحذف دليلك الوحيد على أنّك كنت
+--        مأذونًا بنشر اسم عميل أو شعاره أو رقمه. لا تحذفه إلّا بقرار موثَّق.
+--
+--  ٣) cs_credits — موافقات نشر أسماء الأشخاص ومراجعها. الموافقة الشخصية سجلّ
+--     يخصّ صاحبها، لا بيانات تشغيلية.
+--
+--  ٤) cs_audit — من نشر، ومن سحب النشر، ومن سجّل الإذن، ومتى. سجلّ المساءلة.
+--
+--  ٥) cs_case_studies / cs_media / cs_metrics — المحتوى المؤلَّف نفسه: نصوص
+--     كُتبت يدويًّا ولم تُنسَخ من أيّ مكان، فلا يوجد أصل يُستعاد منه.
+--
+-- ═══ ما لا يفعله هذا الملفّ ═══════════════════════════════════════════════
+--  • لا يلمس منصّة المشاريع (projects / project_core / deliverables) — مجمَّدة.
+--  • لا يلمس tvn_documents ولا hr_employee_documents — الوحدة لم تنشئهما ولم
+--    تقرأ منهما أصلًا.
+--  • لا يلمس storage.buckets ولا storage.objects — الوحدة لم تنشئ دلوًا ولا
+--    سياسة تخزين واحدة، فلا شيء لتتراجع عنه هناك.
+--  • لا يحذف صفوف components/Portfolio.tsx (وهي في الكود لا في القاعدة).
+--
+-- ═══ خطوة إلزامية قبل أيّ شيء: نسخة احتياطية ══════════════════════════════
+--  خذ نسخة احتياطية كاملة، وتحقّق منها، ثمّ تحقّق منها مرّة ثانية:
+--
+--    -- create schema if not exists cs_backup_YYYYMMDD;
+--    -- create table cs_backup_YYYYMMDD.cs_case_studies        as select * from public.cs_case_studies;
+--    -- create table cs_backup_YYYYMMDD.cs_permissions         as select * from public.cs_permissions;
+--    -- create table cs_backup_YYYYMMDD.cs_versions            as select * from public.cs_versions;
+--    -- create table cs_backup_YYYYMMDD.cs_credits             as select * from public.cs_credits;
+--    -- create table cs_backup_YYYYMMDD.cs_metrics             as select * from public.cs_metrics;
+--    -- create table cs_backup_YYYYMMDD.cs_media               as select * from public.cs_media;
+--    -- create table cs_backup_YYYYMMDD.cs_audit               as select * from public.cs_audit;
+--    -- create table cs_backup_YYYYMMDD.cs_sectors             as select * from public.cs_sectors;
+--    -- create table cs_backup_YYYYMMDD.cs_services            as select * from public.cs_services;
+--    -- create table cs_backup_YYYYMMDD.cs_case_study_sectors  as select * from public.cs_case_study_sectors;
+--    -- create table cs_backup_YYYYMMDD.cs_case_study_services as select * from public.cs_case_study_services;
+--    -- create table cs_backup_YYYYMMDD.cs_settings            as select * from public.cs_settings;
+--
+-- ═══ الخيار الأوّل — وهو الصحيح في ٩٩٪ من الحالات ═════════════════════════
+--  ★ أطفئ السطح العامّ بدل أن تهدم الوحدة. ★
+--  هذا يوقف كلّ ظهور علنيّ فورًا (cs_is_public تعيد false لكلّ صفّ)، ولا يحذف
+--  حرفًا واحدًا من التاريخ ولا من سجلّ الإذن:
+--
+--    -- update public.cs_settings set public_enabled = false where id = true;
+--
+--  ولو أردت سحب دراسة بعينها مع الإبقاء على تاريخها (وهو الإجراء الموصى به):
+--    -- select public.cs_unpublish('<case_study_id>'::uuid, 'سبب موثَّق');
+--
+--  الفرق جوهريّ: الإطفاء يوقف النشر ويُبقي الدليل. الهدم يوقف النشر ويحرق
+--  الدليل معه.
+--
+-- ═══ الخيار الثاني — إزالة الدوالّ مع إبقاء البيانات ══════════════════════
+--  يوقف كلّ الواجهات (الداخلية والعامّة) ويُبقي كلّ صفّ. الوسيلة الأنظف حين
+--  تكون المشكلة في المنطق لا في البيانات.
+--  ⚠️ الحارسان يجب أن يُسقَطا قبل دوالّهما وإلّا فشل الإسقاط بالتبعية.
+--
+--    -- drop trigger if exists trg_cs_guard_publish on public.cs_case_studies;
+--    -- drop trigger if exists trg_cs_versions_immutable on public.cs_versions;
+--    -- drop function if exists public.cs_guard_publish();
+--    -- drop function if exists public.cs_versions_immutable();
+--    -- drop function if exists public.cs_public_index(jsonb);
+--    -- drop function if exists public.cs_public_study(text);
+--    -- drop function if exists public.cs_public_slugs();
+--    -- drop function if exists public.cs_public_row(uuid,boolean);
+--    -- drop function if exists public.cs_mask(uuid,jsonb,boolean);
+--    -- drop function if exists public.cs_is_public(uuid);
+--    -- drop function if exists public.cs_snapshot_build(uuid);
+--    -- drop function if exists public.cs_publish_blockers(uuid);
+--    -- drop function if exists public.cs_preview(uuid);
+--    -- drop function if exists public.cs_checklist(uuid);
+--    -- drop function if exists public.cs_publish(uuid,text);
+--    -- drop function if exists public.cs_schedule(uuid,timestamptz,text);
+--    -- drop function if exists public.cs_unpublish(uuid,text);
+--    -- drop function if exists public.cs_archive(uuid,text);
+--    -- drop function if exists public.cs_restore(uuid,text);
+--    -- drop function if exists public.cs_publish_due();
+--    -- drop function if exists public.cs_approve(uuid,text);
+--    -- drop function if exists public.cs_mark_approved(uuid);
+--    -- drop function if exists public.cs_permission_confirm(uuid,text);
+--    -- drop function if exists public.cs_legal_decide(uuid,text,text);
+--    -- drop function if exists public.cs_review_decide(uuid,text,text);
+--    -- drop function if exists public.cs_submit(uuid,text);
+--    -- drop function if exists public.cs_rollback(uuid,int,text);
+--    -- drop function if exists public.cs_version_new(uuid,text,int);
+--    -- drop function if exists public.cs_versions_list(uuid);
+--    -- drop function if exists public.cs_permission_set(uuid,jsonb);
+--    -- drop function if exists public.cs_credit_delete(uuid,text);
+--    -- drop function if exists public.cs_credit_upsert(jsonb);
+--    -- drop function if exists public.cs_metric_delete(uuid,text);
+--    -- drop function if exists public.cs_metric_upsert(jsonb);
+--    -- drop function if exists public.cs_media_delete(uuid,text);
+--    -- drop function if exists public.cs_media_upsert(jsonb);
+--    -- drop function if exists public.cs_touch(uuid);
+--    -- drop function if exists public.cs_set_taxonomy(uuid,text[],text[]);
+--    -- drop function if exists public.cs_taxonomy_upsert(text,jsonb);
+--    -- drop function if exists public.cs_settings_set(jsonb);
+--    -- drop function if exists public.cs_export_csv(jsonb);
+--    -- drop function if exists public.cs_audit_list(jsonb);
+--    -- drop function if exists public.cs_upsert(jsonb);
+--    -- drop function if exists public.cs_get(uuid);
+--    -- drop function if exists public.cs_list(jsonb);
+--    -- drop function if exists public.cs_lookups();
+--    -- drop function if exists public.cs_access();
+--    -- drop function if exists public.cs_log(text,uuid,boolean,jsonb);
+--
+--  ⚠️ المُسنَدات الأربعة (can_view_case_studies_internal / can_edit_case_studies /
+--     can_review_case_studies / can_publish_case_studies) تُستعمل في سياسات RLS.
+--     أسقِط السياسات أوّلًا أو أبقِ المُسنَدات — وإلّا فشل الإسقاط بالتبعية:
+--    -- drop policy if exists cs_case_studies_read on public.cs_case_studies;
+--    -- ... (بقيّة السياسات الاثنتي عشرة)
+--    -- drop function if exists public.can_publish_case_studies();
+--    -- drop function if exists public.can_review_case_studies();
+--    -- drop function if exists public.can_edit_case_studies();
+--    -- drop function if exists public.can_view_case_studies_internal();
+--    -- drop function if exists public.cs_perm(text);
+--    -- drop function if exists public.cs_is_owner();
+--    -- drop function if exists public.cs_is_admin();
+--    -- drop function if exists public.cs_is_staff();
+--    -- drop function if exists public.cs_slugify(text);
+--    -- drop function if exists public.cs_csv_cell(text);
+--    -- drop function if exists public.cs_sanitize_block(text);
+--    -- drop function if exists public.cs_sanitize(text);
+--    -- drop function if exists public.cs_date(jsonb,text);
+--    -- drop function if exists public.cs_ts(jsonb,text);
+--    -- drop function if exists public.cs_int(jsonb,text);
+--    -- drop function if exists public.cs_bool(jsonb,text,boolean);
+--    -- drop function if exists public.cs_txt(jsonb,text);
+--
+-- ═══ الخيار الثالث — الهدم الكامل ═════════════════════════════════════════
+--  ★★ هذا يحذف سجلّ إذن العميل وسجلّ موافقات الأفراد وتاريخ النشر كاملًا. ★★
+--  لا تفعله إلّا بقرار مالك مكتوب، وبعد نسخة احتياطية مُتحقَّق منها فعلًا.
+--  الترتيب يحترم المفاتيح الأجنبية.
+--
+--    -- alter table public.cs_case_studies drop constraint if exists cs_published_version_fk;
+--    -- alter table public.cs_case_studies drop constraint if exists cs_approved_version_fk;
+--    -- drop table if exists public.cs_audit;
+--    -- drop table if exists public.cs_versions;                 -- ★ تاريخ التحرير كلّه
+--    -- drop table if exists public.cs_case_study_services;
+--    -- drop table if exists public.cs_case_study_sectors;
+--    -- drop table if exists public.cs_credits;                  -- ★ موافقات أشخاص
+--    -- drop table if exists public.cs_metrics;
+--    -- drop table if exists public.cs_media;
+--    -- drop table if exists public.cs_permissions;              -- ★ إذن العميل ومرجعه
+--    -- drop table if exists public.cs_case_studies;             -- ★ المحتوى المؤلَّف
+--    -- drop table if exists public.cs_services;
+--    -- drop table if exists public.cs_sectors;
+--    -- drop table if exists public.cs_settings;
+--    -- drop sequence if exists public.cs_code_seq;
+--
+--  ومفاتيح الصلاحيات الثلاثة (اختياريّ — تركها لا يضرّ وحذفها يفقد الإسنادات):
+--    -- delete from public.permissions where key in
+--    --   ('case_study.view','case_study.edit','case_study.review');
+--
+-- ═══ بعد أيّ خيار ═════════════════════════════════════════════════════════
+--    -- notify pgrst, 'reload schema';
+--
+--  ثمّ راجع الكود: الواجهات مكتشِفة للميزة، فغياب الدوالّ يُقرأ «الميزة
+--  بانتظار تفعيل قاعدة البيانات» داخليًّا، والصفحات العامّة **تُخفي** القسم.
+--  لا انهيار ولا صفر مضلّل — لكن لا تنسَ حذف /case-studies من app/sitemap.ts
+--  إن كنت قد أضفته، وإلّا بقيت روابط في خريطة الموقع تشير إلى صفحات مخفيّة.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- لا شيء ينفَّذ في هذا الملفّ. اختر خيارًا أعلاه، وانسخ سطوره، وأزل التعليق
+-- عنها في جلسة واعية بعد نسخة احتياطية مُتحقَّق منها.
+select 'ROLLBACK: هذا الملفّ لا ينفّذ شيئًا. اقرأ الرأس واختر خيارًا واعيًا.' as note;

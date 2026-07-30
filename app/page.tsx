@@ -20,6 +20,9 @@ import Cursor       from "@/components/Cursor";
 import WaFloat      from "@/components/WaFloat";
 import Marquee      from "@/components/Marquee";
 import OpportunityPromo from "@/components/OpportunityPromo";
+// يعيد null ما لم تكن ميزة دراسات الحالة مفعّلة ويوجد محتوى منشور — فلا يظهر
+// قسم فارغ ولا رابط إلى صفحة «قريبًا». شبكة الأعمال أعلاه لم تُمسّ.
+import CaseStudiesTeaser from "@/components/CaseStudiesTeaser";
 
 export default function Home() {
   return (
@@ -35,6 +38,7 @@ export default function Home() {
         <About />
         <Services />
         <Portfolio />
+        <CaseStudiesTeaser />
         <Stats />
         <WhyKian />
         <Process />
