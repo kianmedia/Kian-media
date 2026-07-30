@@ -1,0 +1,125 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- commercial_subscriptions_ROLLBACK.sql        ⚠️ طوارئ فقط · كلّ سطر معلَّق ⚠️
+--
+-- ★★ اقرأ هذا قبل أن تُزيل تعليقًا واحدًا ★★
+--
+-- هذا الملفّ **يحذف بيانات**، ولا يحذف بيانات عادية: `public.csub_ledger` سجلّ
+-- **محاسبيّ**. كلّ صفّ فيه واقعة: رصيد مُنح، أو يوم تصوير استُهلك، أو تجاوز
+-- اعتمده المالك، أو تصحيح مكتوب بسببه. إسقاط هذا الجدول لا يُعيدك إلى «ما قبل
+-- الحزمة» — يُعيدك إلى حالة **لا يمكن فيها إثبات ما استهلكه العميل**. لن يكون
+-- لديك ما تردّ به على «لم أستهلك هذا اليوم»، ولا ما تُصدر به فاتورة تجاوز.
+--
+-- ما يُفقد فعليًّا ولا يُسترجع من أيّ مكان آخر في هذا المستودع:
+--   • csub_ledger              — الدفتر كلّه: التخصيص والحجز والاستهلاك والفكّ
+--                                والعكس والانتهاء والتسوية. **لا نسخة ثانية منه.**
+--   • csub_subscriptions       — عقود العملاء وتواريخها وتسعيرها وضريبتها.
+--   • csub_subscription_units  — مرساة الرصيد: أيّ وحدة يملك أيّ اشتراك.
+--   • csub_periods             — الفترات وما رُحِّل وما انتهى فيها.
+--   • csub_approval_requests   — أثر قرارات المالك: ماذا اعتُمد ومتى ولماذا.
+--   • csub_audit               — سجلّ التدقيق: من فعل ماذا. **يُفقد أيضًا.**
+--   • csub_plans / _units / _versions — الخطط وإصداراتها المنشورة.
+--
+-- ⛔ لا تُشغّل هذا إن كان قد جرى **استهلاك واحد** على الإنتاج. الطريق الصحيح
+--    عندئذٍ ليس التراجع بل التصحيح: `csub_reverse` يكتب قيدًا عكسيًّا ويُبقي
+--    الخطأ وتصحيحه معًا. هذا هو سبب وجود القيد العكسيّ أصلًا.
+--
+-- ─── الخطوة صفر: نسخة احتياطية. ليست اقتراحًا. ─────────────────────────────
+--   pg_dump للجداول الأحد عشر **قبل** أيّ حذف، وتحقّق من أنّ الملفّ يُقرأ:
+--     pg_dump "$DATABASE_URL" \
+--       -t public.csub_ledger -t public.csub_subscriptions \
+--       -t public.csub_subscription_units -t public.csub_periods \
+--       -t public.csub_approval_requests -t public.csub_audit \
+--       -t public.csub_plans -t public.csub_plan_units -t public.csub_plan_versions \
+--       -t public.csub_unit_types -t public.csub_settings \
+--       > csub_backup_$(date +%F_%H%M).sql
+--   ثمّ: قِس حجم الملفّ، وافتح آخره، وتأكّد أنّه ينتهي بـ«PostgreSQL database dump complete».
+--   نسخة احتياطية لم تُقرأ ليست نسخة احتياطية.
+--
+-- ─── الخطوة قبل الأخيرة: كم ستفقد بالضبط؟ (استعلامات قراءة فقط) ──────────
+--   شغّلها **قبل** الحذف واحتفظ بالنتيجة مكتوبة:
+--     select count(*) as entries, count(distinct subscription_id) as subs,
+--            count(distinct client_id) as clients, min(occurred_at), max(occurred_at)
+--       from public.csub_ledger;
+--     select entry_type, count(*), sum(quantity) from public.csub_ledger group by 1 order by 1;
+--     select status, count(*) from public.csub_subscriptions group by 1;
+--     select count(*) from public.csub_approval_requests where status = 'approved';
+--   إن أعاد الأوّل صفرًا في كلّ شيء فالحزمة لم تُستعمل بعد، والتراجع رخيص.
+--   إن أعاد رقمًا غير صفر فأنت على وشك محو محاسبة حيّة.
+--
+-- ─── بديل أخفّ يُجرَّب أوّلًا: التعطيل بلا حذف ────────────────────────────
+--   في أغلب الحالات المطلوب هو «أوقفوا الوحدة» لا «امحوا الدفتر». عندئذٍ:
+--     ١) اسحب المفاتيح الستّة من كلّ الأدوار في شاشة الصلاحيات
+--        (csub.view · csub.manage · csub.consume · csub.adjust ·
+--         csub.view_pricing · csub.export). النتيجة: لا أحد يفتح الوحدة،
+--        والمالك وحده يبقى قادرًا — والدفتر سليم.
+--     ٢) أو علّق الاشتراكات: csub_subscription_set_status(id,'suspended',<سبب>).
+--        الاستهلاك يتوقّف فورًا (الحالة ليست active) والرصيد يبقى محفوظًا.
+--   هذان البديلان **قابلان للعكس**. ما تحت هذا السطر ليس كذلك.
+--
+-- ─── ملاحظة تقنية: المُشغِّلات لن تعترض ────────────────────────────────────
+--   مُشغِّلات عدم القابلية للتعديل تمنع UPDATE/DELETE/TRUNCATE على الصفوف،
+--   لكنّها **لا تمنع DROP TABLE**. لا تقرأ نجاح DROP على أنّه «إذن» — هو حدّ
+--   تقنيّ في PostgreSQL لا موافقة معماريّة.
+--
+-- ─── ما لا يلمسه هذا الملفّ إطلاقًا ────────────────────────────────────────
+--   منصّة المشاريع (projects · project_core · deliverables · deliverable_internal)
+--   وclients وprofiles وnotifications: خارج نطاق الحزمة تمامًا. الحزمة أضافت
+--   إليها شيئًا واحدًا فقط هو تعميم قيد notifications.entity_type إلى «شكل»،
+--   وإرجاعه تعدادًا يكسر CRM وOperations Center معًا — لذلك لا تُرجعه.
+-- ════════════════════════════════════════════════════════════════════════════
+
+
+-- ─── ١) إزالة المفاتيح من الكتالوج (اختياريّ — لا يفقد بيانات عمل) ───────
+-- delete from public.permissions where key in
+--   ('csub.view','csub.manage','csub.consume','csub.adjust','csub.view_pricing','csub.export');
+
+
+-- ─── ٢) إسقاط الدوالّ. لا يفقد بيانات، ويوقف الوحدة فورًا. ───────────────
+--     أخفّ من إسقاط الجداول: الدفتر يبقى للقراءة والتصدير والتدقيق.
+--     ★ إن كان هدفك «أوقفوها» فتوقّف هنا ولا تكمل. ★
+-- do $drop_fns$
+-- declare r record;
+-- begin
+--   for r in
+--     select p.oid::regprocedure::text as sig
+--       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--      where n.nspname = 'public' and p.proname like 'csub\_%'
+--   loop
+--     execute format('drop function if exists %s cascade', r.sig);
+--   end loop;
+-- end $drop_fns$;
+
+
+-- ─── ٣) ★ نقطة اللاعودة ★ إسقاط الجداول — يمحو الدفتر والتدقيق معًا ─────
+--     الترتيب يحترم المفاتيح الخارجية (cascade يغني عنه، وهو مكتوب للوضوح).
+--     ⚠️ بعد هذه الكتلة لا يمكن إثبات أيّ استهلاك سابق. لا في هذه القاعدة
+--        ولا في أيّ مكان آخر في هذا المستودع.
+--     (المرحلة ٣ أوّلًا: طلبات الخدمة تشير إلى الدفتر والاشتراك بـrestrict.)
+-- drop table if exists public.csub_service_request_attachments cascade;
+-- drop table if exists public.csub_service_requests     cascade;
+-- drop table if exists public.csub_ledger              cascade;
+-- drop table if exists public.csub_approval_requests   cascade;
+-- drop table if exists public.csub_periods             cascade;
+-- drop table if exists public.csub_subscription_units  cascade;
+-- drop table if exists public.csub_subscriptions       cascade;
+-- drop table if exists public.csub_plan_versions       cascade;
+-- drop table if exists public.csub_plan_units          cascade;
+-- drop table if exists public.csub_plans               cascade;
+-- drop table if exists public.csub_unit_types          cascade;
+-- drop table if exists public.csub_settings            cascade;
+-- drop table if exists public.csub_audit               cascade;
+-- drop sequence if exists public.csub_plan_code_seq;
+-- drop sequence if exists public.csub_subscription_code_seq;
+
+
+-- ─── ٤) بعد أيّ تراجع: أعِد تحميل مخطّط PostgREST ───────────────────────
+--     بلا هذا ستستمرّ الواجهة في مناداة دوالّ محذوفة وتقرأ PGRST202، وستعرض
+--     «بانتظار تفعيل قاعدة البيانات» — وهي رسالة صحيحة عندئذٍ، لكن لا تجعلها
+--     تصل متأخّرة.
+-- notify pgrst, 'reload schema';
+
+
+-- ─── ٥) وثّق ما فعلت ────────────────────────────────────────────────────
+--     سجّل في docs/MANUAL_ACTIONS_QUEUE.md: التاريخ، ومن قرّر، والسبب، وأرقام
+--     «كم ستفقد» أعلاه، ومسار ملفّ النسخة الاحتياطية. تراجع بلا سجلّ يتحوّل
+--     بعد شهر إلى «لا أحد يعرف أين ذهب رصيد العميل».

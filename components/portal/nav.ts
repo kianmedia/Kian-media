@@ -45,6 +45,17 @@ const REG: Record<string, TabDef> = {
   // فالشاشة تقول «لا تملك صلاحية» بدل شاشة فارغة. المؤشّرات المالية والهوامش
   // مقصورة على المالك بنيويًّا ولا مفتاح لها إطلاقًا.
   executive:     { href: "/client-portal/executive",     ar: "اللوحة التنفيذية", en: "Executive", adminAr: "اللوحة التنفيذية", adminEn: "Executive Dashboard", staffAr: "اللوحة التنفيذية", staffEn: "Executive Dashboard" },
+  // باني عروض الأسعار (المرحلة ٤+٥) — داخليّ بحت: غائب عن مجموعتَي client/lead،
+  // والقاعدة ترفض العميل حتى برابط مباشر (sq_can_view = is_staff + مفتاح quote.*).
+  // ★ التكلفة والهامش والحدّ الأدنى ليست مخفيّة بالواجهة بل غير مُرسَلة أصلًا:
+  //   دالّة العرض لا تقرأ جدول تكلفة، ولوحة المالك نداء منفصل يردّ 42501 لغير
+  //   المالك. ولا مفتاح صلاحية للتكلفة إطلاقًا — لو وُجد لمُنح يومًا ثمّ نُسي.
+  quoting:       { href: "/client-portal/quoting",       ar: "عروض الأسعار", en: "Quotes", adminAr: "باني عروض الأسعار", adminEn: "Smart Quoting", staffAr: "عروض الأسعار", staffEn: "Quote Builder" },
+  // «رصيدي الإنتاجي» — سطح عميل بحت. غائب عمدًا عن كلّ مجموعة موظّف: القاعدة
+  // ترفض حساب الموظّف (csub_my_credits تشترط csub_is_client)، فإظهار التبويب
+  // له يعني إرساله إلى شاشة «لا تملك صلاحية» بلا سبب. مجموعة lead مستثناة
+  // كذلك: الزائر بلا ملفّ عميل، وسيقرأ «لا يوجد ملفّ عميل» بلا فائدة.
+  production_credits: { href: "/client-portal/production-credits", ar: "رصيدي الإنتاجي", en: "My Production Credits" },
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
@@ -53,17 +64,17 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "accounts", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
-  sales:       ["employee", "crm", "quotes", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  sales:       ["employee", "crm", "quotes", "quoting", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   editor:      ["employee", "operations", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   readonly:    ["employee", "projects", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
@@ -74,7 +85,7 @@ const SETS: Record<ViewRole, string[]> = {
   lighting_tech:    ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   camera_assistant: ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   custody_officer:  ["employee", "operations", "equipment", "asset_custody", "rentals", "finance_ops", "notifications", "profile"],
-  client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "equipment", "rentals", "notifications", "profile"],
+  client:      ["overview", "projects", "production_credits", "quotes", "messages", "files", "invoices", "offers", "equipment", "rentals", "notifications", "profile"],
   lead:        ["overview", "quotes", "messages", "files", "offers", "equipment", "notifications", "profile"],
 };
 
