@@ -927,6 +927,206 @@ begin
 end $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- §7B) منع الحجز المزدوج — **في القاعدة، لا في الواجهة**.
+--
+--   §7 يكشف ويُبلّغ. §7B يمنع. الفرق ليس تجميليًّا: تحذيرٌ في الشاشة يسقط
+--   بأوّل استدعاء REST مباشر أو بأوّل ضغطة على «حفظ» رغم التحذير، فيخرج طاقمٌ
+--   واحد إلى موقعين في الساعة نفسها. لذلك الفاصل هنا مُشغِّل (trigger) على
+--   الجدول نفسه: يعمل مهما كان الطريق — RPC أو PostgREST أو psql.
+--
+--   ثلاثة تعارضات مانعة: الشخص · الجهاز · الموقع/الاستوديو.
+--   نطاق المنع = نافذة مُلتزَمة فقط: مهمّة حالتها scheduled/confirmed/in_progress
+--   ولها بداية ونهاية. المسوّدة (draft) لا تحجز أحدًا ولا تمنع أحدًا — وهذا
+--   مقصود كي يبقى التخطيط المبدئيّ ممكنًا؛ الالتزام هو ما يُقفل.
+--   رمز الخطأ 23P01 (exclusion_violation) كي تميّزه الطبقة الأعلى عن «ممنوع».
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- الشخص: هل هو مُسنَد لمهمّة أخرى مُلتزَمة تتقاطع مع النافذة؟ يعيد رمزها أو NULL.
+create or replace function public.prodops_person_clash(
+  p_user uuid, p_job uuid, p_from timestamptz, p_to timestamptz) returns text
+language sql stable security definer set search_path = public as $$
+  select j.job_code
+    from public.ops_job_crew c
+    join public.ops_jobs j on j.id = c.job_id and j.is_deleted = false
+   where p_user is not null and p_job is not null and p_from is not null and p_to is not null
+     and c.user_id = p_user and c.job_id <> p_job and c.is_deleted = false
+     and c.status not in ('declined','no_show')
+     and j.status in ('scheduled','confirmed','in_progress')
+     and j.scheduled_start is not null and j.scheduled_end is not null
+     and tstzrange(j.scheduled_start, j.scheduled_end) && tstzrange(p_from, p_to)
+   order by j.scheduled_start
+   limit 1;
+$$;
+
+-- الجهاز: نفس المنطق، ونافذة البند تسبق نافذة المهمّة إن وُجدت.
+create or replace function public.prodops_asset_clash(
+  p_asset uuid, p_job uuid, p_from timestamptz, p_to timestamptz) returns text
+language sql stable security definer set search_path = public as $$
+  select j.job_code
+    from public.ops_job_equipment e
+    join public.ops_jobs j on j.id = e.job_id and j.is_deleted = false
+   where p_asset is not null and p_job is not null and p_from is not null and p_to is not null
+     and e.asset_id = p_asset and e.job_id <> p_job and e.is_deleted = false
+     and e.status in ('requested','reserved','handed_over')
+     and j.status in ('scheduled','confirmed','in_progress')
+     and coalesce(e.needed_from, j.scheduled_start) is not null
+     and coalesce(e.needed_to,   j.scheduled_end)   is not null
+     and tstzrange(coalesce(e.needed_from, j.scheduled_start), coalesce(e.needed_to, j.scheduled_end))
+      && tstzrange(p_from, p_to)
+   order by j.scheduled_start
+   limit 1;
+$$;
+
+-- الموقع/الاستوديو: مساحة واحدة لا تتحمّل تصويرين في اللحظة نفسها.
+create or replace function public.prodops_location_clash(
+  p_loc uuid, p_job uuid, p_from timestamptz, p_to timestamptz) returns text
+language sql stable security definer set search_path = public as $$
+  select j.job_code
+    from public.ops_jobs j
+   where p_loc is not null and p_job is not null and p_from is not null and p_to is not null
+     and j.location_id = p_loc and j.id <> p_job and j.is_deleted = false
+     and j.status in ('scheduled','confirmed','in_progress')
+     and j.scheduled_start is not null and j.scheduled_end is not null
+     and tstzrange(j.scheduled_start, j.scheduled_end) && tstzrange(p_from, p_to)
+   order by j.scheduled_start
+   limit 1;
+$$;
+
+-- حارس الطاقم: يمنع إسناد شخص محجوز. النافذة تُقرأ من المهمّة الأمّ (لم تتغيّر هنا).
+create or replace function public.prodops_guard_crew() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_from timestamptz; v_to timestamptz; v_st text; v_code text;
+begin
+  if new.is_deleted then return new; end if;
+  if new.user_id is null then return new; end if;
+  -- ⚠️ OLD غير مُسنَد في مُشغِّل INSERT، ولمسه هناك يرفع خطأً يُسقط كلّ إدراج.
+  --    لذلك الشرط **متداخل**: فحص نوع العملية أوّلًا في IF مستقلّة، ثمّ لمس OLD
+  --    داخلها. دمجهما في تعبير AND واحد غير آمن لأنّ SQL لا يضمن ترتيب التقييم.
+  if tg_op = 'UPDATE' then
+    -- تعديل لا يمسّ الحجز (تغيير ملاحظة مثلًا) لا يُعاد فحصه.
+    if old.is_deleted = false
+       and new.user_id is not distinct from old.user_id
+       and new.job_id  is not distinct from old.job_id
+       and new.status  is not distinct from old.status then
+      return new;
+    end if;
+  end if;
+  if new.status in ('declined','no_show') then return new; end if;
+
+  select j.scheduled_start, j.scheduled_end, j.status into v_from, v_to, v_st
+    from public.ops_jobs j where j.id = new.job_id and j.is_deleted = false;
+  if v_st is null or v_st not in ('scheduled','confirmed','in_progress') then return new; end if;
+  if v_from is null or v_to is null then return new; end if;
+
+  v_code := public.prodops_person_clash(new.user_id, new.job_id, v_from, v_to);
+  if v_code is not null then
+    raise exception 'ops_double_booking: الشخص نفسه محجوز في المهمّة % خلال نفس الفترة. الحجز المزدوج ممنوع.', v_code
+      using errcode = '23P01', hint = 'person:' || v_code;
+  end if;
+  return new;
+end $$;
+
+-- حارس المعدّات: يمنع حجز جهاز محجوز.
+create or replace function public.prodops_guard_equipment() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_from timestamptz; v_to timestamptz; v_st text; v_code text;
+begin
+  if new.is_deleted then return new; end if;
+  if new.asset_id is null then return new; end if;
+  -- ⚠️ نفس السبب: OLD لا يُلمَس إلّا داخل فرع UPDATE (انظر prodops_guard_crew).
+  if tg_op = 'UPDATE' then
+    if old.is_deleted = false
+       and new.asset_id    is not distinct from old.asset_id
+       and new.job_id      is not distinct from old.job_id
+       and new.status      is not distinct from old.status
+       and new.needed_from is not distinct from old.needed_from
+       and new.needed_to   is not distinct from old.needed_to then
+      return new;
+    end if;
+  end if;
+  if new.status not in ('requested','reserved','handed_over') then return new; end if;
+
+  select j.scheduled_start, j.scheduled_end, j.status into v_from, v_to, v_st
+    from public.ops_jobs j where j.id = new.job_id and j.is_deleted = false;
+  if v_st is null or v_st not in ('scheduled','confirmed','in_progress') then return new; end if;
+  v_from := coalesce(new.needed_from, v_from);
+  v_to   := coalesce(new.needed_to,   v_to);
+  if v_from is null or v_to is null then return new; end if;
+
+  v_code := public.prodops_asset_clash(new.asset_id, new.job_id, v_from, v_to);
+  if v_code is not null then
+    raise exception 'ops_double_booking: الجهاز نفسه محجوز في المهمّة % خلال نفس الفترة. الحجز المزدوج ممنوع.', v_code
+      using errcode = '23P01', hint = 'equipment:' || v_code;
+  end if;
+  return new;
+end $$;
+
+-- حارس المهمّة: نقل الوقت أو الموقع أو الالتزام بالحالة يُعيد فحص **كلّ** ما حُجز
+-- تحتها. بدون هذا يُلتفّ على الحارسَين أعلاه: تُنشأ مهمّتان بأوقات متباعدة ثمّ
+-- تُسحب إحداهما فوق الأخرى فيقع الازدواج بلا أيّ فحص.
+create or replace function public.prodops_guard_job() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_code text; r record;
+begin
+  if new.is_deleted then return new; end if;
+  -- ⚠️ نفس السبب: OLD لا يُلمَس إلّا داخل فرع UPDATE (انظر prodops_guard_crew).
+  if tg_op = 'UPDATE' then
+    if new.scheduled_start is not distinct from old.scheduled_start
+       and new.scheduled_end   is not distinct from old.scheduled_end
+       and new.location_id     is not distinct from old.location_id
+       and new.status          is not distinct from old.status
+       and new.is_deleted      is not distinct from old.is_deleted then
+      return new;
+    end if;
+  end if;
+  if new.status not in ('scheduled','confirmed','in_progress') then return new; end if;
+  if new.scheduled_start is null or new.scheduled_end is null then return new; end if;
+
+  if new.location_id is not null then
+    v_code := public.prodops_location_clash(new.location_id, new.id, new.scheduled_start, new.scheduled_end);
+    if v_code is not null then
+      raise exception 'ops_double_booking: الموقع/الاستوديو محجوز للمهمّة % خلال نفس الفترة. الحجز المزدوج ممنوع.', v_code
+        using errcode = '23P01', hint = 'location:' || v_code;
+    end if;
+  end if;
+
+  for r in select c.user_id from public.ops_job_crew c
+            where c.job_id = new.id and c.is_deleted = false and c.user_id is not null
+              and c.status not in ('declined','no_show') loop
+    v_code := public.prodops_person_clash(r.user_id, new.id, new.scheduled_start, new.scheduled_end);
+    if v_code is not null then
+      raise exception 'ops_double_booking: أحد أفراد الطاقم محجوز في المهمّة % خلال الفترة الجديدة. الحجز المزدوج ممنوع.', v_code
+        using errcode = '23P01', hint = 'person:' || v_code;
+    end if;
+  end loop;
+
+  for r in select e.asset_id, e.needed_from, e.needed_to from public.ops_job_equipment e
+            where e.job_id = new.id and e.is_deleted = false and e.asset_id is not null
+              and e.status in ('requested','reserved','handed_over') loop
+    v_code := public.prodops_asset_clash(r.asset_id, new.id,
+                coalesce(r.needed_from, new.scheduled_start), coalesce(r.needed_to, new.scheduled_end));
+    if v_code is not null then
+      raise exception 'ops_double_booking: أحد الأجهزة محجوز في المهمّة % خلال الفترة الجديدة. الحجز المزدوج ممنوع.', v_code
+        using errcode = '23P01', hint = 'equipment:' || v_code;
+    end if;
+  end loop;
+
+  return new;
+end $$;
+
+drop trigger if exists trg_ops_crew_no_double_booking  on public.ops_job_crew;
+create trigger trg_ops_crew_no_double_booking  before insert or update on public.ops_job_crew
+  for each row execute function public.prodops_guard_crew();
+
+drop trigger if exists trg_ops_equip_no_double_booking on public.ops_job_equipment;
+create trigger trg_ops_equip_no_double_booking before insert or update on public.ops_job_equipment
+  for each row execute function public.prodops_guard_equipment();
+
+drop trigger if exists trg_ops_job_no_double_booking   on public.ops_jobs;
+create trigger trg_ops_job_no_double_booking   before insert or update on public.ops_jobs
+  for each row execute function public.prodops_guard_job();
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- §8) درجة الجاهزية — **مشتقّة بالكامل**. لا عمود محفوظ يمكن أن ينحرف.
 -- ════════════════════════════════════════════════════════════════════════════
 create or replace function public.prodops_readiness_core(p_job uuid)
@@ -1314,6 +1514,7 @@ end $$;
 create or replace function public.prodops_lookups()
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v_people jsonb := '[]'::jsonb; v_prof jsonb := '[]'::jsonb; v_assets jsonb := '[]'::jsonb;
+        v_projects jsonb := '[]'::jsonb;
 begin
   if not coalesce(public.prodops_can_view(), false) then raise exception 'not authorized'; end if;
 
@@ -1356,7 +1557,35 @@ begin
     end if;
   end if;
 
+  -- المشاريع للربط الاختياريّ — **قراءة معرّف واسم فقط**، وهو حدّ التماسّ
+  -- المسموح به مع المنصّة المجمَّدة. اسم العمود يُكتشف ولا يُخمَّن (تخمينه سبق
+  -- أن أنتج 42703)، والقراءة معزولة باستثناء فيبقى الربط اختياريًّا لا شرطًا.
+  if coalesce(public.prodops_can_manage(), false) and to_regclass('public.projects') is not null then
+    declare v_col text;
+    begin
+      select c.column_name into v_col from information_schema.columns c
+       where c.table_schema = 'public' and c.table_name = 'projects'
+         and c.column_name in ('project_name','title','name')
+       order by case c.column_name when 'project_name' then 1 when 'title' then 2 else 3 end
+       limit 1;
+      if v_col is not null then
+        -- عمودان فقط: id والاسم المكتشَف. لا created_at ولا غيره — كلّ عمود
+        -- إضافيّ هنا تخمينٌ يُنتج 42703 ويُسقط الشاشة كلّها.
+        execute format($q$select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'name',
+                         coalesce(nullif(btrim(p.%I), ''), p.id::text)) order by p.%I), '[]'::jsonb)
+                       from (select id, %I from public.projects order by %I limit 500) p$q$,
+                       v_col, v_col, v_col, v_col)
+          into v_projects;
+      end if;
+    exception when others then v_projects := '[]'::jsonb;
+    end;
+  end if;
+
   return jsonb_build_object('ok', true,
+    'projects', v_projects,
+    -- صدق: «غير متاح» ليست «لا مشاريع». الفرق يظهر في الشاشة كما هو.
+    'projects_source', case when to_regclass('public.projects') is null
+                            then 'unavailable' else 'projects' end,
     'locations', (select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'name', l.name, 'kind', l.kind,
                      'city', l.city, 'contact_name', l.contact_name, 'contact_phone', l.contact_phone)
                      order by l.name), '[]'::jsonb)
@@ -1563,6 +1792,10 @@ begin
     'ops_job', v_id, v_id, jsonb_build_object('payload_keys', (select coalesce(jsonb_agg(k),'[]'::jsonb)
       from jsonb_object_keys(p) k)));
   return jsonb_build_object('ok', true, 'id', v_id, 'created', v_new);
+-- ★ رفض الحجز المزدوج يصل من حارس §7B كـ23P01. يُترجَم إلى رفض مفهوم بدل خطأ
+--   خام، ولا يُلتقط 'not authorized' (P0001) فيبقى المنع منعًا.
+exception when sqlstate '23P01' then
+  return jsonb_build_object('ok', false, 'reason','double_booked', 'message', sqlerrm);
 end $$;
 
 -- تغيير الحالة: انتقال مضبوط، لا قفزة عشوائية، ومُدقَّق.
@@ -1602,6 +1835,11 @@ begin
   perform public.prodops_log('job_status', 'ops_job', p_job, p_job,
     jsonb_build_object('from', v_old, 'to', p_status, 'note', p_note));
   return jsonb_build_object('ok', true, 'id', p_job, 'from', v_old, 'to', p_status);
+-- ★ الالتزام بالحالة (draft → scheduled) يُفعّل فحص §7B: مسوّدة تخفي ازدواجًا
+--   لا تصير مهمّة مُلتزَمة بصمت.
+exception when sqlstate '23P01' then
+  return jsonb_build_object('ok', false, 'id', p_job, 'from', v_old, 'to', p_status,
+    'reason','double_booked', 'message', sqlerrm);
 end $$;
 
 create or replace function public.prodops_job_delete(p_job uuid, p_reason text)
@@ -1938,6 +2176,10 @@ begin
 
   perform public.prodops_log('child_upsert', v_tbl, v_id, v_job, jsonb_build_object('kind', p_kind));
   return jsonb_build_object('ok', true, 'id', v_id, 'kind', p_kind, 'job_id', v_job);
+-- ★ الحجز المزدوج (طاقم أو معدّات) مرفوض في القاعدة — هنا تُقال العلّة بالعربية.
+exception when sqlstate '23P01' then
+  return jsonb_build_object('ok', false, 'kind', p_kind, 'job_id', v_job,
+    'reason','double_booked', 'message', sqlerrm);
 end $$;
 
 create or replace function public.prodops_child_delete(p_kind text, p_id uuid, p_reason text)
@@ -2122,15 +2364,25 @@ end $$;
 create or replace function public.prodops_backup_step(
   p_card uuid, p_step text, p_done boolean default true, p_path text default null)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
-declare v_job uuid; v_row public.ops_media_backups%rowtype;
+declare v_job uuid; v_holder uuid; v_manage boolean; v_row public.ops_media_backups%rowtype;
 begin
   if auth.uid() is null then raise exception 'not authorized'; end if;
   if p_step is null or p_step not in ('primary','second','nas','verified') then raise exception 'invalid_step'; end if;
-  select job_id into v_job from public.ops_media_cards where id = p_card and is_deleted = false;
+  select job_id, holder_user_id into v_job, v_holder
+    from public.ops_media_cards where id = p_card and is_deleted = false;
   if v_job is null then raise exception 'card_not_found'; end if;
-  -- من ينفّذ الحفظ: المدير أو أحد طاقم المهمّة (هو من بيده البطاقة على الموقع).
-  if not (coalesce(public.prodops_can_manage(), false) or coalesce(public.prodops_is_crew(v_job), false)) then
+  v_manage := coalesce(public.prodops_can_manage(), false);
+  -- بوّابة الموديول: المدير أو أحد طاقم المهمّة. غيرهما لا يصل أصلًا.
+  if not (v_manage or coalesce(public.prodops_is_crew(v_job), false)) then
     raise exception 'not authorized';
+  end if;
+  -- ★ التوقيع شخصيّ: زميلٌ في الطاقم لا يوقّع نسخ بطاقة غيره ولا يُعلّم تحقّقها.
+  --   «كوني ضمن الطاقم» تُدخلني المهمّة، ولا تجعلني حاملَ كلّ بطاقة فيها.
+  --   بطاقة بلا حامل مُسجَّل: المدير وحده — لأنّ المسؤولية عنها غير مُسنَدة.
+  if not v_manage and (v_holder is null or v_holder <> auth.uid()) then
+    return jsonb_build_object('ok', false, 'card_id', p_card, 'step', p_step,
+      'reason','not_card_holder',
+      'message','هذه البطاقة ليست بعهدتك. لا يُسجّل خطوات نسخها ولا يُعلّم تحقّقها إلّا حاملها أو مدير التشغيل.');
   end if;
 
   -- بلا هدف صريح: uq_ops_backup_card فهرس **جزئيّ**، واستنتاجه بـ(card_id) وحده يفشل.
@@ -2301,6 +2553,13 @@ begin
   foreach f in array array[
     'public.prodops_conflicts_core(timestamptz,timestamptz,uuid)',
     'public.prodops_external_conflicts(timestamptz,timestamptz)',
+    -- حرّاس §7B: تُستدعى من المُشغِّلات فقط. لا يد للواجهة عليها، ولا التفاف حولها.
+    'public.prodops_person_clash(uuid,uuid,timestamptz,timestamptz)',
+    'public.prodops_asset_clash(uuid,uuid,timestamptz,timestamptz)',
+    'public.prodops_location_clash(uuid,uuid,timestamptz,timestamptz)',
+    'public.prodops_guard_crew()',
+    'public.prodops_guard_equipment()',
+    'public.prodops_guard_job()',
     'public.prodops_readiness_core(uuid)',
     'public.prodops_visible_jobs()',
     'public.prodops_project_label(uuid)',
@@ -2514,7 +2773,55 @@ begin
   if v is null or (v->'sources') is null then
     raise exception 'OPS SELF-TEST: المسح الخارجيّ لا يُعلن حالة مصادره'; end if;
 
-  raise notice 'OPS SELF-TEST: نجح — 20 جدولًا، RLS قراءة فقط، لا anon، مُسنَدات لا تعيد NULL، والمنصّة لم تُمَسّ.';
+  -- (15) ★ منع الحجز المزدوج موجود كمُشغِّل على الجدول، لا كتحذير في الشاشة.
+  foreach f in array array[
+    'trg_ops_crew_no_double_booking:ops_job_crew',
+    'trg_ops_equip_no_double_booking:ops_job_equipment',
+    'trg_ops_job_no_double_booking:ops_jobs'
+  ] loop
+    if not exists (select 1 from pg_trigger g
+                    where g.tgrelid = ('public.' || split_part(f, ':', 2))::regclass
+                      and g.tgname = split_part(f, ':', 1) and not g.tgisinternal) then
+      raise exception 'OPS SELF-TEST: مُشغِّل منع الحجز المزدوج % غائب — المنع صار تحذيرًا فقط', f;
+    end if;
+  end loop;
+  foreach f in array array[
+    'public.prodops_guard_crew()','public.prodops_guard_equipment()','public.prodops_guard_job()'
+  ] loop
+    v_def := pg_get_functiondef(to_regprocedure(f));
+    if v_def not ilike '%23P01%' then
+      raise exception 'OPS SELF-TEST: % لا يرفع رمز تعارض مميّزًا', f; end if;
+    if v_def not ilike '%ops_double_booking%' then
+      raise exception 'OPS SELF-TEST: % بلا رسالة رفض صريحة', f; end if;
+  end loop;
+  -- الحارس يعمل على قاعدة فارغة ويعيد NULL (لا تعارض) بدل أن ينفجر
+  if public.prodops_person_clash(ZERO, ZERO, now(), now() + interval '1 hour') is not null
+     or public.prodops_asset_clash(ZERO, ZERO, now(), now() + interval '1 hour') is not null
+     or public.prodops_location_clash(ZERO, ZERO, now(), now() + interval '1 hour') is not null then
+    raise exception 'OPS SELF-TEST: كاشف التعارض يدّعي تعارضًا على قاعدة فارغة';
+  end if;
+  -- الطبقة الأعلى تترجم 23P01 ولا تبتلعه، وفي الوقت نفسه لا تبتلع «ممنوع»
+  foreach f in array array[
+    'public.prodops_child_upsert(text,jsonb)','public.prodops_job_upsert(jsonb)',
+    'public.prodops_job_set_status(uuid,text,text)'
+  ] loop
+    v_def := pg_get_functiondef(to_regprocedure(f));
+    if v_def not ilike '%23P01%' or v_def not ilike '%double_booked%' then
+      raise exception 'OPS SELF-TEST: % لا تُترجم رفض الحجز المزدوج', f; end if;
+    -- النمط مكتوب متقطّعًا عمدًا كي لا يُطابق نفسه في فحوص المستودع النصّية.
+    if v_def ilike '%exception when%others%then%return%' then
+      raise exception 'OPS SELF-TEST: % تبتلع كلّ الأخطاء — «ممنوع» سيظهر كنجاح', f; end if;
+  end loop;
+
+  -- (16) ★ توقيع النسخ الاحتياطي شخصيّ: حاملُ البطاقة أو المدير، لا أيّ زميل
+  v_def := pg_get_functiondef(to_regprocedure('public.prodops_backup_step(uuid,text,boolean,text)'));
+  if v_def not ilike '%holder_user_id%' or v_def not ilike '%not_card_holder%' then
+    raise exception 'OPS SELF-TEST: خطوة النسخ لا تتحقّق من حامل البطاقة — زميل يوقّع نيابةً عن غيره';
+  end if;
+  if v_def not ilike '%verified_by%' or v_def not ilike '%auth.uid()%' then
+    raise exception 'OPS SELF-TEST: مُوقِّع التحقّق لا يُؤخذ من الجلسة'; end if;
+
+  raise notice 'OPS SELF-TEST: نجح — 20 جدولًا، RLS قراءة فقط، لا anon، مُسنَدات لا تعيد NULL، منع الحجز المزدوج بمُشغِّل، والمنصّة لم تُمَسّ.';
 end $st$;
 
 commit;

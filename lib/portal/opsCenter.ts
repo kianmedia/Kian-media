@@ -59,6 +59,10 @@ export function opsReasonAr(reason: string): string {
     case "job_id_required":    return "المهمّة مطلوبة.";
     case "unknown_kind":       return "نوع سجلّ غير معروف.";
     case "card_not_found":     return "بطاقة الذاكرة غير موجودة.";
+    // ★ رفضٌ من القاعدة لا تحذيرٌ من الشاشة: الحجز لم يُسجَّل أصلًا.
+    case "double_booked":      return "حجز مزدوج — الحجز لم يُسجَّل. راجع تبويب التعارضات.";
+    case "not_card_holder":    return "هذه البطاقة ليست بعهدتك — لا تُوقَّع نسخها إلّا من حاملها أو المدير.";
+    case "needs_two_copies":   return "لا يُعلَّم التحقّق قبل تسجيل نسختين فعليًّا (الأولى والثانية).";
     default:                   return "تعذّر تنفيذ الطلب.";
   }
 }
@@ -188,6 +192,26 @@ export interface OpsLookups {
   assets: { id: string; code: string; name: string; availability: string }[];
   /** "unavailable" = موديول المخزون غير مطبَّق ⇒ اسم الجهاز نصّ حرّ، بلا ادّعاء تكامل. */
   assets_source: string;
+  /** الربط بالمشروع اختياريّ وللعرض فقط — المنصّة مجمَّدة ولا يُكتب فيها شيء. */
+  projects: { id: string; name: string }[];
+  /** "unavailable" = جدول المشاريع غير موجود ⇒ الربط معطّل، لا «لا مشاريع». */
+  projects_source: string;
+}
+
+/** ورقة النداء كما يبنيها prodops_call_sheet — الخادم هو من يُصفّي، لا الطباعة. */
+export interface OpsCallSheetData {
+  ok: boolean;
+  sheet: OpsRow | null;
+  job: { id: string; job_code: string; title: string; job_type: OpsJobType;
+         scheduled_start: string | null; scheduled_end: string | null;
+         client_label: string | null; project_name: string | null };
+  location: OpsRow | null;
+  crew: { crew_role: string; user_id: string | null; name: string | null; phone: string | null;
+          call_time: string | null; wrap_time: string | null; status: string }[];
+  vehicles: OpsRow[];
+  hse: { item_ar: string; status: string; is_required: boolean }[];
+  weather: OpsRow | null;
+  weather_note: string;
 }
 
 /** أنواع الأبناء التي يقبلها المُحرِّر العامّ على الخادم (قائمة بيضاء مطابقة). */
@@ -223,7 +247,7 @@ export const opsConflicts = (filters: Record<string, unknown> = {}) =>
 
 export const opsCallSheet = (jobId: string, date: string | null = null) =>
   prpc<unknown>("prodops_call_sheet", { p_job: jobId, p_date: date })
-    .then((r) => toState<Record<string, unknown>>(r));
+    .then((r) => toState<OpsCallSheetData>(r));
 
 export const opsReadiness = (jobId: string) =>
   prpc<unknown>("prodops_readiness", { p_job: jobId }).then((r) => toState<OpsReadiness>(r));

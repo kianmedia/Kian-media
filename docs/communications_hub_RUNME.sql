@@ -256,6 +256,12 @@ insert into public.comms_event_catalog(event_key, category, audience, is_financi
   ('project.status_changed',        'projects',  'both',     false, true,  array['portal','email'], 'تغيّر حالة مشروع',        'Project status changed'),
   ('project.delivery_recorded',     'projects',  'both',     false, true,  array['portal','email'], 'تسجيل تسليم',              'Delivery recorded'),
   ('project.member_assigned',       'projects',  'internal', false, true,  array['portal','email'], 'تكليف عضو فريق',           'Member assigned'),
+  -- Assignment notes used to be mailed by the BROWSER no-cors relay
+  -- (docs/NOTIFICATIONS_CURRENT_STATE_AUDIT.md §5, path D5). That path is gone;
+  -- the server adapter /api/comms/legacy-notify maps it here, so the event must
+  -- exist in the catalogue or the adapter answers UNKNOWN_EVENT and records
+  -- nothing. Internal only: a note to a staff member is never client-facing.
+  ('project.assignment_note',       'projects',  'internal', false, false, array['portal','email'], 'ملاحظة على تكليف',         'Assignment note'),
   ('deliverable.preview_sent',      'delivery',  'both',     false, true,  array['portal','email'], 'إرسال معاينة للعميل',      'Preview sent'),
   ('deliverable.final_ready',       'delivery',  'both',     false, true,  array['portal','email'], 'النسخة النهائية جاهزة',    'Final ready'),
   ('deliverable.client_commented',  'delivery',  'internal', false, true,  array['portal','email'], 'تعليق من العميل',          'Client commented'),
@@ -1376,6 +1382,38 @@ begin
                    and indexname = 'uq_comms_outbox_idem'
                    and indexdef ilike '%unique%' and indexdef ilike '%where%') then
     raise exception 'HUB FAIL: partial unique idempotency index missing';
+  end if;
+
+  -- (15) THE BROWSER-RELAY REPLACEMENT. /api/comms/legacy-notify maps the five
+  --       surviving legacy browser events onto these catalogue keys. If one is
+  --       missing the adapter answers UNKNOWN_EVENT and the notification is
+  --       silently lost, which is exactly the failure mode this phase exists to
+  --       end. Each key is asserted individually so the error names the gap.
+  foreach t in array array['deliverable.preview_sent','deliverable.final_ready',
+                           'project.member_assigned','project.assignment_note',
+                           'deliverable.client_commented'] loop
+    if not exists (select 1 from public.comms_event_catalog where event_key = t and active) then
+      raise exception 'HUB FAIL: legacy-adapter event % is missing from the catalogue', t;
+    end if;
+  end loop;
+
+  -- (15b) Those five are the ones a BROWSER can trigger. None of them may be
+  --       financial: a browser-triggered event must never carry money to a
+  --       client, whatever the template says later.
+  if exists (select 1 from public.comms_event_catalog
+              where event_key in ('deliverable.preview_sent','deliverable.final_ready',
+                                  'project.member_assigned','project.assignment_note',
+                                  'deliverable.client_commented')
+                and is_financial) then
+    raise exception 'HUB FAIL: a browser-triggerable event is marked financial';
+  end if;
+
+  -- (15c) An assignment note is internal. If it were ever flipped to client or
+  --       both, a private instruction to a staff member would reach a client.
+  if exists (select 1 from public.comms_event_catalog
+              where event_key in ('project.assignment_note','project.member_assigned')
+                and audience <> 'internal') then
+    raise exception 'HUB FAIL: assignment events must stay internal-only';
   end if;
 
   raise notice 'COMMUNICATIONS HUB SELF-TEST PASSED — % catalogue events, all channels dry_run, email+whatsapp disabled.', v_n;

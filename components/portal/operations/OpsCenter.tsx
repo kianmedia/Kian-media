@@ -9,7 +9,7 @@
 import { useState } from "react";
 import {
   opsAccess, opsDashboard, opsJobsList, opsMyAssignments, opsCalendar, opsConflicts,
-  opsLookups, opsJobUpsert, opsLocationUpsert, opsVehicleUpsert,
+  opsLookups, opsLocationUpsert, opsVehicleUpsert,
   JOB_TYPE_AR, JOB_STATUS_AR, JOB_STATUS_COLOR, CONFLICT_AR,
   opsDate, opsTime, opsDateTime, opsIsoDay, readinessColor,
   type OpsAccess, type OpsDashboard, type OpsJobRow, type OpsAssignments,
@@ -20,6 +20,7 @@ import {
   StateView, useOpsLoad, Denied,
 } from "./OpsAtoms";
 import OpsJobPanel from "./OpsJobPanel";
+import OpsJobForm from "./OpsJobForm";
 
 type Tab = "today" | "mine" | "jobs" | "calendar" | "conflicts" | "refs";
 const S = (v: unknown): string => (v === null || v === undefined || v === "" ? "—" : String(v));
@@ -275,7 +276,7 @@ function JobsTab({ canManage, onOpen }: { canManage: boolean; onOpen: (id: strin
         )}
       </div>
 
-      {creating && <NewJobForm onDone={() => { setCreating(false); setNonce((n) => n + 1); }} />}
+      {creating && <OpsJobForm onDone={() => { setCreating(false); setNonce((n) => n + 1); }} />}
 
       <StateView st={st} onRetry={reload}>
         {(d) => (
@@ -311,103 +312,55 @@ function JobsTab({ canManage, onOpen }: { canManage: boolean; onOpen: (id: strin
   );
 }
 
-function NewJobForm({ onDone }: { onDone: () => void }) {
-  const { st: lkSt } = useOpsLoad<OpsLookups>(() => opsLookups(), []);
-  const lookups = lkSt && lkSt.state === "ok" ? lkSt.data : null;
-  const [f, setF] = useState<Record<string, string>>({
-    title: "", job_type: "filming", scheduled_start: "", scheduled_end: "",
-    location_id: "", location_note: "", client_label: "", priority: "normal",
-  });
-  const [busy, setBusy] = useState(false);
-  const [flash, setFlash] = useState<{ t: string; tone: "ok" | "bad" }>({ t: "", tone: "ok" });
-
-  const save = async () => {
-    if (f.title.trim().length < 2) { setFlash({ t: "العنوان مطلوب.", tone: "bad" }); return; }
-    setBusy(true);
-    const payload: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(f)) payload[k] = v === "" ? null : v;
-    const r = await opsJobUpsert(payload);
-    setBusy(false);
-    if (r.state === "ok") onDone();
-    else setFlash({ t: r.message, tone: "bad" });
-  };
-
-  return (
-    <div className={`${card} p-4 space-y-3`}>
-      <h3 className="text-sm text-stone-100">أمر عمل جديد</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="block sm:col-span-2">
-          <span className="block text-[11px] text-stone-400 mb-1">العنوان</span>
-          <input className={fieldCls} value={f.title} onChange={(e) => setF((s) => ({ ...s, title: e.target.value }))} />
-        </label>
-        <label className="block">
-          <span className="block text-[11px] text-stone-400 mb-1">النوع</span>
-          <select className={fieldCls} value={f.job_type} onChange={(e) => setF((s) => ({ ...s, job_type: e.target.value }))}>
-            {Object.entries(JOB_TYPE_AR).map(([v, ar]) => <option key={v} value={v}>{ar}</option>)}
-          </select>
-        </label>
-        <label className="block">
-          <span className="block text-[11px] text-stone-400 mb-1">الأولوية</span>
-          <select className={fieldCls} value={f.priority} onChange={(e) => setF((s) => ({ ...s, priority: e.target.value }))}>
-            <option value="low">منخفضة</option><option value="normal">عادية</option>
-            <option value="high">عالية</option><option value="urgent">عاجلة</option>
-          </select>
-        </label>
-        <label className="block">
-          <span className="block text-[11px] text-stone-400 mb-1">البداية</span>
-          <input className={fieldCls} type="datetime-local" value={f.scheduled_start}
-            onChange={(e) => setF((s) => ({ ...s, scheduled_start: e.target.value }))} />
-        </label>
-        <label className="block">
-          <span className="block text-[11px] text-stone-400 mb-1">النهاية</span>
-          <input className={fieldCls} type="datetime-local" value={f.scheduled_end}
-            onChange={(e) => setF((s) => ({ ...s, scheduled_end: e.target.value }))} />
-        </label>
-        <label className="block">
-          <span className="block text-[11px] text-stone-400 mb-1">الموقع</span>
-          <select className={fieldCls} value={f.location_id} onChange={(e) => setF((s) => ({ ...s, location_id: e.target.value }))}>
-            <option value="">—</option>
-            {(lookups?.locations ?? []).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-        </label>
-        <label className="block">
-          <span className="block text-[11px] text-stone-400 mb-1">وصف الموقع (حرّ)</span>
-          <input className={fieldCls} value={f.location_note}
-            onChange={(e) => setF((s) => ({ ...s, location_note: e.target.value }))} />
-        </label>
-        <label className="block sm:col-span-2">
-          <span className="block text-[11px] text-stone-400 mb-1">العميل (نصّ حرّ)</span>
-          <input className={fieldCls} value={f.client_label}
-            onChange={(e) => setF((s) => ({ ...s, client_label: e.target.value }))} />
-        </label>
-      </div>
-      <Flash text={flash.t} tone={flash.tone} />
-      <button className={btnPrimary} disabled={busy} onClick={() => void save()}>
-        {busy ? "…" : "إنشاء"}
-      </button>
-    </div>
-  );
+// ─── التقويم ───────────────────────────────────────────────────────────────
+/** المدى المعروض: يوم · أسبوع · شهر — أو مدى يدويّ. الاختصار هو ما يُستعمل
+ *  فعلًا في الميدان؛ حقلا التاريخ يبقيان للحالات النادرة. */
+type CalSpan = "day" | "week" | "month" | "custom";
+const CAL_SPAN_AR: Record<Exclude<CalSpan, "custom">, string> = {
+  day: "اليوم", week: "الأسبوع", month: "الشهر",
+};
+/** نافذة المدى بأيّام تقويمية كاملة: يوم = اليوم نفسه (من = إلى). */
+function spanRange(span: Exclude<CalSpan, "custom">): { from: string; to: string } {
+  const base = new Date();
+  if (span === "day") return { from: opsIsoDay(base), to: opsIsoDay(base) };
+  if (span === "week") {
+    const end = new Date(base); end.setDate(end.getDate() + 6);
+    return { from: opsIsoDay(base), to: opsIsoDay(end) };
+  }
+  const first = new Date(base.getFullYear(), base.getMonth(), 1);
+  const last = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+  return { from: opsIsoDay(first), to: opsIsoDay(last) };
 }
 
-// ─── التقويم ───────────────────────────────────────────────────────────────
 function CalendarTab({ onOpen }: { onOpen: (id: string) => void }) {
-  const [from, setFrom] = useState(opsIsoDay());
-  const [to, setTo] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() + 30); return opsIsoDay(d);
-  });
+  const [span, setSpan] = useState<CalSpan>("week");
+  const [from, setFrom] = useState(() => spanRange("week").from);
+  const [to, setTo] = useState(() => spanRange("week").to);
   const { st, reload } = useOpsLoad<{ ok: boolean; from: string; to: string; days: OpsRow[] }>(
     () => opsCalendar(from, to), [from, to],
   );
+  const pick = (s: Exclude<CalSpan, "custom">) => {
+    const r = spanRange(s); setSpan(s); setFrom(r.from); setTo(r.to);
+  };
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
+        {(["day", "week", "month"] as const).map((s) => (
+          <button key={s} className={span === s ? btnPrimary : btnGhost} onClick={() => pick(s)}>
+            {CAL_SPAN_AR[s]}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
         <label className="flex-1 min-w-[140px]">
           <span className="block text-[11px] text-stone-400 mb-1">من</span>
-          <input className={fieldCls} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <input className={fieldCls} type="date" value={from}
+            onChange={(e) => { setSpan("custom"); setFrom(e.target.value); }} />
         </label>
         <label className="flex-1 min-w-[140px]">
           <span className="block text-[11px] text-stone-400 mb-1">إلى</span>
-          <input className={fieldCls} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          <input className={fieldCls} type="date" value={to}
+            onChange={(e) => { setSpan("custom"); setTo(e.target.value); }} />
         </label>
       </div>
       <StateView st={st} onRetry={reload}>

@@ -19,6 +19,8 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { getValidSession } from "@/lib/portal/auth";
+import { COMMS_DRY_RUN_NOTICE_AR } from "@/lib/portal/notifyEmail";
 import {
   commsDashboard, commsHealth, commsRetry, commsCancel, commsChannelSet,
   commsPreview, commsCatalog, commsImportLegacy, commsRowsToCsv,
@@ -154,6 +156,36 @@ export default function CommunicationsHub() {
     else say(r.state === "needs_migration" ? "الميزة بانتظار تفعيل قاعدة البيانات." : r.message);
   }
 
+  /**
+   * Drain the outbox now. Calls the SAME server route the scheduler would call
+   * (/api/comms/process) with the admin's own session, so authorization is
+   * re-checked in the database. It cannot send: the route hands every claimed
+   * row to the mock provider. The message says what actually happened.
+   */
+  async function processNow() {
+    setBusy(true);
+    try {
+      const sess = await getValidSession();
+      if (!sess?.access_token) { say("انتهت الجلسة. سجّل الدخول من جديد."); return; }
+      const res = await fetch("/api/comms/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sess.access_token}` },
+        body: JSON.stringify({ limit: 25 }),
+      });
+      const b = (await res.json().catch(() => ({}))) as {
+        code?: string; claimed?: number; simulated?: number; live_sent?: number; deferred?: number;
+      };
+      if (res.status === 401) { say("لا تملك صلاحية تشغيل المعالجة."); return; }
+      if (b.code === "HUB_NOT_INSTALLED") { say("الميزة بانتظار تفعيل قاعدة البيانات."); return; }
+      say(`تمت المعالجة: ${b.claimed ?? 0} صف · ${b.simulated ?? 0} محاكاة · ${b.deferred ?? 0} مؤجّل · ${b.live_sent ?? 0} إرسال فعلي — ${COMMS_DRY_RUN_NOTICE_AR}`);
+      void load();
+    } catch {
+      say("تعذّر تشغيل المعالجة.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function exportCsv() {
     const csv = commsRowsToCsv(rows);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -197,6 +229,13 @@ export default function CommunicationsHub() {
             en: "Nothing actually sends in this phase. The provider is a mock, the email channel is disabled, and the Apps Script handler is not deployed.",
           })}
         </p>
+        <div className="f-sans" style={{
+          marginTop: "12px", padding: "10px 14px", fontSize: "12.5px", lineHeight: 1.8,
+          color: "#e0b955", background: "rgba(224,185,85,0.08)",
+          border: "1px solid rgba(224,185,85,0.3)", borderRadius: "3px",
+        }}>
+          {COMMS_DRY_RUN_NOTICE_AR}
+        </div>
       </div>
 
       {flash && (
@@ -319,6 +358,11 @@ export default function CommunicationsHub() {
                   {t({ ar: "استيراد عرض الطابور القديم", en: "Mirror legacy queue" })}
                 </button>
               )}
+              {isAdmin && (
+                <button style={BTN} disabled={busy} onClick={() => void processNow()}>
+                  {t({ ar: "معالجة الطابور الآن (محاكاة)", en: "Process queue now (simulated)" })}
+                </button>
+              )}
             </div>
           </div>
 
@@ -431,7 +475,10 @@ export default function CommunicationsHub() {
               {detail.cancel_reason && <div>{t({ ar: "سبب الإلغاء", en: "Cancel reason" })}: {detail.cancel_reason}</div>}
               {isAdmin && <div style={{ direction: "ltr", fontSize: "10.5px", color: "rgba(255,255,255,0.3)" }}>correlation: {detail.correlation_id}</div>}
             </div>
-            <div style={{ display: "flex", gap: "8px", marginTop: "16px", flexWrap: "wrap" }}>
+            <div className="f-sans" style={{ marginTop: "14px", fontSize: "11.5px", color: "#e0b955", lineHeight: 1.8 }}>
+              {COMMS_DRY_RUN_NOTICE_AR}
+            </div>
+            <div style={{ display: "flex", gap: "8px", marginTop: "10px", flexWrap: "wrap" }}>
               {isAdmin && (detail.status === "queued" || detail.status === "retrying") && (
                 <button style={BTN} disabled={busy}
                   onClick={() => { const why = window.prompt("سبب الإلغاء؟") ?? ""; void act(() => commsCancel(detail.id, why), "أُلغيت الرسالة قبل الإرسال."); setDetail(null); }}>

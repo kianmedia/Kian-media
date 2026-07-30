@@ -2,13 +2,19 @@
 // ════════════════════════════════════════════════════════════════════════
 // Dynamic opportunity form: shared fields + the selected type's specific fields.
 // Public (no login) → submitOpportunityRequest (anon RPC). Inline validation,
-// honeypot anti-spam, consent, inline success/error (no alert()). On success it
-// emails Kian (opportunity_new) + the applicant (opportunity_ack) via portal_notify.
+// honeypot anti-spam, consent, inline success/error (no alert()).
+//
+// ⛔ NO EMAIL IS SENT FROM THIS PAGE. It used to POST straight at the Google
+// Apps Script mail relay from an ANONYMOUS browser (audit §5, path D5) — an
+// unauthenticated, unmetered, unverifiable relay call. The notification is
+// produced SERVER-SIDE instead: public.submit_opportunity_request() calls
+// notify() for the admins and for the matching portal user
+// (docs/opportunities_notifications_addendum_RUNME.sql:59,70). This page must
+// never import a notification sender again.
 // ════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { SHARED_FIELDS, submitOpportunityRequest, type OppType, type OppField } from "@/lib/opportunities";
-import { notifyOpportunityNew, notifyOpportunityAck } from "@/lib/portal/notifyEmail";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const WA_URL = "https://wa.me/966503422999";
@@ -78,9 +84,9 @@ export default function OpportunityForm({ type, onBack }: { type: OppType; onBac
       return;
     }
     const num = r.data || "";
-    // Fire-and-forget emails (Kian + applicant). Never block the success state.
-    void notifyOpportunityNew({ type: isAr ? type.ar : type.en, fullName: (values.full_name || "").trim(), email: values.email, phone: values.phone, city: values.city, message: values.message, requestNumber: num });
-    if ((values.email || "").trim()) void notifyOpportunityAck({ toEmail: values.email.trim(), fullName: (values.full_name || "").trim(), requestNumber: num });
+    // No notification call here, deliberately: submit_opportunity_request()
+    // already notified the Kian team inside the same transaction. A browser on
+    // a public page has no business talking to a mail relay.
     setDone(num);
   }
 

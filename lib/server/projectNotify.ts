@@ -15,12 +15,15 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
+import { legacySendersEnabled } from "@/lib/server/commsKillSwitch";
 
 if (typeof window !== "undefined") {
   throw new Error("lib/server/projectNotify must never be imported in the browser");
 }
 
 export function projectEmailEnabled(): boolean {
+  // The hub-wide kill switch can only turn this OFF, never on.
+  if (!legacySendersEnabled()) return false;
   return (process.env.PROJECT_EMAIL_ALERTS_ENABLED ?? "").trim() !== "false";
 }
 function endpoint(): string {

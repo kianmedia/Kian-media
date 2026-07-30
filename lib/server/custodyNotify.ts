@@ -19,6 +19,7 @@
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
 import { interpretRelayResponse } from "@/lib/server/projectNotify";
+import { legacySendersEnabled } from "@/lib/server/commsKillSwitch";
 
 if (typeof window !== "undefined") {
   throw new Error("lib/server/custodyNotify must never be imported in the browser");
@@ -42,6 +43,8 @@ const log = (tag: string, extra: Record<string, unknown>) =>
 // ─── env readers (server-side, trimmed — a stray space/newline in Vercel would
 //     otherwise silently fail the https:// check) ───
 export function custodyEmailEnabled(): boolean {
+  // The hub-wide kill switch can only turn this OFF, never on.
+  if (!legacySendersEnabled()) return false;
   return (process.env.CUSTODY_EMAIL_ALERTS_ENABLED ?? "").trim() !== "false";
 }
 export function emailEndpoint(): string {

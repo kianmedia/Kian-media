@@ -12,6 +12,28 @@ guessing — the owner has already paid for two cycles of forged "sent" signals.
 
 ---
 
+## 0) CLOSURE NOTE — added after the finalization phase
+
+This audit is a point-in-time record at `1f0faff` and its findings are **not** edited
+below. What has changed since:
+
+* **§5 path D5 (the browser `no-cors` relay) is closed.** `lib/portal/notifyEmail.ts` no
+  longer imports `SHEETS_ENDPOINT` and makes no cross-origin request. Its helpers post to
+  `/api/comms/legacy-notify`, which authenticates, re-authorizes in the database,
+  discards any caller-chosen recipient and records the event through the hub.
+* **The public anonymous relay is gone.** `components/opportunities/OpportunityForm.tsx`
+  imports no notification sender; the staff notification for a new opportunity is already
+  produced inside `public.submit_opportunity_request()`.
+* **D1–D4 are unchanged**, but a single kill switch (`COMMS_LEGACY_SENDERS_ENABLED`) can
+  now stop all three server senders at once — one-way, disable only.
+* **§7 `payload.direct`** can no longer be set from a browser.
+* Everything else in §§3, 4, 6, 7 and 8 stands as written, including the fact that **no
+  email has ever been delivered** and that the Apps Script handler is still not deployed.
+
+Full detail: `docs/LEGACY_EMAIL_DEDUPLICATION_AUDIT.md`.
+
+---
+
 ## 1) Inventory — what exists today
 
 ### 1.1 Storage (5 objects, 3 different generations)

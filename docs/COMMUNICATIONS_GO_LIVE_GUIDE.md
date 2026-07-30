@@ -180,10 +180,25 @@ channel is still off. It is: the existing legacy path stops reporting
 | `CRON_SECRET` | the drain endpoint | reuses the existing secret; no new one is introduced |
 | `PORTAL_NOTIFY_ENDPOINT` | Stage 5+ | overrides `SHEETS_ENDPOINT` |
 | `PORTAL_PUBLIC_URL` | deep links | defaults to `https://www.kianmedia.com` |
-| `COMMS_RELAY_SIGNING_SECRET` | optional | must match the Apps Script property of the same name |
+| `COMMS_RELAY_SIGNING_SECRET` | optional | must match the Apps Script property `KIAN_PORTAL_NOTIFY_SECRET` |
+| `COMMS_LEGACY_SENDERS_ENABLED` | optional kill switch | `false` stops the project, custody/rental and HR senders in one action. One-way: it can only disable, never enable |
+| `COMMS_LEGACY_RELAY_ENABLED` | optional | asking `/api/comms/legacy-notify` for a real relay. There is no real provider, so it answers `provider_unavailable` — it exists so the intent is visible, not so it sends |
+| `NEXT_PUBLIC_COMMS_LEGACY_NOTIFY_ENABLED` | optional | `false` makes the browser helpers inert (`disabled`) without touching any caller |
 
 The hub introduces **no new required environment variable**. Absent optional ones simply
 mean unsigned payloads and the default public base.
+
+### The browser can no longer reach the relay
+
+Before this phase, `lib/portal/notifyEmail.ts` posted straight at the Apps Script from the
+browser — including from the **public, anonymous** opportunities page. That path is gone.
+The helpers now post to `/api/comms/legacy-notify`, which authenticates, re-authorizes in
+the database, discards any caller-chosen recipient, and records the event through the hub.
+Full detail, including what each old caller does now, is in
+`docs/LEGACY_EMAIL_DEDUPLICATION_AUDIT.md`.
+
+Going live therefore does **not** require touching that route: it cannot send, whatever the
+channel flags say.
 
 ---
 

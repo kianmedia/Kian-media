@@ -47,18 +47,35 @@ system now reports the outage instead of hiding it.
      `portal_notify`, so the existing `quote` / `meeting` / `upload` paths are untouched;
    * `kianJson_(obj)` — returns the reply as JSON.
 4. Wire it into `doPost` **before** the existing branches, and return early when it handles
-   the payload:
+   the payload. Note the `kianJson_()` wrapper — `doPost` must return a `ContentService`
+   output, never a bare object, or Apps Script raises an error and the caller sees a
+   non-JSON body, which the platform correctly classifies as `relay_handler_missing`:
    ```js
-   var handled = kianHandlePortalNotify_(data);
-   if (handled) return handled;
+   var portal = kianHandlePortalNotify_(data);
+   if (portal) return kianJson_(portal);
    ```
 5. **Script Properties** (Project Settings → Script Properties). Names only — never commit
-   values:
-   | Name | Purpose |
-   |---|---|
-   | `KIAN_PORTAL_FALLBACK_TO` | recipient used when `To` is empty |
-   | `KIAN_PORTAL_SHARED_TOKEN` | optional; only if you enable token checking |
-   | `COMMS_RELAY_SIGNING_SECRET` | optional; must match the Vercel env of the same name |
+   values, and never put a secret in the `.gs` file itself:
+
+   | Name | Purpose | When |
+   |---|---|---|
+   | `KIAN_PORTAL_NOTIFY_SECRET` | HMAC key; must equal the Vercel env `COMMS_RELAY_SIGNING_SECRET` | strongly recommended — the `/exec` URL is public by design |
+   | `KIAN_PORTAL_NOTIFY_REQUIRE_SIGNATURE` | `true` rejects every unsigned payload | only **after** every producer posts through the hub; before that it would break the legacy senders, which do not sign |
+
+   The fallback recipient and the sender name are plain `var`s at the top of the handler
+   file (`KIAN_PORTAL_FALLBACK_TO`, `KIAN_PORTAL_SENDER_NAME`); edit them in place.
+
+   **Signature behaviour, exactly:**
+   * no secret set → unsigned compatibility mode; the reply carries `mode:"legacy_unsigned"`;
+   * secret set + payload carries `contract_version` (i.e. it came from the hub) →
+     signature **required**, `bad_signature` / `signature_expired` otherwise;
+   * secret set + legacy payload without `contract_version` → still accepted, until you
+     set `KIAN_PORTAL_NOTIFY_REQUIRE_SIGNATURE=true`.
+
+   The signed string is defined once, in `docs/EMAIL_PROVIDER_CONTRACT.md` §3, and built by
+   `kianCanonicalString_()` on the script side and `canonicalSigningString()` on the server
+   side. Changing one without the other produces permanent verification failure — run
+   `kianTestCanonicalString_()` in the editor and compare before you suspect anything else.
 6. **Deploy → Manage deployments → edit the existing deployment → New version → Deploy.**
    ⚠️ Without a **new version** the old code keeps serving and nothing changes. This is the
    single most common way this step silently fails.
@@ -99,6 +116,14 @@ HTTP 200 and must be fixed before going live.
 **Idempotency test.** Perform the same business action twice. There must be exactly one
 queue row, and the second attempt must report `already_sent` / duplicate-suppressed — not a
 second message.
+
+**Relay-side idempotency.** The handler also remembers each `IdempotencyKey` for six hours
+in `CacheService` and **replays the earlier acknowledgment** (`duplicate: true`) instead of
+mailing again. This is the second line of defence, for the one code path that has no
+database-level key — `emitViaFallback()` in `lib/server/notifyEvent.ts`, which sends
+directly when the SQL is not applied (`docs/LEGACY_EMAIL_DEDUPLICATION_AUDIT.md` §5).
+`CacheService` may evict early under load, so it is a mitigation, not a guarantee; the
+database key remains the primary control.
 
 ---
 

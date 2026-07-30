@@ -8,7 +8,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { useMemo, useState } from "react";
 import {
-  opsJobDetail, opsJobSetStatus, opsHseSeed, opsBackupStep, opsCallSheetPublish,
+  opsJobDetail, opsJobSetStatus, opsJobDelete, opsHseSeed, opsBackupStep, opsCallSheetPublish,
   opsConfirmAttendance, opsDailyReportUpsert, opsPostHandoffProgress, opsLookups,
   JOB_TYPE_AR, JOB_STATUS_AR, JOB_STATUS_COLOR, PRIORITY_AR, CREW_ROLE_AR, CREW_STATUS_AR,
   PERMIT_STATUS_AR, EQUIP_STATUS_AR, HSE_STATUS_AR, CONFLICT_AR,
@@ -20,6 +20,8 @@ import {
   StateView, useOpsLoad, Empty,
 } from "./OpsAtoms";
 import OpsChildForm, { FIELDS } from "./OpsChildForm";
+import OpsCallSheetPrint from "./OpsCallSheetPrint";
+import OpsJobForm from "./OpsJobForm";
 
 const S = (v: unknown): string => (v === null || v === undefined || v === "" ? "—" : String(v));
 
@@ -42,13 +44,15 @@ export default function OpsJobPanel({ jobId, onBack }: { jobId: string; onBack: 
     <div className="space-y-4">
       <button className={btnGhost} onClick={onBack}>← رجوع إلى القائمة</button>
       <StateView st={st} onRetry={reload}>
-        {(d) => <JobBody d={d} lookups={lookups} reload={reload} />}
+        {(d) => <JobBody d={d} lookups={lookups} reload={reload} onBack={onBack} />}
       </StateView>
     </div>
   );
 }
 
-function JobBody({ d, lookups, reload }: { d: OpsJobDetail; lookups: OpsLookups | null; reload: () => void }) {
+function JobBody({ d, lookups, reload, onBack }: {
+  d: OpsJobDetail; lookups: OpsLookups | null; reload: () => void; onBack: () => void;
+}) {
   const job = d.job as Record<string, unknown>;
   const jobId = String(job.id ?? "");
   const status = String(job.status ?? "draft") as OpsJobStatus;
@@ -56,6 +60,11 @@ function JobBody({ d, lookups, reload }: { d: OpsJobDetail; lookups: OpsLookups 
   const [flash, setFlash] = useState<{ t: string; tone: "ok" | "bad" }>({ t: "", tone: "ok" });
   const [editing, setEditing] = useState<{ kind: OpsChildKind; row: OpsRow | null } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** ورقة النداء للطباعة: null = مغلقة · string = تاريخ الورقة · "" = آخر ورقة. */
+  const [printing, setPrinting] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [delReason, setDelReason] = useState("");
+  const [editJob, setEditJob] = useState(false);
 
   const myCrew = useMemo(
     () => d.crew.find((c) => c.user_id && c.user_id === d.user_id) ?? null,
@@ -109,6 +118,18 @@ function JobBody({ d, lookups, reload }: { d: OpsJobDetail; lookups: OpsLookups 
     </Section>
   );
 
+  // الطباعة تأخذ الشاشة وحدها: قواعد @media print تُخفي كلّ ما عداها، فبقاء
+  // بقيّة اللوحة مركَّبة يعني ورقة فيها فراغات لا يفهمها من يمسكها في الموقع.
+  if (printing !== null) {
+    return (
+      <OpsCallSheetPrint
+        jobId={jobId}
+        sheetDate={printing === "" ? null : printing}
+        onClose={() => setPrinting(null)}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* ─── الرأس ─── */}
@@ -152,7 +173,24 @@ function JobBody({ d, lookups, reload }: { d: OpsJobDetail; lookups: OpsLookups 
           </div>
           <ReadinessBar score={d.readiness.score ?? 0} />
         </div>
+        {/* الطباعة متاحة لكلّ من يقرأ المهمّة: من يقف في الموقع يحتاج الورقة،
+            والخادم هو من قرّر أصلًا أنّه يقرأ هذه المهمّة. */}
+        <div className="flex flex-wrap gap-2">
+          <button className={btnGhost} onClick={() => setPrinting("")}>طباعة ورقة النداء</button>
+          {canManage && (
+            <button className={btnGhost} onClick={() => setEditJob((e) => !e)}>
+              {editJob ? "إخفاء التحرير" : "تعديل أمر العمل"}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* تحرير أمر العمل: نفس نموذج الإنشاء — الوقت والموقع والمشروع ومدير
+          العمليّات. تغيير الوقت أو الموقع قد يُرفض من حارس الحجز المزدوج،
+          وحينها لا يتغيّر شيء وتظهر رسالة الخادم كما هي. */}
+      {canManage && editJob && (
+        <OpsJobForm job={job} onDone={() => { setEditJob(false); reload(); }} />
+      )}
 
       <Flash text={flash.t} tone={flash.tone} />
 
@@ -198,6 +236,43 @@ function JobBody({ d, lookups, reload }: { d: OpsJobDetail; lookups: OpsLookups 
               ))}
             </div>
           )}
+          {/* الحذف أرشفة لا محو: الخادم يشترط سببًا مكتوبًا ويُدوّنه في سجلّ
+              التدقيق. لذلك السبب حقل حقيقيّ هنا، لا نافذة confirm() فارغة. */}
+          <div className="pt-2 border-t border-stone-800 space-y-2">
+            {!deleting ? (
+              <button className={`${btnGhost} text-red-300`} onClick={() => setDeleting(true)}>
+                حذف المهمّة
+              </button>
+            ) : (
+              <div className="space-y-2">
+                <label className="block">
+                  <span className="block text-[11px] text-stone-400 mb-1">سبب الحذف (٣ أحرف على الأقلّ)</span>
+                  <input className={fieldCls} value={delReason}
+                    onChange={(e) => setDelReason(e.target.value)} placeholder="مثال: أُلغي التصوير من العميل" />
+                </label>
+                <p className="text-[11px] text-stone-500">
+                  تُؤرشَف المهمّة وتختفي من القوائم. لا تُمحى الصفوف، ويبقى السبب في سجلّ التدقيق.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button className={`${btnPrimary} bg-red-800 hover:bg-red-700`}
+                    disabled={busy || delReason.trim().length < 3}
+                    onClick={async () => {
+                      setBusy(true);
+                      const r = await opsJobDelete(jobId, delReason.trim());
+                      setBusy(false);
+                      if (r.state === "ok") onBack();
+                      else setFlash({ t: r.message, tone: "bad" });
+                    }}>
+                    تأكيد الحذف
+                  </button>
+                  <button className={btnGhost} disabled={busy}
+                    onClick={() => { setDeleting(false); setDelReason(""); }}>
+                    تراجع
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -473,15 +548,20 @@ function JobBody({ d, lookups, reload }: { d: OpsJobDetail; lookups: OpsLookups 
                 <div className="text-xs text-stone-500">
                   الحضور العامّ: {opsTime(cs.general_call_time as string)} · مستشفى: {S(cs.hospital_name)}
                 </div>
-                {canManage && cs.status === "draft" && (
-                  <div className="flex gap-2">
-                    <button className={btnPrimary} disabled={busy}
-                      onClick={() => void run(opsCallSheetPublish(String(cs.id)), "نُشرت الورقة.")}>
-                      نشر
-                    </button>
-                    <button className={btnGhost} onClick={() => setEditing({ kind: "call_sheet", row: cs })}>تعديل</button>
-                  </div>
-                )}
+                <div className="flex flex-wrap gap-2">
+                  <button className={btnGhost} onClick={() => setPrinting(String(cs.sheet_date ?? ""))}>
+                    طباعة
+                  </button>
+                  {canManage && cs.status === "draft" && (
+                    <>
+                      <button className={btnPrimary} disabled={busy}
+                        onClick={() => void run(opsCallSheetPublish(String(cs.id)), "نُشرت الورقة.")}>
+                        نشر
+                      </button>
+                      <button className={btnGhost} onClick={() => setEditing({ kind: "call_sheet", row: cs })}>تعديل</button>
+                    </>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

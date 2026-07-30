@@ -61,6 +61,26 @@ where routine_schema = 'public' and grantee = 'authenticated'
   and routine_name in ('comms_enqueue','comms_claim','comms_settle','comms_reap',
                        'comms_resolve','comms_rate_check','comms_audit_write');
 
+-- The five catalogue keys /api/comms/legacy-notify maps the old BROWSER relay
+-- events onto. A missing key does not error anywhere visible — the adapter just
+-- answers UNKNOWN_EVENT and the notification disappears — so it is checked here
+-- explicitly rather than left to be discovered in production.
+select 'A.legacy_adapter_events' as check_id,
+       case when count(*) = 5 then 'PASS — all five browser-replacement events are catalogued'
+            else 'FAIL — only ' || count(*) || ' of 5 present' end as verdict,
+       coalesce(string_agg(event_key, ', ' order by event_key), 'none') as detail
+from public.comms_event_catalog
+where active and event_key in ('deliverable.preview_sent','deliverable.final_ready',
+                               'project.member_assigned','project.assignment_note',
+                               'deliverable.client_commented');
+
+select 'A.assignment_events_internal' as check_id,
+       case when count(*) = 0 then 'PASS — assignment events are internal-only'
+            else 'FAIL — ' || string_agg(event_key || '=' || audience, ', ') end as verdict,
+       'a private instruction to staff must never be client-facing' as detail
+from public.comms_event_catalog
+where event_key in ('project.assignment_note','project.member_assigned') and audience <> 'internal';
+
 -- ─── B. NOTHING CAN SEND ────────────────────────────────────────────────────
 select 'B.channels_safe' as check_id,
        case when count(*) filter (where enabled and channel <> 'portal') = 0

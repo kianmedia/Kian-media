@@ -46,8 +46,17 @@ begin
   raise notice 'ROLLBACK (أ): سُحبت صلاحية التنفيذ من كلّ دوالّ prodops_*. البيانات كما هي.';
 end $revoke$;
 
+-- ⚠️ ما لا يُلغيه (أ): حرّاس منع الحجز المزدوج (trg_ops_*_no_double_booking) تبقى
+--    فعّالة، لأنّ المُشغِّل لا يعتمد على منح EXECUTE. وهذا مقصود: تعطيل الشاشات
+--    شيء، والسماح بإخراج طاقم واحد إلى موقعين شيء آخر. إن أردت تعطيلها فعلًا
+--    فذلك قرار صريح منفصل — أزل التعليق عن هذه الأسطر الثلاثة وحدها:
+-- drop trigger if exists trg_ops_crew_no_double_booking  on public.ops_job_crew;
+-- drop trigger if exists trg_ops_equip_no_double_booking on public.ops_job_equipment;
+-- drop trigger if exists trg_ops_job_no_double_booking   on public.ops_jobs;
+--    بعد إزالتها يصير الازدواج ممكنًا من أيّ مسار، ويبقى §7 يكشفه بعد وقوعه فقط.
+
 -- لإعادة التشغيل بعد (أ): أعد تنفيذ operations_center_RUNME.sql كاملًا
--- (فهو idempotent ويُعيد المنح في §12).
+-- (فهو idempotent ويُعيد المنح في §12 ويُعيد تركيب الحرّاس في §7B).
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- (ب) الحذف الكامل — يُفقد كلّ ما ورد أعلاه. أزل التعليق يدويًّا سطرًا سطرًا.

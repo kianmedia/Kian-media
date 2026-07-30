@@ -12,6 +12,7 @@
 
 import { SHEETS_ENDPOINT } from "@/lib/submitForm";
 import { interpretRelayResponse } from "@/lib/server/projectNotify";
+import { legacySendersEnabled } from "@/lib/server/commsKillSwitch";
 
 if (typeof window !== "undefined") {
   throw new Error("lib/server/hrNotify must never be imported in the browser");
@@ -31,6 +32,8 @@ const log = (tag: string, extra: Record<string, unknown>) =>
   console.log(JSON.stringify({ tag, ...extra }));
 
 export function hrEmailEnabled(): boolean {
+  // The hub-wide kill switch can only turn this OFF, never on.
+  if (!legacySendersEnabled()) return false;
   return (process.env.HR_EMAIL_ALERTS_ENABLED ?? "").trim() !== "false";
 }
 export function hrEmailEndpoint(): string {

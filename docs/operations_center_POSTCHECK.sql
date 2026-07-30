@@ -117,3 +117,48 @@ from (values ('uq_ops_crew_job_user'),('uq_ops_hse_item'),('uq_ops_weather_day')
 -- ─── 14) 7B لم تُمَسّ: ops_can_view() القديمة ما زالت كما هي ─────────────
 -- متوقّع: true.
 select (to_regprocedure('public.ops_can_view()') is not null) as batch7b_intact;
+
+-- ─── 15) ★ منع الحجز المزدوج مُشغِّل على الجدول، لا تحذيرًا في الشاشة ★ ───
+-- متوقّع: 3 صفوف، enabled_always_or_origin يساوي 'O' أو 'A' (لا 'D' = معطّل).
+-- 'D' هنا يعني أنّ أحدهم عطّل الحارس: الازدواج صار ممكنًا من أيّ مسار.
+select g.tgname, c.relname as on_table, g.tgenabled as enabled_always_or_origin,
+       ((g.tgtype::int & 4) > 0) as fires_on_insert,
+       ((g.tgtype::int & 16) > 0) as fires_on_update
+from pg_trigger g join pg_class c on c.oid = g.tgrelid
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and not g.tgisinternal
+  and g.tgname in ('trg_ops_crew_no_double_booking','trg_ops_equip_no_double_booking',
+                   'trg_ops_job_no_double_booking')
+order by g.tgname;
+
+-- متوقّع: 3 صفوف، raises_distinct_code = true في كلّها.
+select p.proname, (pg_get_functiondef(p.oid) ilike '%23P01%') as raises_distinct_code
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public' and p.proname in ('prodops_guard_crew','prodops_guard_equipment','prodops_guard_job')
+order by p.proname;
+
+-- متوقّع: صفّ واحد بكلّ الأعمدة NULL — كاشف التعارض لا يخترع تعارضًا من العدم.
+select public.prodops_person_clash('00000000-0000-0000-0000-000000000000',
+         '00000000-0000-0000-0000-000000000000', now(), now() + interval '1 hour') as person_clash,
+       public.prodops_asset_clash('00000000-0000-0000-0000-000000000000',
+         '00000000-0000-0000-0000-000000000000', now(), now() + interval '1 hour') as asset_clash,
+       public.prodops_location_clash('00000000-0000-0000-0000-000000000000',
+         '00000000-0000-0000-0000-000000000000', now(), now() + interval '1 hour') as location_clash;
+
+-- متوقّع: صفر صفّ — لا حارس ولا كاشف تعارض مكشوف لدور الواجهة.
+select f.sig from (values
+  ('public.prodops_person_clash(uuid,uuid,timestamptz,timestamptz)'),
+  ('public.prodops_asset_clash(uuid,uuid,timestamptz,timestamptz)'),
+  ('public.prodops_location_clash(uuid,uuid,timestamptz,timestamptz)')) f(sig)
+where to_regprocedure(f.sig) is not null
+  and has_function_privilege('authenticated', f.sig, 'EXECUTE');
+
+-- ─── 16) ★ توقيع النسخ الاحتياطي شخصيّ ★ ─────────────────────────────────
+-- متوقّع: صفّ واحد، checks_card_holder = true وrefuses_non_holder = true
+-- وsigner_from_session = true. false في أيٍّ منها = زميل يوقّع نيابةً عن غيره.
+select (pg_get_functiondef(to_regprocedure('public.prodops_backup_step(uuid,text,boolean,text)'))
+          ilike '%holder_user_id%') as checks_card_holder,
+       (pg_get_functiondef(to_regprocedure('public.prodops_backup_step(uuid,text,boolean,text)'))
+          ilike '%not_card_holder%') as refuses_non_holder,
+       (pg_get_functiondef(to_regprocedure('public.prodops_backup_step(uuid,text,boolean,text)'))
+          ilike '%verified_by%auth.uid()%') as signer_from_session;

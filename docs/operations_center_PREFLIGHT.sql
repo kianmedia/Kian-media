@@ -79,3 +79,19 @@ select (to_regprocedure('pg_catalog.gen_random_uuid()') is not null
 select conname, pg_get_constraintdef(oid) as def
 from pg_constraint
 where conrelid = to_regclass('public.notifications') and contype = 'c';
+
+-- ─── 9) أسماء حرّاس منع الحجز المزدوج حرّة ───────────────────────────────
+-- متوقّع قبل أوّل تشغيل: صفر صفّ. صفٌّ هنا يعني إمّا إعادة تشغيل (وهذا سليم،
+-- فالحزمة idempotent) وإمّا اسمًا يخصّ موديولًا آخر — تحقّق قبل المتابعة.
+select g.tgname, c.relname as on_table
+from pg_trigger g join pg_class c on c.oid = g.tgrelid
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and not g.tgisinternal
+  and g.tgname in ('trg_ops_crew_no_double_booking','trg_ops_equip_no_double_booking',
+                   'trg_ops_job_no_double_booking');
+
+-- ⚠️ الحارس يفحص كلّ كتابة **بعد** تركيبه؛ لا يُعيد فحص صفوف كانت موجودة قبله.
+-- عند إعادة التشغيل على قاعدة فيها بيانات، شغّل هذا الاستعلام **بعد** RUNME
+-- لمعرفة أيّ ازدواج قديم (سيُرفَض أوّل تعديل يمسّه، وهذا مقصود لا عطل):
+--   select * from jsonb_array_elements(
+--     public.prodops_conflicts_core(now() - interval '365 days', now() + interval '365 days', null));

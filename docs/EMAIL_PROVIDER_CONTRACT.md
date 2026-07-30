@@ -92,11 +92,26 @@ v<contract_version>
 The message text is included as a **hash**, not as text: the signed string stays short and
 no log that records "what was signed" ends up holding message bodies.
 
-Verification is constant-time (`verifyRelaySignature()`, `:155`). A relay that verifies
-should also reject a `SignedAt` older than a few minutes to stop replay; that window is the
-relay's choice and is not encoded here.
+Verification is constant-time (`verifyRelaySignature()`, `:155`).
 
-Unsigned mode is valid and is the current default: the endpoint URL itself is the secret.
+**Replay window.** `docs/apps_script_portal_notify_HANDLER.gs` rejects a `SignedAt` more
+than **±10 minutes** from the relay's own clock (`KIAN_PORTAL_SIGNATURE_WINDOW_MS`) and
+answers `signature_expired`. The window is the relay's choice; ±10 minutes is what the
+shipped handler uses, and it is wide enough for a queued row that waits before its attempt.
+
+**Relay-side idempotency.** The handler remembers each `IdempotencyKey` for six hours and
+returns the earlier acknowledgment with `duplicate: true` rather than sending a second
+message. The reply is the *stored* one, so `sent` keeps its original positive value and the
+classifier still records a delivery — a retry after a lost response settles correctly
+instead of failing.
+
+**Unsigned mode** is valid and is the current default: the endpoint URL itself is the
+secret. That is weak — the `/exec` URL must be reachable by "Anyone" for the relay to work
+at all — so set the secret as soon as a real send is contemplated. Enforcement is staged:
+the handler requires a signature on any payload carrying `contract_version` once a secret
+exists, and rejects *everything* unsigned only when
+`KIAN_PORTAL_NOTIFY_REQUIRE_SIGNATURE=true`, which must wait until the legacy senders
+(which do not sign) are retired or migrated.
 
 ---
 

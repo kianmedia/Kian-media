@@ -186,8 +186,13 @@ test("سلامة المادّة: التحقّق لا يُقبل قبل نسخت�
     "قيد التحقّق غائب أو ضعيف");
   const b = funcBody("prodops_backup_step");
   assert.match(b, /p_step not in \('primary','second','nas','verified'\)/, "خطوات النسخ غير محصورة");
-  assert.match(b, /prodops_can_manage\(\), false\) or coalesce\(public\.prodops_is_crew/i,
+  assert.match(b, /v_manage or coalesce\(public\.prodops_is_crew/i,
     "خطوة النسخ ليست مقصورة على المدير أو طاقم المهمّة");
+  // ★ وطاقم المهمّة ليس تفويضًا عامًّا: التوقيع مقصور على حامل البطاقة نفسه.
+  assert.match(b, /holder_user_id/, "خطوة النسخ لا تقرأ حامل البطاقة");
+  assert.match(b, /not_card_holder/, "لا رفض صريح لغير حامل البطاقة");
+  assert.match(b, /v_holder is null or v_holder <> auth\.uid\(\)/,
+    "الرفض لا يقارن الحامل بصاحب الجلسة — زميل يوقّع نيابةً عن غيره");
   // رسالة عربية قبل القيد الخام، والقيد يبقى هو الفاصل
   assert.match(b, /needs_two_copies/, "التحقّق يفشل بـ23514 خام بلا رسالة مفهومة");
   assert.match(b, /لا يُعلَّم التحقّق قبل تسجيل نسختين/, "لا رسالة عربية لرفض التحقّق");

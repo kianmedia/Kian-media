@@ -26,7 +26,7 @@ import {
   adminListProfiles, adminListProjects, adminSetStaffRole,
   adminAddProjectMember, adminRemoveProjectMember, adminListMembershipsForUser,
 } from "@/lib/portal/admin";
-import { notifyStaffAssigned, notifyAssignmentNote } from "@/lib/portal/notifyEmail";
+import { notifyStaffAssigned, notifyAssignmentNote, COMMS_DRY_RUN_NOTICE_AR } from "@/lib/portal/notifyEmail";
 import { listAssignmentNotes, addAssignmentNote, removeAssignmentNote } from "@/lib/portal/assignments";
 import { STAFF_ROLE_LABELS, STAFF_ROLE_OPTIONS, PROJECT_STAFF_ROLES } from "@/lib/portal/roles";
 import type { Profile, Project, ProjectMember, StaffRole, ProjectMemberRole, AssignmentNote } from "@/lib/portal/types";
@@ -209,10 +209,15 @@ function StaffAssign({ account, projects }: { account: Profile; projects: Projec
     const r = await adminAddProjectMember({ projectId: pick, userId: account.id, role });
     setBusy(false);
     if (!r.ok) { setFlash({ kind: "err", text: t({ ar: "تعذّر التكليف: ", en: "Assign failed: " }) + r.error }); return; }
-    // Email the staff member that they've been assigned (best-effort; never blocks).
-    void notifyStaffAssigned({ projectId: pick, projectName, staffEmail: account.email, staffName: account.full_name, role });
+    // Notification: recorded through the SERVER adapter, never sent from here.
+    // The old text claimed "staff notified" — a forged delivery signal, since
+    // the browser relay could not confirm anything. Report what really happened.
+    const n = await notifyStaffAssigned({ projectId: pick, projectName, staffEmail: account.email, staffName: account.full_name, role });
     setPick("");
-    setFlash({ kind: "ok", text: t({ ar: "تم التكليف ✓ (سيصل إشعار للموظف)", en: "Assigned ✓ (staff notified)" }) });
+    setFlash({ kind: "ok", text: t({
+      ar: "تم التكليف ✓ — " + (n.ok ? COMMS_DRY_RUN_NOTICE_AR : "لم يُسجَّل إشعار بريد (" + n.code + ")"),
+      en: "Assigned ✓ — " + (n.ok ? "dry run: no real message will be sent" : "no email recorded (" + n.code + ")"),
+    }) });
     void load();
   }
   async function remove(projectId: string) {
@@ -239,6 +244,9 @@ function StaffAssign({ account, projects }: { account: Profile; projects: Projec
         <button onClick={() => void assign()} disabled={busy || !pick} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.18)", padding: "9px 13px", borderRadius: "3px", cursor: busy || !pick ? "default" : "pointer", opacity: !pick ? 0.5 : 1 }}>
           {t({ ar: "تكليف", en: "Assign" })}
         </button>
+        <div className="f-sans" style={{ fontSize: "10.5px", color: "rgba(224,185,85,0.85)", width: "100%", marginTop: "6px", lineHeight: 1.8 }}>
+          {COMMS_DRY_RUN_NOTICE_AR}
+        </div>
       </div>
 
       <div className="f-sans" style={{ fontSize: "10px", letterSpacing: "1px", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>{t({ ar: "المشاريع المكلّف بها", en: "Assigned Projects" })}</div>
@@ -299,10 +307,13 @@ function AssignmentNotes({ projectId, projectName, staff }: { projectId: string;
     const r = await addAssignmentNote({ projectId, staffUserId: staff.id, body: body.trim() });
     setBusy(false);
     if (!r.ok) { setFlash({ kind: "err", text: t({ ar: "تعذّر الحفظ: ", en: "Save failed: " }) + r.error }); return; }
-    // Email the staff member (best-effort; never blocks).
-    void notifyAssignmentNote({ projectId, projectName, staffEmail: staff.email, staffName: staff.full_name, note: body.trim() });
+    // Same honesty rule as assign(): report the recorded state, not a delivery.
+    const n = await notifyAssignmentNote({ projectId, projectName, staffEmail: staff.email, staffName: staff.full_name, note: body.trim(), noteId: r.data ?? null });
     setBody("");
-    setFlash({ kind: "ok", text: t({ ar: "تمت إضافة الملاحظة ✓ (سيصل إشعار للموظف)", en: "Note added ✓ (staff notified)" }) });
+    setFlash({ kind: "ok", text: t({
+      ar: "تمت إضافة الملاحظة ✓ — " + (n.ok ? COMMS_DRY_RUN_NOTICE_AR : "لم يُسجَّل إشعار بريد (" + n.code + ")"),
+      en: "Note added ✓ — " + (n.ok ? "dry run: no real message will be sent" : "no email recorded (" + n.code + ")"),
+    }) });
     void load();
   }
 
@@ -341,6 +352,9 @@ function AssignmentNotes({ projectId, projectName, staff }: { projectId: string;
         <button onClick={() => void add()} disabled={busy || !body.trim()} className="f-sans" style={{ fontSize: "11px", color: "rgba(255,255,255,0.85)", background: "none", border: "1px solid rgba(255,255,255,0.18)", padding: "9px 13px", borderRadius: "3px", cursor: busy || !body.trim() ? "default" : "pointer", opacity: !body.trim() ? 0.5 : 1, whiteSpace: "nowrap" }}>
           {t({ ar: "إضافة", en: "Add" })}
         </button>
+      </div>
+      <div className="f-sans" style={{ fontSize: "10.5px", color: "rgba(224,185,85,0.85)", marginTop: "6px", lineHeight: 1.8 }}>
+        {COMMS_DRY_RUN_NOTICE_AR}
       </div>
       {flash && <div className="f-sans" style={{ fontSize: "11.5px", marginTop: "8px", color: flash.kind === "ok" ? "#7CFC9A" : "#ff8a8e" }}>{flash.text}</div>}
     </div>
