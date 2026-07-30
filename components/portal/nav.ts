@@ -29,6 +29,22 @@ const REG: Record<string, TabDef> = {
   // مركز التشغيل والإنتاج (Phase 2) — داخليّ بحت: غائب عن مجموعتَي client/lead، والقاعدة
   // ترفض العميل حتى برابط مباشر (prodops_can_view = is_staff). الطاقم يرى إسناداته هو فقط.
   operations:    { href: "/client-portal/operations",    ar: "مركز التشغيل", en: "Operations", adminAr: "التشغيل والإنتاج", adminEn: "Production Operations", staffAr: "مهامّي الميدانية", staffEn: "My Field Work" },
+  // وحدة المبيعات (Phase 3) — داخليّة بحتة: غائبة عن مجموعتَي client/lead،
+  // والقاعدة ترفض العميل حتى برابط مباشر (crm_can_view = is_staff + مفتاح صريح).
+  // موظّف المبيعات يرى سجلّاته هو؛ رؤية الفريق مفتاح مستقلّ لا يمنحه هذا التبويب.
+  crm:           { href: "/client-portal/crm",           ar: "المبيعات",     en: "Sales", adminAr: "المبيعات وعلاقات العملاء", adminEn: "Sales & CRM", staffAr: "مبيعاتي", staffEn: "My Sales" },
+  // المركز المالي (Phase 4) — داخليّ بحت وأخطر سطح في البرنامج: غائب عن مجموعتَي
+  // client/lead، والقاعدة ترفض العميل حتى برابط مباشر (finops_can_view = is_staff
+  // + دور مالية أو مفتاح finance_ops.* صريح). الموظّف العاديّ يرى «طلباتي» فقط:
+  // لا ميزانية ولا تكاليف غيره ولا هامش. التبويب ليس تفويضًا — المنع في القاعدة.
+  finance_ops:   { href: "/client-portal/finance",       ar: "طلباتي المالية", en: "My Finance Requests", adminAr: "المالية والربحية", adminEn: "Finance & Profitability", staffAr: "طلباتي المالية", staffEn: "My Finance Requests" },
+  // اللوحة التنفيذية (Phase 5) — قراءة فقط عبر الموديولات الأربعة. داخليّة بحتة:
+  // غائبة عن مجموعتَي client/lead، والقاعدة ترفض العميل حتى برابط مباشر
+  // (mgmt_can_view = is_staff + مفتاح exec_report.view أو ملكية). التبويب معروض
+  // للمدير/المالك فقط لأنّ المفتاح لا يُمنَح افتراضيًّا؛ ولو ظهر لغير مُخوَّل
+  // فالشاشة تقول «لا تملك صلاحية» بدل شاشة فارغة. المؤشّرات المالية والهوامش
+  // مقصورة على المالك بنيويًّا ولا مفتاح لها إطلاقًا.
+  executive:     { href: "/client-portal/executive",     ar: "اللوحة التنفيذية", en: "Executive", adminAr: "اللوحة التنفيذية", adminEn: "Executive Dashboard", staffAr: "اللوحة التنفيذية", staffEn: "Executive Dashboard" },
   invoices:      { href: "/client-portal/invoices",      ar: "الفواتير",    en: "Invoices" },
   offers:        { href: "/client-portal/offers",        ar: "العروض",      en: "Offers" },
   notifications: { href: "/client-portal/notifications", ar: "الإشعارات",   en: "Notifications" },
@@ -37,25 +53,27 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "operations", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "operations", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "messages", "files", "accounts", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "messages", "files", "staff", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "operations", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
-  sales:       ["employee", "quotes", "whatsapp", "equipment", "asset_custody", "notifications", "profile"],
-  editor:      ["employee", "operations", "projects", "project_core", "equipment", "asset_custody", "notifications", "profile"],
-  hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "notifications", "profile"],
-  readonly:    ["employee", "projects", "equipment", "asset_custody", "notifications", "profile"],
-  finance:     ["employee", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
-  photographer:     ["employee", "operations", "equipment", "asset_custody", "projects", "notifications", "profile"],
-  lighting_tech:    ["employee", "operations", "equipment", "asset_custody", "notifications", "profile"],
-  camera_assistant: ["employee", "operations", "equipment", "asset_custody", "notifications", "profile"],
-  custody_officer:  ["employee", "operations", "equipment", "asset_custody", "rentals", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "messages", "files", "employee", "operations", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  sales:       ["employee", "crm", "quotes", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  editor:      ["employee", "operations", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  hr:          ["employee", "overview", "whatsapp", "opportunities", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  readonly:    ["employee", "projects", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  // دور المالية: التبويب هنا يفتح المركز كاملًا **إن** منحته القاعدة ذلك. لا يشتقّ
+  // هذا السطر صلاحية: finops_can_view هي الفاصل، وهذا مجرّد مدخل في التنقّل.
+  finance:     ["employee", "finance_ops", "invoices", "whatsapp", "equipment", "asset_custody", "rentals", "notifications", "profile"],
+  photographer:     ["employee", "operations", "equipment", "asset_custody", "projects", "finance_ops", "notifications", "profile"],
+  lighting_tech:    ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  camera_assistant: ["employee", "operations", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
+  custody_officer:  ["employee", "operations", "equipment", "asset_custody", "rentals", "finance_ops", "notifications", "profile"],
   client:      ["overview", "projects", "quotes", "messages", "files", "invoices", "offers", "equipment", "rentals", "notifications", "profile"],
   lead:        ["overview", "quotes", "messages", "files", "offers", "equipment", "notifications", "profile"],
 };

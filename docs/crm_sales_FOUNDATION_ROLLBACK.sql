@@ -1,0 +1,100 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- crm_sales_FOUNDATION_ROLLBACK.sql
+--
+-- ⚠️ اقرأ هذا قبل التشغيل — ماذا يُفقَد بالضبط
+-- ─────────────────────────────────────────────────────────────────────────
+-- هذا التراجع **يحذف بيانات**. القسم (ب) يُسقط تسعة عشر جدولًا بكلّ ما فيها:
+--   • كلّ العملاء المحتملين وشركاتهم وأشخاص التواصل.
+--   • كلّ الفرص البيعية وتاريخ مراحلها وأسباب الخسارة والمنافسين.
+--   • كلّ الأنشطة (اتصالات · اجتماعات · متابعات) — وهي غالبًا الذاكرة الوحيدة
+--     لما قيل للعميل ومتى.
+--   • الأهداف وخطط العمولات وسجلّاتها المحسوبة.
+--   • سجلّ التدقيق crm_audit — أي أثر «مَن فعل ماذا» يختفي معه.
+-- لا نسخة احتياطية تُؤخذ تلقائيًّا هنا. خذها بنفسك أوّلًا (القسم أ).
+--
+-- ما **لا** يُفقَد:
+--   • منصّة المشاريع: لم تُلمَس أصلًا، ولا سطر في هذا الملفّ يمسّها.
+--   • quote_requests: مرجع للقراءة فقط، ولا يُحذف منه شيء.
+--   • كتالوج الصلاحيات public.permissions: يبقى الجدول، وتُحذف مفاتيح crm.*
+--     فقط (القسم ج) وهو اختياريّ.
+--
+-- الترتيب: (أ) نسخة احتياطية → (ب) إسقاط الدوالّ ثمّ الجداول → (ج) المفاتيح.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (أ) نسخة احتياطية — شغّل هذا **أوّلًا** واحفظ الناتج خارج القاعدة.
+--     هذه القراءة وحدها لا تُغيّر شيئًا.
+-- ════════════════════════════════════════════════════════════════════════════
+-- select jsonb_pretty(jsonb_build_object(
+--   'taken_at', now(),
+--   'leads',         (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_leads t),
+--   'companies',     (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_companies t),
+--   'contacts',      (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_contacts t),
+--   'opportunities', (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_opportunities t),
+--   'stage_history', (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_stage_history t),
+--   'activities',    (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_activities t),
+--   'targets',       (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_targets t),
+--   'commission',    (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_commission_records t),
+--   'audit',         (select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) from public.crm_audit t)));
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (ب) الإسقاط. أزل التعليق سطرًا سطرًا فقط بعد أخذ النسخة.
+-- ════════════════════════════════════════════════════════════════════════════
+-- begin;
+--
+-- -- 1) الدوالّ (الدوالّ أوّلًا: سياسات RLS تعتمد عليها).
+-- do $r$
+-- declare f record;
+-- begin
+--   for f in select p.oid::regprocedure::text as sig
+--             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--            where n.nspname = 'public' and p.proname like 'crm\_%'
+--   loop
+--     execute format('drop function if exists %s cascade', f.sig);
+--   end loop;
+-- end $r$;
+--
+-- -- 2) الجداول — بترتيب التبعية العكسيّ (وcascade احتياطًا).
+-- drop table if exists public.crm_commission_records     cascade;
+-- drop table if exists public.crm_commission_assignments cascade;
+-- drop table if exists public.crm_commission_plans       cascade;
+-- drop table if exists public.crm_targets                cascade;
+-- drop table if exists public.crm_activities             cascade;
+-- drop table if exists public.crm_stage_history          cascade;
+-- drop table if exists public.crm_opportunities          cascade;
+-- drop table if exists public.crm_stages                 cascade;
+-- drop table if exists public.crm_pipelines              cascade;
+-- drop table if exists public.crm_leads                  cascade;
+-- drop table if exists public.crm_lead_score_rules       cascade;
+-- drop table if exists public.crm_competitors            cascade;
+-- drop table if exists public.crm_contacts               cascade;
+-- drop table if exists public.crm_companies              cascade;
+-- drop table if exists public.crm_team_members           cascade;
+-- drop table if exists public.crm_teams                  cascade;
+-- drop table if exists public.crm_import_batches         cascade;
+-- drop table if exists public.crm_settings               cascade;
+-- drop table if exists public.crm_audit                  cascade;
+--
+-- drop sequence if exists public.crm_lead_code_seq;
+-- drop sequence if exists public.crm_opportunity_code_seq;
+--
+-- commit;
+-- notify pgrst, 'reload schema';
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (ج) مفاتيح الصلاحيات — اختياريّ ومستقلّ.
+--
+--     ⚠️ إن كنت ستعيد تشغيل RUNME لاحقًا فاترك المفاتيح كما هي: حذفها يمحو
+--     منح الصلاحيات المبنيّة عليها (profession_permissions يشير إليها بمفتاح
+--     خارجيّ on delete cascade)، فتعود بعد إعادة التثبيت بلا أيّ منح.
+-- ════════════════════════════════════════════════════════════════════════════
+-- delete from public.permissions where key like 'crm.%';
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (د) ما لا يفعله هذا الملفّ — صراحةً
+--   • لا يحذف ولا يعدّل أيّ صفّ في projects / project_core / deliverables.
+--   • لا يحذف ولا يعدّل أيّ صفّ في quote_requests.
+--   • لا يعيد أيّ مشروع أُنشئ يدويًّا بعد ربح فرصة: تلك المشاريع تخصّ المنصّة
+--     وتبقى كما هي — العلاقة كانت تسجيلًا في اتّجاه واحد لا مِلكيّة.
+--   • لا يستعيد شيئًا. الاستعادة تتمّ من نسخة القسم (أ) بإدراج يدويّ.
+-- ════════════════════════════════════════════════════════════════════════════
