@@ -63,12 +63,27 @@ begin;
 -- silently is exactly the kind of thing that leaves nobody able to answer what
 -- happened. Comment the block out ONLY if you accept that.
 do $guard$
-declare v_n int := 0;
+declare v_n int := 0; v_prov boolean;
 begin
   if to_regclass('public.comms_outbox') is not null then
-    select count(*) into v_n from public.comms_outbox
-     where status in ('sent','delivered') and not dry_run
-       and coalesce(provider, '') <> 'legacy_email_deliveries';
+    -- "Real send" is decided on PROVENANCE when the columns exist, and on the
+    -- old provider string when they do not, so this file is correct both
+    -- before and after the provenance migration. Dynamic EXECUTE because the
+    -- columns may genuinely be absent and a static reference would not parse.
+    select count(*) = 4 into v_prov from information_schema.columns
+     where table_schema = 'public' and table_name = 'comms_outbox'
+       and column_name in ('source_kind','is_legacy_mirror','delivery_mode','provider_state');
+    if coalesce(v_prov, false) then
+      execute $q$ select count(*) from public.comms_outbox
+                   where status in ('sent','delivered') and not dry_run
+                     and source_kind = 'native' and not is_legacy_mirror
+                     and delivery_mode = 'live'
+                     and provider_state in ('accepted','delivered') $q$ into v_n;
+    else
+      execute $q$ select count(*) from public.comms_outbox
+                   where status in ('sent','delivered') and not dry_run
+                     and coalesce(provider, '') <> 'legacy_email_deliveries' $q$ into v_n;
+    end if;
   end if;
   if v_n > 0 then
     raise exception 'ROLLBACK REFUSED: % real send(s) are recorded in comms_outbox. Export them first, then comment out this guard block.', v_n;

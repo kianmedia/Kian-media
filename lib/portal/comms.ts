@@ -56,10 +56,29 @@ export interface CommsDashboard { total: number; rows: CommsOutboxRow[]; is_admi
 export interface CommsHealth {
   counts: {
     queued: number; processing: number; retrying: number;
-    sent_dry_run: number; sent_live: number; delivered: number;
-    /** Read-only copies of terminal email_deliveries rows. NEVER part of
-     *  sent_live: the legacy queue's own 'sent' is not evidence of delivery. */
+    /** Simulated. Never summed with anything live. */
+    sent_dry_run: number;
+    /** Provider ACCEPTED it (status 'sent'). Real evidence, disjoint from
+     *  `delivered` by status, so the two may be added — that sum is
+     *  `live_total`, and it is the only number that means "really sent". */
+    sent_live: number;
+    /** Provider produced DELIVERY evidence. Acceptance is not delivery. */
+    delivered: number;
+    /** sent_live + delivered. The ONLY honest "really sent" figure. */
+    live_total: number;
+    /** Read-only copies of terminal email_deliveries rows. NEVER live: the
+     *  legacy queue's own 'sent' is not evidence of delivery. */
     mirrored_legacy: number;
+    /** Rows brought in from elsewhere. Never live. */
+    imported: number;
+    /** The provider was not reachable / not deployed. Never live. */
+    provider_unavailable: number;
+    /** The Apps Script portal_notify branch is absent. Never live. */
+    relay_handler_missing: number;
+    /** Claims a terminal success while carrying no provider evidence at all.
+     *  Must always read 0; any other number is a bug in a settle path, and it
+     *  is surfaced rather than folded into a green number. */
+    claimed_sent_without_evidence: number;
     failed: number; dead_letter: number; cancelled: number;
     blocked_external_total: number; total: number;
   };

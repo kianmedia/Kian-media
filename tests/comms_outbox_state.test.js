@@ -218,23 +218,29 @@ test("mandatory events ignore preferences; optional events honour them", () => {
 // delivery while the Apps Script portal_notify handler is undeployed.
 test("comms_health: mirrored legacy rows are excluded from sent_live and reported separately", () => {
   const h = fnBody("comms_health");
-  const live = h.match(/'sent_live',[\s\S]*?\),\n/);
+  const live = h.match(/'sent_live',[\s\S]*?'delivered',/);
   assert.ok(live, "sent_live is not computed in comms_health");
-  assert.match(live[0], /legacy_email_deliveries/,
+  assert.match(live[0], /not is_legacy_mirror/,
     "sent_live still counts rows mirrored from the legacy queue as real sends");
-  const delivered = h.match(/'delivered',[\s\S]*?\),\n/);
-  assert.ok(delivered && /legacy_email_deliveries/.test(delivered[0]),
+  assert.match(live[0], /legacy_email_deliveries/,
+    "sent_live lost the belt-and-braces provider-string exclusion");
+  const delivered = h.match(/'delivered',[\s\S]*?'mirrored_legacy',/);
+  assert.ok(delivered && /not is_legacy_mirror/.test(delivered[0]),
     "delivered still counts mirrored legacy rows");
-  assert.match(h, /'mirrored_legacy',\s*count\(\*\) filter \(where provider = 'legacy_email_deliveries'\)/,
+  assert.match(h, /'mirrored_legacy',\s*count\(\*\) filter \(where is_legacy_mirror/,
     "the mirror count is not surfaced on its own");
-  // The importer is what creates those rows: pin the provider tag they carry.
-  assert.match(fnBody("comms_adapter_import_legacy"), /'legacy_email_deliveries'/,
-    "the importer no longer tags mirrored rows, so the exclusion above cannot match");
+  // The importer is what creates those rows: pin the provenance they carry.
+  const imp = fnBody("comms_adapter_import_legacy");
+  assert.match(imp, /'legacy_mirror', true, 'live', 'unavailable'/,
+    "the importer no longer states provenance, so the exclusions above rest on a free-text string again");
+  assert.match(imp, /'legacy_email_deliveries'/, "the legacy provider tag is still written");
 });
 
 test("the migration refuses to install a comms_health that launders the legacy mirror", () => {
-  assert.match(RUNME, /comms_health counts mirrored legacy rows as live sends/,
-    "no static self-test guards the sent_live exclusion");
-  assert.match(RUNME, /comms_health does not report mirrored_legacy separately/,
-    "no static self-test guards the separate mirrored_legacy counter");
+  assert.match(RUNME, /comms_health\.sent_live lost the/,
+    "no static self-test guards the sent_live conditions");
+  assert.match(RUNME, /comms_health\.delivered lost the/,
+    "no static self-test guards the delivered conditions");
+  assert.match(RUNME, /comms_health does not report % as its own bucket/,
+    "no static self-test guards the separate never-live buckets");
 });

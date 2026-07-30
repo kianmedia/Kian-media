@@ -145,7 +145,8 @@ test("no anon grants: revoked on every table and every function, and pinned by a
   assert.ok(!/grant (insert|update|delete)[^\n]*comms_outbox[^\n]*authenticated/i.test(RUNME),
     "authenticated may never write the outbox directly");
   // POSTCHECK re-proves it against the live catalogue
-  assert.ok(POST.includes("A.no_anon_tables") && POST.includes("A.no_anon_functions"), "postcheck re-proves anon exposure");
+  assert.ok(POST.includes("A.no_anon_comms_tables") && POST.includes("A.no_anon_comms_functions"),
+    "postcheck re-proves anon exposure on the comms_* surface");
 });
 
 test("rate limiter table is unreachable: RLS on with no policy = deny all", () => {

@@ -193,6 +193,24 @@ create table if not exists public.comms_outbox (
   project_id            uuid,
   actor_id              uuid,
   legacy_delivery_id    uuid,          -- adapter link to email_deliveries (read-only mirror)
+  -- ── PROVENANCE — DATA, NOT A MAGIC STRING ─────────────────────────────────
+  -- "Is this row a real send?" used to be inferred from provider =
+  -- 'legacy_email_deliveries', a free-text column any writer could set to
+  -- anything. One typo there silently promoted a mirrored row to a live send —
+  -- the forged success this module exists to prevent. Provenance is now
+  -- explicit, constrained, cross-checked (§2.4b) and re-derived on every write
+  -- by the guard trigger (§4), so no caller can lie about it.
+  -- The CHECKs for these four are NAMED and added in §2.4b, not inline, so that
+  -- a fresh install and a re-run over an existing table end in the identical
+  -- catalogue state and the POSTCHECK can assert on stable constraint names.
+  source_kind           text not null default 'native',
+  is_legacy_mirror      boolean not null default false,
+  -- The honest NAME of dry_run. It is not an independent fact: a CHECK in §2.4b
+  -- ties it to dry_run so the two can never drift into two sources of truth.
+  delivery_mode         text not null default 'dry_run',
+  -- What the PROVIDER actually told us. Only 'accepted' and 'delivered' are
+  -- evidence; everything else is an absence of evidence and never counts live.
+  provider_state        text not null default 'none',
   meta                  jsonb not null default '{}'::jsonb,
   created_at            timestamptz not null default now(),
   claimed_at            timestamptz,
@@ -211,6 +229,104 @@ create index if not exists ix_comms_outbox_created on public.comms_outbox(create
 create index if not exists ix_comms_outbox_event   on public.comms_outbox(event_key, created_at desc);
 create unique index if not exists uq_comms_outbox_legacy
   on public.comms_outbox(legacy_delivery_id) where legacy_delivery_id is not null;
+create index if not exists ix_comms_outbox_provenance
+  on public.comms_outbox(source_kind, delivery_mode, provider_state);
+
+-- ─── 2.4b PROVENANCE: retro-fit, backfill, and CONSTRAIN ────────────────────
+-- The columns above only exist for a table this file creates. If comms_outbox
+-- already exists from an earlier run they must be added, backfilled from what
+-- is already known, and only THEN constrained — a CHECK added before the
+-- backfill would fail validation on legitimate historical rows.
+alter table public.comms_outbox add column if not exists source_kind      text;
+alter table public.comms_outbox add column if not exists is_legacy_mirror boolean;
+alter table public.comms_outbox add column if not exists delivery_mode    text;
+alter table public.comms_outbox add column if not exists provider_state   text;
+
+-- BACKFILL. Conservative on purpose: evidence is granted only where evidence
+-- actually exists. A row that merely CLAIMS 'sent' gets 'attempted', not
+-- 'accepted' — inventing evidence during a migration would be the same lie in
+-- a different place.
+-- PROMOTE ONLY, never demote — the same one-way OR the guard trigger uses. If a
+-- row already declares itself a mirror, this backfill will not un-declare it on
+-- the strength of a missing tag: demoting a mirror is precisely how it would
+-- become countable as a live send, which is the failure being repaired here.
+update public.comms_outbox set
+  is_legacy_mirror = coalesce(is_legacy_mirror, false)
+                     or legacy_delivery_id is not null
+                     or coalesce(provider,'') = 'legacy_email_deliveries'
+                     or coalesce(source_kind,'') = 'legacy_mirror'
+where is_legacy_mirror is null
+   or (not is_legacy_mirror
+       and (legacy_delivery_id is not null
+            or coalesce(provider,'') = 'legacy_email_deliveries'
+            or coalesce(source_kind,'') = 'legacy_mirror'));
+
+update public.comms_outbox set
+  source_kind = case when is_legacy_mirror then 'legacy_mirror' else 'native' end
+where source_kind is null or (source_kind = 'legacy_mirror') <> is_legacy_mirror;
+
+update public.comms_outbox set
+  delivery_mode = case when dry_run then 'dry_run' else 'live' end
+where delivery_mode is null or (delivery_mode = 'dry_run') <> dry_run;
+
+update public.comms_outbox set
+  provider_state = case
+    -- A mirror carries somebody else's outcome. This hub has no provider
+    -- evidence for it and never will; 'unavailable' says exactly that.
+    when is_legacy_mirror                                     then 'unavailable'
+    when dry_run                                              then 'none'
+    when coalesce(last_error,'') like '%relay_handler_missing%'
+      or coalesce(error_class,'') like '%relay_handler_missing%'             then 'relay_handler_missing'
+    when status = 'delivered'
+     and lower(coalesce(provider_response->>'delivered','')) in ('true','t','1')
+                                                              then 'delivered'
+    when status in ('sent','delivered')
+     and lower(coalesce(provider_response->>'ack','')) in ('true','t','1')   then 'accepted'
+    when status in ('sent','delivered')                       then 'attempted'
+    when coalesce(error_class,'') = 'channel'                 then 'unavailable'
+    when status in ('failed','retrying','dead_letter')        then 'attempted'
+    else 'none' end
+where provider_state is null;
+
+do $prov_constrain$
+declare c text;
+begin
+  alter table public.comms_outbox alter column source_kind      set default 'native';
+  alter table public.comms_outbox alter column is_legacy_mirror set default false;
+  alter table public.comms_outbox alter column delivery_mode    set default 'dry_run';
+  alter table public.comms_outbox alter column provider_state   set default 'none';
+  alter table public.comms_outbox alter column source_kind      set not null;
+  alter table public.comms_outbox alter column is_legacy_mirror set not null;
+  alter table public.comms_outbox alter column delivery_mode    set not null;
+  alter table public.comms_outbox alter column provider_state   set not null;
+
+  -- Idempotent CHECKs. A CHECK, not only a trigger: triggers can be disabled
+  -- (`alter table ... disable trigger`) and do not fire on COPY without
+  -- `FREEZE`; a CHECK constrains every writer including service_role.
+  for c in select unnest(array[
+    -- closed vocabularies (repeated here for a table created by an earlier run)
+    $c$comms_outbox_source_kind_ck|source_kind in ('native','legacy_mirror','imported')$c$,
+    $c$comms_outbox_delivery_mode_ck|delivery_mode in ('live','dry_run')$c$,
+    $c$comms_outbox_provider_state_ck|provider_state in ('none','attempted','accepted','delivered','unavailable','relay_handler_missing')$c$,
+    -- provenance may not contradict itself: one typo in source_kind can no
+    -- longer desynchronise it from the boolean the counters read.
+    $c$comms_outbox_provenance_consistent_ck|(source_kind = 'legacy_mirror') = is_legacy_mirror$c$,
+    -- delivery_mode is the NAME of dry_run, never a second opinion about it.
+    $c$comms_outbox_delivery_mode_matches_dry_run_ck|(delivery_mode = 'dry_run') = dry_run$c$,
+    -- ★ COMMS R0 ★ A legacy mirror can NEVER be stored carrying provider
+    -- evidence, so the state "mirrored row that counts as a live send" is not
+    -- merely uncounted — it is unrepresentable. This is the database-level
+    -- version of the rule the whole module exists for.
+    $c$comms_outbox_mirror_never_live_ck|not (is_legacy_mirror and provider_state in ('accepted','delivered'))$c$
+  ]) loop
+    if not exists (select 1 from pg_constraint
+                    where conrelid = 'public.comms_outbox'::regclass
+                      and conname = split_part(c, '|', 1)) then
+      execute format('alter table public.comms_outbox add constraint %I check (%s)',
+                     split_part(c, '|', 1), split_part(c, '|', 2));
+    end if;
+  end loop;
+end $prov_constrain$;
 
 -- ─── 2.5 Preference centre — per user, per CATEGORY, per channel ────────────
 create table if not exists public.comms_preferences (
@@ -334,6 +450,35 @@ $$;
 create or replace function public.comms_outbox_guard()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
+  -- ── PROVENANCE IS RE-DERIVED, NEVER TRUSTED ──────────────────────────────
+  -- Same principle as recipient_is_external below: the caller states it, the
+  -- database decides it. A row linked to email_deliveries, or tagged with the
+  -- legacy provider string, or declaring itself a legacy_mirror, IS a mirror —
+  -- whichever of the three the writer happened to set.
+  new.is_legacy_mirror := coalesce(new.is_legacy_mirror, false)
+                          or new.legacy_delivery_id is not null
+                          or coalesce(new.provider,'') = 'legacy_email_deliveries'
+                          or coalesce(new.source_kind,'') = 'legacy_mirror';
+  if new.is_legacy_mirror then
+    new.source_kind := 'legacy_mirror';
+  elsif coalesce(new.source_kind,'') not in ('native','imported') then
+    new.source_kind := 'native';
+  end if;
+  -- delivery_mode is the NAME of dry_run, so it is computed from dry_run and
+  -- never read from the caller: two writable copies of one fact is how a
+  -- simulation gets reported as a send.
+  new.delivery_mode  := case when new.dry_run then 'dry_run' else 'live' end;
+  new.provider_state := coalesce(new.provider_state, 'none');
+
+  -- ★ RULE R0 ★ A legacy mirror may never carry provider evidence, and evidence
+  -- is the only thing that makes a row count as a live send. The CHECK
+  -- constraint comms_outbox_mirror_never_live_ck enforces the same rule against
+  -- writers that bypass triggers; this arm names it in the error message.
+  if new.is_legacy_mirror and new.provider_state in ('accepted','delivered') then
+    raise exception 'COMMS R0: a mirrored legacy row can never be stored as a live successful send (event=%, provider_state=%)',
+      new.event_key, new.provider_state using errcode = 'check_violation';
+  end if;
+
   if new.recipient_user_id is not null then
     new.recipient_is_external := public.comms_is_external(new.recipient_user_id);
   else
@@ -358,9 +503,13 @@ begin
 end $$;
 
 drop trigger if exists t_comms_outbox_guard on public.comms_outbox;
+-- No `update of <columns>` list: the guard now also derives provenance, which
+-- changes when status / provider / dry_run / provider_state are written by
+-- comms_settle. A column list would have let a settle slip past the derivation
+-- and leave provenance stale — a stale mirror flag is exactly the failure this
+-- module exists to prevent, so the guard runs on every write.
 create trigger t_comms_outbox_guard
-  before insert or update of subject, body, audience_scope, recipient_user_id
-  on public.comms_outbox
+  before insert or update on public.comms_outbox
   for each row execute function public.comms_outbox_guard();
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -589,12 +738,17 @@ begin
         recipient_user_id, recipient_address, recipient_role, recipient_is_external, locale,
         template_id, template_version, subject, body, action_url,
         status, dry_run, next_attempt_at,
+        -- Provenance stated EXPLICITLY at the only place native rows are born:
+        -- this row was produced by the hub, it mirrors nothing, and no provider
+        -- has been asked anything yet.
+        source_kind, is_legacy_mirror, delivery_mode, provider_state,
         entity_type, entity_id, project_id, actor_id, meta)
       values (
         v_corr, v_key, p_event, cat.category, ch, v_scope,
         rec.user_id, v_addr, rec.role, v_ext, v_locale,
         tpl.id, tpl.version, v_subject, v_body, coalesce(rec.action_url, '/client-portal'),
         'queued', v_dry, now(),
+        'native', false, case when v_dry then 'dry_run' else 'live' end, 'none',
         p_entity_type, p_entity_id, p_project, p_actor,
         jsonb_build_object('recipient_reason', rec.reason))
       on conflict (idempotency_key) where idempotency_key is not null do nothing
@@ -663,6 +817,7 @@ create or replace function public.comms_settle(
   p_error text default null, p_error_class text default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare o record; v_next timestamptz; v_status text; v_ack boolean;
+        v_delivered boolean; v_outcome0 text; v_pstate text;
 begin
   select * into o from public.comms_outbox where id = p_id for update;
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
@@ -670,18 +825,51 @@ begin
     return jsonb_build_object('ok', false, 'error', 'not_claimed', 'status', o.status);
   end if;
 
+  v_outcome0 := p_outcome;
   v_ack := coalesce((p_provider_response->>'ack')::boolean, false);
+  -- Delivery evidence is a STRONGER claim than acceptance and needs its own
+  -- proof. Parsed defensively (never a bare ::boolean cast on caller text).
+  v_delivered := lower(coalesce(p_provider_response->>'delivered','')) in ('true','t','1')
+                 or nullif(btrim(coalesce(p_provider_response->>'delivery_receipt','')), '') is not null;
 
   if p_outcome = 'sent' and not o.dry_run and not v_ack then
     p_outcome := 'failed'; p_error := coalesce(p_error, 'provider did not acknowledge');
     p_error_class := 'no_provider_ack';
   end if;
 
+  -- 'delivered' without delivery evidence is downgraded, never inflated. It is
+  -- NOT failed: the provider did accept it, and marking an accepted message
+  -- failed would invite a second send of something already in flight.
+  if p_outcome = 'delivered' and not o.dry_run then
+    if not v_ack then
+      p_outcome := 'failed'; p_error := coalesce(p_error, 'provider did not acknowledge');
+      p_error_class := 'no_provider_ack';
+    elsif not v_delivered then
+      p_outcome := 'sent';
+    end if;
+  end if;
+
+  -- ── PROVIDER EVIDENCE, RECORDED AS DATA ──────────────────────────────────
+  -- Only 'accepted' and 'delivered' are evidence. A mirror can never reach
+  -- them (R0). A dry run never engaged a provider at all, so it is 'none' —
+  -- not 'accepted', which is how a simulation would become a green number.
+  v_pstate := case
+    when o.is_legacy_mirror                                          then 'unavailable'
+    when o.dry_run                                                   then 'none'
+    when p_outcome = 'delivered'                                     then 'delivered'
+    when p_outcome = 'sent'                                          then 'accepted'
+    when lower(coalesce(p_error,'') || ' ' || coalesce(p_error_class,''))
+         like '%relay_handler_missing%'                              then 'relay_handler_missing'
+    when v_outcome0 = 'channel_deferred'
+      or coalesce(p_error_class,'') = 'channel'                      then 'unavailable'
+    else 'attempted' end;
+
   if p_outcome in ('sent','delivered') then
     v_status := p_outcome;
     update public.comms_outbox set
       status = v_status, provider = p_provider, provider_message_id = p_provider_message_id,
       provider_response = coalesce(p_provider_response, '{}'::jsonb),
+      provider_state = v_pstate,
       last_error = null, error_class = null, lease_until = null, next_attempt_at = null,
       sent_at = coalesce(sent_at, now()),
       delivered_at = case when v_status = 'delivered' then now() else delivered_at end
@@ -696,6 +884,7 @@ begin
       last_error = coalesce(p_error, 'channel_unavailable'),
       error_class = coalesce(p_error_class, 'channel'),
       provider_response = coalesce(p_provider_response, '{}'::jsonb),
+      provider_state = v_pstate,
       lease_until = null, next_attempt_at = now() + interval '30 minutes'
     where id = p_id;
     v_status := 'queued';
@@ -710,13 +899,18 @@ begin
     update public.comms_outbox set
       status = v_status, next_attempt_at = v_next, lease_until = null,
       provider = p_provider, provider_response = coalesce(p_provider_response, '{}'::jsonb),
+      provider_state = v_pstate,
       last_error = left(coalesce(p_error, 'send_failed'), 500),
       error_class = coalesce(p_error_class, 'send_failed')
     where id = p_id;
   end if;
 
   return jsonb_build_object('ok', true, 'id', p_id, 'status', v_status,
-                            'attempts', o.attempts, 'dry_run', o.dry_run);
+                            'attempts', o.attempts, 'dry_run', o.dry_run,
+                            'provider_state', v_pstate,
+                            'counts_as_live_send',
+                              v_status in ('sent','delivered') and not o.dry_run
+                              and not o.is_legacy_mirror and v_pstate in ('accepted','delivered'));
 end $$;
 
 -- Return rows whose processing lease expired. A row already at max_attempts
@@ -757,7 +951,12 @@ begin
   -- A mirrored legacy row is a REPORT of something the old queue already did.
   -- Retrying it here would send a second copy of a message that path may have
   -- already delivered. Refuse — this is the double-send the audit warned about.
-  if o.legacy_delivery_id is not null then
+  -- Three independent ways to recognise a mirror; any one of them refuses. The
+  -- provenance flag is the primary test, the FK link and the provider string
+  -- are belt and braces for a row written before §2.4b existed.
+  if o.is_legacy_mirror or o.source_kind = 'legacy_mirror'
+     or o.legacy_delivery_id is not null
+     or coalesce(o.provider,'') = 'legacy_email_deliveries' then
     return jsonb_build_object('ok', false, 'error', 'legacy_mirror_not_retryable',
       'hint', 'this row mirrors public.email_deliveries; retry it in the legacy monitor instead');
   end if;
@@ -939,23 +1138,69 @@ begin
     return jsonb_build_object('ok', false, 'error', 'not_authorized');
   end if;
 
+  -- ══ THE COUNTING RULE ═════════════════════════════════════════════════════
+  -- A row counts as a LIVE SEND only on REAL EVIDENCE. The five conjuncts below
+  -- are repeated verbatim on both live counters — deliberately, because §90
+  -- asserts each token on each counter, so the repetition is what makes the
+  -- guard able to catch a removal. Every conjunct does work:
+  --   source_kind = 'native'                     not a mirror, not an import
+  --   not is_legacy_mirror                       the explicit provenance flag
+  --   delivery_mode = 'live'                     not a simulation
+  --   provider_state in ('accepted','delivered') the provider actually took it
+  --   provider <> 'legacy_email_deliveries'      belt and braces on the old string
+  -- NONE of these may ever be counted live: legacy_mirror, dry_run, imported,
+  -- provider unavailable, relay_handler_missing, queued, processing, retrying —
+  -- each gets its own honestly named bucket below instead.
   select jsonb_build_object(
     'queued',      count(*) filter (where status = 'queued'),
     'processing',  count(*) filter (where status = 'processing'),
     'retrying',    count(*) filter (where status = 'retrying'),
-    'sent_dry_run',count(*) filter (where status in ('sent','delivered') and dry_run),
-    -- ⚠️ MIRRORED LEGACY ROWS ARE EXCLUDED FROM sent_live ON PURPOSE.
-    --    comms_adapter_import_legacy() copies TERMINAL email_deliveries rows in
-    --    with dry_run = false and status 'sent'. Counting those as sent_live
-    --    would put a green "actually sent" number on the dashboard for mail this
-    --    hub never touched — and whose legacy 'sent' is not evidence of delivery
-    --    at all, since the Apps Script portal_notify handler is not deployed.
-    --    That is precisely the forged-success signal this module exists to kill.
-    'sent_live',   count(*) filter (where status in ('sent','delivered') and not dry_run
+    -- SIMULATED. Never summed with anything live.
+    -- The three mirror tests are repeated here, not just on the live counters:
+    -- a mirror is reported ONLY as a mirror, so sent_dry_run and mirrored_legacy
+    -- can never both fire on one row even if the guard trigger was bypassed.
+    'sent_dry_run',count(*) filter (where status in ('sent','delivered')
+                                      and (dry_run or delivery_mode = 'dry_run')
+                                      and not is_legacy_mirror
+                                      and source_kind <> 'legacy_mirror'
                                       and coalesce(provider,'') <> 'legacy_email_deliveries'),
-    'delivered',   count(*) filter (where status = 'delivered' and not dry_run
+    'sent_live',   count(*) filter (where status = 'sent'
+                                      and source_kind = 'native' and not is_legacy_mirror
+                                      and delivery_mode = 'live'
+                                      and provider_state in ('accepted','delivered')
                                       and coalesce(provider,'') <> 'legacy_email_deliveries'),
-    'mirrored_legacy', count(*) filter (where provider = 'legacy_email_deliveries'),
+    -- Same four exclusions; a STRICTER evidence bar. Acceptance is not delivery.
+    'delivered',   count(*) filter (where status = 'delivered'
+                                      and source_kind = 'native' and not is_legacy_mirror
+                                      and delivery_mode = 'live'
+                                      and provider_state = 'delivered'
+                                      and coalesce(provider,'') <> 'legacy_email_deliveries'),
+    -- ⚠️ MIRRORED LEGACY ROWS ARE NOT SENDS BY THIS HUB.
+    --    comms_adapter_import_legacy() copies TERMINAL email_deliveries rows in.
+    --    Counting those live would put a green "actually sent" number on the
+    --    dashboard for mail this hub never touched — and whose legacy 'sent' is
+    --    not evidence of delivery at all, since the Apps Script portal_notify
+    --    handler is not deployed. That is the forged success this module kills.
+    'mirrored_legacy', count(*) filter (where is_legacy_mirror
+                                          or source_kind = 'legacy_mirror'
+                                          or coalesce(provider,'') = 'legacy_email_deliveries'),
+    'imported',    count(*) filter (where source_kind = 'imported'),
+    -- Absence-of-evidence buckets, named for what they actually are.
+    'provider_unavailable',
+      count(*) filter (where provider_state = 'unavailable' and not is_legacy_mirror),
+    'relay_handler_missing',
+      count(*) filter (where provider_state = 'relay_handler_missing'),
+    -- ★ The forged-success detector: a native, live row that claims a terminal
+    --   success it has no evidence for. Must always read 0; any other number is
+    --   a bug in a settle path, surfaced instead of hidden. The second arm
+    --   catches the subtler case — status 'delivered' backed only by
+    --   acceptance — so that every native live terminal row lands in exactly one
+    --   of sent_live, delivered and this bucket, and none can go unreported.
+    'claimed_sent_without_evidence',
+      count(*) filter (where status in ('sent','delivered') and source_kind = 'native'
+                         and not is_legacy_mirror and delivery_mode = 'live'
+                         and (provider_state not in ('accepted','delivered')
+                              or (status = 'delivered' and provider_state <> 'delivered'))),
     'failed',      count(*) filter (where status = 'failed'),
     'dead_letter', count(*) filter (where status = 'dead_letter'),
     'cancelled',   count(*) filter (where status = 'cancelled'),
@@ -963,6 +1208,11 @@ begin
       (select count(*) from public.comms_audit where action in ('recipient_blocked_r1','content_blocked_r2')),
     'total',       count(*))
   into v from public.comms_outbox;
+
+  -- The ONLY number that may be read as "really sent". sent_live and delivered
+  -- are disjoint by status, so this is a sum and not a double count.
+  v := v || jsonb_build_object('live_total',
+         coalesce((v->>'sent_live')::int, 0) + coalesce((v->>'delivered')::int, 0));
 
   select min(created_at) into v_old from public.comms_outbox where status in ('queued','retrying');
 
@@ -980,8 +1230,8 @@ begin
 
   return jsonb_build_object('ok', true, 'counts', v, 'channels', v_ch,
     'oldest_runnable_at', v_old, 'legacy_email_deliveries', v_legacy,
-    'note_ar', 'الأرقام تحت sent_dry_run محاكاة ولم تُرسَل فعليًا، وmirrored_legacy صفوف منسوخة من الطابور القديم للعرض فقط — ليست دليل تسليم ولا تُحتسب ضمن الإرسال الفعلي.',
-    'note_en', 'sent_dry_run rows were simulated and never actually sent; mirrored_legacy rows are read-only copies of the old queue — not evidence of delivery, and never counted as live sends.');
+    'note_ar', 'الإرسال الفعلي هو live_total فقط، ويشترط إقرارًا حقيقيًا من المزوّد. أمّا sent_dry_run فمحاكاة لم تُرسَل، وmirrored_legacy صفوف منسوخة من الطابور القديم للعرض فقط، وprovider_unavailable وrelay_handler_missing وimported وclaimed_sent_without_evidence كلّها ليست إرسالًا فعليًّا ولا تُحتسب ضمنه.',
+    'note_en', 'live_total is the only "really sent" number and requires real provider evidence. sent_dry_run was simulated and never sent; mirrored_legacy are read-only copies of the old queue; provider_unavailable, relay_handler_missing, imported and claimed_sent_without_evidence are absences of evidence. None of them is ever counted as a live send.');
 end $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -1070,6 +1320,12 @@ begin
         correlation_id, idempotency_key, event_key, category, channel, audience_scope,
         recipient_user_id, recipient_address, recipient_role, recipient_is_external, locale,
         subject, body, action_url, status, dry_run, attempts, max_attempts,
+        -- PROVENANCE, STATED — not left to be inferred from the provider string.
+        -- provider_state is 'unavailable' for every mirror without exception:
+        -- whatever the old queue recorded, THIS hub has no provider evidence for
+        -- it, and R0 (trigger + CHECK) makes 'accepted'/'delivered' impossible
+        -- here anyway. A mirror can therefore never become a live send.
+        source_kind, is_legacy_mirror, delivery_mode, provider_state,
         provider, provider_message_id, last_error, legacy_delivery_id, created_at, sent_at, meta)
       values (
         coalesce(r.correlation_id, gen_random_uuid()), 'legacy:' || r.id::text,
@@ -1080,9 +1336,12 @@ begin
         coalesce(nullif(btrim(r.subject), ''), '(بلا عنوان)'), coalesce(r.body_text, ''), r.direct_url,
         case r.status when 'sent' then 'sent' when 'failed' then 'dead_letter' else 'failed' end,
         false, coalesce(r.attempts, 0), 5,
+        'legacy_mirror', true, 'live', 'unavailable',
         'legacy_email_deliveries', r.provider_message_id, r.last_error,
         r.id, r.created_at, r.sent_at,
-        jsonb_build_object('legacy_status', r.status, 'mirror', true))
+        jsonb_build_object('legacy_status', r.status, 'mirror', true,
+                           'provenance_note',
+                           'mirrored from public.email_deliveries; this hub holds no provider evidence for it'))
       on conflict do nothing;
       v_n := v_n + 1;
     exception when others then
@@ -1197,6 +1456,72 @@ begin
   execute 'revoke all on function public.comms_outbox_guard() from public, anon, authenticated';
 end $grants$;
 
+-- ─── 13.b THE anon PRIVILEGES THE PREFLIGHT FOUND ON THE LEGACY TABLES ──────
+-- PREFLIGHT §5 reported anon holding REFERENCES, TRIGGER and TRUNCATE on
+-- public.notifications, notification_events, notification_preferences,
+-- notification_delivery_log and email_deliveries.
+--
+-- SOURCE, established from the repo rather than assumed: not one of the 263 SQL
+-- files in docs/ grants anything to anon on any of those five tables, and the
+-- repo already documents the real origin —
+--   docs/authz_fixD_profiles_direct_write_RUNME.sql:34
+--     "grant all on all tables in schema public to anon, authenticated;"
+-- which every Supabase project is created with. ALL expands to exactly SELECT,
+-- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER; an earlier cleanup
+-- removed the four CRUD verbs and left these three behind. That is the residue.
+--
+-- IS THERE A GENUINE ANONYMOUS CALLER? Checked before revoking anything:
+--   • the only anonymous path that touches these tables is
+--     public.submit_opportunity_request(...) (opportunities_center_RUNME.sql:117,
+--     public_portal_rate_limit_RUNME.sql:195), granted to anon and used by the
+--     PUBLIC opportunities form. It is SECURITY DEFINER and inserts through
+--     public.notify(), so it runs as its owner and needs NO table grant at all.
+--   • no browser module selects or writes any of these five tables directly
+--     (grep of lib/, app/, components/ for .from("notifications") etc. → none).
+-- Nothing legitimate depends on anon's table privileges here.
+--
+-- WHY THESE THREE MATTER, ordered by severity:
+--   TRUNCATE   — row level security does NOT apply to TRUNCATE. anon holding it
+--                means the public browser key can empty the notification tables.
+--   TRIGGER    — attach a trigger to a table privileged code writes.
+--   REFERENCES — create a foreign key that constrains other people's deletes.
+--
+-- The revoke below names ONLY these three privilege types, on ONLY these five
+-- legacy tables. SELECT / INSERT / UPDATE / DELETE are deliberately NOT touched:
+-- removing a privilege a public form might rely on is not this file's business,
+-- and the POSTCHECK reports them under an allowlist instead of silently killing
+-- them here.
+do $anon_legacy$
+declare t text; v_left text;
+begin
+  foreach t in array array['notifications','notification_events','notification_preferences',
+                           'notification_delivery_log','email_deliveries'] loop
+    if to_regclass('public.' || t) is null then
+      raise notice 'ANON REVOKE — public.% is absent, skipped', t;
+      continue;
+    end if;
+    -- Both grantees: a privilege held via PUBLIC is not removed by revoking
+    -- from anon, and vice versa. Revoking one and calling it done is how a
+    -- privilege survives a cleanup that reports success.
+    execute format('revoke references, trigger, truncate on table public.%I from anon', t);
+    execute format('revoke references, trigger, truncate on table public.%I from public', t);
+  end loop;
+
+  -- Report, do not remove, whatever else anon still holds. The POSTCHECK turns
+  -- this into an allowlist assertion across ALL privilege types.
+  select string_agg(distinct table_name || ':' || privilege_type, ', ')
+    into v_left
+    from information_schema.role_table_grants
+   where table_schema = 'public' and grantee in ('anon','PUBLIC')
+     and table_name in ('notifications','notification_events','notification_preferences',
+                        'notification_delivery_log','email_deliveries');
+  if v_left is null then
+    raise notice 'ANON REVOKE — anon/PUBLIC now hold NO privilege of any type on the five legacy notification tables.';
+  else
+    raise notice 'ANON REVOKE — REFERENCES/TRIGGER/TRUNCATE removed. STILL HELD (not touched by this file, review in the POSTCHECK): %', v_left;
+  end if;
+end $anon_legacy$;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- §90 SELF-TESTS — STATIC ONLY.
 --     No protected RPC is called here. The SQL editor runs as postgres with
@@ -1206,7 +1531,7 @@ end $grants$;
 --     hence ilike). Nothing is wrapped in a catch-all that would pass anyway.
 -- ════════════════════════════════════════════════════════════════════════════
 do $selftest$
-declare v_def text; t text; f text; v_n int;
+declare v_def text; v_flat text; v_seg text; t text; f text; v_n int;
 begin
   -- (1) Every table exists.
   foreach t in array array['comms_channels','comms_event_catalog','comms_templates',
@@ -1322,15 +1647,156 @@ begin
     end if;
   end loop;
 
-  -- (9b) sent_live MUST exclude rows mirrored from the legacy queue. Static
-  --      body assertion — calling comms_health() here would hit its own
-  --      comms_can_view() gate under auth.uid() = NULL and abort the migration.
-  v_def := pg_get_functiondef(to_regprocedure('public.comms_health()'));
-  if v_def !~* $re$'sent_live'[^)]*legacy_email_deliveries$re$ then
-    raise exception 'HUB FAIL: comms_health counts mirrored legacy rows as live sends — forged success';
+  -- (9b) THE COUNTING RULE, asserted statically. Calling comms_health() here
+  --      would hit its own comms_can_view() gate under auth.uid() = NULL and
+  --      abort the migration, so the assertion reads the function BODY.
+  --
+  -- ⚠️ WHY THIS WAS REWRITTEN. The previous form was
+  --        if v_def !~* $re$'sent_live'[^)]*legacy_email_deliveries$re$
+  --    and it can NEVER match a correct function: [^)] cannot cross a ')', and
+  --    the ')' of count(*) appears immediately after the sent_live label. So a
+  --    perfectly correct comms_health failed its own guard and rolled the whole
+  --    migration back. Same class as the earlier case-sensitive LIKE that could
+  --    not match a deparsed COALESCE: an assertion that cannot pass is not a
+  --    strict test, it is a broken one.
+  --
+  -- The replacement is STRICTER, not looser, in three ways:
+  --    (a) pg_get_functiondef returns the body AS WRITTEN, i.e. line-wrapped, so
+  --        whitespace is normalised FIRST and no pattern has to guess at layout;
+  --    (b) it checks BOTH live counters, where the old one checked one;
+  --    (c) it checks every conjunct of the counting rule, not just the legacy
+  --        provider string.
+  --
+  -- WHY IT STILL FAILS IF SOMEBODY REMOVES AN EXCLUSION — reasoning, not hope:
+  -- v_seg is the text BETWEEN the sent_live label and the delivered label, i.e.
+  -- exactly one counter's own predicate and nothing else. A conjunct that
+  -- survives only on the OTHER counter is therefore outside v_seg and cannot
+  -- satisfy the check. position() is a plain substring test on that slice, so
+  -- deleting `and not is_legacy_mirror` from sent_live removes the only
+  -- occurrence inside v_seg, position() returns 0, and the migration aborts.
+  -- The same argument holds for the delivered slice, bounded by the
+  -- mirrored_legacy label. And v_seg being NULL — the failure mode that would
+  -- make every position() vacuously skipped — is itself an exception below.
+  -- Comments are stripped BEFORE whitespace is normalised, so no assertion here
+  -- can ever be satisfied by prose that merely describes the rule. (Flattening
+  -- first would be wrong: with the newlines gone, a `--` comment would swallow
+  -- the rest of the body.)
+  v_flat := regexp_replace(pg_get_functiondef(to_regprocedure('public.comms_health()')),
+                           '--[^' || chr(10) || ']*', ' ', 'g');
+  v_flat := regexp_replace(v_flat, '\s+', ' ', 'g');
+
+  v_seg := substring(v_flat from $re$'sent_live', (.*?)'delivered',$re$);
+  if v_seg is null then
+    raise exception 'HUB FAIL: comms_health has no sent_live counter followed by a delivered counter — the counting rule cannot be verified';
   end if;
-  if v_def not ilike '%mirrored_legacy%' then
-    raise exception 'HUB FAIL: comms_health does not report mirrored_legacy separately';
+  -- NON-VACUITY CONTROL. If position() ever stopped discriminating (an empty
+  -- slice, a pattern that matches everything) this would pass a token that is
+  -- provably absent, and the whole block below would be theatre.
+  if position('legacy_email_deliveries_THIS_TOKEN_MUST_NOT_EXIST' in v_seg) > 0 then
+    raise exception 'HUB FAIL: the sent_live assertion is vacuous — it matches a token that does not exist';
+  end if;
+  foreach t in array array[
+      $c$source_kind = 'native'$c$,
+      $c$not is_legacy_mirror$c$,
+      $c$delivery_mode = 'live'$c$,
+      $c$provider_state in ('accepted','delivered')$c$,
+      $c$<> 'legacy_email_deliveries'$c$] loop
+    if position(t in v_seg) = 0 then
+      raise exception 'HUB FAIL: comms_health.sent_live lost the "%" condition — something that is not a proven send could be counted as a live send', t;
+    end if;
+  end loop;
+
+  v_seg := substring(v_flat from $re$'delivered', (.*?)'mirrored_legacy',$re$);
+  if v_seg is null then
+    raise exception 'HUB FAIL: comms_health has no delivered counter followed by a mirrored_legacy counter';
+  end if;
+  if position('legacy_email_deliveries_THIS_TOKEN_MUST_NOT_EXIST' in v_seg) > 0 then
+    raise exception 'HUB FAIL: the delivered assertion is vacuous — it matches a token that does not exist';
+  end if;
+  foreach t in array array[
+      $c$source_kind = 'native'$c$,
+      $c$not is_legacy_mirror$c$,
+      $c$delivery_mode = 'live'$c$,
+      $c$provider_state = 'delivered'$c$,     -- acceptance is not delivery
+      $c$<> 'legacy_email_deliveries'$c$] loop
+    if position(t in v_seg) = 0 then
+      raise exception 'HUB FAIL: comms_health.delivered lost the "%" condition — delivery would be reported without delivery evidence', t;
+    end if;
+  end loop;
+
+  -- Every never-live category is reported under its own honest name.
+  foreach t in array array['mirrored_legacy','imported','provider_unavailable',
+                           'relay_handler_missing','claimed_sent_without_evidence',
+                           'sent_dry_run','live_total'] loop
+    if position('''' || t || '''' in v_flat) = 0 then
+      raise exception 'HUB FAIL: comms_health does not report % as its own bucket', t;
+    end if;
+  end loop;
+
+  -- (9c) PROVENANCE IS DATA. The counters above are only trustworthy if the
+  --      columns they read cannot be set to a lie.
+  foreach t in array array['source_kind','is_legacy_mirror','delivery_mode','provider_state'] loop
+    if not exists (select 1 from information_schema.columns
+                    where table_schema = 'public' and table_name = 'comms_outbox'
+                      and column_name = t and is_nullable = 'NO') then
+      raise exception 'HUB FAIL: comms_outbox.% is missing or nullable — provenance must be explicit and total', t;
+    end if;
+  end loop;
+  foreach t in array array['comms_outbox_source_kind_ck','comms_outbox_delivery_mode_ck',
+                           'comms_outbox_provider_state_ck','comms_outbox_provenance_consistent_ck',
+                           'comms_outbox_delivery_mode_matches_dry_run_ck',
+                           'comms_outbox_mirror_never_live_ck'] loop
+    if not exists (select 1 from pg_constraint
+                    where conrelid = 'public.comms_outbox'::regclass
+                      and contype = 'c' and conname = t and convalidated) then
+      raise exception 'HUB FAIL: validated CHECK constraint % is missing from comms_outbox', t;
+    end if;
+  end loop;
+  -- ★ R0 is enforced by a CHECK (survives a disabled trigger) AND by the guard.
+  if pg_get_constraintdef((select oid from pg_constraint
+                            where conrelid = 'public.comms_outbox'::regclass
+                              and conname = 'comms_outbox_mirror_never_live_ck'))
+     !~* 'is_legacy_mirror' then
+    raise exception 'HUB FAIL: the mirror-never-live CHECK does not mention is_legacy_mirror';
+  end if;
+  v_def := pg_get_functiondef('public.comms_outbox_guard()'::regprocedure);
+  if v_def !~* 'COMMS R0' then
+    raise exception 'HUB FAIL: R0 (a mirror can never be stored as a live send) is not enforced in comms_outbox_guard';
+  end if;
+  if v_def !~* 'new\.delivery_mode\s*:=' or v_def !~* 'new\.is_legacy_mirror\s*:=' then
+    raise exception 'HUB FAIL: the guard must RE-DERIVE provenance, not trust the writer';
+  end if;
+  -- The importer must state provenance rather than leave it to the default.
+  v_def := pg_get_functiondef('public.comms_adapter_import_legacy(int)'::regprocedure);
+  foreach t in array array['source_kind','is_legacy_mirror','delivery_mode','provider_state',
+                           'legacy_mirror','unavailable'] loop
+    if position(t in v_def) = 0 then
+      raise exception 'HUB FAIL: comms_adapter_import_legacy does not set % explicitly', t;
+    end if;
+  end loop;
+  -- comms_settle must record evidence, and must not accept 'delivered' as proof
+  -- of itself.
+  v_def := pg_get_functiondef('public.comms_settle(uuid,text,text,text,jsonb,text,text)'::regprocedure);
+  if position('provider_state = v_pstate' in v_def) = 0 then
+    raise exception 'HUB FAIL: comms_settle does not record provider_state';
+  end if;
+  if v_def !~* 'v_delivered' then
+    raise exception 'HUB FAIL: comms_settle accepts a delivered outcome without delivery evidence';
+  end if;
+
+  -- (9d) THE anon PRIVILEGES §13.b REVOKED ARE ACTUALLY GONE.
+  --      Only the three types this file revoked are fatal here; a residual
+  --      SELECT/INSERT is a pre-existing condition that must be REPORTED, not
+  --      used to abort an unrelated migration. The POSTCHECK holds the full
+  --      allowlist across all privilege types.
+  select count(*) into v_n
+    from information_schema.role_table_grants
+   where table_schema = 'public' and grantee in ('anon','PUBLIC')
+     and privilege_type in ('REFERENCES','TRIGGER','TRUNCATE')
+     and table_name in ('notifications','notification_events','notification_preferences',
+                        'notification_delivery_log','email_deliveries');
+  if v_n > 0 then
+    raise exception 'HUB FAIL: anon/PUBLIC still holds % REFERENCES/TRIGGER/TRUNCATE grant(s) on the legacy notification tables', v_n;
   end if;
 
   -- (10) CHANNELS SHIP SAFE: nothing may send after this migration.

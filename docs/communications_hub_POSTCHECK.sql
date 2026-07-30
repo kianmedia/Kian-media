@@ -1,172 +1,390 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- COMMUNICATIONS HUB — POSTCHECK (READ-ONLY)
+-- COMMUNICATIONS HUB — POSTCHECK (READ-ONLY · ONE RESULT SET)
 --
--- Run AFTER docs/communications_hub_RUNME.sql. Writes nothing.
--- It re-proves, from the live catalogue, the four claims that matter:
+-- Run AFTER docs/communications_hub_RUNME.sql. Writes nothing, locks nothing.
+-- Safe from the SQL editor, where auth.uid() is NULL: no protected RPC is
+-- called, so nothing here can die on its own authorization gate.
+--
+-- It re-proves, from the live catalogue and the live data, the claims that
+-- matter:
 --   A. the hub is installed and locked down (RLS, no anon, service-only writes)
---   B. NOTHING CAN SEND (every channel dry_run; email + whatsapp disabled)
---   C. the two hard safety rules are physically enforced by a trigger
+--   B. NOTHING CAN SEND (every channel dry_run; email + whatsapp disabled) and
+--      nothing HAS been sent
+--   C. the safety rules R0/R1/R2 are physically enforced
+--   P. PROVENANCE is explicit, constrained, and honest — legacy, dry-run and
+--      live are three different things and are never added together
 --   D. the legacy queue was not touched
--- Any FAIL line below means do not proceed to the go-live guide.
+--   G. anon holds nothing outside an explicit ALLOWLIST, across ALL privilege
+--      types — not a denylist of the four CRUD verbs
+--
+-- Read every FAIL. The final block raises an ERROR only on a real failure.
 -- ════════════════════════════════════════════════════════════════════════════
 
--- ─── A. INSTALLED ───────────────────────────────────────────────────────────
-select 'A.tables' as check_id,
-       case when count(*) = 7 then 'PASS' else 'FAIL — expected 7, found ' || count(*) end as verdict,
-       string_agg(relname, ', ' order by relname) as detail
-from pg_class c join pg_namespace n on n.oid = c.relnamespace
-where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'comms\_%';
+with
+-- ─── THE ALLOWLIST ──────────────────────────────────────────────────────────
+-- Deliberately EMPTY, and that is a finding, not an oversight:
+--   • the only anonymous caller that reaches these tables is
+--     public.submit_opportunity_request(...), which is SECURITY DEFINER and
+--     writes through public.notify(), so it needs no table privilege at all;
+--   • no browser module reads or writes any of them directly.
+-- Add a row here ONLY with a named caller that provably needs it. Anything not
+-- named below is reported as a failure, whatever its privilege type.
+allowed(table_name, grantee, privilege_type) as (
+  select null::text, null::text, null::text where false
+),
+legacy_tables(t) as (
+  values ('notifications'), ('notification_events'), ('notification_preferences'),
+         ('notification_delivery_log'), ('email_deliveries')
+),
+checks(sort_key, check_id, verdict, detail) as (
 
-select 'A.rls' as check_id,
+-- ─── A. INSTALLED ───────────────────────────────────────────────────────────
+select 10, 'A.tables',
+       case when count(*) = 7 then 'PASS' else 'FAIL — expected 7, found ' || count(*) end,
+       string_agg(relname, ', ' order by relname)
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'comms\_%'
+
+union all
+select 11, 'A.rls',
        case when count(*) filter (where not relrowsecurity) = 0
             then 'PASS' else 'FAIL — RLS off on: ' ||
-                 string_agg(relname, ', ') filter (where not relrowsecurity) end as verdict,
-       count(*)::text || ' comms_* tables' as detail
+                 string_agg(relname, ', ') filter (where not relrowsecurity) end,
+       count(*)::text || ' comms_* tables'
 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'comms\_%';
+where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'comms\_%'
 
-select 'A.functions' as check_id,
-       case when count(*) >= 24 then 'PASS' else 'FAIL — only ' || count(*) || ' comms_* functions' end as verdict,
-       count(*)::text as detail
+union all
+select 12, 'A.functions',
+       case when count(*) >= 24 then 'PASS' else 'FAIL — only ' || count(*) || ' comms_* functions' end,
+       count(*)::text
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname like 'comms\_%';
+where n.nspname = 'public' and p.proname like 'comms\_%'
 
-select 'A.search_path_pinned' as check_id,
+union all
+select 13, 'A.search_path_pinned',
        case when count(*) = 0 then 'PASS'
-            else 'FAIL — ' || count(*) || ' SECURITY DEFINER function(s) without a pinned search_path' end as verdict,
-       coalesce(string_agg(p.proname, ', '), 'none') as detail
+            else 'FAIL — ' || count(*) || ' SECURITY DEFINER function(s) without a pinned search_path' end,
+       coalesce(string_agg(p.proname, ', '), 'none')
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname like 'comms\_%' and p.prosecdef
-  and coalesce(array_to_string(p.proconfig, ','), '') not like '%search_path%';
+  and coalesce(array_to_string(p.proconfig, ','), '') not like '%search_path%'
 
-select 'A.no_anon_tables' as check_id,
-       case when count(*) = 0 then 'PASS' else 'FAIL — ' || count(*) || ' anon/PUBLIC table grant(s)' end as verdict,
-       coalesce(string_agg(distinct table_name || ':' || privilege_type, ', '), 'none') as detail
+union all
+select 14, 'A.no_anon_comms_tables',
+       case when count(*) = 0 then 'PASS' else 'FAIL — ' || count(*) || ' anon/PUBLIC table grant(s)' end,
+       coalesce(string_agg(distinct table_name || ':' || privilege_type, ', '), 'none')
 from information_schema.role_table_grants
-where table_schema = 'public' and table_name like 'comms\_%' and grantee in ('anon','PUBLIC');
+where table_schema = 'public' and table_name like 'comms\_%' and grantee in ('anon','PUBLIC')
 
-select 'A.no_anon_functions' as check_id,
-       case when count(*) = 0 then 'PASS' else 'FAIL — ' || count(*) || ' anon/PUBLIC EXECUTE grant(s)' end as verdict,
-       coalesce(string_agg(distinct routine_name, ', '), 'none') as detail
+union all
+select 15, 'A.no_anon_comms_functions',
+       case when count(*) = 0 then 'PASS' else 'FAIL — ' || count(*) || ' anon/PUBLIC EXECUTE grant(s)' end,
+       coalesce(string_agg(distinct routine_name, ', '), 'none')
 from information_schema.routine_privileges
-where routine_schema = 'public' and routine_name like 'comms\_%' and grantee in ('anon','PUBLIC');
+where routine_schema = 'public' and routine_name like 'comms\_%' and grantee in ('anon','PUBLIC')
 
+union all
 -- The write surface must be unreachable from a browser session.
-select 'A.service_only_write_surface' as check_id,
+select 16, 'A.service_only_write_surface',
        case when count(*) = 0 then 'PASS'
-            else 'FAIL — authenticated can call: ' || string_agg(routine_name, ', ') end as verdict,
-       'comms_enqueue / claim / settle / reap / resolve / rate_check / audit_write' as detail
+            else 'FAIL — authenticated can call: ' || string_agg(routine_name, ', ') end,
+       'comms_enqueue / claim / settle / reap / resolve / rate_check / audit_write'
 from information_schema.routine_privileges
 where routine_schema = 'public' and grantee = 'authenticated'
   and routine_name in ('comms_enqueue','comms_claim','comms_settle','comms_reap',
-                       'comms_resolve','comms_rate_check','comms_audit_write');
+                       'comms_resolve','comms_rate_check','comms_audit_write')
 
+union all
 -- The five catalogue keys /api/comms/legacy-notify maps the old BROWSER relay
 -- events onto. A missing key does not error anywhere visible — the adapter just
--- answers UNKNOWN_EVENT and the notification disappears — so it is checked here
--- explicitly rather than left to be discovered in production.
-select 'A.legacy_adapter_events' as check_id,
+-- answers UNKNOWN_EVENT and the notification disappears.
+select 17, 'A.legacy_adapter_events',
        case when count(*) = 5 then 'PASS — all five browser-replacement events are catalogued'
-            else 'FAIL — only ' || count(*) || ' of 5 present' end as verdict,
-       coalesce(string_agg(event_key, ', ' order by event_key), 'none') as detail
+            else 'FAIL — only ' || count(*) || ' of 5 present' end,
+       coalesce(string_agg(event_key, ', ' order by event_key), 'none')
 from public.comms_event_catalog
 where active and event_key in ('deliverable.preview_sent','deliverable.final_ready',
                                'project.member_assigned','project.assignment_note',
-                               'deliverable.client_commented');
+                               'deliverable.client_commented')
 
-select 'A.assignment_events_internal' as check_id,
+union all
+select 18, 'A.assignment_events_internal',
        case when count(*) = 0 then 'PASS — assignment events are internal-only'
-            else 'FAIL — ' || string_agg(event_key || '=' || audience, ', ') end as verdict,
-       'a private instruction to staff must never be client-facing' as detail
+            else 'FAIL — ' || string_agg(event_key || '=' || audience, ', ') end,
+       'a private instruction to staff must never be client-facing'
 from public.comms_event_catalog
-where event_key in ('project.assignment_note','project.member_assigned') and audience <> 'internal';
+where event_key in ('project.assignment_note','project.member_assigned') and audience <> 'internal'
 
--- ─── B. NOTHING CAN SEND ────────────────────────────────────────────────────
-select 'B.channels_safe' as check_id,
+-- ─── B. NOTHING CAN SEND, AND NOTHING HAS ───────────────────────────────────
+union all
+select 20, 'B.channels_safe',
        case when count(*) filter (where enabled and channel <> 'portal') = 0
              and count(*) filter (where not dry_run) = 0
             then 'PASS — every channel dry_run; email/whatsapp disabled'
-            else 'FAIL — a channel can send' end as verdict,
-       string_agg(channel || '(enabled=' || enabled || ',dry_run=' || dry_run || ')', ', ' order by channel) as detail
-from public.comms_channels;
+            else 'FAIL — a channel can send' end,
+       string_agg(channel || '(enabled=' || enabled || ',dry_run=' || dry_run || ')', ', ' order by channel)
+from public.comms_channels
 
-select 'B.no_live_sends_recorded' as check_id,
-       case when count(*) = 0 then 'PASS — zero non-dry-run sends'
-            else 'REVIEW — ' || count(*) || ' row(s) claim a real send' end as verdict,
-       coalesce(string_agg(distinct provider, ', '), 'none') as detail
-from public.comms_outbox where status in ('sent','delivered') and not dry_run
-  and coalesce(provider,'') <> 'legacy_email_deliveries';
+union all
+-- A LIVE SEND, defined on evidence rather than on a free-text provider string.
+select 21, 'B.no_live_sends_recorded',
+       case when count(*) = 0 then 'PASS — zero rows carry provider evidence of a real send'
+            else 'REVIEW — ' || count(*) || ' row(s) are genuine live sends' end,
+       coalesce(string_agg(distinct coalesce(provider,'(null)') || '/' || provider_state, ', '), 'none')
+from public.comms_outbox
+where status in ('sent','delivered') and source_kind = 'native' and not is_legacy_mirror
+  and delivery_mode = 'live' and provider_state in ('accepted','delivered')
+  and coalesce(provider,'') <> 'legacy_email_deliveries'
 
-select 'B.provider_ack_rule' as check_id,
+union all
+select 22, 'B.provider_ack_rule',
        case when pg_get_functiondef('public.comms_settle(uuid,text,text,text,jsonb,text,text)'::regprocedure) ilike '%no_provider_ack%'
             then 'PASS — a live send without provider acknowledgment is recorded as FAILED'
-            else 'FAIL — comms_settle would accept an unacknowledged send' end as verdict,
-       'HTTP 200 is not delivery' as detail;
+            else 'FAIL — comms_settle would accept an unacknowledged send' end,
+       'HTTP 200 is not delivery'
 
--- ─── C. THE TWO HARD SAFETY RULES ───────────────────────────────────────────
-select 'C.guard_trigger' as check_id,
+union all
+select 23, 'B.delivery_evidence_rule',
+       case when pg_get_functiondef('public.comms_settle(uuid,text,text,text,jsonb,text,text)'::regprocedure) ilike '%v_delivered%'
+            then 'PASS — "delivered" is downgraded to "sent" without delivery evidence'
+            else 'FAIL — comms_settle takes a delivered claim as proof of itself' end,
+       'acceptance is not delivery'
+
+-- ─── C. THE SAFETY RULES ────────────────────────────────────────────────────
+union all
+select 30, 'C.guard_trigger',
        case when exists (select 1 from pg_trigger
                           where tgname = 't_comms_outbox_guard'
                             and tgrelid = 'public.comms_outbox'::regclass and not tgisinternal)
-            then 'PASS' else 'FAIL — the guard trigger is not attached' end as verdict,
-       't_comms_outbox_guard on public.comms_outbox' as detail;
+            then 'PASS' else 'FAIL — the guard trigger is not attached' end,
+       't_comms_outbox_guard on public.comms_outbox'
 
-select 'C.rules_in_guard' as check_id,
-       case when pg_get_functiondef('public.comms_outbox_guard()'::regprocedure) ilike '%COMMS R1%'
+union all
+select 31, 'C.rules_in_guard',
+       case when pg_get_functiondef('public.comms_outbox_guard()'::regprocedure) ilike '%COMMS R0%'
+             and pg_get_functiondef('public.comms_outbox_guard()'::regprocedure) ilike '%COMMS R1%'
              and pg_get_functiondef('public.comms_outbox_guard()'::regprocedure) ilike '%COMMS R2%'
              and pg_get_functiondef('public.comms_outbox_guard()'::regprocedure) ilike '%comms_is_external%'
-            then 'PASS — R1 + R2 present and externality is recomputed, not trusted'
-            else 'FAIL' end as verdict, 'server-side enforcement' as detail;
+            then 'PASS — R0 + R1 + R2 present; externality and provenance are recomputed, not trusted'
+            else 'FAIL' end,
+       'server-side enforcement'
 
-select 'C.external_fails_closed' as check_id,
+union all
+select 32, 'C.external_fails_closed',
        case when public.comms_is_external('00000000-0000-0000-0000-000000000000'::uuid) is true
             then 'PASS — an unknown user is treated as EXTERNAL'
-            else 'FAIL — unknown user is not fail-closed' end as verdict,
-       'comms_is_external(unknown) must be true' as detail;
+            else 'FAIL — unknown user is not fail-closed' end,
+       'comms_is_external(unknown) must be true'
 
-select 'C.no_client_template_for_internal_event' as check_id,
+union all
+select 33, 'C.no_client_template_for_internal_event',
        case when count(*) = 0 then 'PASS'
-            else 'FAIL — ' || count(*) || ' client template(s) on internal-only event(s)' end as verdict,
-       coalesce(string_agg(distinct t.event_key, ', '), 'none') as detail
+            else 'FAIL — ' || count(*) || ' client template(s) on internal-only event(s)' end,
+       coalesce(string_agg(distinct t.event_key, ', '), 'none')
 from public.comms_templates t
 join public.comms_event_catalog c on c.event_key = t.event_key
-where t.audience_scope = 'client' and c.audience = 'internal';
+where t.audience_scope = 'client' and c.audience = 'internal'
 
--- Any recipient the hub refused. Zero is normal on a fresh install; a non-zero
--- number here is the safety rules doing their job, not a defect.
-select 'C.blocked_recipients' as check_id, 'INFO' as verdict,
-       coalesce(string_agg(action || '=' || n::text, ', '), 'none yet') as detail
-from (select action, count(*) as n from public.comms_audit
-       where action in ('recipient_blocked_r1','content_blocked_r2') group by action) s;
+union all
+-- Zero is normal on a fresh install; a non-zero number is the rules working.
+select 34, 'C.blocked_recipients', 'INFO',
+       coalesce((select string_agg(action || '=' || n::text, ', ')
+                   from (select action, count(*) as n from public.comms_audit
+                          where action in ('recipient_blocked_r1','content_blocked_r2')
+                          group by action) s), 'none yet')
+
+-- ─── P. PROVENANCE ──────────────────────────────────────────────────────────
+union all
+select 40, 'P.columns',
+       case when count(*) = 4 then 'PASS — all four provenance columns exist and are NOT NULL'
+            else 'FAIL — only ' || count(*) || ' of 4 present and non-nullable' end,
+       coalesce(string_agg(column_name || ' ' || data_type, ', ' order by column_name), 'none')
+from information_schema.columns
+where table_schema = 'public' and table_name = 'comms_outbox' and is_nullable = 'NO'
+  and column_name in ('source_kind','is_legacy_mirror','delivery_mode','provider_state')
+
+union all
+select 41, 'P.constraints',
+       case when count(*) = 6 then 'PASS — vocabulary, consistency and R0 are all CHECK-enforced'
+            else 'FAIL — only ' || count(*) || ' of 6 validated CHECK constraints' end,
+       coalesce(string_agg(conname, ', ' order by conname), 'none')
+from pg_constraint
+where conrelid = 'public.comms_outbox'::regclass and contype = 'c' and convalidated
+  and conname in ('comms_outbox_source_kind_ck','comms_outbox_delivery_mode_ck',
+                  'comms_outbox_provider_state_ck','comms_outbox_provenance_consistent_ck',
+                  'comms_outbox_delivery_mode_matches_dry_run_ck',
+                  'comms_outbox_mirror_never_live_ck')
+
+union all
+-- R0 as DATA, not only as a constraint definition.
+select 42, 'P.mirror_never_live',
+       case when count(*) = 0 then 'PASS — no legacy mirror carries provider evidence'
+            else 'FAIL — ' || count(*) || ' mirrored row(s) claim provider evidence' end,
+       'is_legacy_mirror AND provider_state in (accepted, delivered) must be empty'
+from public.comms_outbox
+where is_legacy_mirror and provider_state in ('accepted','delivered')
+
+union all
+-- The forged-success detector. Any number but 0 is a bug in a settle path.
+select 43, 'P.no_forged_success',
+       case when count(*) = 0 then 'PASS — nothing claims a terminal success without provider evidence'
+            else 'FAIL — ' || count(*) || ' row(s) claim sent/delivered with no evidence' end,
+       'native + live + sent/delivered + provider_state not in (accepted, delivered)'
+from public.comms_outbox
+where status in ('sent','delivered') and source_kind = 'native' and not is_legacy_mirror
+  and delivery_mode = 'live' and provider_state not in ('accepted','delivered')
+
+union all
+select 44, 'P.provenance_agrees_with_legacy_link',
+       case when count(*) = 0 then 'PASS — the flag, the FK link and the provider string agree on every row'
+            else 'FAIL — ' || count(*) || ' row(s) disagree about being a mirror' end,
+       'is_legacy_mirror vs legacy_delivery_id vs provider'
+from public.comms_outbox
+where is_legacy_mirror <> (legacy_delivery_id is not null
+                           or coalesce(provider,'') = 'legacy_email_deliveries')
 
 -- ─── D. THE LEGACY QUEUE WAS NOT TOUCHED ────────────────────────────────────
--- Compare this with the same block in the PREFLIGHT. The numbers must match.
-do $legacy$
-declare v_txt text := 'email_deliveries ABSENT';
-begin
-  if to_regclass('public.email_deliveries') is not null then
-    execute $q$ select 'email_deliveries · ' ||
-                       coalesce(string_agg(status || '=' || n::text, ', ' order by status), 'empty')
-                  from (select status, count(*) as n from public.email_deliveries group by status) s $q$
-      into v_txt;
-  end if;
-  raise notice 'LEGACY AFTER — %  (must equal the PREFLIGHT baseline)', v_txt;
-end $legacy$;
-
-select 'D.legacy_mirror_is_terminal_only' as check_id,
-       case when count(*) = 0 then 'PASS — no live legacy row was mirrored'
-            else 'FAIL — ' || count(*) || ' mirrored row(s) are in a runnable state' end as verdict,
-       'mirrored rows must never be claimable' as detail
+union all
+select 50, 'D.legacy_mirror_is_terminal_only',
+       case when count(*) = 0 then 'PASS — no mirrored row is in a runnable state'
+            else 'FAIL — ' || count(*) || ' mirrored row(s) are claimable' end,
+       'a mirrored row must never be claimed, retried or re-sent'
 from public.comms_outbox
-where legacy_delivery_id is not null and status in ('queued','retrying','processing');
+where (is_legacy_mirror or legacy_delivery_id is not null)
+  and status in ('queued','retrying','processing')
 
--- ─── E. WHAT IS ACTUALLY IN THE QUEUE RIGHT NOW ─────────────────────────────
-select 'E.outbox_by_status' as check_id, status as verdict,
-       count(*)::text || ' row(s), dry_run=' ||
-       count(*) filter (where dry_run)::text as detail
-from public.comms_outbox group by status order by status;
+union all
+select 51, 'D.legacy_queue_now', 'INFO — must equal the PREFLIGHT baseline',
+       case when to_regclass('public.email_deliveries') is null then 'email_deliveries ABSENT'
+            else (select coalesce(string_agg(status || '=' || n::text, ', ' order by status), 'empty')
+                    from (select status, count(*) as n from public.email_deliveries group by status) s) end
 
-do $done$
+-- ─── E. LEGACY vs DRY-RUN vs LIVE, KEPT APART ───────────────────────────────
+union all
+select 60, 'E.outbox_breakdown', 'INFO',
+       'total=' || count(*) ||
+       ' · mirrored_legacy=' || count(*) filter (where is_legacy_mirror) ||
+       ' · imported='        || count(*) filter (where source_kind = 'imported') ||
+       ' · dry_run='         || count(*) filter (where delivery_mode = 'dry_run') ||
+       ' · live_with_evidence=' ||
+         count(*) filter (where source_kind = 'native' and not is_legacy_mirror
+                            and delivery_mode = 'live'
+                            and provider_state in ('accepted','delivered')) ||
+       ' · runnable='        || count(*) filter (where status in ('queued','retrying','processing'))
+from public.comms_outbox
+
+union all
+select 61, 'E.outbox_by_status', 'INFO',
+       coalesce((select string_agg(status || '=' || n || '(dry_run ' || d || ')', ', ' order by status)
+                   from (select status, count(*) as n, count(*) filter (where dry_run) as d
+                           from public.comms_outbox group by status) s), 'empty')
+
+-- ─── G. THE anon ALLOWLIST, ACROSS ALL PRIVILEGE TYPES ──────────────────────
+-- No filter on privilege_type anywhere below. A check that enumerates SELECT /
+-- INSERT / UPDATE / DELETE is a denylist of four verbs with an allowlist's name,
+-- and that is precisely how REFERENCES, TRIGGER and TRUNCATE survived on these
+-- tables long enough for the PREFLIGHT to find them. TRUNCATE is not restricted
+-- by row level security at all.
+union all
+select 70, 'G.anon_allowlist_legacy_tables',
+       case when count(*) = 0 then 'PASS — anon/PUBLIC hold NO privilege of any type outside the allowlist'
+            else 'FAIL — ' || count(*) || ' privilege(s) outside the allowlist' end,
+       coalesce(string_agg(distinct g.grantee || ' ' || g.privilege_type || ' on ' || g.table_name, ', '), 'none')
+from information_schema.role_table_grants g
+join legacy_tables lt on lt.t = g.table_name
+where g.table_schema = 'public' and g.grantee in ('anon','PUBLIC')
+  and not exists (select 1 from allowed a
+                   where a.table_name = g.table_name and a.grantee = g.grantee
+                     and a.privilege_type = g.privilege_type)
+
+union all
+select 71, 'G.anon_allowlist_comms_tables',
+       case when count(*) = 0 then 'PASS — anon/PUBLIC hold NO privilege of any type on comms_*'
+            else 'FAIL — ' || count(*) || ' privilege(s) held' end,
+       coalesce(string_agg(distinct grantee || ' ' || privilege_type || ' on ' || table_name, ', '), 'none')
+from information_schema.role_table_grants
+where table_schema = 'public' and table_name like 'comms\_%' and grantee in ('anon','PUBLIC')
+
+union all
+-- Proof of REACH, so the reader can see the check is not blind to a type it
+-- never thought to name: every privilege type anon holds anywhere in public.
+select 72, 'G.anon_privilege_types_seen_in_public', 'INFO',
+       coalesce((select string_agg(distinct privilege_type, ', ' order by privilege_type)
+                   from information_schema.role_table_grants
+                  where table_schema = 'public' and grantee in ('anon','PUBLIC')), 'none')
+
+union all
+select 73, 'G.anon_execute_on_notify_helpers',
+       case when count(*) = 0 then 'PASS — anon cannot execute the notification writers'
+            else 'REVIEW — ' || count(*) || ' EXECUTE grant(s); confirm each has a named public caller' end,
+       coalesce(string_agg(distinct routine_name, ', '), 'none')
+from information_schema.routine_privileges
+where routine_schema = 'public' and grantee in ('anon','PUBLIC')
+  and routine_name in ('notify','notify_emit_event','notification_dispatch_portal',
+                       'notification_resolve_recipients')
+)
+select check_id, verdict, detail from checks order by sort_key;
+
+-- ─── FATAL SUMMARY — raises an ERROR only on a real failure ─────────────────
+do $verdict$
+declare v_fail int := 0; v_names text;
 begin
-  raise notice 'POSTCHECK COMPLETE — read-only. Read every FAIL before opening docs/COMMUNICATIONS_GO_LIVE_GUIDE.md.';
-end $done$;
+  select count(*), string_agg(x.id, ', ')
+    into v_fail, v_names
+  from (
+    select 'A.tables' as id where (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                                    where n.nspname='public' and c.relkind='r' and c.relname like 'comms\_%') <> 7
+    union all
+    select 'A.no_anon_comms_tables' where exists (
+      select 1 from information_schema.role_table_grants
+       where table_schema='public' and table_name like 'comms\_%' and grantee in ('anon','PUBLIC'))
+    union all
+    select 'B.channels_safe' where exists (
+      select 1 from public.comms_channels where (enabled and channel <> 'portal') or not dry_run)
+    union all
+    select 'C.guard_trigger' where not exists (
+      select 1 from pg_trigger where tgname='t_comms_outbox_guard'
+        and tgrelid='public.comms_outbox'::regclass and not tgisinternal)
+    union all
+    select 'P.columns' where (select count(*) from information_schema.columns
+                               where table_schema='public' and table_name='comms_outbox'
+                                 and is_nullable='NO'
+                                 and column_name in ('source_kind','is_legacy_mirror',
+                                                     'delivery_mode','provider_state')) <> 4
+    union all
+    select 'P.constraints' where (select count(*) from pg_constraint
+                                   where conrelid='public.comms_outbox'::regclass and contype='c'
+                                     and convalidated
+                                     and conname in ('comms_outbox_source_kind_ck','comms_outbox_delivery_mode_ck',
+                                                     'comms_outbox_provider_state_ck',
+                                                     'comms_outbox_provenance_consistent_ck',
+                                                     'comms_outbox_delivery_mode_matches_dry_run_ck',
+                                                     'comms_outbox_mirror_never_live_ck')) <> 6
+    union all
+    select 'P.mirror_never_live' where exists (
+      select 1 from public.comms_outbox where is_legacy_mirror
+        and provider_state in ('accepted','delivered'))
+    union all
+    select 'P.no_forged_success' where exists (
+      select 1 from public.comms_outbox
+       where status in ('sent','delivered') and source_kind='native' and not is_legacy_mirror
+         and delivery_mode='live' and provider_state not in ('accepted','delivered'))
+    union all
+    select 'D.legacy_mirror_is_terminal_only' where exists (
+      select 1 from public.comms_outbox
+       where (is_legacy_mirror or legacy_delivery_id is not null)
+         and status in ('queued','retrying','processing'))
+    union all
+    select 'G.anon_allowlist_legacy_tables' where exists (
+      select 1 from information_schema.role_table_grants
+       where table_schema='public' and grantee in ('anon','PUBLIC')
+         and table_name in ('notifications','notification_events','notification_preferences',
+                            'notification_delivery_log','email_deliveries'))
+  ) x;
+
+  if v_fail > 0 then
+    raise exception 'POSTCHECK FAILED — % check(s): %. Do not open docs/COMMUNICATIONS_GO_LIVE_GUIDE.md until every one is green.', v_fail, v_names;
+  end if;
+  raise notice 'POSTCHECK COMPLETE — read-only, no failures. Legacy, dry-run and live are reported separately and are never summed.';
+end $verdict$;

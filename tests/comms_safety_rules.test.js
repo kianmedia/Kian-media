@@ -52,9 +52,14 @@ test("R1 cannot be bypassed by a direct INSERT: the trigger RECOMPUTES externali
   // and a row with no identifiable user is treated as external
   assert.ok(/coalesce\(new\.recipient_is_external, true\)/.test(guard),
     "an unidentifiable recipient defaults to external (fail closed)");
-  // the trigger must actually be attached
-  assert.ok(/create trigger t_comms_outbox_guard\s+before insert or update of/.test(RUNME),
-    "the guard is attached BEFORE insert or update");
+  // The trigger must be attached, and with NO `update of <columns>` list: the
+  // guard also derives provenance, which changes when comms_settle writes
+  // status/provider/provider_state, and a column list would let those writes
+  // slip past the derivation and leave a stale mirror flag behind.
+  assert.ok(/create trigger t_comms_outbox_guard\s+before insert or update on public\.comms_outbox/.test(RUNME),
+    "the guard is attached BEFORE INSERT OR UPDATE on every column");
+  assert.ok(!/create trigger t_comms_outbox_guard\s+before insert or update of/.test(RUNME),
+    "no column list — a settle must not be able to bypass the guard");
   assert.ok(/on public\.comms_outbox/.test(RUNME.slice(RUNME.indexOf("create trigger t_comms_outbox_guard"))),
     "attached to comms_outbox");
 });

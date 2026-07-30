@@ -258,10 +258,16 @@ export default function CommunicationsHub() {
               ["في الطابور", counts?.queued ?? 0, "rgba(255,255,255,0.7)"],
               ["إعادة محاولة", counts?.retrying ?? 0, "#e0b955"],
               ["محاكاة (لم تُرسل)", counts?.sent_dry_run ?? 0, "rgba(255,255,255,0.5)"],
-              ["إرسال فعلي", counts?.sent_live ?? 0, "#5fd08a"],
+              // «إرسال فعلي» = live_total فقط: المجموع الوحيد المبنيّ على إقرار
+              // حقيقي من المزوّد (sent_live + delivered)، ولا يشمل أيّ صفّ بلا دليل.
+              ["إرسال فعلي", counts?.live_total ?? 0, "#5fd08a"],
               // منسوخة من الطابور القديم: تُعرض رمادية ومنفصلة عن «إرسال فعلي»،
               // لأنّ حالة 'sent' في الطابور القديم ليست دليل تسليم.
               ["منسوخة من القديم", counts?.mirrored_legacy ?? 0, "rgba(255,255,255,0.4)"],
+              // المزوّد غير متاح / فرع portal_notify غير منشور: ليست إرسالًا.
+              ["المزوّد غير متاح", (counts?.provider_unavailable ?? 0) + (counts?.relay_handler_missing ?? 0), "#e0b955"],
+              // يجب أن يبقى صفرًا: صفّ يدّعي النجاح بلا أيّ دليل من المزوّد.
+              ["نجاح بلا دليل", counts?.claimed_sent_without_evidence ?? 0, "#ff8a8e"],
               ["فشل نهائي", counts?.dead_letter ?? 0, "#ff8a8e"],
               ["أُلغيت", counts?.cancelled ?? 0, "rgba(255,255,255,0.4)"],
               ["مُنعت لحماية العميل", counts?.blocked_external_total ?? 0, "#7fb2ff"],

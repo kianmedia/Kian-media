@@ -91,8 +91,12 @@ begin
   raise notice 'LEGACY BASELINE — the hub NEVER writes to email_deliveries. Re-run this block after the RUNME; the numbers must be identical.';
 end $preflight_baseline$;
 
--- ─── 5) ANON EXPOSURE BASELINE ─────────────────────────────────────────────
--- Must be zero now and must still be zero after the RUNME.
+-- ─── 5) ANON EXPOSURE BASELINE — ALL PRIVILEGE TYPES, NOT JUST CRUD ────────
+-- No filter on privilege_type on purpose. A check that looks only for SELECT /
+-- INSERT / UPDATE / DELETE is a denylist of four verbs wearing an allowlist's
+-- name, and it is exactly why REFERENCES / TRIGGER / TRUNCATE sat unnoticed on
+-- the legacy notification tables. TRUNCATE in particular is not restricted by
+-- row level security at all.
 select 'anon_grant_on_notification_object' as check_kind,
        table_schema || '.' || table_name as name, privilege_type as state
 from information_schema.role_table_grants
@@ -101,6 +105,52 @@ where table_schema = 'public' and grantee in ('anon','PUBLIC')
        ('notifications','notification_preferences','notification_events',
         'email_deliveries','notification_delivery_log'))
 order by 2, 3;
+
+-- ─── 6) PROVENANCE COLUMNS — only relevant if comms_outbox already exists ───
+-- The RUNME adds source_kind / is_legacy_mirror / delivery_mode / provider_state
+-- and backfills them. If the table is already there WITHOUT them, that backfill
+-- is the interesting part of the run; if the table is absent this is a clean
+-- install and there is nothing to migrate.
+do $preflight_provenance$
+declare v_missing text; v_rows bigint;
+begin
+  if to_regclass('public.comms_outbox') is null then
+    raise notice 'PROVENANCE — comms_outbox absent. Clean install; nothing to backfill.';
+    return;
+  end if;
+  execute 'select count(*) from public.comms_outbox' into v_rows;
+  select string_agg(c, ', ') into v_missing
+    from unnest(array['source_kind','is_legacy_mirror','delivery_mode','provider_state']) c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema = 'public' and table_name = 'comms_outbox'
+                        and column_name = c);
+  if v_missing is null then
+    raise notice 'PROVENANCE — all four columns already present on comms_outbox (% row(s)).', v_rows;
+  else
+    raise notice 'PROVENANCE — comms_outbox has % row(s); the RUNME will add and backfill: %', v_rows, v_missing;
+  end if;
+end $preflight_provenance$;
+
+-- ─── 7) FORGED-SUCCESS BASELINE ────────────────────────────────────────────
+-- If comms_outbox already exists, how many rows would TODAY be reported as a
+-- live send purely because of the free-text provider string? Compare with the
+-- POSTCHECK, which counts on explicit provenance instead.
+do $preflight_forged$
+declare v_txt text;
+begin
+  if to_regclass('public.comms_outbox') is null then
+    raise notice 'FORGED-SUCCESS BASELINE — comms_outbox absent; nothing can be miscounted yet.';
+    return;
+  end if;
+  execute $q$
+    select 'claims sent/delivered and not dry_run = ' ||
+           count(*) filter (where status in ('sent','delivered') and not dry_run) ||
+           ' · of which tagged legacy_email_deliveries = ' ||
+           count(*) filter (where status in ('sent','delivered') and not dry_run
+                              and coalesce(provider,'') = 'legacy_email_deliveries')
+      from public.comms_outbox $q$ into v_txt;
+  raise notice 'FORGED-SUCCESS BASELINE — %', v_txt;
+end $preflight_forged$;
 
 do $preflight_done$
 begin
