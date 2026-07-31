@@ -1790,6 +1790,44 @@ commit;
 -- pg_get_functiondef + ilike (المُفكِّك يرفع حالة COALESCE)، وعلى الكتالوج.
 -- ════════════════════════════════════════════════════════════════════════════
 begin;
+-- ════════════════════════════════════════════════════════════════════════════
+-- §٩-ب) ★ قرار صلاحيات صريح لكلّ دالّة تُنشئها هذه الحزمة ★
+--   PostgreSQL يمنح EXECUTE لـPUBLIC افتراضيًّا، وanon عضو في PUBLIC فيرث.
+--   ترك الافتراضيّ ليس حيادًا بل قرار — وهو القرار الذي أوقف الفحص الذاتيّ.
+--   هذه الدوالّ كلّها داخلية (مُسنَدات · حرّاس زناد · محوّلات · نوى حساب):
+--   لا يناديها التطبيق مباشرةً، فلا EXECUTE لأيّ دور API.
+--   وما يناديه التطبيق فعلًا يُمنح في رقعة الصلاحيات المستقلّة بالاسم.
+-- ════════════════════════════════════════════════════════════════════════════
+do $acl$
+declare f text; r record;
+begin
+  foreach f in array array[
+    'civ_allowed_transitions', 'civ_asset_state', 'civ_can_close_custody',
+    'civ_can_issue_custody', 'civ_can_manage_assets', 'civ_can_manage_maintenance',
+    'civ_can_view_asset_sensitive_costs', 'civ_condition_to_grade', 'civ_grade_to_condition',
+    'civ_guard_asset_disposal', 'civ_guard_assignment_closure', 'civ_guard_assignment_history',
+    'civ_guard_evidence_path', 'civ_guard_reservation', 'civ_meter_block_write',
+    'civ_meter_usage_between', 'civ_sync_condition_grade', 'custody_inv_admin_create_reservation_v2',
+    'custody_inv_admin_revoke_qr', 'custody_inv_asset_cost_summary', 'custody_inv_asset_meter_totals',
+    'custody_inv_asset_utilization', 'custody_inv_expire_reservations', 'custody_inv_fulfil_reservation',
+    'custody_inv_lookup_asset', 'custody_inv_maint_close_with_inspection', 'custody_inv_maint_plan_archive',
+    'custody_inv_maint_plan_due', 'custody_inv_maint_plan_upsert', 'custody_inv_maintenance_signals',
+    'custody_inv_post_closure_correction', 'custody_inv_qr_scan', 'custody_inv_record_meter',
+    'custody_inv_reservation_calendar', 'custody_inv_reverse_meter'
+  ] loop
+    for r in select p.oid::regprocedure::text as sig
+               from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+              where ns.nspname = 'public' and p.proname = f
+    loop
+      execute format('revoke all on function %s from public', r.sig);
+      begin execute format('revoke all on function %s from anon', r.sig);
+        exception when undefined_object then null; end;
+      begin execute format('revoke all on function %s from authenticated', r.sig);
+        exception when undefined_object then null; end;
+    end loop;
+  end loop;
+end $acl$;
+
 do $st$
 declare f text; v_def text; n int;
 begin
@@ -2047,6 +2085,13 @@ begin
               where table_schema='public' and grantee='anon'
                 and table_name in ('custody_inventory_maintenance_plans','custody_inventory_meter_readings')) then
     raise exception 'ASSET SELF-TEST: anon يملك صلاحية على جدول جديد'; end if;
+  -- ⚠️ هذا الفحص أوقف الترحيلة على الإنتاج، وهو **محقّ**. المشكلة أوسع من
+  --    دالّة: PostgreSQL يمنح EXECUTE لـPUBLIC افتراضيًّا عند الإنشاء، و
+  --    `grant … to authenticated` لا يُلغي ذلك بل يضيف فوقه، وanon عضو في
+  --    PUBLIC فيرث. من 135 دالّة عهدة كانت 78 بلا revoke — منها 35 تُنشئها هذه
+  --    الحزمة نفسها. ولا منحة مباشرة واحدة لـanon: الوراثة هي المسار كلّه.
+  --    ⚠️ الإنتاج يُغلَق بـdocs/asset_intelligence_security_patch_RUNME.sql —
+  --       فهذه الحزمة مطبَّقة جزئيًّا ولا تُعاد لإغلاق ACL وحدها.
   if exists (select 1 from pg_roles where rolname='anon') then
     for f in select p.oid::regprocedure::text from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
               where ns.nspname='public'
