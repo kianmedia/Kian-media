@@ -2218,8 +2218,21 @@ begin
   if not v_price then
     v := v - 'price_net' - 'vat_rate' - 'vat_amount' - 'price_gross';
   end if;
+  -- ★ وحدات الخطّة: إسقاط صريح بالاسم، لا to_jsonb خام ★
+  --   to_jsonb(pu) كان يُخرج overage_unit_price_net وoverage_vat_rate كاملَين
+  --   لكلّ من يملك csub.view — أي أنّ السعر كان يتسرّب من داخل مصفوفة الوحدات
+  --   بينما العمود المماثل في csub_plans_list مُقنَّع. الإسقاط الصريح يُنهي
+  --   الاختلاف: ما لا يُذكر هنا لا يخرج، والمال يُقنَّع بـNULL لا يُصفَّر.
   return jsonb_build_object('ok', true, 'pricing_visible', v_price, 'plan', v,
-    'units', (select coalesce(jsonb_agg(to_jsonb(pu) order by pu.sort_order), '[]'::jsonb)
+    'units', (select coalesce(jsonb_agg(jsonb_build_object(
+                'id', pu.id, 'unit_type', pu.unit_type, 'custom_unit_label', pu.custom_unit_label,
+                'quantity_per_period', pu.quantity_per_period,
+                'rollover_enabled', pu.rollover_enabled, 'rollover_limit_units', pu.rollover_limit_units,
+                'expiry_policy', pu.expiry_policy, 'expiry_days', pu.expiry_days,
+                'notes', pu.notes, 'sort_order', pu.sort_order,
+                'overage_unit_price_net', case when v_price then pu.overage_unit_price_net else null end,
+                'overage_vat_rate',       case when v_price then pu.overage_vat_rate       else null end)
+                order by pu.sort_order), '[]'::jsonb)
                 from public.csub_plan_units pu where pu.plan_id = p_plan),
     'versions', (select coalesce(jsonb_agg(jsonb_build_object('version', pv.version,
                    'published_at', pv.published_at, 'note', pv.note) order by pv.version desc), '[]'::jsonb)
@@ -2331,11 +2344,34 @@ begin
    where s.id = p_subscription and s.is_deleted = false;
   if v is null then return jsonb_build_object('ok', false, 'reason', 'subscription_not_found'); end if;
   if not coalesce(public.csub_can_manage(), false) then v := v - 'internal_notes'; end if;
-  if not v_price then v := v - 'price_net' - 'vat_rate' - 'vat_amount' - 'price_gross'; end if;
+  -- ★★ إسقاط المال من صفّ الاشتراك ★★
+  --   'plan_snapshot' هو لقطة الخطّة كاملةً (to_jsonb(pl) في
+  --   csub_plan_publish_version) وتحمل price_net وvat_rate وvat_amount و
+  --   price_gross ومصفوفة units بأسعار التجاوز. إسقاط الأعمدة الأربعة العليا
+  --   وحده كان يترك السعر كلّه داخل اللقطة لمن يملك csub.view فقط —
+  --   تسريب فعليّ لا نظريّ. و'price_is_custom' وحده يكشف أنّ لهذا العميل سعرًا
+  --   خاصًّا، وهي معلومة تجارية لا تشغيلية.
+  if not v_price then
+    v := v - 'price_net' - 'vat_rate' - 'vat_amount' - 'price_gross'
+           - 'plan_snapshot' - 'price_is_custom';
+  end if;
+  -- ★ وحدات الاشتراك: إسقاط صريح بالاسم لا to_jsonb خام ★ (كما في تفصيل الخطّة)
   return jsonb_build_object('ok', true, 'pricing_visible', v_price, 'subscription', v,
-    'units', (select coalesce(jsonb_agg(to_jsonb(u) order by u.sort_order), '[]'::jsonb)
+    'units', (select coalesce(jsonb_agg(jsonb_build_object(
+                'id', u.id, 'unit_type', u.unit_type, 'custom_unit_label', u.custom_unit_label,
+                'quantity_per_period', u.quantity_per_period,
+                'rollover_enabled', u.rollover_enabled, 'rollover_limit_units', u.rollover_limit_units,
+                'expiry_policy', u.expiry_policy, 'expiry_days', u.expiry_days,
+                'notes', u.notes, 'sort_order', u.sort_order,
+                'overage_unit_price_net', case when v_price then u.overage_unit_price_net else null end,
+                'overage_vat_rate',       case when v_price then u.overage_vat_rate       else null end)
+                order by u.sort_order), '[]'::jsonb)
                 from public.csub_subscription_units u where u.subscription_id = p_subscription),
-    'periods', (select coalesce(jsonb_agg(to_jsonb(pr) order by pr.period_no desc), '[]'::jsonb)
+    'periods', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'id', pr.id, 'period_no', pr.period_no, 'starts_on', pr.starts_on,
+                  'ends_on', pr.ends_on, 'status', pr.status,
+                  'rolled_over_units', pr.rolled_over_units, 'expired_units', pr.expired_units,
+                  'closed_at', pr.closed_at) order by pr.period_no desc), '[]'::jsonb)
                   from public.csub_periods pr where pr.subscription_id = p_subscription),
     'balances', public.csub_balances(p_subscription) -> 'balances');
 end $$;
@@ -2571,11 +2607,28 @@ end $g$;
 --      يمرّ عند غياب هدفه. أيّ فشل يُلغي المعاملة كلّها.
 -- ════════════════════════════════════════════════════════════════════════════
 do $st$
-declare t text; f text; v_def text; v_b boolean; v_n bigint; v_bad text;
+declare t text; f text; v_def text; v_txt text; v_b boolean; v_n bigint; v_bad text;
   ZERO constant uuid := '00000000-0000-0000-0000-000000000000';
   LEDGER_WRITERS constant text[] := array[
     'public.csub_reserve(jsonb)','public.csub_release(jsonb)','public.csub_consume(jsonb)',
     'public.csub_reverse(jsonb)','public.csub_adjust(jsonb)'];
+  -- الأسطح الموظّفية التي تلمس جدولًا يحمل مالًا. كلّها تمرّ بفحص (15ب).
+  PRICED_SURFACES constant text[] := array[
+    'public.csub_plans_list(jsonb)','public.csub_plan_detail(uuid)',
+    'public.csub_subscriptions_list(jsonb)','public.csub_subscription_detail(uuid)',
+    'public.csub_balances(uuid)','public.csub_statement(uuid,jsonb)',
+    'public.csub_dashboard(jsonb)'];
+  -- مفردات المال بالاسم الكامل. ⛔ لا 'currency': العملة ثابت SAR مقيَّد وليست
+  --   مبلغًا، وهي تُعرض بلا تقنيع في كلّ سطح عمدًا.
+  PRICED_COLS constant text[] := array[
+    'price_net','price_gross','vat_amount','vat_rate','price_is_custom','plan_snapshot',
+    'overage_unit_price_net','overage_vat_rate','overage_amount_net',
+    'overage_vat_amount','overage_amount_gross',
+    'unit_price','unit_rate','contract_value','renewal_value','minimum_price',
+    'floor_price','list_price','selling_price','sale_price',
+    'cost','unit_cost','internal_cost','margin','margin_pct','profit','profitability',
+    'discount','discount_amount','invoice_amount','receivable','receivable_amount',
+    'overage_value','billing_amount'];
 begin
   -- (1) الجداول الأحد عشر موجودة وRLS مفعّلة عليها كلّها.
   foreach t in array array['csub_settings','csub_unit_types','csub_plans','csub_plan_units',
@@ -2775,6 +2828,106 @@ begin
     if v_def not ilike '%my_client_id()%' and v_def not ilike '%csub_client_owns%' then
       raise exception 'CSUB SELF-TEST: % لا تُقيّد النتيجة بعميل الجلسة', f;
     end if;
+  end loop;
+
+  -- ════════════════════════════════════════════════════════════════════════
+  -- (15ب) ★★ فصل العقود: لا مبلغ يخرج من سطح موظّف بلا مفتاح الأسعار ★★
+  --
+  --   الفحص لا يسأل «هل توجد بوّابة؟» بل «هل بقي مبلغ خارجها؟». المنهج:
+  --   احذف من نصّ التعريف كلّ ذكر **مُقنَّع** (case when v_price … else null end)
+  --   وكلّ ذكر **مُسقَط** (- 'عمود')، ثمّ ابحث عمّا بقي. أيّ مفردة مال تنجو من
+  --   الحذف هي مفردة تخرج بلا تقنيع.
+  --
+  --   ما أمسكه هذا الفحص فعليًّا عند كتابته — تسريبان حقيقيّان لا نظريّان:
+  --     ★ csub_subscription_detail كانت تُعيد to_jsonb(s) وتُسقط أربعة أعمدة
+  --       عليا فقط، بينما 'plan_snapshot' لقطةُ الخطّة كاملةً بأسعارها وبمصفوفة
+  --       وحداتها — فكان السعر كلّه يخرج لمن يملك csub.view وحده.
+  --     ★ الدالّتان التفصيليّتان كانتا تُعيدان to_jsonb للوحدات، وفيه
+  --       overage_unit_price_net خامًا — بينما العمود نفسه مُقنَّع في
+  --       csub_plans_list وcsub_balances. الإسقاط الصريح أنهى هذا التناقض.
+  -- ════════════════════════════════════════════════════════════════════════
+  foreach f in array PRICED_SURFACES loop
+    if to_regprocedure(f) is null then
+      raise exception 'CSUB SELF-TEST: السطح المُسعَّر % غير موجود', f; end if;
+    v_def := pg_get_functiondef(to_regprocedure(f));
+    if v_def not ilike '%csub_can_view_pricing%' then
+      raise exception 'CSUB SELF-TEST: % سطح موظّف يلمس المال بلا بوّابة أسعار', f;
+    end if;
+    if v_def not ilike '%''pricing_visible''%' then
+      raise exception 'CSUB SELF-TEST: % لا تصرّح بحال رؤية المال — القارئ لا يميّز NULL المُقنَّع عن غياب القيمة', f;
+    end if;
+    -- (٠) احذف التعليقات: pg_get_functiondef يُعيدها ضمن الجسم، وشرحُ ثغرةٍ
+    --     ليس ارتكابَها. بدون هذا يفشل الفحص على تعليق يذكر اسم عمود سعر.
+    v_txt := regexp_replace(v_def, chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g');
+    -- (١) احذف الذكر المُقنَّع، بمفتاحه إن سبقه.
+    v_txt := regexp_replace(v_txt,
+      '''[a-z_]+''\s*,\s*case\s+when\s+v_price\s+then[^;]{0,400}?else\s+null\s+end', ' ', 'gi');
+    v_txt := regexp_replace(v_txt,
+      'case\s+when\s+v_price\s+then[^;]{0,400}?else\s+null\s+end', ' ', 'gi');
+    -- (٢) احذف الذكر المُسقَط بالاسم من كائن jsonb.
+    v_txt := regexp_replace(v_txt, '-\s*''[a-z_]+''', ' ', 'gi');
+    -- (٣) ما بقي من مفردات المال يخرج بلا تقنيع.
+    foreach t in array PRICED_COLS loop
+      if v_txt ~* ('\m' || t || '\M') then
+        raise exception 'CSUB SELF-TEST: % تُخرج % بلا تقنيع ولا إسقاط — المال يبلغ دورًا بلا csub.view_pricing', f, t;
+      end if;
+    end loop;
+  end loop;
+
+  -- (15ج) ★ الوحدات تُسقَط بالاسم لا بـto_jsonb خام ★ — to_jsonb يُخرج كلّ عمود
+  --   يُضاف لاحقًا إلى الجدول تلقائيًّا، فهو قائمة سماح مفتوحة، أي لا قائمة.
+  foreach f in array array['public.csub_plan_detail(uuid)','public.csub_subscription_detail(uuid)'] loop
+    -- التعليقات تُحذف أوّلًا: التعليق أسفلُه يشرح to_jsonb(pu) بالاسم، وشرحُ
+    -- ثغرةٍ ليس ارتكابَها. بدونه يفشل هذا الفحص على تعليقه هو.
+    v_def := regexp_replace(pg_get_functiondef(to_regprocedure(f)),
+                            chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g');
+    if v_def ~* 'to_jsonb\(\s*(pu|u)\s*\)' then
+      raise exception 'CSUB SELF-TEST: % تُعيد وحدات الاشتراك/الخطّة بـto_jsonb خام — أيّ عمود سعر يُضاف لاحقًا يخرج بلا تقنيع', f;
+    end if;
+    if v_def not ilike '%overage_unit_price_net%' then
+      raise exception 'CSUB SELF-TEST: % لا تذكر سعر وحدة التجاوز أصلًا — الإسقاط الصريح غائب', f;
+    end if;
+  end loop;
+  v_def := pg_get_functiondef(to_regprocedure('public.csub_subscription_detail(uuid)'));
+  if v_def not ilike '%- ''plan_snapshot''%' then
+    raise exception 'CSUB SELF-TEST: تفصيل الاشتراك لا يُسقط plan_snapshot — لقطة الخطّة تحمل السعر كاملًا لمن لا يملك مفتاحه';
+  end if;
+
+  -- (15د) ★ التشغيل لا يُمنح جدول الاشتراكات الماليّ أصلًا ★ — التقنيع في RPC
+  --   ليس ضابطًا وحده: لو قرأ csub.view الجدول عبر PostgREST مباشرةً لقرأ
+  --   price_net خامًا. سياسة القراءة على الجداول الحاملة للمال بمفتاح الأسعار.
+  foreach t in array array['csub_plans','csub_plan_units','csub_plan_versions',
+                           'csub_subscriptions','csub_subscription_units','csub_ledger'] loop
+    if not exists (select 1 from pg_policies
+                    where schemaname = 'public' and tablename = t and cmd = 'SELECT'
+                      and coalesce(qual, '') ilike '%csub_can_view_pricing%') then
+      raise exception 'CSUB SELF-TEST: سياسة قراءة % لا تشترط مفتاح الأسعار — التشغيل يقرأ المال خامًا من الجدول', t;
+    end if;
+    if exists (select 1 from pg_policies
+                where schemaname = 'public' and tablename = t and cmd = 'SELECT'
+                  and coalesce(qual, '') ~* '\mcsub_can_view\(\)') then
+      raise exception 'CSUB SELF-TEST: سياسة قراءة % تقبل csub_can_view() — بوّابة التشغيل على جدول ماليّ', t;
+    end if;
+  end loop;
+
+  -- (15هـ) ★★ لا مِجَسّ سعر ولا مِجَسّ ربح ★★
+  --   كلّ سبب يخرج من مسار الرصيد لا يحمل إلّا **وحدات**: لا مبلغ، ولا عتبة
+  --   ماليّة، ولا رقم يُطرح من آخر ليُشتقّ منه سعر وحدة. وراية «يلزم اعتماد»
+  --   لا تُقارن بمبلغ أصلًا — العتبة كلّها بالوحدات، فلا شيء يُبحَث ثنائيًّا.
+  foreach f in array array['public.csub_reserve(jsonb)','public.csub_release(jsonb)',
+                           'public.csub_consume(jsonb)','public.csub_reverse(jsonb)',
+                           'public.csub_adjust(jsonb)'] loop
+    v_def := regexp_replace(pg_get_functiondef(to_regprocedure(f)),
+                            chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g');
+    -- ما يُعاد للمنادي: لا مفردة مال في أيّ jsonb_build_object للإرجاع.
+    for v_txt in select m[1] from regexp_matches(v_def,
+        'return\s+jsonb_build_object\(([^;]{0,4000}?)\);', 'g') m loop
+      foreach t in array PRICED_COLS loop
+        if v_txt ~* ('\m' || t || '\M') then
+          raise exception 'CSUB SELF-TEST: % تُعيد % في جواب المنادي — مبلغ بجوار عدد وحدات يُشتقّ منه سعر الوحدة بطرح واحد', f, t;
+        end if;
+      end loop;
+    end loop;
   end loop;
 
   -- (16) البذور: ثلاثة عشر نوع وحدة بالضبط بالأسماء المطلوبة.
@@ -3281,7 +3434,12 @@ begin
 
   if coalesce(public.csub_is_client(), false) then
     v_client := public.my_client_id();
-    if v_client is null or r.client_id <> v_client then raise exception 'not authorized'; end if;
+    -- ★ لا مِجَسّ وجود عبر الأخطاء ★ طلب عميل آخر يُجاب بنفس جواب الطلب غير
+    --   الموجود حرفًا بحرف. لو تمايز الجوابان («غير مصرّح» مقابل «غير موجود»)
+    --   لصار الفرق بينهما مؤشّرًا يعدّ به عميلٌ طلبات غيره بتخمين المعرّفات.
+    if v_client is null or r.client_id <> v_client then
+      return jsonb_build_object('ok', false, 'reason', 'request_not_found');
+    end if;
     if r.status not in ('draft','submitted','under_review','needs_overage_approval') then
       return jsonb_build_object('ok', false, 'reason', 'not_editable');
     end if;
@@ -3598,7 +3756,7 @@ end $g17$;
 -- ─── §17.7) SELF-TEST للمرحلة ٣ — ثابت، بلا استدعاء حيّ لدالّة محميّة ─────
 do $st17$
 declare
-  v_def text; t text; v_n bigint;
+  v_def text; t text; v_n bigint; v_bad text;
   STATES text[] := array['draft','submitted','under_review','credit_reserved','needs_overage_approval',
                          'approved','rejected','scheduled','fulfilled','cancelled'];
   FNS text[] := array['public.csub_my_credits_page(uuid)','public.csub_request_submit(jsonb)',
@@ -3606,6 +3764,60 @@ declare
     'public.csub_request_transition(uuid,text,text,text,date)',
     'public.csub_request_set_credits(uuid,numeric,text)',
     'public.csub_request_link_project(uuid,uuid,text)','public.csub_service_requests_list(jsonb)'];
+
+  -- ★★★ قائمة السماح التشغيلية ★★★ — انظر الفحص (11). كلّ عمود يحمله جدول
+  --   الطلبات مذكور هنا بالاسم الكامل، ولا شيء غيره. إضافة عمود جديد تُسقط
+  --   الترحيلة حتّى يُذكر هنا صراحةً — وذكره قرارٌ يُتَّخذ لا سهوٌ يمرّ.
+  SR_COLS constant text[] := array[
+    'id','code','client_id','subscription_id','unit_type','status',
+    'units','credits_required','overage_estimate_units',
+    'city','location_text','preferred_date','alternative_date','scheduled_date',
+    'description','contact_person_name','contact_person_phone','is_urgent',
+    'client_notes','client_decision_note','internal_notes','decision_reason',
+    -- مفاتيح أجنبية تشغيلية: ربطٌ بقيد الدفتر وبصفّ الاعتماد، بلا مبلغ.
+    -- ⚠️ 'reservation_entry_id' هو بالضبط ما أسقط قائمة المنع القديمة: تطابق
+    --    '%vat%' في «reser·VAT·ion». إنذار كاذب، والعمود uuid لا مال فيه.
+    'reservation_entry_id','consumption_entry_id','approval_request_id',
+    'project_id','project_linked_at','project_linked_by',
+    'submitted_at','decided_at','decided_by','fulfilled_at',
+    'created_by','created_at','updated_at','is_deleted','deleted_reason'];
+
+  SRA_COLS constant text[] := array[
+    'id','request_id','file_name','mime_type','size_bytes','note',
+    'uploaded_by','created_at','is_deleted'];
+
+  -- ★ العدّادات الرقمية المسموحة ★ — كلّ عمود رقميّ على السطح التشغيليّ يجب
+  --   أن يكون هنا. مطابقة **بالنوع**: مفتاح uuid لا يمكن أن يقع في هذا الفحص
+  --   مهما كان اسمه، وهو بالضبط ما عجزت عنه قائمة المنع القديمة. عمود رقميّ
+  --   جديد يمرّ من هنا فقط، بعد أن يُسأل: أهذا عدد وحدات أم مبلغ؟
+  UNIT_COLS constant text[] := array[
+    'units','credits_required','overage_estimate_units'];
+
+  -- الأعمدة التي يجوز لسطح التشغيل أن **يقرأها** من صفّ الطلب. أضيق من
+  --   SR_COLS عمدًا: بوّابة ثانية مستقلّة، فلا يكفي أن يُضاف عمود إلى الجدول
+  --   ليظهر في قائمة التشغيل.
+  OPS_COLS constant text[] := array[
+    'id','code','status','client_id','subscription_id','unit_type',
+    'units','credits_required','overage_estimate_units',
+    'city','location_text','preferred_date','alternative_date','scheduled_date',
+    'description','contact_person_name','contact_person_phone','is_urgent',
+    'client_notes','internal_notes','decision_reason',
+    'reservation_entry_id','consumption_entry_id','approval_request_id',
+    'project_id','submitted_at','decided_at','fulfilled_at','created_at','is_deleted'];
+
+  -- مفردات المال في هذه الحزمة، بالاسم الكامل لا بالسلسلة الجزئية. لا يجوز
+  --   لعمود في جدولَي المرحلة ٣ أن يحمل أحد هذه الأسماء ولو أُضيف إلى قائمة
+  --   السماح: هذه شبكة ثانية تحرس القائمة نفسها من تعديل ساهٍ.
+  MONEY_COLS constant text[] := array[
+    'price_net','price_gross','price_is_custom','vat_rate','vat_amount','currency',
+    'overage_unit_price_net','overage_vat_rate','overage_amount_net',
+    'overage_vat_amount','overage_amount_gross',
+    'unit_price','unit_rate','rate','amount','amount_net','amount_gross',
+    'total','total_net','total_gross','subtotal','discount','discount_amount',
+    'contract_value','renewal_value','minimum_price','floor_price','list_price',
+    'selling_price','sale_price','cost','unit_cost','internal_cost',
+    'margin','margin_pct','profit','profitability','invoice_amount',
+    'receivable','receivable_amount','balance_due','overage_value','billing_amount'];
 begin
   -- (1) الجدولان وRLS وسياسة قراءة لكلّ منهما، ولا سياسة كتابة.
   foreach t in array array['csub_service_requests','csub_service_request_attachments'] loop
@@ -3725,14 +3937,112 @@ begin
     raise exception 'CSUB §17 SELF-TEST: جدول المرفقات يحمل رابطًا أو مسار تخزين';
   end if;
 
-  -- (11) لا مال في جداول المرحلة ٣ — فلا رقمان يُطرحان ولا ضريبة تُطوى.
-  if exists (select 1 from information_schema.columns
-              where table_schema = 'public'
-                and table_name in ('csub_service_requests','csub_service_request_attachments')
-                and (column_name ilike '%price%' or column_name ilike '%amount%'
-                  or column_name ilike '%cost%' or column_name ilike '%vat%'
-                  or column_name ilike '%margin%' or column_name ilike '%profit%')) then
-    raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — السطح التشغيليّ يجب أن يبقى بلا مال';
+  -- ════════════════════════════════════════════════════════════════════════
+  -- (11) ★★ السطح التشغيليّ بلا مال — بقائمة **سماح** لا قائمة منع ★★
+  --
+  --   القائمة السابقة كانت منعًا بالسلاسل الجزئية على أسماء الأعمدة:
+  --     '%price%' · '%amount%' · '%cost%' · '%vat%' · '%margin%' · '%profit%'
+  --   وهي خاطئة مرّتين:
+  --     ★ إنذار كاذب: 'reservation_entry_id' يطابق '%vat%' لأنّ الحروف
+  --       «reser·VAT·ion» تحتويها. العمود uuid ومفتاح أجنبيّ إلى csub_ledger —
+  --       أي الربط التشغيليّ الذي يقتضيه التصميم — ولا مال فيه بحال. هذا
+  --       بالضبط ما أسقط الترحيلة قبل COMMIT.
+  --     ★ ثغرة صامتة: عمود ماليّ حقيقيّ يتجنّب تلك السلاسل الستّ يمرّ بلا
+  --       اعتراض — unit_rate، overage_value، billing_line، selling_figure.
+  --   قائمة المنع تحرس الأسماء التي فكّرنا فيها. قائمة السماح تحرس ما لم
+  --   نفكّر فيه، وهو ما يقع فعلًا. لذلك: **كلّ عمود غير مذكور يُسقط الترحيلة**.
+  --
+  --   وتُطبَّق على ثلاث طبقات لا على أسماء الجداول وحدها:
+  --     (أ) أعمدة الجدولين.        (ب) ما يقرأه سطح التشغيل من صفّ الطلب.
+  --     (ج) غياب أيّ عرض (view) يلتفّ على الطبقتين.
+  -- ════════════════════════════════════════════════════════════════════════
+
+  -- (11-أ) أعمدة csub_service_requests: قائمة سماح صريحة.
+  select coalesce(string_agg(c.column_name, ' · ' order by c.column_name), '')
+    into v_bad
+    from information_schema.columns c
+   where c.table_schema = 'public' and c.table_name = 'csub_service_requests'
+     and c.column_name <> all (SR_COLS);
+  if v_bad <> '' then
+    raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — عمود خارج قائمة السماح التشغيلية: % — السطح التشغيليّ يجب أن يبقى بلا مال، وكلّ عمود جديد يُبرَّر في SR_COLS قبل أن يمرّ', v_bad;
+  end if;
+
+  -- (11-ب) أعمدة جدول المرفقات: قائمة سماح صريحة.
+  select coalesce(string_agg(c.column_name, ' · ' order by c.column_name), '')
+    into v_bad
+    from information_schema.columns c
+   where c.table_schema = 'public' and c.table_name = 'csub_service_request_attachments'
+     and c.column_name <> all (SRA_COLS);
+  if v_bad <> '' then
+    raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — عمود خارج قائمة السماح في جدول المرفقات: %', v_bad;
+  end if;
+
+  -- (11-ج) ★ شبكة ثانية تحرس قائمة السماح نفسها ★ — لا يُنقَل اسم من مفردات
+  --   المال إلى هذين الجدولين ولو أُضيف إلى SR_COLS سهوًا. مطابقة **بالاسم
+  --   الكامل** لا بالسلسلة الجزئية، فلا تتكرّر كارثة «reser·VAT·ion».
+  select coalesce(string_agg(c.table_name || '.' || c.column_name, ' · '
+                             order by c.table_name, c.column_name), '')
+    into v_bad
+    from information_schema.columns c
+   where c.table_schema = 'public'
+     and c.table_name in ('csub_service_requests','csub_service_request_attachments')
+     and c.column_name = any (MONEY_COLS);
+  if v_bad <> '' then
+    raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — مفردة مال صريحة: %', v_bad;
+  end if;
+
+  -- (11-و) ★ كلّ عمود رقميّ عدّادُ وحدات — مطابقة بالنوع لا بالاسم ★
+  --   الشبكة الثالثة، وأدقّها: المال رقم. عمود رقميّ خارج UNIT_COLS يُسقط
+  --   الترحيلة أيًّا كان اسمه — فحتّى تسمية بريئة تمامًا لمبلغٍ تُمسَك هنا.
+  --   وبالمقابل لا يمكن لمفتاح uuid أن يقع في هذا الفحص، فلا «reser·VAT·ion»
+  --   ثانية.
+  select coalesce(string_agg(c.table_name || '.' || c.column_name, ' · '
+                             order by c.table_name, c.column_name), '')
+    into v_bad
+    from information_schema.columns c
+   where c.table_schema = 'public'
+     and c.table_name in ('csub_service_requests','csub_service_request_attachments')
+     and c.data_type in ('numeric','double precision','real','money')
+     and c.column_name <> all (UNIT_COLS);
+  if v_bad <> '' then
+    raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — عمود رقميّ ليس عدّاد وحدات: % — المال رقم، والعدّاد يُذكر في UNIT_COLS صراحةً', v_bad;
+  end if;
+
+  -- (11-د) ★ السطح التشغيليّ: ما يُقرأ من الصفّ، لا ما يحمله الجدول ★
+  --   كلّ إشارة r.<عمود> في قائمة الطلبات يجب أن تكون في OPS_COLS. عمود يُضاف
+  --   إلى الجدول ثمّ يُعرض هنا يفشل ولو ذُكر في SR_COLS: بوّابتان لا واحدة.
+  -- التعليقات تُحذف أوّلًا: pg_get_functiondef يُعيدها ضمن الجسم، وذكرُ اسمٍ
+  -- في شرحٍ ليس إخراجًا له.
+  v_def := regexp_replace(
+    pg_get_functiondef(to_regprocedure('public.csub_service_requests_list(jsonb)')),
+    chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g');
+  select coalesce(string_agg(distinct x.k, ' · '), '') into v_bad
+    from regexp_matches(v_def, '\mr\.([a-z_][a-z0-9_]*)', 'g') m
+    cross join lateral (select m[1]) x(k)
+   where x.k <> all (OPS_COLS);
+  if v_bad <> '' then
+    raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — سطح التشغيل يقرأ عمودًا خارج قائمة السماح: %', v_bad;
+  end if;
+
+  -- ولا مفردة مال في نصّ السطح التشغيليّ إطلاقًا (مبلغ محسوب، أو منسوخ من
+  -- جدول آخر، أو مُسمّى بريئًا ثمّ مملوءًا بمال — كلّها تسقط هنا).
+  foreach t in array MONEY_COLS loop
+    if v_def ~* ('\m' || t || '\M') then
+      raise exception 'CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة — سطح التشغيل يذكر مفردة المال %', t;
+    end if;
+  end loop;
+  if v_def not ilike '%''finance_visible'', false%' then
+    raise exception 'CSUB §17 SELF-TEST: سطح التشغيل لا يصرّح بأنّه بلا مال';
+  end if;
+
+  -- (11-هـ) لا عرض (view/matview) يلتفّ على الجدولين ويعيد تركيب سطح ثالث
+  --   خارج قائمة السماح. السطح التشغيليّ RPC واحدة، ولا ثانية لها.
+  select coalesce(string_agg(c.relname, ' · ' order by c.relname), '') into v_bad
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relkind in ('v','m')
+     and pg_get_viewdef(c.oid, true) ilike '%csub_service_request%';
+  if v_bad <> '' then
+    raise exception 'CSUB §17 SELF-TEST: عرض يلتفّ على طلبات الخدمة خارج قائمة السماح: %', v_bad;
   end if;
 
   -- (12) الترحيلة لم تُنشئ طلبًا.

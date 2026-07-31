@@ -160,7 +160,215 @@ plat as (
   select (select count(*) from pg_policies where schemaname = 'public'
             and tablename in ('projects','project_core','deliverables','deliverable_internal'))::int as pc,
          (select count(*) from information_schema.columns
-            where table_schema = 'public' and table_name = 'projects')::int as cc)
+            where table_schema = 'public' and table_name = 'projects')::int as cc),
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- الفحوص ٣٤ … ٤٧ — أُضيفت بعد سقوط §17 عند قائمة المنع.
+--
+-- ⚠️ منهج هذه الكتلة: **قائمة سماح**. الفحص القديم كان يمنع أسماء تحوي
+--    '%price%' أو '%amount%' أو '%vat%' … فأسقط الترحيلة على
+--    reservation_entry_id («reser·VAT·ion») وهو uuid لا مال فيه، وكان في
+--    الوقت نفسه سيمرّر unit_rate أو overage_value بلا اعتراض. لا قائمة منع
+--    بالسلاسل الجزئية في هذا الملفّ.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- عمود في جدول الطلبات خارج قائمة السماح التشغيلية.
+srallow as (
+  select coalesce(string_agg(column_name, ', ' order by column_name), '') as s
+    from information_schema.columns
+   where table_schema = 'public' and table_name = 'csub_service_requests'
+     and column_name <> all (array[
+       'id','code','client_id','subscription_id','unit_type','status',
+       'units','credits_required','overage_estimate_units',
+       'city','location_text','preferred_date','alternative_date','scheduled_date',
+       'description','contact_person_name','contact_person_phone','is_urgent',
+       'client_notes','client_decision_note','internal_notes','decision_reason',
+       'reservation_entry_id','consumption_entry_id','approval_request_id',
+       'project_id','project_linked_at','project_linked_by',
+       'submitted_at','decided_at','decided_by','fulfilled_at',
+       'created_by','created_at','updated_at','is_deleted','deleted_reason'])),
+sraallow as (
+  select coalesce(string_agg(column_name, ', ' order by column_name), '') as s
+    from information_schema.columns
+   where table_schema = 'public' and table_name = 'csub_service_request_attachments'
+     and column_name <> all (array[
+       'id','request_id','file_name','mime_type','size_bytes','note',
+       'uploaded_by','created_at','is_deleted'])),
+
+-- ما يقرأه سطح التشغيل من صفّ الطلب — بوّابة ثانية أضيق من أعمدة الجدول.
+opsallow as (
+  select coalesce(string_agg(distinct x.k, ', '), '') as s
+    from regexp_matches(
+           regexp_replace(
+             coalesce(pg_get_functiondef(to_regprocedure('public.csub_service_requests_list(jsonb)')), ''),
+             chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g'),
+           '\mr\.([a-z_][a-z0-9_]*)', 'g') m
+    cross join lateral (select m[1]) x(k)
+   where x.k <> all (array[
+     'id','code','status','client_id','subscription_id','unit_type',
+     'units','credits_required','overage_estimate_units',
+     'city','location_text','preferred_date','alternative_date','scheduled_date',
+     'description','contact_person_name','contact_person_phone','is_urgent',
+     'client_notes','internal_notes','decision_reason',
+     'reservation_entry_id','consumption_entry_id','approval_request_id',
+     'project_id','submitted_at','decided_at','fulfilled_at','created_at','is_deleted'])),
+
+-- عمود رقميّ على الجدولين خارج عدّادات الوحدات الثلاثة. مطابقة **بالنوع**،
+-- فلا يمكن لمفتاح uuid أن يظهر هنا مهما كان اسمه.
+opsnumeric as (
+  select coalesce(string_agg(table_name || '.' || column_name, ', '
+                             order by table_name, column_name), '') as s
+    from information_schema.columns
+   where table_schema = 'public'
+     and table_name in ('csub_service_requests','csub_service_request_attachments')
+     and data_type in ('numeric','double precision','real','money')
+     and column_name not in ('units','credits_required','overage_estimate_units')),
+
+-- ⚠️ أنماط regex تُبنى بـchr(59) لا بفاصلة منقوطة حرفية: هذا الملفّ **جملة
+--    واحدة** بحكم عقده، ومحرّر Supabase يعرض النتيجة الأخيرة فقط. فاصلة
+--    منقوطة داخل سلسلة نصّية تبدو للقارئ الآليّ جملةً ثانيةً وتُسقط العقد.
+pat as (
+  select chr(45) || chr(45) || '[^' || chr(10) || ']*' as p_comment,
+         '''[a-z_]+''\s*,\s*case\s+when\s+v_price\s+then[^' || chr(59)
+           || ']{0,400}?else\s+null\s+end' as p_masked_key,
+         'case\s+when\s+v_price\s+then[^' || chr(59)
+           || ']{0,400}?else\s+null\s+end' as p_masked,
+         '-\s*''[a-z_]+''' as p_dropped,
+         'return\s+jsonb_build_object\(([^' || chr(59) || ']{0,4000}?)\)' || chr(59) as p_return),
+
+-- ★ المال لا يخرج من سطح موظّف بلا مفتاح الأسعار ★
+-- المنهج: احذف الذكر المُقنَّع (case when v_price … else null end) والمُسقَط
+-- (- 'عمود') والتعليقات، ثمّ ابحث عمّا بقي. الباقي يخرج خامًا.
+pricedleak as (
+  select coalesce(string_agg(distinct f.sig || ' → ' || m.col, ', '), '') as s
+    from (values ('public.csub_plans_list(jsonb)'),('public.csub_plan_detail(uuid)'),
+                 ('public.csub_subscriptions_list(jsonb)'),('public.csub_subscription_detail(uuid)'),
+                 ('public.csub_balances(uuid)'),('public.csub_statement(uuid,jsonb)'),
+                 ('public.csub_dashboard(jsonb)')) f(sig)
+   cross join (values ('price_net'),('price_gross'),('vat_amount'),('vat_rate'),
+                      ('price_is_custom'),('plan_snapshot'),('overage_unit_price_net'),
+                      ('overage_vat_rate'),('overage_amount_net'),('overage_vat_amount'),
+                      ('overage_amount_gross'),('unit_price'),('unit_rate'),('unit_cost'),
+                      ('internal_cost'),('margin'),('profit'),('profitability'),
+                      ('discount'),('contract_value'),('renewal_value'),('minimum_price'),
+                      ('invoice_amount'),('receivable')) m(col)
+   cross join pat
+   where to_regprocedure(f.sig) is not null
+     and regexp_replace(
+           regexp_replace(
+             regexp_replace(
+               regexp_replace(pg_get_functiondef(to_regprocedure(f.sig)),
+                              pat.p_comment, ' ', 'g'),
+               pat.p_masked_key, ' ', 'gi'),
+             pat.p_masked, ' ', 'gi'),
+           pat.p_dropped, ' ', 'gi') ~* ('\m' || m.col || '\M')),
+
+-- to_jsonb خام على وحدات الخطّة/الاشتراك = قائمة سماح مفتوحة، أي لا قائمة.
+rawjsonb as (
+  select coalesce(string_agg(f.sig, ', '), '') as s
+    from (values ('public.csub_plan_detail(uuid)'),
+                 ('public.csub_subscription_detail(uuid)')) f(sig)
+   cross join pat
+   where to_regprocedure(f.sig) is not null
+     -- التعليقات تُحذف أوّلًا: تعليق يشرح to_jsonb(pu) ليس استعمالًا له.
+     and regexp_replace(pg_get_functiondef(to_regprocedure(f.sig)), pat.p_comment, ' ', 'g')
+         ~* 'to_jsonb\(\s*(pu|u)\s*\)'),
+
+-- الجداول الحاملة للمال: سياسة القراءة بمفتاح الأسعار، لا ببوّابة التشغيل.
+moneyrls as (
+  select coalesce(string_agg(t.name, ', ' order by t.name), '') as s
+    from (values ('csub_plans'),('csub_plan_units'),('csub_plan_versions'),
+                 ('csub_subscriptions'),('csub_subscription_units'),('csub_ledger')) t(name)
+   where to_regclass('public.' || t.name) is not null
+     and (not exists (select 1 from pg_policies
+                       where schemaname = 'public' and tablename = t.name and cmd = 'SELECT'
+                         and coalesce(qual, '') ilike '%csub_can_view_pricing%')
+       or exists (select 1 from pg_policies
+                   where schemaname = 'public' and tablename = t.name and cmd = 'SELECT'
+                     and coalesce(qual, '') ~* '\mcsub_can_view\(\)'))),
+
+-- عزل العميل: لا سياسة جدولية واحدة تعترف بالعميل. RLS تصفّي صفوفًا لا أعمدة،
+-- فأيّ سياسة عميل تعني internal_notes مقروءة عبر PostgREST مباشرةً.
+clientiso as (
+  select coalesce(string_agg(tablename || '.' || policyname, ', '
+                             order by tablename, policyname), '') as s
+    from pg_policies
+   where schemaname = 'public' and tablename like 'csub\_%'
+     and coalesce(qual, '') ~* '(my_client_id|csub_is_client|csub_client_owns)'),
+
+-- ★ لا استهلاك مزدوج ★ مفتاح تكرار فريد + منع إعادة استعمال اعتماد التجاوز
+-- + منع استهلاك طلب خدمة مرّتين.
+dblcons as (
+  select (select count(*) from pg_indexes where schemaname = 'public'
+            and indexname = 'uq_csub_ledger_idem')::int as idx,
+         coalesce(pg_get_functiondef(to_regprocedure('public.csub_consume(jsonb)')), '') as d),
+
+-- ★ اعتماد التجاوز معزول ★ الطلب لا يتقدّم قبل قرار المالك، والقرار يُقرأ من
+-- صفّ الاعتماد لا من صلاحية المُنادي.
+ovgiso as (
+  select coalesce(pg_get_functiondef(
+           to_regprocedure('public.csub_request_transition(uuid,text,text,text,date)')), '') as d),
+
+-- نطاق المبيعات: csub.manage لا يمنح رؤية السعر. لو اشتقّ أحدهما من الآخر
+-- لانهار الفصل بين «يدير الاشتراكات» و«يرى الأرقام».
+salescope as (
+  select coalesce(pg_get_functiondef(to_regprocedure('public.csub_can_manage()')), '') as m,
+         coalesce(pg_get_functiondef(to_regprocedure('public.csub_can_view_pricing()')), '') as p),
+
+-- ★ لا مِجَسّ سعر ★ لا مفردة مال في جواب أيّ دالّة دفتر: لا مبلغ بجوار عدد
+-- وحدات يُطرح منه سعر الوحدة، ولا عتبة ماليّة تُبحَث ثنائيًّا برايةٍ منطقية.
+oracle as (
+  select coalesce(string_agg(distinct f.sig || ' → ' || m.col, ', '), '') as s
+    from (values ('public.csub_reserve(jsonb)'),('public.csub_release(jsonb)'),
+                 ('public.csub_consume(jsonb)'),('public.csub_reverse(jsonb)'),
+                 ('public.csub_adjust(jsonb)'),
+                 ('public.csub_request_submit(jsonb)'),
+                 ('public.csub_request_transition(uuid,text,text,text,date)'),
+                 ('public.csub_request_set_credits(uuid,numeric,text)'),
+                 ('public.csub_service_requests_list(jsonb)'),
+                 ('public.csub_my_credits_page(uuid)')) f(sig)
+   cross join (values ('price_net'),('price_gross'),('vat_amount'),('vat_rate'),
+                      ('overage_unit_price_net'),('overage_amount_net'),
+                      ('overage_amount_gross'),('unit_price'),('unit_rate'),
+                      ('cost'),('margin'),('profit'),('discount'),
+                      ('contract_value'),('minimum_price')) m(col)
+   cross join pat
+   where to_regprocedure(f.sig) is not null
+     and exists (
+       select 1 from regexp_matches(
+              regexp_replace(pg_get_functiondef(to_regprocedure(f.sig)),
+                             pat.p_comment, ' ', 'g'),
+              pat.p_return, 'g') rm
+        where rm[1] ~* ('\m' || m.col || '\M'))),
+
+-- الحزم الأربع المطبَّقة — تُعَدّ بسوابق كائناتها هي، لا بادّعاء.
+applied4 as (
+  select (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'comms\_%')::int as comms_t,
+         (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'ops\_%')::int   as ops_t,
+         (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'crm\_%')::int   as crm_t,
+         (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'fin\_%')::int   as fin_t),
+
+-- التواصل ما زال محاكاةً. النصّ يُختار قبل تنفيذه، فغياب الجدول لا يصير خطأً.
+commsdry as (
+  select (xpath('/row/v/text()', query_to_xml(
+            case when to_regclass('public.comms_channels') is not null
+                 then 'select count(*)::text as v from public.comms_channels
+                        where (enabled and channel <> ''portal'') or not dry_run'
+                 else 'select ''-1'' as v' end, false, true, '')))[1]::text as s),
+
+-- لا حالة نصفية: الجداول والدوالّ والمُشغِّلات متّسقة معًا.
+partial as (
+  select (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'csub\_%')::int as t,
+         (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname like 'csub\_%')::int as f,
+         (select count(*) from pg_trigger where not tgisinternal
+            and tgname in ('t_csub_ledger_no_update','t_csub_ledger_no_delete',
+                           't_csub_ledger_no_truncate','t_csub_ledger_post'))::int as g)
 select * from (
   select 1::numeric as ord, 'الجداول الأحد عشر موجودة' as check_name, '11' as expected,
          tabs.n::text as actual, case when tabs.n = 11 then 'PASS' else 'FAIL' end as verdict from tabs
@@ -261,4 +469,72 @@ select * from (
          case when biz.s = 0 and biz.l = 0 then 'PASS' else 'CHECK — قد تكون بيانات حقيقية من تشغيل سابق' end from biz
   union all select 33, 'تجميد المنصّة — قارن يدويًّا بأرقام PREFLIGHT §7', 'مطابق لـPREFLIGHT',
          plat.pc::text || ' policies / ' || plat.cc::text || ' projects columns', 'CHECK' from plat
+
+  -- ─── ٣٤ … ٤٧ — ما أضافته معالجة سقوط §17 ────────────────────────────────
+  union all select 34, '★ لا حالة نصفية — الجداول والدوالّ والمُشغِّلات متّسقة', '13 / >=62 / 4',
+         partial.t::text || ' / ' || partial.f::text || ' / ' || partial.g::text,
+         case when partial.t >= 13 and partial.f >= 62 and partial.g = 4 then 'PASS' else 'FAIL' end
+         from partial
+  union all select 35, '★★ قائمة سماح أعمدة الطلبات (لا قائمة منع بالسلاسل) ★★', 'لا عمود خارجها',
+         case when srallow.s = '' then 'لا عمود خارجها' else srallow.s end,
+         case when srallow.s = '' then 'PASS' else 'FAIL' end from srallow
+  union all select 36, 'قائمة سماح أعمدة المرفقات', 'لا عمود خارجها',
+         case when sraallow.s = '' then 'لا عمود خارجها' else sraallow.s end,
+         case when sraallow.s = '' then 'PASS' else 'FAIL' end from sraallow
+  union all select 37, '★ سطح التشغيل لا يقرأ عمودًا خارج قائمة السماح', 'لا شيء',
+         case when opsallow.s = '' then 'لا شيء' else opsallow.s end,
+         case when opsallow.s = '' then 'PASS' else 'FAIL' end from opsallow
+  union all select 38, '★ لا عمود رقميّ تشغيليّ غير عدّاد وحدات (مطابقة بالنوع)', 'لا شيء',
+         case when opsnumeric.s = '' then 'لا شيء' else opsnumeric.s end,
+         case when opsnumeric.s = '' then 'PASS' else 'FAIL' end from opsnumeric
+  union all select 39, '★★ لا مبلغ يخرج من سطح موظّف بلا مفتاح الأسعار ★★', 'لا تسريب',
+         case when pricedleak.s = '' then 'لا تسريب' else pricedleak.s end,
+         case when pricedleak.s = '' then 'PASS' else 'FAIL' end from pricedleak
+  union all select 40, '★ الوحدات تُسقَط بالاسم لا بـto_jsonb خام', 'لا شيء',
+         case when rawjsonb.s = '' then 'لا شيء' else rawjsonb.s end,
+         case when rawjsonb.s = '' then 'PASS' else 'FAIL' end from rawjsonb
+  union all select 41, '★★ التشغيل لا يُمنح الجدول الماليّ أصلًا (RLS بمفتاح الأسعار) ★★', 'لا شيء',
+         case when moneyrls.s = '' then 'لا شيء' else moneyrls.s end,
+         case when moneyrls.s = '' then 'PASS' else 'FAIL' end from moneyrls
+  union all select 42, '★ عزل العميل بنيويّ — لا سياسة جدولية تعترف بالعميل', 'لا شيء',
+         case when clientiso.s = '' then 'لا شيء' else clientiso.s end,
+         case when clientiso.s = '' then 'PASS' else 'FAIL' end from clientiso
+  union all select 43, '★★ لا استهلاك مزدوج — مفتاح فريد + اعتماد يُستهلك مرّة + طلب لا يُستهلك مرّتين',
+         'الثلاثة',
+         case when dblcons.idx = 1 and dblcons.d ilike '%overage_approval_already_used%'
+               and dblcons.d ilike '%service_request_already_consumed%'
+              then 'الثلاثة' else 'ناقصة' end,
+         case when dblcons.idx = 1 and dblcons.d ilike '%overage_approval_already_used%'
+               and dblcons.d ilike '%service_request_already_consumed%'
+              then 'PASS' else 'FAIL' end from dblcons
+  union all select 44, '★★ اعتماد التجاوز معزول — الحُكم صفّ الاعتماد لا صلاحية المُنادي',
+         'overage_not_approved',
+         case when ovgiso.d ilike '%overage_not_approved%'
+               and ovgiso.d ilike '%v_ap.status <> ''approved''%'
+              then 'overage_not_approved' else 'غائب' end,
+         case when ovgiso.d ilike '%overage_not_approved%'
+               and ovgiso.d ilike '%v_ap.status <> ''approved''%'
+              then 'PASS' else 'FAIL' end from ovgiso
+  union all select 45, '★ نطاق المبيعات — csub.manage لا يمنح رؤية السعر', 'مفتاحان منفصلان',
+         case when salescope.m not ilike '%csub_can_view_pricing%'
+               and salescope.m not ilike '%csub.view_pricing%'
+               and salescope.p ilike '%csub.view_pricing%'
+              then 'مفتاحان منفصلان' else 'مشتقّ أحدهما من الآخر' end,
+         case when salescope.m not ilike '%csub_can_view_pricing%'
+               and salescope.m not ilike '%csub.view_pricing%'
+               and salescope.p ilike '%csub.view_pricing%'
+              then 'PASS' else 'FAIL' end from salescope
+  union all select 46, '★★ لا مِجَسّ سعر ولا مِجَسّ ربح — لا مبلغ في جواب أيّ دالّة ★★', 'لا شيء',
+         case when oracle.s = '' then 'لا شيء' else oracle.s end,
+         case when oracle.s = '' then 'PASS' else 'FAIL' end from oracle
+  union all select 47, '★ التواصل ما زال محاكاةً — لا قناة تستطيع الإرسال', '0 أو -1',
+         coalesce(commsdry.s, 'unknown'),
+         case when coalesce(commsdry.s, '') in ('0','-1') then 'PASS' else 'FAIL' end from commsdry
+  union all select 48, '★★ الحزم الأربع المطبَّقة سليمة (تواصل · تشغيل · CRM · مالية) ★★',
+         '>=7 / >=20 / >=20 / >=22',
+         applied4.comms_t::text || ' / ' || applied4.ops_t::text || ' / '
+           || applied4.crm_t::text || ' / ' || applied4.fin_t::text,
+         case when applied4.comms_t >= 7 and applied4.ops_t >= 20
+               and applied4.crm_t >= 20 and applied4.fin_t >= 22
+              then 'PASS' else 'FAIL' end from applied4
 ) q order by ord;

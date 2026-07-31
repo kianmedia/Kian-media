@@ -125,3 +125,46 @@ select table_name, column_name from information_schema.columns
 where table_schema = 'public'
   and (table_name ilike '%subscription%' or table_name ilike '%credit%' or table_name ilike '%ledger%')
 order by table_name, ordinal_position;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ─── 12) ★ أثر السقوط السابق — يُقرأ قبل إعادة التشغيل ★ ──────────────────
+--
+-- سقطت هذه الحزمة مرّة واحدة قبل COMMIT، عند فحص §17 رقم (11):
+--     CSUB §17 SELF-TEST: عمود ماليّ في طلبات الخدمة —
+--                         السطح التشغيليّ يجب أن يبقى بلا مال
+-- والرسالة سمّت المتّهم الخطأ. كان الفحص قائمة **منع** بالسلاسل الجزئية على
+-- أسماء الأعمدة، والعمود الذي أطلقها:
+--     reservation_entry_id uuid references public.csub_ledger(id)
+-- لأنّ حروف «reser·VAT·ion» تحتوي 'vat'. مفتاح أجنبيّ إلى الدفتر، بلا مال:
+-- إنذار كاذب، والفحص هو الخطأ لا المخطّط. وقد استُبدل بقائمة **سماح**.
+--
+-- ⚠️ التشخيص الكامل بعد السقوط في:
+--     docs/commercial_subscriptions_AFTER_FAILURE_VERIFY.sql
+--
+-- متوقّع هنا: صفّ واحد، false_positive = true وverdict يقول «إنذار كاذب».
+-- لو قرأت شيئًا آخر فالسبب غير ما وُثِّق — أوقف كلّ شيء واقرأ قبل التشغيل.
+select
+  ('reservation_entry_id' ilike '%vat%')                     as false_positive,
+  'reservation_entry_id → reser|vat|ion_entry_id'            as why,
+  'uuid FK → public.csub_ledger(id) — بلا مال'               as what_it_really_is,
+  case when ('reservation_entry_id' ilike '%vat%')
+            and not ('reservation_entry_id' ilike '%price%')
+       then 'إنذار كاذب مؤكَّد — الفحص القديم كان خاطئًا، والمخطّط سليم'
+       else 'حالة أخرى — لا تُشغّل RUNME قبل قراءتها' end     as verdict,
+  -- والنصف الآخر من العطل: أسماء مالية كانت ستمرّ بلا اعتراض.
+  (select count(*) from (values ('unit_rate'),('overage_value'),('billing_line'),
+                                ('contract_value'),('receivable')) v(c)
+    where c not ilike '%price%' and c not ilike '%amount%' and c not ilike '%cost%'
+      and c not ilike '%vat%'   and c not ilike '%margin%' and c not ilike '%profit%')
+                                                             as financial_names_the_old_denylist_missed;
+
+-- متوقّع: صفر صفّ. لو وُجد جدول طلبات خدمة من تشغيل سابق، فكلّ عمود رقميّ فيه
+-- يجب أن يكون عدّاد وحدات — والمطابقة **بالنوع** لا بالاسم، فلا يقع فيها مفتاح
+-- uuid مهما كان اسمه. هذا هو الفحص الذي كان يجب أن يُكتب من البداية.
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema = 'public'
+  and table_name in ('csub_service_requests', 'csub_service_request_attachments')
+  and data_type in ('numeric', 'double precision', 'real', 'money')
+  and column_name not in ('units', 'credits_required', 'overage_estimate_units')
+order by table_name, column_name;
