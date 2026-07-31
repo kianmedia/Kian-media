@@ -22,6 +22,49 @@
 
 with
 -- ─── مصادر مشتركة تُحسب مرّة واحدة ─────────────────────────────────────────
+rival as (
+  select c.relname,
+         (select count(*) from pg_attribute a
+           where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+             and a.attname in ('asset_code','barcode','qr_code_value','asset_name',
+                               'serial_number','category_id','condition_status',
+                               'availability_status')) as ident,
+         (exists (select 1 from pg_constraint fk
+                   join pg_attribute a on a.attrelid = c.oid and a.attnum = fk.conkey[1]
+                  where fk.conrelid = c.oid and fk.contype = 'f'
+                    and fk.confrelid = to_regclass('public.custody_inventory_assets')
+                    and a.attnotnull)
+          or exists (select 1 from pg_constraint j1
+                      join pg_constraint j2 on j2.conrelid = j1.conrelid and j2.contype = 'f'
+                                           and j2.confrelid = to_regclass('public.custody_inventory_assets')
+                     where j1.contype = 'f' and j1.confrelid = c.oid)) as linked
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relkind in ('r','p')
+     and c.oid is distinct from to_regclass('public.custody_inventory_assets')),
+src as (
+  select
+    to_regclass('public.custody_inventory_maintenance_plans')       as plans_rel,
+    to_regclass('public.custody_inventory_meter_readings')          as meter_rel,
+    to_regclass('public.custody_inventory_reservations')            as resv_rel,
+    to_regclass('public.custody_inventory_assets')                  as assets_rel,
+    to_regclass('public.custody_inventory_assignments')             as assign_rel,
+    to_regclass('public.custody_inventory_evidence')                as evid_rel,
+    to_regclass('public.custody_condition_reports')                 as cond_rel,
+    pg_get_functiondef(to_regprocedure('public.civ_can_manage()'))                  as def_gate,
+    pg_get_functiondef(to_regprocedure('public.civ_reservation_conflict(uuid,numeric,timestamptz,timestamptz,uuid,uuid)')) as def_conflict,
+    pg_get_functiondef(to_regprocedure('public.civ_guard_reservation()'))           as def_resvguard,
+    pg_get_functiondef(to_regprocedure('public.civ_guard_assignment_closure()'))    as def_closeguard,
+    pg_get_functiondef(to_regprocedure('public.civ_guard_asset_disposal()'))        as def_dispguard,
+    pg_get_functiondef(to_regprocedure('public.custody_inv_qr_public_payload(uuid)')) as def_qrpay,
+    pg_get_functiondef(to_regprocedure('public.custody_inv_qr_scan(uuid,text)'))    as def_qrscan,
+    pg_get_functiondef(to_regprocedure('public.custody_inv_asset_utilization(uuid,timestamptz,timestamptz)')) as def_util,
+    pg_get_functiondef(to_regprocedure('public.custody_inv_asset_cost_summary(uuid)')) as def_cost,
+    pg_get_functiondef(to_regprocedure('public.custody_inv_maintenance_signals(uuid)')) as def_signals,
+    pg_get_functiondef(to_regprocedure('public.custody_inv_record_meter(jsonb)'))   as def_meter,
+    to_regprocedure('public.custody_inv_qr_public_payload(uuid)')                   as oid_qrpay,
+    to_regprocedure('public.prodops_asset_clash(uuid,uuid,timestamptz,timestamptz)') as oid_prodops,
+    to_regprocedure('public.emp_has_permission(text)')                              as oid_perm
+),
 -- ★★ صدق التسمية — مصدر واحد للحكم يشترك فيه RUNME وPOSTCHECK ★★
 --   الصيغة السابقة هنا كانت: def_signals ilike '%' || w || '%' مع w='ai_'.
 --   عطلان متراكبان أصلحهما RUNME ولم يصلهما هذا الملفّ — وهو سبب نجاح ذاك
@@ -68,49 +111,6 @@ dishonest as (
     from live_names l cross join naming_rule r
    where l.n ~* r.pat),
 
-rival as (
-  select c.relname,
-         (select count(*) from pg_attribute a
-           where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-             and a.attname in ('asset_code','barcode','qr_code_value','asset_name',
-                               'serial_number','category_id','condition_status',
-                               'availability_status')) as ident,
-         (exists (select 1 from pg_constraint fk
-                   join pg_attribute a on a.attrelid = c.oid and a.attnum = fk.conkey[1]
-                  where fk.conrelid = c.oid and fk.contype = 'f'
-                    and fk.confrelid = to_regclass('public.custody_inventory_assets')
-                    and a.attnotnull)
-          or exists (select 1 from pg_constraint j1
-                      join pg_constraint j2 on j2.conrelid = j1.conrelid and j2.contype = 'f'
-                                           and j2.confrelid = to_regclass('public.custody_inventory_assets')
-                     where j1.contype = 'f' and j1.confrelid = c.oid)) as linked
-    from pg_class c join pg_namespace n on n.oid = c.relnamespace
-   where n.nspname = 'public' and c.relkind in ('r','p')
-     and c.oid is distinct from to_regclass('public.custody_inventory_assets')),
-src as (
-  select
-    to_regclass('public.custody_inventory_maintenance_plans')       as plans_rel,
-    to_regclass('public.custody_inventory_meter_readings')          as meter_rel,
-    to_regclass('public.custody_inventory_reservations')            as resv_rel,
-    to_regclass('public.custody_inventory_assets')                  as assets_rel,
-    to_regclass('public.custody_inventory_assignments')             as assign_rel,
-    to_regclass('public.custody_inventory_evidence')                as evid_rel,
-    to_regclass('public.custody_condition_reports')                 as cond_rel,
-    pg_get_functiondef(to_regprocedure('public.civ_can_manage()'))                  as def_gate,
-    pg_get_functiondef(to_regprocedure('public.civ_reservation_conflict(uuid,numeric,timestamptz,timestamptz,uuid,uuid)')) as def_conflict,
-    pg_get_functiondef(to_regprocedure('public.civ_guard_reservation()'))           as def_resvguard,
-    pg_get_functiondef(to_regprocedure('public.civ_guard_assignment_closure()'))    as def_closeguard,
-    pg_get_functiondef(to_regprocedure('public.civ_guard_asset_disposal()'))        as def_dispguard,
-    pg_get_functiondef(to_regprocedure('public.custody_inv_qr_public_payload(uuid)')) as def_qrpay,
-    pg_get_functiondef(to_regprocedure('public.custody_inv_qr_scan(uuid,text)'))    as def_qrscan,
-    pg_get_functiondef(to_regprocedure('public.custody_inv_asset_utilization(uuid,timestamptz,timestamptz)')) as def_util,
-    pg_get_functiondef(to_regprocedure('public.custody_inv_asset_cost_summary(uuid)')) as def_cost,
-    pg_get_functiondef(to_regprocedure('public.custody_inv_maintenance_signals(uuid)')) as def_signals,
-    pg_get_functiondef(to_regprocedure('public.custody_inv_record_meter(jsonb)'))   as def_meter,
-    to_regprocedure('public.custody_inv_qr_public_payload(uuid)')                   as oid_qrpay,
-    to_regprocedure('public.prodops_asset_clash(uuid,uuid,timestamptz,timestamptz)') as oid_prodops,
-    to_regprocedure('public.emp_has_permission(text)')                              as oid_perm
-),
 -- المُسنَدات الستّة: موجودة؟ لا تعيد NULL؟ SECURITY DEFINER بمسار مثبَّت؟
 preds as (
   select p.sig,
