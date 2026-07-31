@@ -231,6 +231,64 @@ test("(١٢) ★ نموذج التصنيف: امتداد يمرّ ومصدر م�
   assert.ok(!rival(["policy_number", "provider"], false), "اسم asset_* وحده أسقط جدولًا");
 });
 
+// ─── (و) RUNME وPOSTCHECK يحكمان بالقاعدة نفسها ────────────────────────────
+
+test("(١٣) ★★ POSTCHECK يستعمل قاعدة التسمية البنيوية ذاتها لا LIKE ★★", () => {
+  // RUNME أُصلح فنجح، وPOSTCHECK بقي على الصيغة القديمة ففشل على القاعدة
+  // نفسها. الاختلاف بين فاحصَي الحزمة الواحدة عطبٌ بذاته: أحدهما يُجيز ما
+  // يرفضه الآخر، فيُقرأ أحد الحكمين كذبًا. القاعدة الآن واحدة نصًّا.
+  const pc = read("docs/asset_intelligence_POSTCHECK.sql");
+  const rn = read("docs/asset_intelligence_RUNME.sql");
+  assert.ok(pc && rn, "ملفّ مفقود");
+  const RULE = /\^\(ai\|ml\)_\|_\(ai\|ml\)\$\|predict\|forecast\|machine_learning\|neural\|deep_learning\|intelligen\|confidence_score/;
+  assert.match(pc, RULE, "POSTCHECK بلا قاعدة التسمية المرسّاة");
+  assert.match(rn, RULE, "RUNME بلا قاعدة التسمية المرسّاة");
+  // وكلاهما يقرأ الكتالوج لا نصّ التعريف.
+  for (const [name, sql] of [["POSTCHECK", pc], ["RUNME", rn]]) {
+    assert.match(sql, /from pg_proc/i, `${name}: لا يقرأ أسماء الدوالّ من الكتالوج`);
+    assert.match(sql, /pg_attribute/i, `${name}: لا يقرأ أسماء الأعمدة`);
+  }
+  // ولا يبقى في POSTCHECK فحص تسمية بـILIKE على نصّ التعريف.
+  const code = noComments(pc);
+  assert.doesNotMatch(code, /unnest\(array\['predict','ai_'/,
+    "POSTCHECK ما زال يطابق قائمة كلمات على نصّ التعريف");
+});
+
+test("(١٤) ★ لا LIKE بشرطة سفلية غير مهروبة في POSTCHECK ★", () => {
+  const code = noComments(read("docs/asset_intelligence_POSTCHECK.sql"));
+  const lines = code.split("\n");
+  const bad = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/i?like\s+'%'\s*\|\|/.test(lines[i])) continue;
+    if (/escape/i.test(lines[i])) continue;
+    bad.push(`L${i + 1}: ${lines[i].trim().slice(0, 70)}`);
+  }
+  assert.deepEqual(bad, [],
+    "الشرطة السفلية محرف بدل في LIKE — استعمل replace(w,'_','\\\\_') مع escape:\n  " + bad.join("\n  "));
+});
+
+test("(١٥) ★ الكلمات البريئة لا تُصنَّف، والمضلِّلة تُصنَّف ★", () => {
+  const RULE = /^(ai|ml)_|_(ai|ml)$|predict|forecast|machine_learning|neural|deep_learning|intelligen|confidence_score/i;
+  for (const w of ["maintenance", "remaining", "raise", "against",
+                   "custody_inv_maintenance_signals", "days_remaining", "available", "repair_cost"]) {
+    assert.ok(!RULE.test(w), `كلمة بريئة صُنِّفت تنبّؤية: ${w}`);
+  }
+  for (const w of ["ai_predict_maintenance", "ai_score", "prediction_confidence",
+                   "forecast_model", "ml_rank", "model_ai", "confidence_score"]) {
+    assert.ok(RULE.test(w), `اسم مضلِّل لم يُصنَّف: ${w}`);
+  }
+});
+
+test("(١٦) ★ الفحوص الـ57 المرقّمة ما زالت كلّها في POSTCHECK ★", () => {
+  const pc = read("docs/asset_intelligence_POSTCHECK.sql");
+  const nums = [...pc.matchAll(/^\s*select (\d+),/gm)].map((m) => Number(m[1]));
+  assert.ok(nums.length >= 57, `${nums.length} فحصًا فقط — فُقد فحص أثناء الإصلاح`);
+  assert.ok(nums.includes(46), "الفحص 46 اختفى بدل أن يُصلَح");
+  const missing = [];
+  for (let i = 2; i <= 58; i++) if (!nums.includes(i)) missing.push(i);
+  assert.deepEqual(missing, [], `أرقام فحوص مفقودة: ${missing.join(", ")}`);
+});
+
 test("SAFE: ساكن فقط (لا قاعدة بيانات ولا شبكة)", () => {
   const src = fs.readFileSync(__filename, "utf8");
   for (const bad of ["fet" + "ch(", "child_" + "process", "service_" + "role"]) {

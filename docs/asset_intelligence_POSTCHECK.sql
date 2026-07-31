@@ -22,6 +22,52 @@
 
 with
 -- ─── مصادر مشتركة تُحسب مرّة واحدة ─────────────────────────────────────────
+-- ★★ صدق التسمية — مصدر واحد للحكم يشترك فيه RUNME وPOSTCHECK ★★
+--   الصيغة السابقة هنا كانت: def_signals ilike '%' || w || '%' مع w='ai_'.
+--   عطلان متراكبان أصلحهما RUNME ولم يصلهما هذا الملفّ — وهو سبب نجاح ذاك
+--   وفشل هذا على القاعدة نفسها:
+--     (١) الشرطة السفلية في LIKE/ILIKE **محرف بدل**: '%ai_%' تعني «ai يتبعها
+--         أيّ محرف» لا «تبدأ بـai_». طابقت 28 موضعًا، أوّلها اسم الدالّة نفسها
+--         custody_inv_m·ai·ntenance_signals، ثمّ days_rem·ai·ning و r·ai·se.
+--     (٢) والمطابقة كانت على **نصّ التعريف** كاملًا — تعليقاته وسلاسله معه —
+--         لا على الأسماء الحيّة.
+--   والحكم الآن: أسماء الكتالوج (دوالّ/جداول/أعمدة) + مفاتيح JSON الصادرة
+--   فعلًا، بتعبير نمطيّ **مرسّى** لا بـLIKE. فـmaintenance وremaining وraise
+--   لا تُصنَّف، وai_predict و prediction_confidence و forecast_model تُصنَّف.
+naming_rule(pat) as (values
+  ('^(ai|ml)_|_(ai|ml)$|predict|forecast|machine_learning|neural|deep_learning|intelligen|confidence_score')),
+
+live_names as (
+  select p.proname as n, 'دالّة' as kind
+    from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+   where ns.nspname = 'public' and p.proname like 'custody\_inv\_%' escape '\'
+  union all
+  select c.relname, 'جدول'
+    from pg_class c join pg_namespace ns on ns.oid = c.relnamespace
+   where ns.nspname = 'public' and c.relkind in ('r','p','v','m')
+     and c.relname like 'custody\_inv%' escape '\'
+  union all
+  select a.attname, 'عمود'
+    from pg_attribute a
+    join pg_class c on c.oid = a.attrelid
+    join pg_namespace ns on ns.oid = c.relnamespace
+   where ns.nspname = 'public' and c.relkind in ('r','p')
+     and c.relname like 'custody\_inventory\_%' escape '\'
+     and a.attnum > 0 and not a.attisdropped
+  union all
+  -- مفاتيح JSON الصادرة من دالّة الإشارات، بعد حذف التعليقات: الاسم الذي يراه
+  -- المستعمل واجهةٌ حيّة مثل اسم العمود تمامًا.
+  select m[1], 'مفتاح'
+    from regexp_matches(
+           regexp_replace(coalesce((select def_signals from src), ''),
+                          chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g'),
+           '''([a-z_][a-z0-9_]*)''\s*,', 'g') m),
+
+dishonest as (
+  select coalesce(string_agg(distinct l.kind || ' ' || l.n, ' · '), '') as s
+    from live_names l cross join naming_rule r
+   where l.n ~* r.pat),
+
 rival as (
   select c.relname,
          (select count(*) from pg_attribute a
@@ -376,9 +422,9 @@ union all
 select 34, '★ الحمولة العامّة للـQR بلا تكلفة ولا بيانات موظّف ولا مسار تخزين',
        'لا purchase_price/current_value/book_value/file_path/employee_user_id',
        coalesce((select string_agg(w, ', ') from unnest(array['purchase_price','current_value','book_value','file_path','employee_user_id','auth.users']) as t(w)
-                  where (select def_qrpay from src) ilike '%' || w || '%'), 'نظيفة'),
+                  where (select def_qrpay from src) ilike '%' || replace(w, '_', '\_') || '%' escape '\'), 'نظيفة'),
        not exists (select 1 from unnest(array['purchase_price','current_value','book_value','file_path','employee_user_id','auth.users']) as t(w)
-                    where (select def_qrpay from src) ilike '%' || w || '%')
+                    where (select def_qrpay from src) ilike '%' || replace(w, '_', '\_') || '%' escape '\')
 
 union all
 select 35, '★ الحمولة العامّة لا تُنادى مباشرةً (تمرّ عبر المسح: معدّل + تدقيق)', '0 صلاحية',
@@ -418,9 +464,9 @@ union all
 select 40, '★ سطح الاستغلال التشغيليّ خالٍ من المال',
        'لا purchase_price/current_value/book_value/salvage_value/cost',
        coalesce((select string_agg(w, ', ') from unnest(array['purchase_price','current_value','book_value','salvage_value','cost']) as t(w)
-                  where (select def_util from src) ilike '%' || w || '%'), 'نظيف'),
+                  where (select def_util from src) ilike '%' || replace(w, '_', '\_') || '%' escape '\'), 'نظيف'),
        not exists (select 1 from unnest(array['purchase_price','current_value','book_value','salvage_value','cost']) as t(w)
-                    where (select def_util from src) ilike '%' || w || '%')
+                    where (select def_util from src) ilike '%' || replace(w, '_', '\_') || '%' escape '\')
 
 union all
 select 41, 'سطح الاستغلال يُعلن خلوّه من المال للواجهة', 'contains_financials',
@@ -455,11 +501,10 @@ select 45, '★ كلّ إشارة تحمل قاعدتها وأساسها الر�
        and coalesce((select def_signals from src) ilike '%''basis''%', false)
 
 union all
-select 46, '★ لا تُسمّى تنبّؤية ولا ذكاءً اصطناعيًّا', 'لا predict/ai_/forecast_model',
-       coalesce((select string_agg(w, ', ') from unnest(array['predict','ai_','machine_learning','forecast_model']) as t(w)
-                  where (select def_signals from src) ilike '%' || w || '%'), 'قواعد صريحة'),
-       not exists (select 1 from unnest(array['predict','ai_','machine_learning','forecast_model']) as t(w)
-                    where (select def_signals from src) ilike '%' || w || '%')
+select 46, '★ لا تُسمّى تنبّؤية ولا ذكاءً اصطناعيًّا', 'لا اسم حيّ ولا مفتاح صادر يدّعي التنبّؤ',
+       case when (select s from dishonest) = '' then 'قواعد صريحة — كلّ اسم يصف قاعدة معلَنة'
+            else '★ ' || (select s from dishonest) end,
+       (select s from dishonest) = ''
 
 -- ═══ ١٢) التدقيق والصلاحيات ════════════════════════════════════════════════
 union all
