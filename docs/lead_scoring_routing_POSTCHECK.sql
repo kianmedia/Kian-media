@@ -61,6 +61,23 @@ forbidden_inputs(tok) as (values
   ('gender'),('nationality'),('ethnic'),('religio'),('marital'),
   ('date_of_birth'),('birth_date'),('age_group'),('age_band')),
 
+-- ★★ القائمة المغلقة لمفاتيح لوحة العميل ★★ نسخة طبق الأصل عن القائمة في
+--   الفحص الذاتيّ داخل RUNME (يُثبت تطابقهما اختبارٌ ساكن في المستودع، فلا
+--   تنحرف نسخةٌ عن أختها بصمت). كلّ مبلغ هنا **سعر بيع** يُفوتَر على هذا
+--   العميل نفسه: سعر باقته وضريبتها ورسوم تجاوزه هو. لا تكلفة ولا هامش ولا
+--   أرضية سعر ولا سعر مورّد — ولا رقمٌ يُطرح من آخر فيبلغ اقتصادًا داخليًّا.
+client_keys(k) as (values
+  ('ok'),('available'),('reason'),('message'),('client_id'),('subscriptions'),
+  ('balances'),('requests'),('usage_ledger'),('excluded_by_design'),('note'),
+  ('subscription_id'),('code'),('status'),('start_date'),('end_date'),('renewal_date'),
+  ('package'),('terms'),('limitations'),('price_net'),('vat_rate'),('vat_amount'),
+  ('price_gross'),('currency'),('allow_overage'),('overage_requires_approval'),
+  ('unit_type'),('allocated'),('reserved'),('used'),('expired'),
+  ('occurred_at'),('entry_type'),('quantity'),('usage_date'),('description'),
+  ('overage_units'),('overage_amount_net'),('overage_vat_amount'),('overage_amount_gross'),
+  ('id'),('units'),('credits_required'),('overage_estimate_units'),('city'),
+  ('preferred_date'),('scheduled_date'),('decision_note')),
+
 -- تعريف كلّ دالّة مرّة واحدة.
 defs as (
   select p.proname, pg_get_functiondef(p.oid) as d, p.prorettype
@@ -71,10 +88,18 @@ defs as (
 -- الترحيلة: الكلمة `zoho` طابقت جملةَ العقد التي تقول «ولا تنادي Zoho».
 -- lsr_contract_scan تقسم المصدر (كود / سلاسل) ثمّ تطابق **شكل الجملة**.
 -- وهي تُنشأ في الترحيلة نفسها؛ فغيابها إخفاق حقيقيّ لا حالة تُبلَّغ.
+-- حكم لوحة العميل: ماذا تُصدِر · هل تسكب صفًّا كاملًا · هل تقرأ بلا حصر.
+client_scan(c) as (
+  select public.lsr_client_scan(d.d) from defs d where d.proname = 'lsr_dashboard_client'),
+client_emitted(k) as (
+  select x.value #>> '{}' from client_scan
+   cross join lateral jsonb_array_elements(c -> 'keys') as x(value)),
+
 scan as (
   select d.proname, public.lsr_contract_scan(d.d) as s
     from defs d
-   where d.proname not in ('lsr_sql_partition','lsr_contract_scan')),
+   where d.proname not in ('lsr_sql_partition','lsr_contract_scan',
+                     'lsr_key_of','lsr_sql_literals','lsr_json_keys','lsr_client_scan')),
 
 -- ما تناديه دوالّ الموديول مباشرة — أساس فحص الالتفاف غير المباشر.
 callees as (
@@ -92,7 +117,8 @@ callees as (
       on q.proname <> d.proname
      and position(q.proname in b.body) > 0
      and b.body ~ ('\m' || q.proname || '\s*\(')
-   where d.proname not in ('lsr_sql_partition','lsr_contract_scan')
+   where d.proname not in ('lsr_sql_partition','lsr_contract_scan',
+                     'lsr_key_of','lsr_sql_literals','lsr_json_keys','lsr_client_scan')
      -- مركز الاتصالات حدّ داخليّ مثبَّت بـdry_run (الفحص ٨٦ يُثبت التثبيت).
      and q.proname not like 'comms\_%'
      and q.proname not like 'lsr\_%'),
@@ -327,15 +353,24 @@ select 54, 'التوزيع', 'طابور المراجعة يمنع تكرار ا
 
 -- ─── (٦) اللوحات — ما يجب ألّا يظهر ────────────────────────────────────────
 union all
+-- ★ الحكم على **شكل القراءة** لا على الاسم ★ الصيغة القديمة طابقت الاسم
+--   المجرّد داخل التعريف كاملًا، فكانت مصفوفة excluded_by_design — التي تُعلن
+--   أنّ هذه الحقول غير معروضة — كفيلة بإدانة اللوحة. الإعلان ليس ارتكابًا.
 select 60, 'اللوحات', 'لوحة العميل بلا رقم داخليّ',
   case when count(*) = 0 then 'PASS' else 'FAIL' end,
   case when count(*) = 0
-       then 'لا تكلفة ولا هامش ولا ملاحظة داخلية في مسار العميل'
-       else '★ تسريب ★ ' || string_agg(tok, ', ') end
-from (select tok from (values ('l.internal_metadata'),('s.internal_notes'),('r.internal_notes'),
-                             ('r.decision_reason'),('sq_quote_internal'),('base_cost'),
-                             ('margin_pct'),('gross_profit'),('cost_rate')) v(tok)) t
-where coalesce((select d.d ilike '%' || t.tok || '%' from defs d
+       then 'لا تكلفة ولا هامش ولا ملاحظة داخلية في مسار العميل — بشكل القراءة لا بالكلمة'
+       else '★ تسريب ★ ' || string_agg(lbl, ', ') end
+from (select lbl, pat from (values
+        ('internal_notes',    '\m[a-z_][a-z_0-9]{0,62}\.internal_notes\M'),
+        ('internal_metadata', '\m[a-z_][a-z_0-9]{0,62}\.internal_metadata\M'),
+        ('decision_reason',   '\m[a-z_][a-z_0-9]{0,62}\.decision_reason\M'),
+        ('تكلفة/هامش/أرضية/مورّد',
+           '\m[a-z_][a-z_0-9]{0,62}\.(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate)\M'),
+        ('جدول التكلفة',
+           '\m(from|join|into|update|table)\s+(only\s+)?(public\.)?(fin_costs|sq_quote_internal)\M')
+      ) v(lbl, pat)) t
+where coalesce((select d.d ~* t.pat from defs d
                  where d.proname = 'lsr_dashboard_client'), false)
 
 union all
@@ -385,6 +420,58 @@ from (
                         from defs d where d.proname = f), false) as honest
     from (values ('lsr_dashboard_owner'),('lsr_dashboard_sales'),
                  ('lsr_dashboard_client'),('lsr_dashboard_operations')) v(f)) x
+
+union all
+-- ★★ القائمة المغلقة ★★ الفحص ٦٠ يمنع أسماءً **نعرفها**؛ هذا يمنع كلّ ما لا
+--   نعرفه. نعدّ مفاتيح JSON الخارجة فعلًا (من كلّ مستوى بناء) ونرفض ما ليس في
+--   القائمة. عمودٌ داخليّ جديد باسم لم يخطر لأحد لا يمرّ لأنّه ليس مُجازًا.
+select 66, 'اللوحات', 'لوحة العميل: كلّ مفتاح داخل القائمة المغلقة',
+  case when (select count(*) from client_emitted) < 30 then 'FAIL'
+       when exists (select 1 from client_emitted e
+                     where e.k not in (select k from client_keys)) then 'FAIL'
+       else 'PASS' end,
+  case when (select count(*) from client_emitted) < 30
+       then '★ الفحص أجوف ★ عدد المفاتيح المقروءة '
+            || (select count(*) from client_emitted)::text || ' — القارئ أو الدالّة مفقود'
+       when exists (select 1 from client_emitted e
+                     where e.k not in (select k from client_keys))
+       then '★ تسريب ★ مفاتيح خارج القائمة: '
+            || (select string_agg(e.k, ', ') from client_emitted e
+                 where e.k not in (select k from client_keys))
+       else (select count(*) from client_emitted)::text
+            || ' مفتاحًا، كلّها أسعار بيع تخصّ هذا العميل — لا تكلفة ولا هامش ولا أرضية' end
+
+union all
+select 67, 'اللوحات', 'القائمة المغلقة بلا مدخل ميت',
+  case when (select count(*) from client_emitted) = 0 then 'FAIL'
+       when exists (select 1 from client_keys k
+                     where k.k not in (select k from client_emitted)) then 'FAIL'
+       else 'PASS' end,
+  case when (select count(*) from client_emitted) = 0
+       then '★ لا مفاتيح مقروءة ★ الدالّة أو القارئ مفقود'
+       when exists (select 1 from client_keys k
+                     where k.k not in (select k from client_emitted))
+       then '★ تمهيد مسبق ★ القائمة تُجيز ما لا يُصدَر: '
+            || (select string_agg(k.k, ', ') from client_keys k
+                 where k.k not in (select k from client_emitted))
+       else 'كلّ مُجاز مُصدَر فعلًا — لا مفتاح داخليّ مُمهَّد لتسريب لاحق' end
+
+union all
+select 68, 'اللوحات', 'لوحة العميل بلا إسقاط عريض',
+  case when coalesce((select (c ->> 'wide_projection')::boolean from client_scan), true)
+       then 'FAIL' else 'PASS' end,
+  case when coalesce((select (c ->> 'wide_projection')::boolean from client_scan), true)
+       then '★ لقطة واسعة ★ to_jsonb/row_to_json/jsonb_agg لصفّ كامل — قائمة مفتوحة أي بلا قائمة'
+       else 'كلّ حقل مسمّى صراحةً؛ والقراءة الفرعية المسمّى إسقاطها الخارجيّ مقبولة' end
+
+union all
+select 69, 'اللوحات', 'كلّ استعلام في لوحة العميل محصور بـ client_id',
+  case when coalesce((select (c ->> 'unscoped_query')::boolean from client_scan), true)
+       then 'FAIL' else 'PASS' end,
+  case when coalesce((select (c ->> 'unscoped_query')::boolean from client_scan), true)
+       then '★ قراءة عابرة للعملاء ★ '
+            || coalesce((select c ->> 'unscoped_sample' from client_scan), 'الكاشف أو الدالّة مفقود')
+       else 'كلّ قراءة لجدول مملوك للعميل تحمل client_id = $1 من my_client_id() وحده' end
 
 -- ─── (٧) العقود ────────────────────────────────────────────────────────────
 union all

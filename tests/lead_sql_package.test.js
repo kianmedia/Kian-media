@@ -205,7 +205,8 @@ test("الفحص الذاتيّ ساكن ولا ينادي دالّة محميّ
   const bare = st.replace(/'(?:[^']|'')*'/g, "''");
   // كاشفا العقد نقيّان: نصّ ← نصّ، بلا فحص صلاحية وبلا لمس جدول، فلا يمكن
   // أن يرفعا «not authorized». والسماح لهما ليس مجّانيًّا — يُثبَت أدناه.
-  const PURE = ["lsr_sql_partition", "lsr_contract_scan"];
+  const PURE = ["lsr_sql_partition", "lsr_contract_scan",
+                "lsr_key_of", "lsr_sql_literals", "lsr_json_keys", "lsr_client_scan"];
   for (const p of PURE) {
     const body = funcBody(p);
     assert.doesNotMatch(body, /not authorized|auth\.uid\(\)|lsr_can_|lsr_perm|lsr_is_/,

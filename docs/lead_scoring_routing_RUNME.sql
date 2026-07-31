@@ -2589,34 +2589,236 @@ begin
       v_both ~* '(insert\s+into|update|delete\s+from|truncate)\s+(table\s+)?(only\s+)?(public\.)?(projects|project_core|deliverable)',
     -- نداء خارجيّ: **شكل نداء**. الكلمة المجرّدة `zoho` نثرٌ لا نداء — وهي
     -- بالضبط ما أسقط الترحيلة سابقًا؛ فلا تُستعمل هنا أبدًا.
+    -- ‼️ الاسم المجرّد `pg_net` كان يُطابَق في **السلاسل** أيضًا، فجملةٌ تقول
+    --    «لا pg_net هنا» كانت تُدين نفسها. الامتداد الإضافيّ يغطّي pg_net_worker
+    --    و dblink_exec و pg_background_launch بلا حاجة إلى تعداد الأسماء.
     'external_call',
-      (v_both ~* '\m(pg_net|dblink|pg_background)\M'
+      (v_both ~* '\m(pg_net|dblink|pg_background)[a-z_0-9]{0,40}\s*[(.]'
        or v_both ~* '\mhttp_(get|post|put|delete|head)\s*\('
        or v_both ~* '\mnet\.http'
        or v_both ~* '\mzoho[a-z_]*\s*\('
        or v_code ~* '(https?://|\m(openai|anthropic|model_endpoint)\M)'),
-    -- صفة شخصية حسّاسة: في الهيكل التنفيذيّ وحده. ذكرها في تعليق ليس مدخلًا.
+    -- صفة شخصية حسّاسة: في الهيكل التنفيذيّ وحده — وهذا **هو** وعي الشكل هنا.
+    -- v_code بلا تعليقات وسلاسله مُفرَّغة، فالاسم فيه استعمالٌ لا ذكر. (تدقيق
+    -- شامل: كلّ قاعدة تمسح v_both يجب أن تكون بشكل جملة أو نداء أو إشارة
+    -- مؤهَّلة؛ وكلّ قاعدة باسم مجرّد يجب أن تقتصر على v_code. لا ثالث.)
     'sensitive_attribute',
       v_code ~* '\m(gender|nationality|ethnic|religio|marital|date_of_birth|birth_date|age_group|age_band)',
     'forbidden_gate',
       v_code ~* '\m(can_manage_projects|is_kian_member)\M',
-    -- قراءة ماليّة ممنوعة بالعقد: تكلفة/هامش/ربح/أرضية سعر/سعر مورّد.
+    -- ★★ قراءة ماليّة ممنوعة — بشكل **القراءة** لا بالاسم ★★
+    --   (أ) إشارة جدول في جملة: from/join/into/update … fin_costs | sq_quote_internal
+    --   (ب) إشارة عمود مؤهَّلة: alias.base_cost — وهي وحدها ما يُخرج قيمة.
+    --   (ج) إشارة مؤهَّلة بالجدول: public.fin_costs.base_cost
+    -- ‼️ الاسم المجرّد داخل سلسلة **وسمٌ لا قراءة**. مصفوفة excluded_by_design
+    --    في لوحة العميل تعدّ floor_price و supplier_rate لتعلن أنّها **غير**
+    --    معروضة، فأسقطت الصيغةُ القديمة الترحيلةَ لأنّ الدالّة أعلنت براءتها —
+    --    وهو حرفيًّا عطب `zoho` نفسه بعد أن استُبدل به. الشكل يميّز الإعلان من
+    --    الارتكاب؛ والاسم وحده لا يميّز شيئًا.
+    -- ⚠️ هذا الحارس شرط ضروريّ لا كافٍ: عمودًا داخليًّا جديدًا باسم غير مُعدَّد
+    --    لن يلتقطه. الكافي هو قائمة مفاتيح لوحة العميل المسموحة (lsr_client_scan).
     'forbidden_finance_read',
-      (v_both ~* '\m(public\.)?fin_costs\M'
-       or v_both ~* '\m(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate|sq_quote_internal)\M'));
+      (v_both ~* '\m(from|join|into|update|table)\s+(only\s+)?(public\.)?(fin_costs|sq_quote_internal)\M'
+       or v_both ~* '\m[a-z_][a-z_0-9]{0,62}\.(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate)\M'
+       or v_both ~* '\m(public\.)?(fin_costs|sq_quote_internal)\s*\.\s*[a-z_]'));
 end $lsrscan$;
 
 comment on function public.lsr_contract_scan(text) is
   'يحكم على مصدر دالّة وفق شكل الجملة/النداء بعد التقسيم البنيويّ. لا يطابق كلمة مجرّدة داخل نصّ بشريّ.';
 
--- 13.9.3 صلاحيات الكاشفَين. كتلة المنح في §13 تسبق هذا القسم، فلو تُركا بلا
---        سحب لبقيت منحة PUBLIC الافتراضية عليهما — وهي وحدها كافية لإسقاط
---        صفّ «لا EXECUTE لـanon ولا PUBLIC» في POSTCHECK. الدالّتان أداتا فحص
---        داخليّتان لا سطح تطبيق: لا تقرآن جدولًا ولا تفحصان صلاحية.
+-- ════════════════════════════════════════════════════════════════════════════
+-- 13.9.3 ★★ قائمة مفاتيح لوحة العميل ★★
+--   الحارس الشكليّ أعلاه شرط ضروريّ لا كافٍ: يمنع تسريب عمود **معروف الاسم**،
+--   ولا يمنع عمودًا داخليًّا جديدًا لم يُعدَّد بعد. الكافي هو العكس: أن نعدّ ما
+--   **يخرج** فعلًا، ونرفض كلّ ما ليس في القائمة. قائمة مغلقة تُلزم كلّ إضافة
+--   مستقبلية بتبرير مكتوب قبل أن تمرّ — والقائمة المفتوحة ليست قائمة.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- (أ) قيمة وسيط واحد → مفتاح، أو وسم «محسوب» إن لم تكن سلسلة حرفية.
+--     المفتاح المحسوب لا يمكن تدقيقه ساكنًا، فيُردّ بالتصميم لا بالإهمال.
+create or replace function public.lsr_key_of(p_arg text)
+returns text language sql immutable set search_path = public as $lsrkeyof$
+  select coalesce(substring(btrim(coalesce(p_arg, '')) from '^''(.*)''$'), '<computed>');
+$lsrkeyof$;
+
+-- (ب) كلّ سلسلة حرفية على حدة — لا مجموعةً واحدة. الفرق حاسم: استعلام
+--     ديناميكيّ متعدّد الأسطر يجب أن يُقاس **كوحدة**، وإلّا بدا سطرٌ فيه بلا
+--     حصر بالعميل بينما الحصر في سطر آخر من الاستعلام نفسه.
+create or replace function public.lsr_sql_literals(p_src text)
+returns text[] language plpgsql immutable set search_path = public as $lsrlit$
+declare v_out text[] := '{}'; n int; i int := 1; s int; d int; p int; c text;
+begin
+  if p_src is null then return '{}'; end if;
+  n := length(p_src);
+  while i <= n loop
+    c := substr(p_src, i, 1);
+    if c = '-' and substr(p_src, i + 1, 1) = '-' then
+      p := position(chr(10) in substr(p_src, i));
+      if p = 0 then i := n + 1; else i := i + p; end if;
+    elsif c = '/' and substr(p_src, i + 1, 1) = '*' then
+      d := 1; i := i + 2;
+      while i <= n and d > 0 loop
+        if substr(p_src, i, 2) = '/*' then d := d + 1; i := i + 2;
+        elsif substr(p_src, i, 2) = '*/' then d := d - 1; i := i + 2;
+        else i := i + 1; end if;
+      end loop;
+    elsif c = '''' then
+      s := i + 1; i := i + 1;
+      loop
+        exit when i > n;
+        if substr(p_src, i, 1) = '''' then
+          if substr(p_src, i, 2) = '''''' then i := i + 2; else exit; end if;
+        else i := i + 1; end if;
+      end loop;
+      v_out := v_out || replace(substr(p_src, s, i - s), '''''', '''');
+      i := i + 1;
+    else
+      i := i + 1;
+    end if;
+  end loop;
+  return v_out;
+end $lsrlit$;
+
+-- (ج) مفاتيح jsonb_build_object المُصدَّرة فعلًا، بمسح متوازن الأقواس.
+--     الوسائط الزوجية مفاتيح والفردية قيم؛ والكائن المتداخل يُلتقط لأنّ المسح
+--     الخارجيّ يواصل المرور داخل الوسائط. فلا يفلت مفتاح تكلفة مدسوس في العمق.
+-- ‼️ البحث عن الوسم **واعٍ بالاقتباس**، وهذا ليس تجميلًا: بحثٌ ساذج كان سيدخل
+--    نصّ SQL الديناميكيّ حيث المفاتيح مكتوبة ''key'' باقتباس مهروب، فيقرأ
+--    المفتاح على أنّه ''key'' بعلاماته — مفتاحٌ لن يكون في أيّ قائمة، فيُسقط
+--    الترحيلة بإنذار كاذب. السلاسل تُفحص في مرور منفصل بعد فكّ الهروب.
+create or replace function public.lsr_json_keys(p_src text)
+returns text[] language plpgsql immutable set search_path = public as $lsrkeys$
+declare
+  v_out text[] := '{}';
+  n int; i int := 1; k int; d int; argi int; seg int; p int; c text; arg text;
+begin
+  if p_src is null then return '{}'; end if;
+  n := length(p_src);
+  while i <= n loop
+    c := substr(p_src, i, 1);
+    if c = '-' and substr(p_src, i + 1, 1) = '-' then
+      p := position(chr(10) in substr(p_src, i));
+      if p = 0 then i := n + 1; else i := i + p; end if;
+      continue;
+    elsif c = '/' and substr(p_src, i + 1, 1) = '*' then
+      d := 1; i := i + 2;
+      while i <= n and d > 0 loop
+        if substr(p_src, i, 2) = '/*' then d := d + 1; i := i + 2;
+        elsif substr(p_src, i, 2) = '*/' then d := d - 1; i := i + 2;
+        else i := i + 1; end if;
+      end loop;
+      continue;
+    elsif c = '''' then
+      i := i + 1;
+      loop
+        exit when i > n;
+        if substr(p_src, i, 1) = '''' then
+          if substr(p_src, i, 2) = '''''' then i := i + 2; else i := i + 1; exit; end if;
+        else i := i + 1; end if;
+      end loop;
+      continue;
+    elsif substr(p_src, i, 18) <> 'jsonb_build_object' then
+      i := i + 1;
+      continue;
+    end if;
+    k := i + 18;
+    i := k;                             -- المسح الخارجيّ يواصل داخل الوسائط.
+    while k <= n and substr(p_src, k, 1) ~ '\s' loop k := k + 1; end loop;
+    continue when k > n or substr(p_src, k, 1) <> '(';
+    k := k + 1; d := 1; argi := 0; seg := k;
+    while k <= n and d > 0 loop
+      c := substr(p_src, k, 1);
+      if c = '''' then
+        k := k + 1;
+        loop
+          exit when k > n;
+          if substr(p_src, k, 1) = '''' then
+            if substr(p_src, k, 2) = '''''' then k := k + 2; else k := k + 1; exit; end if;
+          else k := k + 1; end if;
+        end loop;
+        continue;
+      elsif c = '(' then d := d + 1;
+      elsif c = ')' then
+        d := d - 1;
+        if d = 0 then
+          arg := substr(p_src, seg, k - seg);
+          if argi % 2 = 0 and btrim(arg) <> '' then
+            v_out := v_out || public.lsr_key_of(arg); end if;
+          exit;
+        end if;
+      elsif c = ',' and d = 1 then
+        arg := substr(p_src, seg, k - seg);
+        if argi % 2 = 0 and btrim(arg) <> '' then
+          v_out := v_out || public.lsr_key_of(arg); end if;
+        argi := argi + 1; seg := k + 1;
+      end if;
+      k := k + 1;
+    end loop;
+  end loop;
+  return v_out;
+end $lsrkeys$;
+
+-- (د) الحكم على دالّة تواجه العميل: ماذا تُصدِر · هل تسكب صفًّا كاملًا ·
+--     هل يوجد استعلام على جدول مملوك للعميل بلا حصر بمعرّفه.
+create or replace function public.lsr_client_scan(p_src text)
+returns jsonb language plpgsql immutable set search_path = public as $lsrclient$
+declare
+  v_p jsonb; v_code text; v_str text; v_both text;
+  v_keys text[] := '{}'; l text; l2 text; v_unscoped text := null;
+begin
+  v_p := public.lsr_sql_partition(p_src);
+  v_code := coalesce(v_p ->> 'code', '');
+  v_str  := coalesce(v_p ->> 'strings', '');
+  v_both := v_code || chr(10) || v_str;
+  -- المفاتيح تُقرأ من كلّ مستوى بناء: plpgsql مباشرة، وSQL ديناميكيّ داخل
+  -- سلسلة، وسلسلة داخل سلسلة. الاكتفاء بمستوى واحد يترك بقيّة المخرَج بلا
+  -- تدقيق — ونصف قائمةٍ مغلقة قائمةٌ مفتوحة. وكلّ مستوى يُفكّ هروبه أوّلًا،
+  -- فتُقرأ ''key'' مفتاحًا لا نصًّا بعلاماته.
+  v_keys := public.lsr_json_keys(p_src);
+  foreach l in array public.lsr_sql_literals(p_src) loop
+    v_keys := v_keys || public.lsr_json_keys(l);
+    foreach l2 in array public.lsr_sql_literals(l) loop
+      v_keys := v_keys || public.lsr_json_keys(l2);
+    end loop;
+  end loop;
+  select coalesce(array_agg(distinct x), '{}'::text[]) into v_keys
+    from unnest(v_keys) as t(x);
+  -- حصر العميل: كلّ استعلام يقرأ عائلة جداول مملوكة للعميل يجب أن يحمل
+  -- client_id = $1 — وهو الوسيط الذي يُمرَّر من my_client_id() وحده.
+  foreach l in array public.lsr_sql_literals(p_src) loop
+    -- الاستعلام الفرعيّ يحمل جملة from خاصّة به، فالشكل البسيط يكفي ولا يحتاج
+    -- تعبيرًا يقفز فوق نصّ حرّ — وقفزةٌ كتلك تُطابق جدولًا بعيدًا فتُنذر كذبًا.
+    continue when l !~* '\m(from|join)\s+(only\s+)?(public\.)?(csub_|crm_|sq_|fin_|comms_)';
+    if l !~* '\mclient_id\s*=\s*\$1\M' then
+      v_unscoped := left(l, 160); exit; end if;
+  end loop;
+  return jsonb_build_object(
+    'keys', to_jsonb(v_keys),
+    -- إسقاط عريض: صفٌّ كامل يُسكب في المخرَج بلا تسمية = قائمة مفتوحة، أي بلا
+    -- قائمة. (‏select * داخل استعلام فرعيّ إسقاطُه الخارجيّ مسمّى — وذلك مقبول
+    -- ولا يُطابَق هنا: المرفوض هو سكب الصفّ **في النتيجة** لا قراءته.)
+    'wide_projection',
+      (v_both ~* '\mto_jsonb\s*\(\s*[a-z_][a-z_0-9]{0,62}\s*\)'
+       or v_both ~* '\mrow_to_json\s*\('
+       or v_both ~* '\mjsonb_agg\s*\(\s*[a-z_][a-z_0-9]{0,62}\s*\)'
+       or v_both ~* '\mjsonb_agg\s*\(\s*[a-z_][a-z_0-9]{0,62}\s+order\s'),
+    'unscoped_query', v_unscoped is not null,
+    'unscoped_sample', v_unscoped);
+end $lsrclient$;
+
+comment on function public.lsr_client_scan(text) is
+  'يعدّ مفاتيح JSON التي تُصدِرها دالّة تواجه العميل، ويكشف الإسقاط العريض والاستعلام غير المحصور بمعرّف العميل.';
+
+-- 13.9.4 صلاحيات الكواشف. كتلة المنح في §13 تسبق هذا القسم، فلو تُركت بلا
+--        سحب لبقيت منحة PUBLIC الافتراضية عليها — وهي وحدها كافية لإسقاط
+--        صفّ «لا EXECUTE لـanon ولا PUBLIC» في POSTCHECK. هذه أدوات فحص
+--        داخليّة لا سطح تطبيق: لا تقرأ جدولًا ولا تفحص صلاحية.
 do $gp$
 declare f text;
 begin
-  foreach f in array array['public.lsr_sql_partition(text)','public.lsr_contract_scan(text)']
+  foreach f in array array['public.lsr_sql_partition(text)','public.lsr_contract_scan(text)',
+                           'public.lsr_key_of(text)','public.lsr_sql_literals(text)',
+                           'public.lsr_json_keys(text)','public.lsr_client_scan(text)']
   loop
     execute format('revoke all on function %s from public', f);
     begin execute format('revoke all on function %s from anon', f); exception when undefined_object then null; end;
@@ -2633,14 +2835,37 @@ end $gp$;
 -- ════════════════════════════════════════════════════════════════════════════
 do $selftest$
 declare
-  v_def text; v_n int; t text; f text; v_bad text;
+  v_def text; v_n int; t text; f text; v_bad text; v_arr text[];
   v_scan jsonb; v_body text; v_hop int;
   v_seen text[] := '{}'; v_frontier text[] := '{}'; v_next text[] := '{}';
   v_all text[] := '{}';
   -- ★ الحدّ الداخليّ المسموح ★ مركز الاتصالات طابور داخليّ لا نداء خارجيّ، ما
   --   دام dry_run مثبَّتًا — وهو ما يُثبته الفحص (٨-ب) أدناه كتابةً لا وعدًا.
   --   ولذلك لا نَنزل داخله في رسم النداءات ولا نعدّه خرقًا.
-  v_boundary text[] := array['lsr_sql_partition','lsr_contract_scan'];
+  v_boundary text[] := array['lsr_sql_partition','lsr_contract_scan',
+                             'lsr_key_of','lsr_sql_literals','lsr_json_keys','lsr_client_scan'];
+  -- ★ قائمة مفاتيح لوحة العميل ★ مغلقة بالكامل. كلّ مبلغ فيها **سعر بيع**
+  --   يُفوتَر على هذا العميل نفسه: سعر باقته وضريبتها، ورسوم تجاوزه هو.
+  --   لا تكلفة ولا هامش ولا أرضية سعر ولا سعر مورّد ولا قيمة داخلية — وليس
+  --   في القائمة رقمٌ يُطرح من آخر فيبلغ اقتصادًا داخليًّا. أيّ مفتاح جديد
+  --   يجب أن يُبرَّر ويُضاف هنا صراحةً قبل أن يمرّ؛ وهذا هو الفرق بين قائمة
+  --   مغلقة وقائمة مفتوحة تُسمّى قائمة.
+  v_client_keys text[] := array[
+    -- المستوى الأعلى
+    'ok','available','reason','message','client_id','subscriptions','balances',
+    'requests','usage_ledger','excluded_by_design','note',
+    -- الاشتراكات: عقد العميل وسعره المفوتَر عليه
+    'subscription_id','code','status','start_date','end_date','renewal_date','package',
+    'terms','limitations','price_net','vat_rate','vat_amount','price_gross','currency',
+    'allow_overage','overage_requires_approval',
+    -- الأرصدة: وحدات لا مال
+    'unit_type','allocated','reserved','used','expired',
+    -- سجلّ الاستهلاك: استهلاكه ورسوم تجاوزه المفوتَرة عليه
+    'occurred_at','entry_type','quantity','usage_date','description','overage_units',
+    'overage_amount_net','overage_vat_amount','overage_amount_gross',
+    -- الطلبات: تشغيليّة بالوحدات
+    'id','units','credits_required','overage_estimate_units','city',
+    'preferred_date','scheduled_date','decision_note'];
 begin
   -- (١) البنية موجودة كاملة.
   foreach t in array array[
@@ -2840,6 +3065,68 @@ begin
   end loop;
   if v_def not ilike '%my_client_id%' then
     raise exception 'LSR SELF-TEST: لوحة العميل بلا حصر بهُويّة العميل'; end if;
+
+  -- (٩-ب) ★★ القائمة المغلقة — الحارس الحقيقيّ ★★
+  --   الفحص أعلاه يمنع أسماء **نعرفها**. هذا يمنع كلّ ما لا نعرفه: نعدّ مفاتيح
+  --   JSON الخارجة فعلًا، ونرفض أيّ مفتاح خارج القائمة. عمود داخليّ جديد باسم
+  --   لم يخطر لنا لن يمرّ لأنّه ببساطة ليس في القائمة.
+  v_scan := public.lsr_client_scan(v_def);
+  select coalesce(array_agg(x.value #>> '{}'), '{}'::text[]) into v_arr
+    from jsonb_array_elements(v_scan -> 'keys') as x(value);
+  foreach f in array v_arr loop
+    if f <> all (v_client_keys) then
+      raise exception 'LSR SELF-TEST: لوحة العميل تُصدِر مفتاحًا خارج القائمة المغلقة (%) — أضِفه إلى القائمة بتبرير مكتوب أو احذفه', f;
+    end if;
+  end loop;
+  if coalesce(array_length(v_arr, 1), 0) < 30 then
+    raise exception 'LSR SELF-TEST: قارئ مفاتيح لوحة العميل عاد بـ% مفتاحًا — الفحص أجوف لا ناجح', coalesce(array_length(v_arr, 1), 0);
+  end if;
+  -- والاتّجاه المعاكس: لا مدخل ميت في القائمة. بدونه يمكن **تمهيد** القائمة
+  -- بمفتاح داخليّ اليوم ثمّ إصداره غدًا بلا أن يوقظ الفحص أحدًا.
+  foreach f in array v_client_keys loop
+    if f <> all (v_arr) then
+      raise exception 'LSR SELF-TEST: القائمة المغلقة تُجيز مفتاحًا لا تُصدِره اللوحة (%) — تمهيدٌ مسبق لتسريب لاحق', f;
+    end if;
+  end loop;
+  -- (٩-ج) إسقاط عريض = قائمة مفتوحة. صفٌّ كامل بلا تسمية يُبطل القائمة كلّها.
+  if (v_scan ->> 'wide_projection')::boolean then
+    raise exception 'LSR SELF-TEST: لوحة العميل تسكب صفًّا كاملًا (to_jsonb/row_to_json/jsonb_agg بلا مفاتيح) — لقطة عريضة تعني قائمة مفتوحة';
+  end if;
+  -- (٩-د) عبر العملاء: كلّ استعلام على جدول مملوك للعميل محصور بمعرّفه.
+  if (v_scan ->> 'unscoped_query')::boolean then
+    raise exception 'LSR SELF-TEST: استعلام في لوحة العميل بلا client_id = $1 — قراءة عابرة للعملاء: %', coalesce(v_scan ->> 'unscoped_sample', '');
+  end if;
+  -- (٩-هـ) ★ الالتفاف غير المباشر ★ دالّة نظيفة تنادي دالّة تقرأ الهامش تُسرّبه
+  --   بالوكالة. نمشي رسم النداءات من لوحة العميل وحدها (ثلاث قفزات) ونحكم على
+  --   قراءة ماليّة ممنوعة في كلّ ما تبلغه — ولا نوسّعها إلى الموديول كلّه لأنّ
+  --   المرجع الماليّ يقرأ الذمم بحقّ، والاتّساع هنا كان سيُسقط الترحيلة بلا خرق.
+  v_seen := '{}'; v_frontier := array['lsr_dashboard_client'];
+  for v_hop in 1..3 loop
+    v_next := '{}';
+    foreach t in array v_frontier loop
+      continue when t = any(v_seen) or t = any(v_boundary);
+      v_seen := v_seen || t;
+      v_def := null;
+      begin
+        select pg_get_functiondef(p.oid) into v_def from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = t limit 1;
+      exception when others then v_def := null; end;
+      continue when v_def is null;
+      if (public.lsr_contract_scan(v_def) ->> 'forbidden_finance_read')::boolean then
+        raise exception 'LSR SELF-TEST: لوحة العميل تبلغ % التي تقرأ تكلفة/هامش — تسريب بالوكالة', t;
+      end if;
+      v_body := coalesce(public.lsr_sql_partition(v_def) ->> 'code', '') || chr(10)
+             || coalesce(public.lsr_sql_partition(v_def) ->> 'strings', '');
+      foreach f in array v_all loop
+        continue when f = t or f = any(v_seen) or f = any(v_next) or f = any(v_boundary);
+        if position(f in v_body) > 0 and v_body ~ ('\m' || f || '\s*\(') then
+          v_next := v_next || f; end if;
+      end loop;
+    end loop;
+    v_frontier := v_next;
+    exit when array_length(v_frontier, 1) is null;
+  end loop;
 
   -- (١٠) طابور العمليات: بلا ماليّة حسّاسة.
   v_def := pg_get_functiondef(to_regprocedure('public.lsr_dashboard_operations(jsonb)'));

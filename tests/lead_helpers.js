@@ -122,6 +122,150 @@ function funcArgs(name, src = SQL) {
   return m[1];
 }
 
+/**
+ * كلّ سلسلة حرفية على حدة — منقول عن public.lsr_sql_literals بالخوارزمية.
+ * الاستعلام الديناميكيّ متعدّد الأسطر يجب أن يُقاس **كوحدة**: لو قُطّع أسطرًا
+ * لبدا سطرٌ فيه بلا حصر بالعميل بينما الحصر في سطر آخر من الاستعلام نفسه.
+ */
+function sqlLiterals(src) {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  while (i < n) {
+    const c = src[i];
+    if (c === "-" && src[i + 1] === "-") {
+      const p = src.indexOf("\n", i);
+      i = p < 0 ? n : p + 1;
+    } else if (c === "/" && src[i + 1] === "*") {
+      let d = 1; i += 2;
+      while (i < n && d > 0) {
+        if (src.startsWith("/*", i)) { d++; i += 2; }
+        else if (src.startsWith("*/", i)) { d--; i += 2; }
+        else i++;
+      }
+    } else if (c === "'") {
+      const s = ++i;
+      while (i < n) {
+        if (src[i] === "'") { if (src[i + 1] === "'") i += 2; else break; }
+        else i++;
+      }
+      out.push(src.slice(s, i).replace(/''/g, "'"));
+      i++;
+    } else i++;
+  }
+  return out;
+}
+
+/**
+ * مفاتيح jsonb_build_object المُصدَّرة فعلًا — منقول عن public.lsr_json_keys.
+ * الوسائط الزوجية مفاتيح والفردية قيم؛ والكائن المتداخل يُلتقط في مرور لاحق
+ * لأنّ المؤشّر يتقدّم وسمًا لا كائنًا — فلا يفلت مفتاحٌ مدسوس في العمق.
+ * مفتاحٌ غير حرفيّ يعود «<computed>»: ما لا يُدقَّق ساكنًا يُردّ بالتصميم.
+ */
+function jsonKeys(src) {
+  const TOK = "jsonb_build_object";
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  while (i < n) {
+    const c0 = src[i];
+    if (c0 === "-" && src[i + 1] === "-") {
+      const p = src.indexOf("\n", i);
+      i = p < 0 ? n : p + 1;
+      continue;
+    }
+    if (c0 === "/" && src[i + 1] === "*") {
+      let d0 = 1; i += 2;
+      while (i < n && d0 > 0) {
+        if (src.startsWith("/*", i)) { d0++; i += 2; }
+        else if (src.startsWith("*/", i)) { d0--; i += 2; }
+        else i++;
+      }
+      continue;
+    }
+    // ‼️ تخطّي السلسلة **قبل** البحث عن الوسم: بحثٌ ساذج كان سيدخل نصّ SQL
+    //    الديناميكيّ حيث المفاتيح مكتوبة ''key'' بهروب، فيقرأها بعلاماتها —
+    //    مفتاحٌ لا يوجد في أيّ قائمة، أي إنذار كاذب يُسقط ترحيلة سليمة.
+    if (c0 === "'") {
+      i++;
+      while (i < n) {
+        if (src[i] === "'") { if (src[i + 1] === "'") i += 2; else { i++; break; } }
+        else i++;
+      }
+      continue;
+    }
+    if (!src.startsWith(TOK, i)) { i++; continue; }
+    let k = i + TOK.length;
+    i = k;                      // المسح الخارجيّ يواصل داخل الوسائط.
+    while (k < n && /\s/.test(src[k])) k++;
+    if (k >= n || src[k] !== "(") continue;
+    k++;
+    let d = 1;
+    let argi = 0;
+    let seg = k;
+    const take = (end) => {
+      const arg = src.slice(seg, end).trim();
+      if (argi % 2 !== 0 || arg === "") return;
+      const m = /^'([\s\S]*)'$/.exec(arg);
+      out.push(m ? m[1] : "<computed>");
+    };
+    while (k < n && d > 0) {
+      const c = src[k];
+      if (c === "'") {
+        k++;
+        while (k < n) {
+          if (src[k] === "'") { if (src[k + 1] === "'") k += 2; else { k++; break; } }
+          else k++;
+        }
+        continue;
+      } else if (c === "(") d++;
+      else if (c === ")") { d--; if (d === 0) { take(k); break; } }
+      else if (c === "," && d === 1) { take(k); argi++; seg = k + 1; }
+      k++;
+    }
+  }
+  return out;
+}
+
+/**
+ * كلّ مفاتيح JSON التي تُصدِرها دالّة، عبر مستويات البناء الثلاثة:
+ * plpgsql مباشرة · SQL ديناميكيّ داخل سلسلة · سلسلة داخل سلسلة.
+ * منقول عن public.lsr_client_scan بالخوارزمية نفسها.
+ */
+function emittedKeys(src) {
+  const out = new Set(jsonKeys(src));
+  for (const l of sqlLiterals(src)) {
+    for (const k of jsonKeys(l)) out.add(k);
+    for (const l2 of sqlLiterals(l)) for (const k of jsonKeys(l2)) out.add(k);
+  }
+  return [...out];
+}
+
+/**
+ * القائمة المغلقة لمفاتيح لوحة العميل — **مقروءة من RUNME** لا مكرّرة هنا.
+ * السبب: مصدر حقيقة واحد. لو نُسخت القائمة في الاختبار لأمكن أن تتباعد
+ * النسختان، فيمرّ مفتاح في SQL ويسقط في الاختبار (أو الأسوأ: العكس).
+ */
+function clientKeyAllowlist() {
+  const st = selfTest();
+  const i = st.indexOf("v_client_keys text[] := array[");
+  assert.ok(i > 0, "قائمة مفاتيح لوحة العميل غائبة عن الفحص الذاتيّ");
+  const j = st.indexOf("];", i);
+  assert.ok(j > i, "قائمة مفاتيح لوحة العميل غير مغلقة");
+  const keys = [...stripComments(st.slice(i, j)).matchAll(/'([a-z_0-9]+)'/g)].map((m) => m[1]);
+  assert.ok(keys.length >= 30, `القائمة المغلقة قصيرة على نحو مريب (${keys.length})`);
+  return keys;
+}
+
+/** كلّ دالّة معرَّفة في الحزمة: الاسم ← جسمها. أساس رسم النداءات الساكن. */
+function allFuncBodies() {
+  const map = new Map();
+  for (const m of SQL.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z_0-9]+)\s*\(/gi)) {
+    if (!map.has(m[1])) map.set(m[1], funcBody(m[1]));
+  }
+  return map;
+}
+
 /** كتلة الفحص الذاتيّ في نهاية RUNME. */
 function selfTest() {
   const i = SQL.indexOf("do $selftest$");
@@ -215,6 +359,7 @@ module.exports = {
   ROOT, read, exists, SQL, PREFLIGHT, POSTCHECK, ROLLBACK, DOCS,
   stripCommentsAndStrings, stripComments, stripRegexOperands,
   funcSrc, funcBody, funcArgs, selfTest, tableSrc,
+  sqlLiterals, jsonKeys, emittedKeys, clientKeyAllowlist, allFuncBodies,
   TABLES, PREDICATES, API_FNS, INTERNAL_FNS, FACTORS, EVENTS,
   FORBIDDEN, FORBIDDEN_GATES,
 };

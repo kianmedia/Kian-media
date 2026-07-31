@@ -55,9 +55,56 @@
 --   • Safe whether the lsr_* objects exist or not: every probe reads the
 --     catalog, never the objects themselves.
 --
+-- ── SECOND ABORT (SAME DEFECT, DIFFERENT RULE) ─────────────────────────────
+--   The corrected RUNME was re-run. It aborted again, before COMMIT, in §14:
+--
+--     ERROR P0001: LSR SELF-TEST: قراءة مالية ممنوعة (تكلفة/هامش/ربح/أرضية)
+--                  داخل lsr_dashboard_client
+--     PL/pgSQL function inline_code_block line 69 at RAISE
+--
+--   The rule that fired was `forbidden_finance_read`, whose second alternative
+--   was still a BARE WORD LIST — the one rule the first repair did not reshape:
+--
+--     v_both ~* '\m(base_cost|cost_rate|margin_pct|gross_profit
+--                   |floor_price|supplier_rate|sq_quote_internal)\M'
+--
+--   It matched inside public.lsr_dashboard_client, in this array:
+--
+--     jsonb_build_array('internal_notes','internal_metadata','decision_reason',
+--                       'cost','margin','floor_price','profit','supplier_rate')
+--
+--   — the `excluded_by_design` list, i.e. the projection's own declaration that
+--   these fields are NOT shown. Matched tokens: floor_price, supplier_rate.
+--   THE DASHBOARD ABORTED THE MIGRATION BY LISTING WHAT IT REFUSES TO EMIT.
+--   Structurally identical to the `zoho` bug it replaced. FALSE POSITIVE: the
+--   function reads no cost, margin, floor or supplier column in executable
+--   code — §V2c below proves that mechanically, on this database.
+--
+--   THE REPAIR (already in RUNME)
+--     • forbidden_finance_read now requires READ SHAPE: a QUALIFIED COLUMN
+--       reference (`s.base_cost`) or a TABLE reference (`from public.fin_costs`).
+--       A bare name inside a string array is a LABEL and can no longer fire.
+--       Strings are still scanned — this module reads through `execute '…'`.
+--     • The last remaining bare-word alternative over strings (pg_net | dblink |
+--       pg_background in external_call) was reshaped the same way. Every rule
+--       that scans strings now matches shape; every rule that matches a bare
+--       name is restricted to `code`, where comments are gone and strings are
+--       emptied, so a name IS a use.
+--     • Shape is necessary, not sufficient: it cannot stop a NEW internal column
+--       whose name nobody enumerated. So an EXPLICIT CLOSED ALLOWLIST of the
+--       JSON keys lsr_dashboard_client emits was added (public.lsr_json_keys +
+--       public.lsr_client_scan), refusing any key outside it — in both
+--       directions, so the list cannot be pre-padded either. Wide row projection
+--       (to_jsonb(row) / row_to_json / jsonb_agg(row)) is refused as well: an
+--       unnamed snapshot is an open list, i.e. no list. And every client query
+--       must carry client_id = $1.
+--     • The excluded_by_design array was NOT edited to dodge the test. Deleting
+--       the declaration to satisfy a broken detector is concealment, not repair.
+--
 -- WHAT IT PROVES
 --   V1  no partial lsr_* state — tables, functions, policies, triggers, types
---   V2  the false positive, spelled out, and that no real violation existed
+--   V2  the FIRST false positive, spelled out, and that no real violation existed
+--   V2c the SECOND false positive, spelled out, and that the new rule is not blind
 --   V3  the six ALREADY-APPLIED packages are intact and untouched
 --   V4  what to do next
 -- ════════════════════════════════════════════════════════════════════════════
@@ -108,6 +155,12 @@ six_counts as (
 sentence(txt) as (
   values ('عقد بيانات لا كتابة متبادلة: هذه الوحدة تقرأ مراجع المالية ولا تكتب فيها، ولا تنشئ فاتورة، ولا تنادي Zoho، ولا تدّعي تحصيلًا.')
 ),
+-- The array below is a verbatim copy of the `excluded_by_design` list inside
+-- public.lsr_dashboard_client — the projection's own declaration of what it
+-- refuses to emit, and the text that aborted the second run.
+excluded_array(txt) as (
+  values ('jsonb_build_array(''internal_notes'',''internal_metadata'',''decision_reason'',''cost'',''margin'',''floor_price'',''profit'',''supplier_rate'')')
+),
 verdicts as (
   select
     -- the OLD check, exactly as it was written when it aborted
@@ -127,7 +180,34 @@ verdicts as (
     -- the identical latent defect in check (2): a COMMENT would have aborted too
     '-- this engine never reads gender or nationality'
       ~* '\m(gender|nationality|ethnic|religio|marital|date_of_birth|birth_date|age_group|age_band)'
-      as old_check2_fires_on_comment
+      as old_check2_fires_on_comment,
+
+    -- ── the SECOND abort, reproduced the same way ──────────────────────────
+    -- the OLD forbidden_finance_read alternative, exactly as it was written
+    (select txt from excluded_array)
+      ~* '\m(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate|sq_quote_internal)\M'
+      as old2_fires,
+    -- the NEW judgement: a QUALIFIED COLUMN reference, never a bare label
+    (select txt from excluded_array)
+      ~* '\m[a-z_][a-z_0-9]{0,62}\.(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate)\M'
+      as new2_fires_column,
+    -- ... nor a TABLE reference in a statement
+    (select txt from excluded_array)
+      ~* '\m(from|join|into|update|table)\s+(only\s+)?(public\.)?(fin_costs|sq_quote_internal)\M'
+      as new2_fires_table,
+    -- proof it is not blind: a REAL qualified read of the floor price still fires
+    'execute ''select s.floor_price from public.csub_subscriptions s'''
+      ~* '\m[a-z_][a-z_0-9]{0,62}\.(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate)\M'
+      as new2_catches_real_read,
+    -- ... and a REAL reference to the internal cost table still fires
+    'execute ''select 1 from public.sq_quote_internal q'''
+      ~* '\m(from|join|into|update|table)\s+(only\s+)?(public\.)?(fin_costs|sq_quote_internal)\M'
+      as new2_catches_real_table,
+    -- ... and the last bare-word alternative over strings was reshaped too
+    'this module never uses pg_net for anything'
+      ~* '\m(pg_net|dblink|pg_background)[a-z_0-9]{0,40}\s*[(.]'   as new2_prose_pg_net_fires,
+    'perform pg_net.http_collect_response(p_lead);'
+      ~* '\m(pg_net|dblink|pg_background)[a-z_0-9]{0,40}\s*[(.]'   as new2_catches_real_pg_net
 ),
 
 -- ─── §V2b: did the module ever get far enough to leave a trace? ─────────────
@@ -137,7 +217,9 @@ verdicts as (
 detector as (
   select
     to_regprocedure('public.lsr_sql_partition(text)') is not null as has_partition,
-    to_regprocedure('public.lsr_contract_scan(text)') is not null as has_scan
+    to_regprocedure('public.lsr_contract_scan(text)') is not null as has_scan,
+    to_regprocedure('public.lsr_json_keys(text)')     is not null as has_keys,
+    to_regprocedure('public.lsr_client_scan(text)')   is not null as has_client_scan
 )
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -175,6 +257,8 @@ select 103, 'V1.detector_absent_as_expected',
             else 'PASS — lsr_sql_partition / lsr_contract_scan do not exist, consistent with a full rollback' end,
        'lsr_sql_partition=' || (select has_partition from detector)::text
          || ' · lsr_contract_scan=' || (select has_scan from detector)::text
+         || ' · lsr_json_keys=' || (select has_keys from detector)::text
+         || ' · lsr_client_scan=' || (select has_client_scan from detector)::text
 
 -- ═══ V2. ★ THE FINGERPRINT — WHY IT ABORTED, AND THAT NOTHING WAS WRONG ★ ══
 union all
@@ -220,6 +304,43 @@ select 114, 'V2.no_real_violation_existed', 'INFO — audited before the repair'
          || 'Every occurrence of the word zoho in the package is prose: three comments and one contract sentence. '
          || 'Separately, the finance READ surface was narrowed to the contract: reference, status, due date and a general collection state — no amount, no price, no VAT, no renewal value.'
 
+-- ═══ V2c. ★ THE SECOND FINGERPRINT — SAME DEFECT, DIFFERENT RULE ★ ════════
+union all
+select 115, 'V2c.the_second_false_positive',
+       case when v.old2_fires and not v.new2_fires_column and not v.new2_fires_table
+              then 'CONFIRMED FALSE POSITIVE — the old bare-word alternative fires on the excluded_by_design array; the read-shape judgement does not. lsr_dashboard_client reads no cost, margin, floor or supplier column.'
+            when not v.old2_fires
+              then 'UNEXPECTED — the old alternative does not fire on this array; the second abort had another cause'
+            else 'REAL VIOLATION — the read-shape judgement also fires; investigate before re-running' end,
+       'old bare-word alternative fires = ' || v.old2_fires::text
+         || '  ·  new QUALIFIED-COLUMN shape fires = ' || v.new2_fires_column::text
+         || '  ·  new TABLE-reference shape fires = ' || v.new2_fires_table::text
+from verdicts v
+
+union all
+select 116, 'V2c.why_it_matched', 'INFO — the words, spelled out',
+       'the array is the projection''s own excluded_by_design list. It names floor_price and supplier_rate in order to DECLARE THAT THEY ARE NOT SHOWN. '
+         || 'The old alternative matched a bare word in code AND strings, so it could not tell a qualified column reference (s.floor_price — a read) from a string label (''floor_price'' — a declaration). '
+         || 'So the client dashboard aborted the migration BY LISTING WHAT IT REFUSES TO EMIT — the same failure mode as the Zoho sentence, one rule later.'
+
+union all
+select 117, 'V2c.the_new_rule_is_not_blind',
+       case when v.new2_catches_real_read and v.new2_catches_real_table
+                 and v.new2_catches_real_pg_net and not v.new2_prose_pg_net_fires
+              then 'CONFIRMED — a REAL qualified read (s.floor_price), a REAL cost-table reference and a REAL pg_net call all still fire, while prose mentioning pg_net no longer does'
+            else 'FAIL — the repair weakened the check instead of correcting it; do not run RUNME' end,
+       'qualified read s.floor_price detected = ' || v.new2_catches_real_read::text
+         || '  ·  from public.sq_quote_internal detected = ' || v.new2_catches_real_table::text
+         || '  ·  pg_net.http_collect_response(...) detected = ' || v.new2_catches_real_pg_net::text
+         || '  ·  prose «never uses pg_net» fires = ' || v.new2_prose_pg_net_fires::text
+from verdicts v
+
+union all
+select 118, 'V2c.shape_alone_is_not_the_guard', 'INFO — what was ADDED, not weakened',
+       'shape-matching is necessary and not sufficient: it cannot stop a NEW internal column nobody enumerated. RUNME therefore also enumerates the JSON keys lsr_dashboard_client actually emits and refuses any key outside an explicit closed allowlist — and refuses any allowlist entry that is not emitted, so the list cannot be padded in advance. '
+         || 'Wide row projection (to_jsonb(row) / row_to_json / jsonb_agg(row)) is refused as an open list. Every client query must carry client_id = $1. '
+         || 'Every amount on that allowlist is a SELLING amount billed to that same client: their own contract price, its VAT, and their own overage charges. None is cost, margin, floor price or supplier rate, and no two of them subtract to one.'
+
 -- ═══ V3. THE SIX APPLIED PACKAGES ARE INTACT ═══════════════════════════════
 union all
 select 120 + c.ord, 'V3.' || c.pkg || '_intact',
@@ -239,7 +360,7 @@ select 140, 'V4.next_step',
        case when (select n_tables + n_funcs from lsr) = 0
               then 'RE-RUN — apply the corrected docs/lead_scoring_routing_RUNME.sql, then docs/lead_scoring_routing_POSTCHECK.sql'
             else 'STOP — object state is not empty; resolve V1 before re-running' end,
-       'the correction is in the DETECTOR (lsr_sql_partition + lsr_contract_scan + the call-graph walk), not in the schema and not in the contract sentence. Nothing was renamed, no check was weakened, and no evidence was edited to pass.'
+       'the correction is in the DETECTOR (lsr_sql_partition + lsr_contract_scan + the call-graph walk + lsr_json_keys/lsr_client_scan), not in the schema, not in the contract sentence and not in the excluded_by_design array. Nothing was renamed, no check was weakened — one was added — and no evidence was edited to pass.'
 
 ) rows
 order by ord;

@@ -32,7 +32,9 @@
 // ════════════════════════════════════════════════════════════════════════════
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { SQL, funcBody, selfTest, stripComments } = require("./lead_helpers.js");
+const {
+  SQL, funcBody, selfTest, stripComments, allFuncBodies,
+} = require("./lead_helpers.js");
 
 // ─── (أ) منفَذ التقسيم: منقول عن public.lsr_sql_partition حرفيًّا بالخوارزمية ──
 //
@@ -141,6 +143,7 @@ const P = {
   projectWrite: patternsOf("project_write"),
   externalCall: patternsOf("external_call"),
   sensitive: patternsOf("sensitive_attribute"),
+  forbiddenRead: patternsOf("forbidden_finance_read"),
 };
 
 /**
@@ -156,6 +159,7 @@ function scan(src) {
     project_write: at(P.projectWrite),
     external_call: at(P.externalCall),
     sensitive_attribute: at(P.sensitive),
+    forbidden_finance_read: at(P.forbiddenRead),
   };
 }
 
@@ -384,6 +388,174 @@ test("عقد المالية: القراءات المسموحة فقط، ولا �
     assert.doesNotMatch(both, new RegExp(`\\b[a-z]\\.${col}\\b`, "i"),
       `★ قراءة ماليّة ممنوعة (${col}) ★`);
   }
+});
+
+// ─── (هـ) ★★ قراءة ماليّة ممنوعة: الشكل يميّز الارتكاب من الإعلان ★★ ───────
+//
+// الحادثة الثانية بنصّها: الصيغة القديمة طابقت **الاسم المجرّد** floor_price
+// و supplier_rate، فأسقطتها مصفوفة excluded_by_design في lsr_dashboard_client —
+// وهي المصفوفة التي تُعلن أنّ هذه الحقول **غير** معروضة. الدالّة سقطت لأنّها
+// أعلنت براءتها، تمامًا كما سقطت قبلها بجملة «ولا تنادي Zoho».
+
+test("(٩) قراءة حقيقية s.floor_price — تسقط", () => {
+  const f = wrap("lsr_bad_floor", `
+begin
+  execute 'select s.floor_price from public.csub_subscriptions s' into v_x;
+  return '{}'::jsonb;
+end`);
+  assert.equal(scan(f).forbidden_finance_read, true,
+    "★ قراءة أرضية السعر أفلتت — الحارس أُضعف بحجّة إصلاح الإنذار الكاذب");
+});
+
+test("(٩-ب) قراءة حقيقية s.supplier_rate — تسقط", () => {
+  const f = wrap("lsr_bad_supplier", `
+begin
+  execute 'select s.supplier_rate from public.csub_subscriptions s' into v_x;
+  return '{}'::jsonb;
+end`);
+  assert.equal(scan(f).forbidden_finance_read, true, "★ سعر المورّد أفلت");
+});
+
+test("(٩-ج) إشارة إلى جدول التكلفة في جملة — تسقط", () => {
+  for (const stmt of ["select 1 from public.fin_costs c",
+                      "select 1 from public.sq_quote_internal q",
+                      "select c.x from fin_costs c"]) {
+    const f = wrap("lsr_bad_costs_table", `
+begin
+  execute '${stmt}' into v_x;
+  return '{}'::jsonb;
+end`);
+    assert.equal(scan(f).forbidden_finance_read, true,
+      `★ إشارة جدول تكلفة أفلتت: ${stmt}`);
+  }
+});
+
+test("(٩-د) ★ العطب الذي شُحن ★ الأسماء داخل مصفوفة «المستبعَد بالتصميم» — تمرّ", () => {
+  const f = wrap("lsr_ok_excluded_array", `
+begin
+  return jsonb_build_object('excluded_by_design',
+    jsonb_build_array('internal_notes','internal_metadata','decision_reason',
+                      'cost','margin','floor_price','profit','supplier_rate'));
+end`);
+  assert.equal(scan(f).forbidden_finance_read, false,
+    "★ الانحدار عاد ★ الدالّة تسقط لأنّ قائمة المستبعَد تسمّي ما استبعدته — " +
+    "هذا نصّ الحادثة الثانية حرفيًّا");
+});
+
+test("(٩-هـ) كلمة profit داخل تعليق، وجملة «لا تعرض profit» داخل سلسلة — تمرّان", () => {
+  const f = wrap("lsr_ok_prose", `
+begin
+  -- هذه اللوحة لا تحمل gross_profit ولا margin_pct ولا floor_price إطلاقًا.
+  return jsonb_build_object('note', 'لا تعرض profit ولا هامشًا ولا أرضية سعر.');
+end`);
+  assert.equal(scan(f).forbidden_finance_read, false,
+    "★ نثرٌ يشرح المنع أُدين كخرق — الحارس سيُعطَّل بعد أوّل إنذار كاذب");
+});
+
+test("(٩-و) ★ لوحة العميل الحقيقية في RUNME لا تُدين نفسها ★", () => {
+  const real = funcBody("lsr_dashboard_client");
+  assert.equal(scan(real).forbidden_finance_read, false,
+    "★ الترحيلة ستسقط ★ لوحة العميل تُدان بقراءة ماليّة وهي لا تقرأ عمودًا واحدًا منها");
+  // والقائمة المُعلَنة باقية بلا تعديل: العلاج في الكاشف لا في حذف الإعلان.
+  assert.ok(real.includes("'floor_price'") && real.includes("'supplier_rate'"),
+    "★ حُذف الإعلان للتملّص من الفحص — هذا إخفاء لا إصلاح");
+  // ولا دالّة أخرى في الحزمة تسقط على هذا الحارس.
+  for (const name of ["lsr_dashboard_owner", "lsr_dashboard_sales",
+                      "lsr_dashboard_operations", "lsr_finance_reference"]) {
+    assert.equal(scan(funcBody(name)).forbidden_finance_read, false,
+      `★ إنذار كاذب على ${name} — الترحيلة ستسقط بلا خرق`);
+  }
+});
+
+test("(٩-ز) لا قاعدة تمسح السلاسل بالاسم المجرّد — تدقيق كلّ قواعد الكاشف", () => {
+  // القاعدة الحاكمة: ما يُمسح في v_both يجب أن يكون **شكل** جملة أو نداء أو
+  // إشارة مؤهَّلة. الاسم المجرّد مسموح في v_code وحده، لأنّ v_code بلا تعليقات
+  // وسلاسله مُفرَّغة — فالاسم فيه استعمالٌ لا ذكر.
+  const SHAPED =
+    /(insert|update|delete|truncate|from|join|into|table|https?|~|\\s\*\\\(|\\s\+|\[\(\.\]|\\\.|\{0,\d+\}\\\.)/;
+  for (const key of ["finance_write", "project_write", "external_call",
+                     "forbidden_finance_read"]) {
+    for (const { scope, re } of patternsOf(key)) {
+      if (scope === "v_code") continue;
+      assert.ok(SHAPED.test(re.source),
+        `★ ${key}: نمطٌ يمسح السلاسل بالاسم المجرّد (${re.source}) — ` +
+        `نثرٌ أو وسمٌ سيُدان كخرق، وهذا هو العطب الذي أسقط الإنتاج مرّتين`);
+    }
+  }
+});
+
+test("(١٠) تسريب الهامش **بالوكالة**: نداء غير مباشر لدالّة تقرأ margin — يسقط", () => {
+  const universe = {
+    lsr_client_entry: wrap("lsr_client_entry", `
+begin
+  return public.lsr_helper(p_lead);
+end`),
+    lsr_helper: wrap("lsr_helper", `
+begin
+  return public.lsr_margin_reader(p_lead);
+end`),
+    lsr_margin_reader: wrap("lsr_margin_reader", `
+begin
+  execute 'select s.margin_pct from public.csub_subscriptions s' into v_x;
+  return v_x;
+end`),
+  };
+  const names = Object.keys(universe);
+  const seen = new Set();
+  let frontier = ["lsr_client_entry"];
+  let violation = null;
+  for (let hop = 1; hop <= 3 && frontier.length; hop++) {
+    const next = [];
+    for (const t of frontier) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      const def = universe[t];
+      if (!def) continue;
+      if (scan(def).forbidden_finance_read) { violation = t; break; }
+      const { code, strings } = sqlPartition(def);
+      const body = code + "\n" + strings;
+      for (const f of names) {
+        if (f === t || seen.has(f)) continue;
+        if (body.includes(f) && new RegExp(`\\b${f}\\s*\\(`).test(body)) next.push(f);
+      }
+    }
+    if (violation) break;
+    frontier = next;
+  }
+  assert.equal(violation, "lsr_margin_reader",
+    "★ التسريب بالوكالة مرّ ★ لوحة نظيفة تنادي دالّة تقرأ الهامش تُسرّبه كاملًا");
+
+  // والفحص الذاتيّ في RUNME يجب أن يمشي هذا المسار من لوحة العميل فعلًا.
+  const st = selfTest();
+  assert.match(st, /v_frontier := array\['lsr_dashboard_client'\]/,
+    "الفحص الذاتيّ لا يمشي رسم النداءات من لوحة العميل");
+  assert.match(st, /تسريب بالوكالة/,
+    "الفحص الذاتيّ لا يُسقط قراءة ماليّة غير مباشرة من لوحة العميل");
+});
+
+test("(١٠-ب) رسم النداءات الحقيقيّ من لوحة العميل نظيف", () => {
+  const bodies = allFuncBodies();
+  const seen = new Set();
+  let frontier = ["lsr_dashboard_client"];
+  for (let hop = 1; hop <= 3 && frontier.length; hop++) {
+    const next = [];
+    for (const t of frontier) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      const def = bodies.get(t);
+      if (!def) continue;
+      assert.equal(scan(def).forbidden_finance_read, false,
+        `★ لوحة العميل تبلغ ${def && t} التي تقرأ تكلفة أو هامشًا — تسريب بالوكالة`);
+      const { code, strings } = sqlPartition(def);
+      const body = code + "\n" + strings;
+      for (const f of bodies.keys()) {
+        if (f === t || seen.has(f)) continue;
+        if (body.includes(f) && new RegExp(`\\b${f}\\s*\\(`).test(body)) next.push(f);
+      }
+    }
+    frontier = next;
+  }
+  assert.ok(seen.size >= 1, "رسم النداءات لم يزر شيئًا — الفحص أجوف");
 });
 
 test("SAFE: ساكن فقط (لا قاعدة بيانات ولا شبكة)", () => {
