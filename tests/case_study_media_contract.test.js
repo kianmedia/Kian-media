@@ -111,7 +111,14 @@ test("external hosts need an allow-list; an empty list means repository paths on
   assert.ok(/media_allowed_hosts\s+text\[\] not null default '\{\}'/.test(RUNME));
   assert.ok(/'code','media_host_not_allowed','severity','blocker'/.test(RUNME));
   assert.ok(/constraint cs_media_url_shape check/.test(MEDIA_TABLE));
-  assert.ok(/\^\/\[A-Za-z0-9\._~%!\$&\*\+,;=:@\/-\]\{1,300\}\$/.test(MEDIA_TABLE), "absolute repo path shape");
+  // The shape used to carry the 300-char cap as a {1,300} bound. PostgreSQL
+  // caps a repetition bound at 255 (RE_DUP_MAX), so that CHECK would have
+  // aborted the migration. The shape is now unbounded and the cap moved to an
+  // explicit length() constraint — same guarantee, expressed where the engine
+  // can actually enforce it. Both halves are pinned so neither can be dropped.
+  assert.ok(/\^\/\[A-Za-z0-9\._~%!\$&\*\+,;=:@\/-\]\+\$/.test(MEDIA_TABLE), "absolute repo path shape");
+  assert.ok(/constraint cs_media_url_len check \(public_url is null or length\(public_url\) <= 300\)/
+    .test(MEDIA_TABLE), "the 300-character cap survives as an explicit length constraint");
   assert.ok(/\^https:\/\//.test(MEDIA_TABLE), "https only for external");
 });
 

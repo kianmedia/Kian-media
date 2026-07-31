@@ -713,7 +713,7 @@ returns text language sql immutable set search_path = public as $$
         regexp_replace(
           regexp_replace(
             regexp_replace(
-              regexp_replace(coalesce(p_text, ''), '<[^>]{0,4000}>', ' ', 'g'),
+              regexp_replace(coalesce(p_text, ''), '<[^>]*>', ' ', 'g'),
               E'[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]', '', 'g'),
             '\((https?://[^)\s]*(token=|X-Amz-|/object/sign/|signature=)[^)\s]*)\)',
             '(رابط-موقَّع-محذوف)', 'gi'),

@@ -124,7 +124,14 @@ test("★ 'ignore all instructions' (no article) matches the SQL pattern — the
 });
 
 test("ai_neutralize strips markup, invisible characters, signed links and command markers", () => {
-  assert.match(NEUTRALIZE, /<\[\^>\]\{0,4000\}>/, "angle-bracket markup is removed");
+  // The bound used to be {0,4000}. PostgreSQL caps a repetition bound at 255
+  // (RE_DUP_MAX), so that pattern did not compile — it aborted a migration on
+  // production. `[^>]` is a negated class and therefore already linear, so the
+  // bound bought nothing; removing it is both valid and strictly more correct,
+  // since markup longer than 4000 characters used to survive the strip.
+  assert.match(NEUTRALIZE, /<\[\^>\]\*>/, "angle-bracket markup is removed");
+  assert.doesNotMatch(NEUTRALIZE, /\{\s*\d*\s*,\s*(?:[3-9]\d\d|\d{4,})\s*\}/,
+    "no repetition bound over 255 — PostgreSQL refuses to compile it");
   assert.match(NEUTRALIZE, /u200B/, "zero-width and bidi characters are removed");
   assert.match(NEUTRALIZE, /object\/sign\//, "signed storage links are removed");
   assert.match(NEUTRALIZE, /X-Amz-/, "presigned S3 links are removed");

@@ -2275,7 +2275,7 @@ begin
   if not exists (select 1 from pg_constraint where conname='liveops_health_source_honest') then
     raise exception 'LIVEOPS SELF-TEST: قيد صدق مصدر القياس غائب'; end if;
   v_def := coalesce(pg_get_functiondef(to_regprocedure('public.liveops_health_record(jsonb)')),'');
-  if v_def !~* 'telemetry_not_connected' or v_def ~* 'values.{0,4000}''telemetry_verified''' then
+  if v_def !~* 'telemetry_not_connected' or v_def ~* 'values[^;]*''telemetry_verified''' then
     raise exception 'LIVEOPS SELF-TEST: مسار يدويّ قد يُنتج قراءة موثَّقة'; end if;
   if not exists (select 1 from pg_trigger where tgname='liveops_reports_uptime' and not tgisinternal) then
     raise exception 'LIVEOPS SELF-TEST: حارس أساس نسبة التشغيل غير مركَّب'; end if;

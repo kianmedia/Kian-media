@@ -560,10 +560,15 @@ create table if not exists public.cs_media (
     )),
 
   -- الشكل: مسار مستودع مطلق، أو https فقط.
+  -- ⚠️ سقف الطول 300 **لا يُكتب حدَّ تكرار**: محرّك regex في PostgreSQL يسقُف
+  --    الحدّ عند 255 (RE_DUP_MAX)، و{1,300} خطأ ترجمة 2201B يُسقط الترحيلة —
+  --    وهو ما أسقط commercial_subscriptions فعلًا. الشكل يُفحص بـ+/* والسقف
+  --    يُحفظ بـlength() صريحة: القيد كما هو، بلا تخفيف ولا تجاوز للسقف.
+  constraint cs_media_url_len check (public_url is null or length(public_url) <= 300),
   constraint cs_media_url_shape check (
     public_url is null
-    or public_url ~ '^/[A-Za-z0-9._~%!$&*+,;=:@/-]{1,300}$'
-    or public_url ~ '^https://[A-Za-z0-9.-]{3,120}/[A-Za-z0-9._~%!$&*+,;=:@/-]{0,300}$')
+    or public_url ~ '^/[A-Za-z0-9._~%!$&*+,;=:@/-]+$'
+    or public_url ~ '^https://[A-Za-z0-9.-]{3,120}/[A-Za-z0-9._~%!$&*+,;=:@/-]*$')
 );
 
 create index if not exists cs_media_study_idx on public.cs_media(case_study_id, asset_kind, sort_order);
