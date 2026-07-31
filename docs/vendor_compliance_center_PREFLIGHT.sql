@@ -178,3 +178,49 @@ begin
 
   raise notice 'PREFLIGHT ✅ كلّ الاعتماديات الإلزامية حاضرة ولا صفّ مخالف. يمكن تشغيل vendor_compliance_center_RUNME.sql.';
 end $gate$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★ عقد أنواع المستندات — يُفحَص قبل التشغيل لا بعد السقوط ★
+--   سقطت الترحيلة مرّةً بـ23503 لأنّ doc_type = 'commercial_register' غير
+--   موجود: سجلّ الأنواع القائم يحمل 'commercial_registration' لنفس الوثيقة.
+--   هذا الصفّ يكشف الاختلاف قبل أن يكلّف دورةَ تشغيل كاملة، ويطبع **كلّ**
+--   الناقص دفعةً واحدة لا أوّله.
+-- ════════════════════════════════════════════════════════════════════════════
+with required(d) as (values
+  ('commercial_registration'),('vat_certificate'),('zatca_compliance'),('zakat_certificate'),
+  ('gosi_certificate'),('saudization_certificate'),('chamber_of_commerce'),('national_address'),
+  ('bank_letter'),('insurance_policy'),('hse_policy'),('privacy_policy_doc'),
+  ('company_profile_ar'),('company_profile_en'),('drone_permit'),('public_liability'),
+  ('hse_certificate'),('articles_of_association'),('municipality_license'),('authorized_signatory')),
+missing as (
+  select coalesce(string_agg(r.d, ' · ' order by r.d), '') as s
+    from required r
+   where to_regclass('public.tvn_document_types') is not null
+     and not exists (select 1 from public.tvn_document_types t where t.key = r.d)),
+seedable as (
+  select coalesce(string_agg(r.d, ' · ' order by r.d), '') as s
+    from required r
+   where to_regclass('public.tvn_document_types') is not null
+     and not exists (select 1 from public.tvn_document_types t where t.key = r.d)
+     and exists (select 1 from public.tvn_document_types t
+                  where t.key like left(r.d, 8) || '%')),
+dupes as (
+  select coalesce(string_agg(a.label_ar || ': ' || a.key || ' / ' || b.key, ' · '), '') as s
+    from public.tvn_document_types a
+    join public.tvn_document_types b on b.label_ar = a.label_ar and b.key > a.key
+   where btrim(coalesce(a.label_ar, '')) <> '')
+select case when to_regclass('public.tvn_document_types') is null then 'STOP'
+            when (select s from missing) <> '' then 'STOP'
+            when (select s from dupes) <> ''   then 'STOP'
+            else 'READY' end                                              as doc_type_contract,
+       case when to_regclass('public.tvn_document_types') is null
+              then 'tvn_document_types غائب — شغّل talent_vendor_network أوّلًا'
+            when (select s from missing) <> ''
+              then '★ أنواع ناقصة (كلّها) ★ ' || (select s from missing)
+                   || case when (select s from seedable) <> ''
+                           then ' — وقد يكون لبعضها مفتاح قائم بتسمية مختلفة: ' || (select s from seedable)
+                           else '' end
+            else 'كلّ الأنواع المطلوبة موجودة بمفاتيحها القانونية' end     as detail,
+       case when (select s from dupes) <> ''
+              then '★ تعارض دلاليّ ★ ' || (select s from dupes)
+            else 'لا مرادف لوثيقة واحدة' end                               as semantic_conflict;

@@ -387,7 +387,7 @@ comment on column public.tvn_document_types.never_public is
 update public.tvn_document_types
    set never_public = true
  where key in ('national_id','iqama','passport','driving_license','bank_letter',
-               'contract','nda','commercial_register','authorized_signatory')
+               'contract','nda','commercial_registration','authorized_signatory')
    and never_public = false;
 
 -- الأنواع الجديدة **صفوف بيانات** لا جداول. applies_to = '{company}' كي لا
@@ -416,7 +416,7 @@ on conflict (key) do nothing;
 -- applies_to الفارغ يعني «كلّ الأنواع» أصلًا، فلا نلمسه.
 update public.tvn_document_types
    set applies_to = applies_to || array['company']
- where key in ('commercial_register','tax_certificate','bank_letter','insurance_policy',
+ where key in ('commercial_registration','vat_certificate','bank_letter','insurance_policy',
                'public_liability','safety_certificate','drone_permit','nda','contract')
    and cardinality(applies_to) > 0
    and not (applies_to @> array['company']);
@@ -847,10 +847,64 @@ create table if not exists public.vcc_readiness_requirements (
       or (kind = 'capability'    and profile_field is not null and doc_type is null))
 );
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★★ حارس عقد أنواع المستندات — قبل الإدراج لا بعده ★★
+--
+--   سقطت الترحيلة هنا بـ23503: doc_type = 'commercial_register' غير موجود في
+--   tvn_document_types. والسبب ليس نقص زرع بل **اختلاف مفتاح**: حزمة المواهب
+--   والموردين تزرع 'commercial_registration' لنفس الوثيقة حرفيًّا — التسمية
+--   العربية في الحزمتين واحدة: «السجلّ التجاريّ». وكذلك 'tax_certificate'
+--   مقابل 'vat_certificate' المزروع أصلًا.
+--
+--   ولم يكن المفتاحان في الإدراج وحده: كانا في جملتَي UPDATE أعلاه (never_public
+--   و applies_to) حيث `where key in (…)` لا يطابق شيئًا فيمرّ **بصمت** — فلا
+--   السجلّ التجاريّ يُمنع من النشر العامّ، ولا هو ولا الشهادة الضريبية
+--   يكتسبان applies_to = company. عطلٌ وظيفيّ لا يُظهره خطأ.
+--
+--   والعلاج ليس زرع مرادف ثانٍ: سجلّ أنواع المستندات واحد
+--   (tvn_document_types)، ومرادفان لوثيقة واحدة يعنيان أنّ نصف الوثائق تُرفع
+--   تحت مفتاح ونصفها تحت الآخر، فلا فحص جاهزية يراها كاملة. لذلك تُستعمل
+--   المفاتيح القانونية القائمة.
+--
+--   وهذا الحارس يطبع **كلّ** المفاتيح الناقصة دفعة واحدة، لا أوّلها فقط:
+--   السقوط على أوّل مفتاح يُخفي البقية فيتكرّر الدوران.
+-- ════════════════════════════════════════════════════════════════════════════
+do $doctypes$
+declare
+  v_missing text := '';
+  v_dupes   text := '';
+begin
+  -- (١) كلّ doc_type مطلوب موجود في السجلّ الواحد.
+  select coalesce(string_agg(distinct t.d, ' · ' order by t.d), '') into v_missing
+    from (values
+      ('commercial_registration'),('vat_certificate'),('zatca_compliance'),('zakat_certificate'),
+      ('gosi_certificate'),('saudization_certificate'),('chamber_of_commerce'),('national_address'),
+      ('bank_letter'),('insurance_policy'),('hse_policy'),('privacy_policy_doc'),
+      ('company_profile_ar'),('company_profile_en'),('drone_permit'),('public_liability'),
+      ('hse_certificate'),('articles_of_association'),('municipality_license'),('authorized_signatory')
+    ) t(d)
+   where not exists (select 1 from public.tvn_document_types dt where dt.key = t.d);
+  if v_missing <> '' then
+    raise exception 'VCC: أنواع مستندات مطلوبة وغير مزروعة (كلّها دفعةً واحدة): % — أضِفها إلى tvn_document_types أو صحّح المفتاح إلى القائم', v_missing;
+  end if;
+
+  -- (٢) ولا مرادف دلاليّ لوثيقة واحدة: مفتاحان بالتسمية العربية نفسها يعنيان
+  --     سجلًّا مشقوقًا — ترفع الشركة تحت أحدهما فتبقى «ناقصة» تحت الآخر.
+  select coalesce(string_agg(x.pair, ' · '), '') into v_dupes
+    from (select a.label_ar || ': ' || a.key || ' / ' || b.key as pair
+            from public.tvn_document_types a
+            join public.tvn_document_types b
+              on b.label_ar = a.label_ar and b.key > a.key
+           where btrim(coalesce(a.label_ar, '')) <> '') x;
+  if v_dupes <> '' then
+    raise exception 'VCC: مرادفان لوثيقة واحدة في سجلّ الأنواع: % — سجلّ الوثائق واحد، والمرادف يشقّ الجاهزية نصفين', v_dupes;
+  end if;
+end $doctypes$;
+
 insert into public.vcc_readiness_requirements
   (requirement_key, context, kind, doc_type, profile_field, label_ar, label_en, is_mandatory, required_language, note_ar) values
-  ('commercial_register','general','document','commercial_register',null,'السجلّ التجاريّ','Commercial register',true,null,'أساس أيّ تسجيل مورّد.'),
-  ('tax_certificate','general','document','tax_certificate',null,'الشهادة الضريبية','Tax certificate',true,null,null),
+  ('commercial_register','general','document','commercial_registration',null,'السجلّ التجاريّ','Commercial register',true,null,'أساس أيّ تسجيل مورّد.'),
+  ('tax_certificate','general','document','vat_certificate',null,'الشهادة الضريبية','Tax certificate',true,null,null),
   ('zatca_compliance','general','document','zatca_compliance',null,'الامتثال الضريبيّ','ZATCA compliance',true,null,null),
   ('zakat_certificate','general','document','zakat_certificate',null,'شهادة الزكاة','Zakat certificate',true,null,null),
   ('gosi_certificate','general','document','gosi_certificate',null,'شهادة التأمينات','GOSI certificate',true,null,null),
