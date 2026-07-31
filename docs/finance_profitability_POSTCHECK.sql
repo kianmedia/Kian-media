@@ -456,18 +456,18 @@ declare v_fail int; v_names text;
 begin
   with recursive
   fb(name, body) as (
-    select p.proname::text,
+    select p.proname::text collate "C",
            lower(regexp_replace(regexp_replace(string_agg(p.prosrc, E'\n'),
                  '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'))
       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'public' and p.proname like 'finops\_%'
      group by p.proname),
   fe(caller, callee) as (
-    select b.name, rx.m[1] from fb b,
+    select b.name collate "C", (rx.m[1]) collate "C" from fb b,
            lateral regexp_matches(b.body, '([a-z_][a-z0-9_]*)\s*\(', 'g') as rx(m)
      where rx.m[1] like 'finops\_%' and rx.m[1] <> b.name),
   tr(fn, tbl) as (
-    select distinct b.name, rx.m[1] from fb b,
+    select distinct b.name collate "C", (rx.m[1]) collate "C" from fb b,
            lateral regexp_matches(b.body, '(fin_[a-z0-9_]+)', 'g') as rx(m)),
   og(name) as (values ('finops_can_manage_finance'),('finops_can_manage_suppliers'),
     ('finops_can_export_sensitive'),('finops_can_view_profit'),('finops_can_view'),
@@ -481,17 +481,17 @@ begin
     ('finops_can_record_collection'),('finops_can_approve_expense'),
     ('finops_can_export_collections'),('finops_can_request'),('finops_is_client')),
   seed(gate, node, hops) as (
-    select name, name, 0 from og union all select name, name, 0 from nd),
+    select name collate "C", name collate "C", 0 from og union all select name collate "C", name collate "C", 0 from nd),
   w(gate, node, hops) as (
-    select gate, node, hops from seed
+    select gate collate "C", node collate "C", hops from seed
     union
-    select w.gate, e.callee, w.hops + 1 from w join fe e on e.caller = w.node
+    select w.gate collate "C", e.callee collate "C", w.hops + 1 from w join fe e on e.caller = w.node
      where w.hops < 8 and w.node <> 'finops_can_view_finance_sensitive'),
   cs(fn) as (values ('finops_collections_list'),('finops_collections_summary')),
   cw(fn, hops) as (
-    select cs.fn, 0 from cs
+    select cs.fn collate "C", 0 from cs
     union
-    select e.callee, cw.hops + 1 from cw join fe e on e.caller = cw.fn where cw.hops < 8),
+    select e.callee collate "C", cw.hops + 1 from cw join fe e on e.caller = cw.fn where cw.hops < 8),
   ct(tbl) as (select distinct tr.tbl from cw join tr on tr.fn = cw.fn),
   internal(name) as (values
     ('finops_log'),('finops_project_label'),('finops_next_code'),('finops_money'),
