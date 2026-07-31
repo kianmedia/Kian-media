@@ -83,10 +83,28 @@ client_keys(k) as (values
   ('preferred_date'),('scheduled_date'),('decision_note')),
 
 -- الحزم الستّ المطبَّقة على الإنتاج — يجب أن تبقى سليمة وغير ممسوسة.
-six(o, pkg, prefix) as (values
-  (1,'communications_hub','comms\_%'), (2,'operations_center','ops\_%'),
-  (3,'crm_sales_FOUNDATION','crm\_%'), (4,'finance_profitability','fin\_%'),
-  (5,'commercial_subscriptions','csub\_%'), (6,'smart_quoting','sq\_%')),
+-- ⚠️ عائلة الجداول ليست عائلة الدوالّ. الصيغة القديمة استعملت نمطًا واحدًا
+--    للاثنين، فأعطت «22 جدولًا / 0 دالّة» للمالية: جداولها fin_* لكنّ دوالّها
+--    الـ72 كلّها finops_* — و`finops_` لا يطابق `fin\_%` لأنّ بعد fin يأتي حرف
+--    o لا شرطة سفلية. والعطل نفسه كان في مركز العمليات: جداوله ops_* ودوالّه
+--    الـ46 prodops_*. أي أنّ الحزمتين كانتا تُقرآن «بلا دوالّ» وهما سليمتان.
+--    ولذلك لا يُكتفى بعدٍّ إجماليّ هشّ: تُضاف دوالّ جوهرية **بالاسم والتوقيع**.
+six(o, pkg, tbl_prefix, fn_prefix) as (values
+  (1,'communications_hub',      'comms\_%', 'comms\_%'),
+  (2,'operations_center',       'ops\_%',   'prodops\_%'),
+  (3,'crm_sales_FOUNDATION',    'crm\_%',   'crm\_%'),
+  (4,'finance_profitability',   'fin\_%',   'finops\_%'),
+  (5,'commercial_subscriptions','csub\_%',  'csub\_%'),
+  (6,'smart_quoting',           'sq\_%',    'sq\_%')),
+
+-- دوالّ جوهرية تُفحص بالتوقيع الكامل: غيابُ واحدة إخفاق مهما بلغ العدّ الإجماليّ.
+pkg_core(o, sig) as (values
+  (1,'public.comms_health()'),   (1,'public.comms_can_view()'),
+  (2,'public.prodops_access()'), (2,'public.prodops_lookups()'),
+  (3,'public.crm_access()'),     (3,'public.crm_lookups()'),
+  (4,'public.finops_access()'),  (4,'public.finops_lookups()'), (4,'public.finops_perm(text)'),
+  (5,'public.csub_access()'),    (5,'public.csub_can_view()'),
+  (6,'public.sq_tiers()'),       (6,'public.sq_perm(text)')),
 
 -- ★ مجسّات التسريب ★ الحكم على **شكل القراءة** لا على الكلمة المجرّدة: الكلمة
 --   المجرّدة أسقطت الترحيلة مرّة حين طابقت جملةَ عقدٍ تنفي الفعل. لكلّ سطح
@@ -100,17 +118,26 @@ leak_probes(fn, kind, pat) as (values
      '\m[a-z_][a-z_0-9]{0,62}\.(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate)\M'),
   ('lsr_dashboard_client','re',
      '\m(from|join|into|update|table)\s+(only\s+)?(public\.)?(fin_costs|sq_quote_internal)\M'),
+  -- ★ المِجَسّات المؤهَّلة (`r.` و`q.`) شكلٌ أصلًا فتبقى نصًّا حرفيًّا ★
   ('lsr_dashboard_operations','lit','r.price_net'),
   ('lsr_dashboard_operations','lit','r.vat_amount'),
   ('lsr_dashboard_operations','lit','r.overage_amount_net'),
   ('lsr_dashboard_operations','lit','r.price_gross'),
-  ('lsr_dashboard_operations','lit','margin'),
-  ('lsr_dashboard_operations','lit','cost_rate'),
-  ('lsr_dashboard_sales','lit','sq_quote_internal'),
   ('lsr_dashboard_sales','lit','q.base_cost'),
   ('lsr_dashboard_sales','lit','q.margin_pct'),
-  ('lsr_dashboard_sales','lit','floor_at_request'),
-  ('lsr_dashboard_sales','lit','internal_cost_estimate'),
+  -- ★★ وهذه كانت **كلمات مجرّدة** وهي التي أنتجت الإخفاقين ★★
+  --   'margin' طابقت عنصرًا في مصفوفة excluded_by_design — أي المصفوفة التي
+  --   تُعلن أنّ الحقل **غير معروض**. و'sq_quote_internal' طابقت تعليقًا نصّه
+  --   «تسكن sq_quote_internal ولا تُقرأ هنا إطلاقًا». إعلانُ الغياب قُرئ حضورًا.
+  --   وهذه رابع مرّة يتكرّر فيها الصنف نفسه في هذا البرنامج: reser·VAT·ion ثمّ
+  --   Zoho ثمّ floor_price داخل قائمة الاستبعاد ثمّ هذان. فالقاعدة نهائيًّا:
+  --   **شكل قراءة أو شكل نداء، لا كلمة**. عنصرُ مصفوفةٍ وتعليقٌ لا يتّخذان
+  --   أيًّا من الشكلين أبدًا؛ والقراءة الحقيقية والنداء الحقيقيّ يتّخذانهما دومًا.
+  ('lsr_dashboard_operations','re','\m[a-z_][a-z_0-9]{0,62}\.(margin|margin_pct|gross_margin)\M'),
+  ('lsr_dashboard_operations','re','\m[a-z_][a-z_0-9]{0,62}\.(cost_rate|base_cost|gross_profit|floor_price|supplier_rate)\M'),
+  ('lsr_dashboard_sales','re','\msq_quote_internal\s*\('),
+  ('lsr_dashboard_sales','re','\m(from|join|into|update|table)\s+(only\s+)?(public\.)?sq_quote_internal\M'),
+  ('lsr_dashboard_sales','re','\m[a-z_][a-z_0-9]{0,62}\.(floor_at_request|internal_cost_estimate|margin|gross_margin)\M'),
   ('lsr_finance_reference','re',
      '\m[a-z]\.(price_net|price_gross|vat_rate|vat_amount|amount_net|amount_gross|renewal_amount_net|total_amount)\M')),
 
@@ -158,18 +185,28 @@ pkg_objects as materialized (
          (select count(*) from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relkind in ('r','p')
-             and c.relname like s.prefix) as tbls,
+             and c.relname like s.tbl_prefix) as tbls,
          (select count(*) from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.proname like s.prefix) as fns
+           where n.nspname = 'public' and p.proname like s.fn_prefix) as fns,
+         -- الدوالّ الجوهرية الغائبة بالاسم والتوقيع — لا يُغطّيها أيّ عدّ إجماليّ.
+         (select coalesce(string_agg(pc.sig, ', ' order by pc.sig), '')
+            from pkg_core pc
+           where pc.o = s.o and to_regprocedure(pc.sig) is null) as missing_core
     from six s),
 
+-- ⚠️ المطابقة على **الجسم المُقسَّم** لا على pg_get_functiondef الخام.
+--    الخام يحوي التعليقات، وlsr_sql_partition يحذفها ويُبقي الشيفرة وحمولات
+--    SQL الديناميكيّ — فيبقى النداء الحقيقيّ داخل execute مرئيًّا، ويسقط
+--    التعليقُ من الحساب. وهذا وحده يُغلق إخفاق sq_quote_internal؛ أمّا
+--    إخفاق margin فيُغلقه شكلُ المِجَسّ أعلاه لأنّ عنصر المصفوفة يبقى في
+--    `strings` ولا يتّخذ شكل `alias.margin` أبدًا.
 leaks as materialized (
   select lp.fn, lp.pat
     from leak_probes lp
-    join defs d on d.proname = lp.fn
-   where (lp.kind = 're' and d.d ~* lp.pat)
-      or (lp.kind = 'lit' and d.d ilike '%' || lp.pat || '%')),
+    join bodies b on b.proname = lp.fn
+   where (lp.kind = 're' and b.body ~* lp.pat)
+      or (lp.kind = 'lit' and b.body ilike '%' || lp.pat || '%')),
 
 results as (
 
@@ -486,10 +523,21 @@ select 15, 'الأحداث', '(١٥) عدم التكرار مضمون بصفّ �
 union all
 select 16, 'الحزم القائمة', '(١٦) الحزم الستّ المطبَّقة سليمة',
   case when (select count(*) from pkg_objects where tbls > 0 and fns > 0) = 6
+        and (select count(*) from pkg_objects where missing_core <> '') = 0
        then 'PASS' else 'FAIL' end,
-  (select string_agg(po.pkg || ': ' || po.tbls::text || ' جدولًا/' || po.fns::text || ' دالّة',
-                     ' · ' order by po.o) from pkg_objects po)
-  || ' — حزمة التقييم لا تُنشئ ولا تُعدّل ولا تُسقط شيئًا خارج lsr_*'
+  case when (select count(*) from pkg_objects where tbls = 0 or fns = 0) > 0
+       then '★ حزمة بلا كائنات ★ '
+            || (select string_agg(po.pkg || ' (' || po.tbls::text || ' جدولًا/' || po.fns::text || ' دالّة)',
+                                  ' · ' order by po.o)
+                  from pkg_objects po where po.tbls = 0 or po.fns = 0)
+       when (select count(*) from pkg_objects where missing_core <> '') > 0
+       then '★ دالّة جوهرية غائبة ★ '
+            || (select string_agg(po.pkg || ' ← ' || po.missing_core, ' · ' order by po.o)
+                  from pkg_objects po where po.missing_core <> '')
+       else (select string_agg(po.pkg || ': ' || po.tbls::text || ' جدولًا/' || po.fns::text || ' دالّة',
+                               ' · ' order by po.o) from pkg_objects po)
+            || ' — وكلّ دالّة جوهرية حاضرة بتوقيعها. حزمة التقييم لا تُنشئ ولا تُعدّل ولا تُسقط شيئًا خارج lsr_*'
+       end
 )
 
 select verdict, area, check_name, detail
