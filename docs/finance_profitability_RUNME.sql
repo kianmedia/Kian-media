@@ -3205,6 +3205,34 @@ do $st$
 declare t text; f text; v_def text; v jsonb; v_b boolean; v_n bigint; v_err text := '';
   v_anon boolean := exists (select 1 from pg_roles where rolname = 'anon');
   ZERO constant uuid := '00000000-0000-0000-0000-000000000000';
+  -- ★ محلّل الانحدار (20-ب) — حالته المحلّية ★
+  v_src text; v_work text[]; v_next text[]; v_seen text[]; v_calls text[];
+  v_cur text; v_hit boolean; v_hop int; v_deep int := -1; v_want boolean;
+  -- الجذر الحسّاس: كلّ بوّابة مالك يجب أن تصله، ولا شيء آخر يفتح ما يفتحه.
+  ROOT_GATE constant text := 'finops_can_view_finance_sensitive';
+  -- بوّابات المالك — بعضها يفوّض بقفزة وبعضها بقفزتين. الاثنتان مقبولتان.
+  OWNER_GATES constant text[] := array[
+    'finops_can_manage_finance','finops_can_manage_suppliers','finops_can_export_sensitive',
+    'finops_can_view_profit','finops_can_view','finops_can_manage',
+    'finops_can_manage_receivables','finops_can_export'];
+  -- ★ ضابطا لا-فراغ ★ — مُسنَدان يجب أن يقول المحلّل عنهما «لا ينحدران».
+  --   لو صار المحلّل يقول «وصل» لكلّ شيء لصار كلّ ما فوق بلا معنى.
+  NO_DESCENT constant text[] := array['finops_can_request','finops_is_finance_role'];
+  -- مُسنَدات واسعة: ظهور أيّ منها على طريق بوّابة مالك = توسيع صامت.
+  -- ليست قائمة أعمدة ولا قائمة جداول: أسماء مُسنَدات تُفتح بمفتاح أو بدور.
+  BROAD_FNS constant text[] := array[
+    'finops_perm','emp_has_permission','emp_can','has_permission','staff_role',
+    'finops_is_finance_role','can_manage_projects','can_final_deliver','can_manage_staff',
+    'is_kian_member','civ_can_finance','civ_can_manage','can_see_invoices','is_hr_admin',
+    'can_manage_hr','pc_can_read_project','crm_perm','ops_perm','comms_perm',
+    'finops_can_view_collections','finops_can_record_collection','finops_can_approve_expense',
+    'finops_can_export_collections','finops_can_request','finops_is_client'];
+  -- كلّ بوّابة قابلة للمنح ومفتاحها الخاصّ بها. مفتاح واحد لبوّابتين = توسيع.
+  GRANTABLE_KEYS constant text[] := array[
+    'finops_can_view_collections|finance_ops.collections_view',
+    'finops_can_record_collection|finance_ops.collections_record',
+    'finops_can_approve_expense|finance_ops.approve',
+    'finops_can_export_collections|finance_ops.export_collections'];
   MONEY_TABLES constant text[] := array['fin_budget_lines','fin_contracts','fin_revenue','fin_retainers',
     'fin_receivables','fin_collections','fin_payment_milestones','fin_expense_requests',
     'fin_purchase_requests','fin_purchase_orders','fin_costs'];
@@ -3598,22 +3626,120 @@ begin
       raise exception 'FIN SELF-TEST: سياسة % تُفتح بمفتاح مباشر بدل البوّابة الحسّاسة', t; end if;
   end loop;
 
-  -- (20-ب) البوّابة الحسّاسة تقول is_owner صراحةً، ولا يفتحها مفتاح ولا دور.
-  v_def := pg_get_functiondef(to_regprocedure('public.finops_can_view_finance_sensitive()'));
-  if v_def not ilike '%is_owner()%' then
+  -- ════════════════════════════════════════════════════════════════════════
+  -- (20-ب) ★★ الانحدار يُفحص بالمشي على رسم النداء، لا بمطابقة نصّية ★★
+  --
+  -- الفحص القديم كان: «هل يظهر اسم البوّابة الحسّاسة في نصّ تعريف الدالّة؟».
+  -- سقط على finops_can_manage() لأنّها تفوّض بقفزة واحدة:
+  --     finops_can_manage → finops_can_manage_finance → البوّابة الحسّاسة
+  -- فالاسم ليس في جسمها وهي **منحدرة فعلًا**. كان الفحص معطوبًا لا الدالّة.
+  --
+  -- البديل هنا محلّل وصول حقيقيّ:
+  --   • يقرأ **جسم الدالّة وحده** (prosrc)، لا الملفّ ولا تعريفًا يحمل اسمها
+  --     في ترويسته — فالنطاق محصور بالدالّة المفحوصة وبمن تناديه فعلًا.
+  --   • ينزع التعليقات (سطرية وكتلية) **قبل** أيّ مطابقة: اسم يظهر في تعليق
+  --     لا يُعَدّ نداءً.
+  --   • يخفض الحالة، فلا يهمّ أن يرفع المُفكِّك COALESCE إلى حروف كبيرة
+  --     (حادثة سابقة في هذا المستودع سببها مطابقة حسّاسة للحالة).
+  --   • يلتقط النداءات بنمط «مُعرِّف يليه قوس» لا بنمط [^)]* الذي يتوقّف عند
+  --     أوّل قوس (حادثة سابقة أخرى).
+  --   • يتبع نداءات finops_* وحدها ويتوقّف عند الجذر: is_owner/is_staff أوراق
+  --     تُفحَص هنا صراحةً ولا يُنزَل تحتها.
+  --   • يرفض أيّ مُسنَد واسع على الطريق كلّه، لا في الجسم الأوّل فقط.
+  -- ════════════════════════════════════════════════════════════════════════
+  select lower(regexp_replace(regexp_replace(string_agg(p.prosrc, E'\n'),
+                                             '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'))
+    into v_src
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = ROOT_GATE;
+  if v_src is null or btrim(v_src) = '' then
+    raise exception 'FIN SELF-TEST: تعذّرت قراءة جسم البوّابة الحسّاسة — المحلّل أجوف ولا يجوز أن يمرّ'; end if;
+  if v_src !~ '\mis_owner\M' then
     raise exception 'FIN SELF-TEST: البوّابة الحسّاسة لا تشترط المالك'; end if;
-  if v_def ilike '%finops_perm%' then
-    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة تُفتح بمفتاح — V1 للمالك وحده'; end if;
-  if v_def ilike '%staff_role%' then
-    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة تُفتح بدور وظيفيّ'; end if;
-  foreach f in array array['public.finops_can_manage_finance()','public.finops_can_manage_suppliers()',
-    'public.finops_can_export_sensitive()','public.finops_can_view_profit()','public.finops_can_view()',
-    'public.finops_can_manage()','public.finops_can_manage_receivables()','public.finops_can_export()'] loop
-    v_def := pg_get_functiondef(to_regprocedure(f));
-    if v_def not ilike '%finops_can_view_finance_sensitive()%' then
-      raise exception 'FIN SELF-TEST: % لا تنحدر من البوّابة الحسّاسة', f; end if;
-    if v_def ilike '%finops_perm%' then
-      raise exception 'FIN SELF-TEST: % تُفتح بمفتاح مباشر — طريق جانبيّ إلى الحسّاس', f; end if;
+  if v_src !~ '\mis_staff\M' then
+    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة لا تستبعد العميل'; end if;
+  if v_src !~ '\mcoalesce\M' then
+    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة بلا coalesce — NULL سيُقرأ نجاحًا'; end if;
+  if v_src !~ '\mauth\M' then
+    raise exception 'FIN SELF-TEST: البوّابة الحسّاسة لا تشترط جلسة'; end if;
+  foreach t in array BROAD_FNS loop
+    if v_src ~ ('\m' || t || '\M') then
+      raise exception 'FIN SELF-TEST: البوّابة الحسّاسة تُفتح بـ%() — V1 للمالك وحده', t; end if;
+  end loop;
+
+  foreach f in array OWNER_GATES || NO_DESCENT loop
+    v_want := not (f = any (NO_DESCENT));
+    v_work := array[f]; v_seen := array[]::text[]; v_hit := false; v_hop := 0;
+    while coalesce(array_length(v_work, 1), 0) > 0 and v_hop <= 8 loop
+      v_next := array[]::text[];
+      foreach v_cur in array v_work loop
+        if v_cur = any (v_seen) then continue; end if;
+        v_seen := v_seen || v_cur;
+        if v_cur = ROOT_GATE then
+          v_hit := true;
+          if v_hop > v_deep then v_deep := v_hop; end if;
+          continue;                        -- الجذر طرفيّ: فُحص أعلاه ولا يُنزَل تحته
+        end if;
+        select lower(regexp_replace(regexp_replace(string_agg(p.prosrc, E'\n'),
+                                                   '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'))
+          into v_src
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = v_cur;
+        if v_src is null then continue; end if;   -- اسم finops_* بلا دالّة ⇒ الطريق مقطوع
+        if v_want then
+          if v_src !~ '\mcoalesce\M' then
+            raise exception 'FIN SELF-TEST: طريق % يمرّ بـ%() بلا coalesce — NULL سيُقرأ نجاحًا', f, v_cur; end if;
+          foreach t in array BROAD_FNS loop
+            if v_src ~ ('\m' || t || '\M') then
+              raise exception 'FIN SELF-TEST: % تبلغ الحسّاس عبر %() التي تستعمل %() — توسيع صامت', f, v_cur, t;
+            end if;
+          end loop;
+        end if;
+        select coalesce(array_agg(distinct rx.m[1]), array[]::text[]) into v_calls
+          from regexp_matches(v_src, '([a-z_][a-z0-9_]*)\s*\(', 'g') as rx(m)
+         where rx.m[1] like 'finops\_%' and rx.m[1] <> v_cur;
+        v_next := v_next || v_calls;
+      end loop;
+      v_work := v_next; v_hop := v_hop + 1;
+    end loop;
+    if v_want and not v_hit then
+      raise exception 'FIN SELF-TEST: % لا تنحدر إلى البوّابة الحسّاسة — مُشِيَ على % عقدة ولم يُبلَغ الجذر',
+        f, coalesce(array_length(v_seen, 1), 0);
+    end if;
+    if (not v_want) and v_hit then
+      raise exception 'FIN SELF-TEST: ضابط لا-الانحدار انكسر — % صارت تبلغ البوّابة الحسّاسة', f; end if;
+    if coalesce(array_length(v_seen, 1), 0) = 0 then
+      raise exception 'FIN SELF-TEST: المحلّل لم يزر عقدة واحدة عند % — أجوف', f; end if;
+  end loop;
+  -- ★ لا-فراغ ★ — لا بدّ أن تكون بوّابة واحدة على الأقلّ قد بلغت الجذر بقفزتين
+  --   لا بقفزة. لو كان الأقصى قفزة واحدة لكان المحلّل مطابقةً نصّيةً متنكّرة،
+  --   ولكان finops_can_manage قد سقط من جديد.
+  if v_deep < 2 then
+    raise exception 'FIN SELF-TEST: المحلّل لم يعبر أكثر من ضلع واحد (أقصى عمق %) — التفويض غير المباشر لم يُفحص', v_deep;
+  end if;
+
+  -- (20-ب-٢) ★ لكلّ بوّابة قابلة للمنح مفتاحها الخاصّ — لا مفتاح يفتح بوّابتين ★
+  --   لو حملت بوّابتان المفتاح نفسه لصار منح «عرض التحصيل» منحًا للاعتماد.
+  foreach t in array GRANTABLE_KEYS loop
+    f := split_part(t, '|', 1);
+    select lower(regexp_replace(regexp_replace(string_agg(p.prosrc, E'\n'),
+                                               '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'))
+      into v_src
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = f;
+    if v_src is null then raise exception 'FIN SELF-TEST: البوّابة القابلة للمنح % غائبة', f; end if;
+    if position(lower(split_part(t, '|', 2)) in v_src) = 0 then
+      raise exception 'FIN SELF-TEST: % لا تحمل مفتاحها % — إمّا صارت مرادفًا وإمّا تُفتح بمفتاح غيرها',
+        f, split_part(t, '|', 2); end if;
+    if v_src !~ '\mcoalesce\M' then
+      raise exception 'FIN SELF-TEST: % بلا coalesce — NULL سيُقرأ نجاحًا', f; end if;
+    foreach v_cur in array GRANTABLE_KEYS loop
+      if split_part(v_cur, '|', 1) <> f
+         and position(lower(split_part(v_cur, '|', 2)) in v_src) > 0 then
+        raise exception 'FIN SELF-TEST: % تُفتح أيضًا بمفتاح % — الصلاحيتان التصقتا',
+          f, split_part(v_cur, '|', 2);
+      end if;
+    end loop;
   end loop;
 
   -- (20-ج) سطح التحصيل لا يلمس تكلفةً ولا ميزانية ولا عقدًا ولا إيرادًا ولا

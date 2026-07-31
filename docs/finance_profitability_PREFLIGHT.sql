@@ -103,6 +103,67 @@ from public.profiles
 where account_status = 'active' and (account_type = 'admin' or staff_role in ('super_admin','finance'))
 order by staff_role nulls first;
 
+-- ─── 9-ب) ★ إعادة التشغيل بعد سقوط §9 ★ ─────────────────────────────────
+-- تشغيلٌ سابق سقط **قبل COMMIT** على تأكيد §9:
+--   FIN SELF-TEST: public.finops_can_manage() لا تنحدر من البوّابة الحسّاسة
+-- كان التأكيد يطلب ذكرًا نصّيًّا مباشرًا لاسم البوّابة داخل جسم الدالّة، بينما
+-- finops_can_manage تفوّض بقفزة (→ finops_can_manage_finance → البوّابة). فكان
+-- **الفحص** معطوبًا لا الدالّة. أُبدل بمحلّل يمشي على رسم النداء (RUNME §9 20-ب).
+--
+-- الحزمة معاملة واحدة بلا CONCURRENTLY، فالسقوط تراجع كاملًا. أثبت ذلك قبل
+-- إعادة التشغيل: شغّل docs/finance_profitability_AFTER_FAILURE_VERIFY.sql
+-- (قراءة فقط · نتيجة واحدة) وتأكّد أنّ كلّ صفّ verdict = 'OK'.
+-- متوقّع هنا: صفّ واحد، كلّ الأعداد = 0. أيّ رقم غير صفر ⇒ لا تُشغّل RUNME،
+-- شغّل ROLLBACK أوّلًا.
+select
+  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like 'fin\_%') as fin_tables,
+  (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname like 'finops\_%')                          as finops_functions,
+  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind = 'S' and c.relname = 'fin_doc_seq')       as fin_sequences,
+  (select count(*) from pg_policies where schemaname = 'public' and tablename like 'fin\_%') as fin_policies,
+  (select count(*) from public.permissions where key like 'finance\_ops.%')             as finance_ops_keys;
+
+-- ─── 9-ج) الحزم الثلاث المطبَّقة سليمة قبل أن نضيف الرابعة ───────────────
+-- متوقّع: ثلاثة صفوف، missing = 0 وwithout_rls = 0 في كلّها.
+-- قائمة صريحة لا نمط: عدّ «كم جدولًا يبدأ بـ crm_» يمرّ بعد حذف جدول وإضافة آخر.
+with expected(pkg, t) as (values
+  ('communications_hub','comms_audit'),('communications_hub','comms_channels'),
+  ('communications_hub','comms_event_catalog'),('communications_hub','comms_outbox'),
+  ('communications_hub','comms_preferences'),('communications_hub','comms_rate_counters'),
+  ('communications_hub','comms_templates'),
+  ('operations_center','ops_audit'),('operations_center','ops_call_sheets'),
+  ('operations_center','ops_daily_reports'),('operations_center','ops_delays'),
+  ('operations_center','ops_incidents'),('operations_center','ops_ingest_jobs'),
+  ('operations_center','ops_job_accommodation'),('operations_center','ops_job_crew'),
+  ('operations_center','ops_job_equipment'),('operations_center','ops_job_hse'),
+  ('operations_center','ops_job_permits'),('operations_center','ops_job_travel'),
+  ('operations_center','ops_job_vehicles'),('operations_center','ops_job_weather'),
+  ('operations_center','ops_jobs'),('operations_center','ops_locations'),
+  ('operations_center','ops_media_backups'),('operations_center','ops_media_cards'),
+  ('operations_center','ops_post_handoff'),('operations_center','ops_vehicles'),
+  ('crm_sales_foundation','crm_settings'),('crm_sales_foundation','crm_teams'),
+  ('crm_sales_foundation','crm_team_members'),('crm_sales_foundation','crm_companies'),
+  ('crm_sales_foundation','crm_contacts'),('crm_sales_foundation','crm_competitors'),
+  ('crm_sales_foundation','crm_lead_score_rules'),('crm_sales_foundation','crm_leads'),
+  ('crm_sales_foundation','crm_pipelines'),('crm_sales_foundation','crm_stages'),
+  ('crm_sales_foundation','crm_opportunities'),('crm_sales_foundation','crm_stage_history'),
+  ('crm_sales_foundation','crm_activities'),('crm_sales_foundation','crm_targets'),
+  ('crm_sales_foundation','crm_commission_plans'),('crm_sales_foundation','crm_commission_assignments'),
+  ('crm_sales_foundation','crm_commission_records'),('crm_sales_foundation','crm_import_batches'),
+  ('crm_sales_foundation','crm_audit'),('crm_sales_foundation','crm_approval_requests')),
+live as (
+  select c.relname::text as relname, c.relrowsecurity
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relkind in ('r','p'))
+select e.pkg,
+       count(*)                                                            as expected_tables,
+       count(*) - count(l.relname)                                         as missing,
+       count(*) filter (where not coalesce(l.relrowsecurity, false))       as without_rls
+from expected e left join live l on l.relname = e.t
+group by e.pkg order by e.pkg;
+
 -- ─── 10) Zoho Books: ما هو مبنيّ فعلًا اليوم (مراجعة عقد لا تشغيل) ───────
 -- متوقّع: توثيقيّ بالكامل. هذه الحزمة **لا** تتصل بـZoho ولا تقرأ بيانات
 -- اعتماد ولا تدّعي اتصالًا. التفاصيل في docs/ZOHO_BOOKS_INTEGRATION_CONTRACT.md.
