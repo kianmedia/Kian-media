@@ -176,7 +176,7 @@ r_guard_body as (
 -- ─── (٥) محرّك الموانع يغطّي المستحيلات ────────────────────────────────────
 r_blockers as (
   select case when to_regprocedure('public.cs_publish_blockers(uuid)') is null then 'FAIL'
-              when pg_get_functiondef(to_regprocedure('public.cs_publish_blockers(uuid)')) not ilike '%' || k || '%' then 'FAIL'
+              when pg_get_functiondef(to_regprocedure('public.cs_publish_blockers(uuid)')) not ilike '%' || replace(k, '_', '\_') || '%' escape '\' then 'FAIL'
               else 'PASS' end as verdict,
          'موانع النشر' as area, k as object,
          'مانع صلب مطلوب بالعقد داخل المحرّك' as detail
@@ -246,7 +246,7 @@ r_clear_identity_safe as (
 -- ─── (٧) ★ الأقنعة حيّة ★ ─────────────────────────────────────────────────
 r_mask_live as (
   select case when to_regprocedure('public.cs_mask(uuid,jsonb,boolean)') is null then 'FAIL'
-              when pg_get_functiondef(to_regprocedure('public.cs_mask(uuid,jsonb,boolean)')) not ilike '%' || k || '%' then 'FAIL'
+              when pg_get_functiondef(to_regprocedure('public.cs_mask(uuid,jsonb,boolean)')) not ilike '%' || replace(k, '_', '\_') || '%' escape '\' then 'FAIL'
               else 'PASS' end as verdict,
          'التقنيع' as area, k as object,
          'القناع يُقرأ من الحالة الحيّة — سحب الإذن أو الموافقة يسري فورًا بلا انتظار نشر جديد' as detail
@@ -315,7 +315,7 @@ r_media_check as (
                                   and conname = 'cs_media_no_private_source') then 'FAIL'
               when pg_get_constraintdef((select oid from pg_constraint
                                           where conrelid = to_regclass('public.cs_media')
-                                            and conname = 'cs_media_no_private_source')) not ilike '%' || b || '%' then 'FAIL'
+                                            and conname = 'cs_media_no_private_source')) not ilike '%' || replace(b, '_', '\_') || '%' escape '\' then 'FAIL'
               else 'PASS' end as verdict,
          'الوسائط' as area, 'منع الدلو ' || b as object,
          'رابط عامّ يشير إلى دلو خاصّ = مسار تخزين داخليّ على وشك أن يصير علنيًّا' as detail
@@ -396,7 +396,7 @@ r_statuses as (
               when (select count(*) from pg_constraint c
                      where c.conrelid = to_regclass('public.cs_case_studies') and c.contype = 'c'
                        and pg_get_constraintdef(c.oid) ilike '%status%'
-                       and pg_get_constraintdef(c.oid) ilike '%' || k || '%') >= 1
+                       and pg_get_constraintdef(c.oid) ilike '%' || replace(k, '_', '\_') || '%' escape '\') >= 1
               then 'PASS' else 'FAIL' end as verdict,
          'مفردات' as area, 'status = ' || k as object,
          'الحالات العشر المتّفق عليها كلّها في قيد CHECK' as detail

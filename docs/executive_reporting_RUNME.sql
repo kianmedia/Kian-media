@@ -1,4 +1,13 @@
 -- ════════════════════════════════════════════════════════════════════════════
+-- ⚠️ BASIS_NOT_SEPARATED — حدّ معلَن، لا يُقرأ نجاحًا ⚠️
+--   هذه الطبقة تُخرج ربحًا وهامشًا مقدَّرَين (estimated_net_profit ·
+--   gross_margin_pct · estimated_profitability) اعتمادًا على مصادر المالية،
+--   لكنّها **لا تفصل** في مخرجاتها بين ثلاثة مفاهيم مختلفة:
+--       المحصَّل (collected) · المفوتَر (invoiced) · قيمة العقد (contract value)
+--   ومن قرأ رقمًا واحدًا منها على أنّه «إيراد» فقد يقرأ مفوتَرًا غير محصَّل.
+--   الفصل قرار دلاليّ ماليّ يخصّ المالك — أيّ مصدر يُعدّ إيرادًا ومتى — ولا
+--   يجوز أن يُحسم بإعادة تسمية عمود. فهو **مفتوح ومعلَن** حتّى يُحسم، ومثبَّت
+--   باختبار يفشل إذا حُذف هذا الإعلان قبل إغلاق الثغرة فعلًا.
 -- executive_reporting_RUNME.sql — المرحلة ٥: التقارير التنفيذية.
 -- idempotent · معاملة واحدة · لا anon · SECURITY DEFINER بمسار بحث مثبَّت.
 --
@@ -1450,7 +1459,7 @@ begin
   -- (13) اللوحة تُعلن الطزاجة دائمًا ولا تقدّم قديمًا كحيّ
   v_def := pg_get_functiondef(to_regprocedure('public.mgmt_dashboard(jsonb,boolean)'));
   foreach t in array array['generated_at','age_seconds','is_stale','from_cache','ttl_seconds','served_at'] loop
-    if v_def not ilike '%' || t || '%' then
+    if v_def not ilike '%' || replace(t, '_', '\_') || '%' escape '\' then
       raise exception 'MGMT SELF-TEST: اللوحة لا تُعلن %', t; end if;
   end loop;
   if v_def not ilike '%recompute_failed%' then

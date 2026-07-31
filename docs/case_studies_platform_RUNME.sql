@@ -700,8 +700,12 @@ create or replace function public.cs_log(
 begin
   insert into public.cs_audit(case_study_id, action, actor, ok, details)
   values (p_study, coalesce(p_action, 'unknown'), auth.uid(), coalesce(p_ok, true), coalesce(p_details, '{}'::jsonb));
-exception when others then
-  null;  -- التدقيق لا يُسقط عمليّة صحيحة، لكنّه لا يُخفي فشلها أيضًا
+exception
+  -- ★ استثناءات **مسمّاة** لا catch-all ★ التدقيق يجب ألّا يُسقط عمليّة صحيحة،
+  --   لكنّ `when others then null` يبتلع أيضًا خطأ صلاحيات أو قيدًا مكسورًا
+  --   فيصير سجلّ التدقيق صامتًا عن فشله هو — وهذا أسوأ من غيابه، لأنّه يُقرأ
+  --   «دُوِّن» وهو لم يُدوَّن. فالمتسامَح معه هنا الغياب البنيويّ وحده.
+  when undefined_table or undefined_column then null;
 end $$;
 
 /**
@@ -1354,7 +1358,7 @@ begin
       from public.cs_case_studies c
       left join public.cs_permissions p on p.case_study_id = c.id
      where (st is null or c.status = st)
-       and (q is null or c.internal_title ilike '%' || q || '%' or c.slug ilike '%' || q || '%')
+       and (q is null or c.internal_title ilike '%' || replace(q, '_', '\_') || '%' escape '\' or c.slug ilike '%' || replace(q, '_', '\_') || '%' escape '\')
      limit lim), '[]'::jsonb);
 end $$;
 
@@ -2692,7 +2696,11 @@ begin
       on conflict (key) do nothing
     $ins$;
   end if;
-exception when others then null;   -- كتالوج الصلاحيات اختياريّ بنيويًّا
+exception
+    -- ★ استثناء **مسمّى** لا catch-all ★ كتالوج الصلاحيات اختياريّ بنيويًّا،
+    --   فغيابه (42P01) حالةٌ متوقَّعة تُتخطّى. أمّا `when others then null`
+    --   فيبتلع خطأ صلاحيات أو قيدًا مكسورًا ويُقرأ نجاحًا — وهو ما نمنعه.
+    when undefined_table then null;
 end $perm$;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -2790,7 +2798,7 @@ begin
                            'anonymization_required','embargo_active','media_infected',
                            'media_metadata_not_stripped','media_host_not_allowed','no_hero_media']
   loop
-    if d not ilike '%' || t || '%' then raise exception 'SELF-TEST: المانع % غير مُطبَّق', t; end if;
+    if d not ilike '%' || replace(t, '_', '\_') || '%' escape '\' then raise exception 'SELF-TEST: المانع % غير مُطبَّق', t; end if;
   end loop;
 
   -- (٧) ★ لا تعديل صامت بعد النشر ★ العامّ يقرأ اللقطة لا الصفّ الحيّ
@@ -2958,7 +2966,7 @@ begin
                               where conrelid = 'public.cs_media'::regclass and conname = 'cs_media_no_private_source'));
   foreach t in array array['project-deliverables','rental-private-documents','custody-evidence','token=']
   loop
-    if d not ilike '%' || t || '%' then raise exception 'SELF-TEST: القيد لا يمنع %', t; end if;
+    if d not ilike '%' || replace(t, '_', '\_') || '%' escape '\' then raise exception 'SELF-TEST: القيد لا يمنع %', t; end if;
   end loop;
 
   -- (٢١) الموافقة والاعتماد فعلان موثَّقان لا صندوقان
@@ -2980,7 +2988,7 @@ begin
     select count(*) into n from pg_constraint c
      where c.conrelid = 'public.cs_case_studies'::regclass and c.contype = 'c'
        and pg_get_constraintdef(c.oid) ilike '%status%'
-       and pg_get_constraintdef(c.oid) ilike '%' || t || '%';
+       and pg_get_constraintdef(c.oid) ilike '%' || replace(t, '_', '\_') || '%' escape '\';
     if n < 1 then raise exception 'SELF-TEST: الحالة % ليست في قيد CHECK', t; end if;
   end loop;
 

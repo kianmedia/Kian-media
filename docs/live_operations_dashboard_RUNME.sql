@@ -1899,8 +1899,8 @@ begin
       'can_operate', public.liveops_can_operate_session(s.id)) as x
       from public.liveops_sessions s
      where (v_status is null or s.status = v_status)
-       and (v_q is null or s.title ilike '%'||v_q||'%' or coalesce(s.session_code,'') ilike '%'||v_q||'%'
-            or coalesce(s.internal_ref,'') ilike '%'||v_q||'%')) t;
+       and (v_q is null or s.title ilike '%' || replace(v_q, '_', '\_') || '%' escape '\' or coalesce(s.session_code,'') ilike '%' || replace(v_q, '_', '\_') || '%' escape '\'
+            or coalesce(s.internal_ref,'') ilike '%' || replace(v_q, '_', '\_') || '%' escape '\')) t;
   return jsonb_build_object('rows', v_rows, 'can_manage', coalesce(public.liveops_can_manage(), false));
 end $fn$;
 
@@ -2238,7 +2238,7 @@ begin
                            'target_bitrate_kbps','venue','control_room','session_code','internal_ref',
                            'mitigation','issue','operations_manager_id','broadcast_director_id',
                            'technical_director_id','assigned_name','prodops_job_id','project_id'] loop
-    if v_def ilike '%'||f||'%' then
+    if v_def ilike '%' || replace(f, '_', '\_') || '%' escape '\' then
       raise exception 'LIVEOPS SELF-TEST: حمولة العميل تذكر العمود الحسّاس %', f; end if;
   end loop;
   if v_def ilike '%select *%' then

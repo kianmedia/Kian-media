@@ -409,6 +409,32 @@ checks(sort_key, check_id, verdict, expected, detail) as (
          'all 17 KPI keys are built inside mgmt_compute (no dangling catalogue)',
          'missing: ' || detail from t_kpi_keys
   union all
+-- ★★ التقارير آخر حزمة: لا تُعلَن جاهزيتها قبل إثبات كلّ سابقاتها ★★
+--   كان يتحقّق من ستّ بادئات فقط؛ وهو طبقة قراءة فوق الجميع، فغياب مصدر
+--   يجعل رقمًا ناقصًا يُقرأ صفرًا صادقًا — وهو أخطر من خطأ ظاهر.
+  select 91, '★ كلّ الحزم السابقة قائمة قبل إعلان الجاهزية',
+       '13 حزمة',
+       coalesce((select string_agg(x.pkg, ' · ' order by x.pkg) from (values
+           ('communications_hub','comms\_%'), ('operations_center','ops\_%'),
+           ('crm_sales','crm\_%'), ('finance_profitability','fin\_%'),
+           ('commercial_subscriptions','csub\_%'), ('smart_quoting','sq\_%'),
+           ('lead_scoring_routing','lsr\_%'), ('asset_intelligence','custody\_inventory\_%'),
+           ('talent_vendor_network','tvn\_%'), ('vendor_compliance_center','vcc\_%'),
+           ('case_studies_platform','cs\_%'), ('live_operations_dashboard','liveops\_%'),
+           ('kian_ai_assistant','ai\_%')
+         ) as x(pkg, pre)
+        where not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                           where n.nspname='public' and c.relkind in ('r','p')
+                             and c.relname like x.pre escape '\')), 'كلّها قائمة'),
+       not exists (select 1 from (values
+           ('comms\_%'),('ops\_%'),('crm\_%'),('fin\_%'),('csub\_%'),('sq\_%'),('lsr\_%'),
+           ('custody\_inventory\_%'),('tvn\_%'),('vcc\_%'),('cs\_%'),('liveops\_%'),('ai\_%')
+         ) as y(pre)
+        where not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                           where n.nspname='public' and c.relkind in ('r','p')
+                             and c.relname like y.pre escape '\'))
+
+union all
   -- ─── 17) خطوة التحقّق التي لا يستطيع هذا الملفّ أداءها ────────────────
   --   كلّ ما سبق يعمل بدور postgres وauth.uid() = NULL، فهو يُثبت الشكل لا
   --   السلوك تحت جلسة حقيقية.

@@ -156,9 +156,9 @@ checks as (
   -- ٩) ★★★ حمولة العميل لا تذكر عمودًا حسّاسًا
   union all select 9, '★★★ حمولة العميل خالية من الأعمدة الحسّاسة', 'صفر تسريب',
          coalesce((select string_agg(c, ', ') from forbidden
-                    where (select d_payload from defs) ilike '%'||c||'%'), 'لا شيء'),
+                    where (select d_payload from defs) ilike '%' || replace(c, '_', '\_') || '%' escape '\'), 'لا شيء'),
          case when (select d_payload from defs) = '' then '❌ FAIL'
-              when exists (select 1 from forbidden where (select d_payload from defs) ilike '%'||c||'%')
+              when exists (select 1 from forbidden where (select d_payload from defs) ilike '%' || replace(c, '_', '\_') || '%' escape '\')
               then '❌ FAIL' else '✅ PASS' end
 
   -- ١٠) ★★ حمولة العميل بلا select * وبلا وصف الحادثة الداخليّ
