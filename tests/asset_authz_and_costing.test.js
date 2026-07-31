@@ -116,7 +116,14 @@ test("★ الإهلاك يحترم قيمة الخردة ولا يتجاوز ا
 
 test("★★ لا anon ولا service_role في أيّ مكان من الحزمة", () => {
   const code = stripComments(SQL);
-  assert.doesNotMatch(code, /grant[^;]{0,200}\bto\b[^;]{0,80}\banon\b/i, "منح صلاحية لـanon");
+  // ⚠️ شكل جملة GRANT حقيقية، لا مجرّد تجاور الكلمتين. الصيغة السابقة طابقت
+  //    **شرحًا** يقول إنّ «grant … to authenticated لا يُلغي PUBLIC، وanon يرث»
+  //    — أي جملةً تشرح الخطر فأُدينت به. سابع ظهور لصنف «طابق اسمًا لا شكلًا»
+  //    في هذا البرنامج. واشتراط `on function|table|schema` بين grant وto يجعل
+  //    النثر عاجزًا عن اتّخاذ الشكل، بينما المنحة الحقيقية تتّخذه دائمًا.
+  assert.doesNotMatch(code,
+    /\bgrant\b[a-z, ]{0,40}\bon\s+(function|table|schema|sequence|all)\b[^;]{0,200}\bto\b[^;]{0,80}\banon\b/i,
+    "منح صلاحية لـanon");
   assert.doesNotMatch(code, /service_role/i, "ذكر service_role");
   assert.match(code, /from public,\s*anon/i, "لا سحب صريح للصلاحيات من anon/public");
 });
