@@ -247,8 +247,67 @@ test("(١٢) ★ الـPreflight يعرض التصنيف كاملًا لا رق�
                      "semantic_conflicts", "expected_seed_count"]) {
     assert.match(pre, new RegExp(`as ${col}\\b`), `عمود مفقود من نتيجة الـPreflight: ${col}`);
   }
-  // و«المجهول» لا يُكتب صفرًا ثابتًا يُقرأ نجاحًا حين لا يمكن قياسه.
-  assert.match(pre, /not_applicable/, "فحص المجهول يُصرّح صفرًا بدل الإعلان عن عدم قابليته للقياس");
+  // و«المجهول» لا يُكتب صفرًا ثابتًا يُقرأ نجاحًا حين لا يمكن قياسه: يُعلَن
+  // صراحةً أنّ الفحص الحيّ لا ينطبق قبل التركيب، وأنّ العقد الساكن مُتحقَّق.
+  assert.match(pre, /NOT_APPLICABLE_BEFORE_INSTALL/,
+    "فحص المجهول يُصرّح صفرًا بدل الإعلان عن عدم قابليته للقياس");
+  // ولا يعود المرجع المباشر الذي أسقط الملفّ بـ42P01.
+  assert.doesNotMatch(pre, /\bfrom\s+public\.vcc_readiness_requirements\b/i,
+    "عاد المرجع المباشر إلى جدول قد لا يوجد");
+});
+
+// ─── (هـ) التركيب الأوّل: لا مرجع إلى علاقة قد تغيب ───────────────────────
+
+test("(١٣) ★★ الـPreflight لا يشير إلى علاقة vcc_* قد لا توجد ★★", () => {
+  // سقط الـPreflight بـ42P01 على تركيب أوّل لأنّه قرأ
+  // public.vcc_readiness_requirements داخل CASE محروس بـto_regclass.
+  // والحارس لا يحمي: PostgreSQL يحلّ أسماء العلاقات **وقت تحليل الجملة**،
+  // للجملة كلّها، قبل تقييم أيّ تعبير. وto_regclass آمنة لأنّها تأخذ نصًّا؛
+  // أمّا اسم الجدول عاريًا في FROM فيُطلب من الكتالوج ولو لم يُنفَّذ فرعه.
+  const pre = PRE();
+  const code = pre.split("\n").map((l) => {
+    let q = false;
+    for (let i = 0; i < l.length; i++) {
+      if (l[i] === "'") q = !q;
+      else if (!q && l[i] === "-" && l[i + 1] === "-") return l.slice(0, i);
+    }
+    return l;
+  }).join("\n");
+  const refs = [...code.matchAll(/\b(from|join)\s+public\.(vcc_[a-z0-9_]+)/gi)]
+    .map((m) => `${m[2]} (سطر ${code.slice(0, m.index).split("\n").length})`);
+  assert.deepEqual(refs, [],
+    "مرجع مباشر إلى علاقة vcc_* في ملفّ يسبق التركيب — 42P01 مهما كان الحارس:\n  " + refs.join("\n  "));
+});
+
+test("(١٤) ★★ القوائم الثلاث متطابقة: الزرع · الجاهزية · المعلَنة ★★", () => {
+  const declared = preflightList("declared_requirement_types");
+  assert.ok(declared.length >= 15, `القائمة المعلَنة قصيرة: ${declared.length}`);
+  // (أ) المعلَنة = doc_type في متطلّبات الجاهزية داخل RUNME، حرفًا بحرف.
+  const fromRunme = [...new Set(requirements(VCC())
+    .filter((r) => r.kind === "document").map((r) => r.docType).filter(Boolean))].sort();
+  assert.deepEqual([...declared].sort(), fromRunme,
+    "القائمة المعلَنة في الـPreflight تخالف doc_type في الترحيلة — الفحص يقيس غير ما يُزرع");
+  // (ب) وكلّ معلَن داخل hard ∪ seedable.
+  const union = new Set([...preflightList("hard"), ...preflightList("seedable")]);
+  const orphan = declared.filter((d) => !union.has(d)).sort();
+  assert.deepEqual(orphan, [], `مفتاح معلَن خارج hard ∪ seedable: ${orphan.join(", ")}`);
+  // (ج) وكلّ قابل للزرع تزرعه الترحيلة فعلًا.
+  const vccSeed = seeded(VCC());
+  const notSeeded = preflightList("seedable").filter((d) => !vccSeed.has(d)).sort();
+  assert.deepEqual(notSeeded, [], `مُعلَن قابلًا للزرع ولا تزرعه الترحيلة: ${notSeeded.join(", ")}`);
+});
+
+test("(١٥) ★ الحكم يعلن عدم قابلية القياس بدل صفر مضلِّل ★", () => {
+  const pre = PRE();
+  assert.match(pre, /NOT_APPLICABLE_BEFORE_INSTALL — STATIC CONTRACT VERIFIED/,
+    "لا يُعلن أنّ الفحص الحيّ لا ينطبق قبل التركيب");
+  // ويظلّ قادرًا على الإدانة: مفتاح معلَن بلا مصدر يسبق الإعلان في ترتيب الحالات.
+  const col = pre.slice(pre.indexOf("as unknown_requirement_types") - 700,
+                        pre.indexOf("as unknown_requirement_types"));
+  const iUnknown = col.indexOf("unknown_types) > 0");
+  const iNA = col.indexOf("NOT_APPLICABLE_BEFORE_INSTALL");
+  assert.ok(iUnknown > -1 && iUnknown < iNA,
+    "إعلان «لا ينطبق» يسبق فحص المفتاح المجهول فيبتلعه");
 });
 
 test("SAFE: ساكن فقط (لا قاعدة بيانات ولا شبكة)", () => {

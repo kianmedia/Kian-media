@@ -217,26 +217,34 @@ seedable_missing as (
     from seedable sd where not exists (select 1 from have v where v.key = sd.d)),
 existing_required as (
   select count(*) as n from required r where exists (select 1 from have v where v.key = r.d)),
--- مفتاح تستعمله قواعد الجاهزية ولا هو قائم ولا معلَن في قائمة الزرع = خلل عقد.
--- ⚠️ في التركيب الأوّل لا يمكن قياسه هنا: vcc_readiness_requirements لم يُنشأ
---    بعد. فيُقاس **ساكنًا في المستودع** (tests/vcc_document_type_contract.test.js
---    يُثبت أنّ كلّ doc_type في الترحيلة داخل hard ∪ seedable). وأمّا عند إعادة
---    التشغيل — حيث الجدول قائم — فيُقاس هنا فعلًا. ولا يُكتب صفرٌ ثابت يُقرأ
---    نجاحًا: الغياب يُعلَن غيابًا.
+-- ★★ المفاتيح المعلَنة — مصدر ساكن، بلا مرجع إلى جدول قد لا يوجد ★★
+--
+--  ⚠️ الصيغة السابقة (كتبتُها أنا) قرأت public.vcc_readiness_requirements داخل
+--     CASE محروس بـ، فسقطت بـ42P01 على تركيب أوّل.
+--     والسبب مبدئيّ لا عرَضيّ: **PostgreSQL يحلّ أسماء العلاقات وقت تحليل
+--     الجملة**، للجملة كلّها، قبل تقييم أيّ تعبير. وCASE وWHERE يتحكّمان في
+--     **التنفيذ** لا في **حلّ الأسماء**. فالفرع الذي لن يُنفَّذ أبدًا يُحلَّل
+--     مع غيره، ويُطلب اسمه من الكتالوج، فيسقط إن غاب.
+--     و to_regclass آمنة لأنّها تأخذ **نصًّا** لا مرجع علاقة؛ فما إن يُكتب اسم
+--     الجدول عاريًا في FROM حتّى تزول تلك الحماية. الحارس لا يحمي ما بعده.
+--
+--  فالمصدر هنا **ساكن**: قائمة مفاتيح doc_type التي سيزرعها RUNME في
+--  vcc_readiness_requirements، مطابقةً حرفًا بحرف — ويُثبت تطابقها اختبارُ
+--  مستودعٍ يقارن القوائم الثلاث (زرع الأنواع · متطلّبات الجاهزية · هذه).
+declared_requirement_types(d) as (values
+  ('articles_of_association'), ('authorized_signatory'), ('bank_letter'),
+  ('chamber_of_commerce'), ('commercial_registration'), ('company_profile_ar'),
+  ('company_profile_en'), ('drone_permit'), ('gosi_certificate'),
+  ('hse_certificate'), ('hse_policy'), ('insurance_policy'),
+  ('municipality_license'), ('national_address'), ('privacy_policy_doc'),
+  ('public_liability'), ('saudization_certificate'), ('vat_certificate'),
+  ('zakat_certificate'), ('zatca_compliance')
+),
+-- خلل العقد: مفتاح معلَن في الجاهزية وليس شرطًا صلبًا ولا قابلًا للزرع.
 unknown_types as (
-  select case when to_regclass('public.vcc_readiness_requirements') is null
-              then '' else coalesce((
-                select string_agg(distinct r.doc_type, ' · ' order by r.doc_type)
-                  from public.vcc_readiness_requirements r
-                 where r.kind = 'document' and r.doc_type is not null
-                   and not exists (select 1 from required q where q.d = r.doc_type)), '') end as s,
-         case when to_regclass('public.vcc_readiness_requirements') is null
-              then 0 else coalesce((
-                select count(distinct r.doc_type)
-                  from public.vcc_readiness_requirements r
-                 where r.kind = 'document' and r.doc_type is not null
-                   and not exists (select 1 from required q where q.d = r.doc_type)), 0) end as n,
-         (to_regclass('public.vcc_readiness_requirements') is null) as not_applicable),
+  select coalesce(string_agg(x.d, ' · ' order by x.d), '') as s, count(*) as n
+    from declared_requirement_types x
+   where not exists (select 1 from required q where q.d = x.d)),
 dupes as (
   select coalesce(string_agg(a.label_ar || ': ' || a.key || ' / ' || b.key, ' · '), '') as s,
          count(*) as n
@@ -256,10 +264,11 @@ select case when to_regclass('public.tvn_document_types') is null then 'STOP'
        case when (select n from hard_missing) = 0 then 'لا شيء ✓'
             else '★ شرط سابق مفقود ★ ' || (select s from hard_missing)
                  || ' — شغّل talent_vendor_network أوّلًا؛ VCC لا تزرع هذه' end as hard_missing_types,
-       case when (select not_applicable from unknown_types)
-              then 'لا ينطبق — تركيب أوّل (الجدول غير موجود). يُفحَص ساكنًا في المستودع'
-            when (select n from unknown_types) = 0 then 'لا شيء ✓'
-            else '★ مفتاح جاهزية بلا مصدر ★ ' || (select s from unknown_types) end as unknown_requirement_types,
+       case when (select n from unknown_types) > 0
+              then '★ مفتاح جاهزية بلا مصدر ★ ' || (select s from unknown_types)
+            when to_regclass('public.vcc_readiness_requirements') is null
+              then 'NOT_APPLICABLE_BEFORE_INSTALL — STATIC CONTRACT VERIFIED'
+            else 'لا شيء ✓ (والعقد الساكن مطابق)' end as unknown_requirement_types,
        case when (select n from dupes) = 0 then 'لا مرادف لوثيقة واحدة ✓'
             else '★ تعارض دلاليّ ★ ' || (select s from dupes) end             as semantic_conflicts,
        (select count(*) from seedable)::text || ' نوعًا تزرعها هذه الحزمة'   as expected_seed_count;
