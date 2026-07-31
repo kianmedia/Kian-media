@@ -20,6 +20,14 @@
 -- earlier pass left in place — so this baseline is what that change is measured
 -- against. §5d names the single anonymous caller that must survive it.
 --
+-- §8 is the PRIVILEGE MAP: for anon, PUBLIC and authenticated, across all seven
+-- privilege types, at TABLE *and* COLUMN granularity, reporting DIRECT and
+-- INHERITED separately. §8b proves, from the code, exactly what
+-- public.notification_preferences needs — the previous version of §8 could not
+-- see a column-level grant at all, and a guard built on the same blind probe is
+-- what aborted the last run. §8c asks whether any user is missing a preference
+-- row (the first-use question), §8d prints the row-isolation policies.
+--
 -- Nothing here is fatal. Read the NOTICEs, then run the RUNME.
 -- ════════════════════════════════════════════════════════════════════════════
 
@@ -235,81 +243,235 @@ begin
   raise notice 'FORGED-SUCCESS BASELINE — %', v_txt;
 end $preflight_forged$;
 
--- ─── 8) ★ THE DEPENDENCY THE PUBLIC REVOKE RESTS ON ★ ──────────────────────
+-- ─── 8) ★ THE FULL PRIVILEGE MAP: DIRECT vs INHERITED, TABLE vs COLUMN ★ ────
 -- §13.b of the RUNME revokes EVERY table privilege from anon AND from PUBLIC on
 -- the five legacy notification tables. `authenticated` is a MEMBER of PUBLIC,
 -- so that revoke is only safe if authenticated holds its OWN direct grant.
 --
--- ONE LEGITIMATE authenticated CALLER EXISTS and it reads a legacy table
--- directly through PostgREST, not through an RPC:
---   lib/portal/account.ts:32  pget  notification_preferences?user_id=eq...
---   lib/portal/account.ts:42  ppatch notification_preferences?user_id=eq...
--- Both send `Bearer <session.access_token>`, so they execute as `authenticated`.
--- If that role's SELECT/UPDATE were inherited via PUBLIC rather than granted
--- directly, the revoke would silently break the account preferences screen —
--- and it would break it AFTER the migration reported success.
+-- ══ WHY THIS SECTION WAS REWRITTEN ══
+-- Its previous version measured only two things: has_table_privilege() and
+-- information_schema.role_table_grants. BOTH ARE TABLE-LEVEL ONLY. A privilege
+-- granted on individual COLUMNS is invisible to both, and
+-- docs/phase0_migration.sql:781 grants exactly that:
+--     grant update (portal_enabled, email_enabled, whatsapp_enabled)
+--       on public.notification_preferences to authenticated;
+-- So the old §8 reported UPDATE on notification_preferences as simply not held —
+-- neither DIRECT nor VIA PUBLIC — and the RUNME's guard, built on the same blind
+-- probe, then aborted the migration claiming a revoke had "stripped" a privilege
+-- that had never been table-level in the first place.
 --
--- The RUNME no longer relies on that assumption (it preserves the effective
--- privilege before revoking PUBLIC), but the assumption is still PROVEN here so
--- the operator sees the real state of the database before touching it.
--- Read the NOTICE: `via_public_only` naming any table is the interesting case.
-do $preflight_authenticated$
+-- The map below therefore reports FOUR states, per role, per table, per
+-- privilege type, and it does not stop at the table:
+--     DIRECT · table-level        — granted straight to the role. A revoke from
+--                                   PUBLIC cannot touch it.
+--     DIRECT · column-level       — granted on named columns. THIS IS THE STATE
+--                                   THAT WAS INVISIBLE BEFORE.
+--     INHERITED                   — effective, but not a direct grant: it comes
+--                                   from PUBLIC or a group role, and a revoke
+--                                   from PUBLIC WOULD remove it.
+--     absent                      — not held at all, at either granularity.
+-- Read from the ACLs themselves (pg_class.relacl, pg_attribute.attacl) rather
+-- than from information_schema, which shows only table-level grants and only for
+-- roles the current session happens to have enabled. In an ACL, grantee 0 is
+-- literally PUBLIC, which is how PUBLIC gets a column in this report at all.
+--
+-- Every row for public.notification_preferences is printed even when the answer
+-- is "absent", because that is the table whose contract the RUNME asserts; for
+-- the other tables only the states that actually exist are listed.
+select 'privilege_map' as check_kind,
+       g.role || ' · public.' || g.tbl || ' · ' || g.priv as name,
+       g.state
+from (
+  select r.role, t.tbl, p.priv,
+         case
+           when x.direct_tbl        then 'DIRECT · table-level'
+           when x.direct_cols is not null
+                                    then 'DIRECT · column-level (' || x.direct_cols || ')'
+           when x.eff_tbl           then 'INHERITED · effective but NOT direct — revoking PUBLIC removes it'
+           when x.eff_col           then 'INHERITED · column-level, effective but NOT direct'
+           else 'absent'
+         end as state
+  from (values ('anon'), ('authenticated'), ('PUBLIC')) r(role)
+  -- Driven off the catalogue, so a table that does not exist never reaches the
+  -- privilege functions (which raise rather than return null on a bad name).
+  cross join (
+    select c.relname::text as tbl, c.oid as reloid
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind in ('r','p')
+       and c.relname::text in ('notifications','notification_events','notification_preferences',
+                               'notification_delivery_log','email_deliveries')
+  ) t
+  cross join (values ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),
+                     ('TRUNCATE'),('REFERENCES'),('TRIGGER')) p(priv)
+  cross join lateral (
+    select
+      exists (
+        select 1 from pg_class c
+        cross join lateral aclexplode(c.relacl) a
+         where c.oid = t.reloid and a.privilege_type = p.priv
+           and a.grantee = case when r.role = 'PUBLIC' then 0::oid else to_regrole(r.role)::oid end
+      ) as direct_tbl,
+      (
+        select string_agg(at.attname, '+' order by at.attnum)
+          from pg_attribute at
+          cross join lateral aclexplode(at.attacl) a
+         where at.attrelid = t.reloid and at.attnum > 0 and not at.attisdropped
+           and a.privilege_type = p.priv
+           and a.grantee = case when r.role = 'PUBLIC' then 0::oid else to_regrole(r.role)::oid end
+      ) as direct_cols,
+      case when r.role = 'PUBLIC' or to_regrole(r.role) is null then false
+           else has_table_privilege(r.role::name, t.reloid, p.priv::text) end as eff_tbl,
+      -- Only these four types can be granted per column in PostgreSQL; passing
+      -- any other type to the column functions raises an error.
+      case when r.role = 'PUBLIC' or to_regrole(r.role) is null
+             or p.priv not in ('SELECT','INSERT','UPDATE','REFERENCES') then false
+           else has_any_column_privilege(r.role::name, t.reloid, p.priv::text) end as eff_col
+  ) x
+) g
+where g.tbl = 'notification_preferences' or g.state <> 'absent'
+order by g.tbl, g.role, g.priv;
+
+-- ─── 8b) WHAT notification_preferences ACTUALLY NEEDS, PROVEN FROM THE CODE ──
+-- Not from the error message the failed run printed — that message named only
+-- SELECT and UPDATE and was itself derived from the wrong probe. This is the
+-- complete list of readers and writers in the working tree:
+--
+--   lib/portal/account.ts:32   pget  'notification_preferences?user_id=eq.<uid>&select=*'
+--        → PostgREST GET carrying `Bearer <session.access_token>`
+--          (lib/portal/client.ts:121) → runs as `authenticated`
+--          → needs a REAL table SELECT covering every column, because select=*.
+--   lib/portal/account.ts:42   ppatch 'notification_preferences?user_id=eq.<uid>'
+--        with Partial<portal_enabled | email_enabled | whatsapp_enabled>
+--        → PostgREST PATCH, same identity, sent with `Prefer: return=representation`
+--          (lib/portal/client.ts:131) → needs UPDATE on exactly those three
+--          columns AND SELECT to return the updated row.
+--   components/portal/ProfileSettings.tsx:47 and :75 — the only UI on this path.
+--   public.notify()            (phase0_migration.sql:95)  — SECURITY DEFINER
+--   public.handle_new_user()   (phase0_migration.sql:515) — SECURITY DEFINER
+--   project_core email helpers (project_core_ABSOLUTE_FINAL_RUNME.sql:2024,2048)
+--        → all three run as the function OWNER and need NO grant on this table.
+--
+-- THEREFORE, and each of these was checked rather than assumed:
+--   • INSERT is NOT needed. The preference centre does NOT create a row on first
+--     use: updateMyPrefs issues a PATCH, never a POST. The row is created at
+--     signup by the SECURITY DEFINER trigger handle_new_user()
+--     (phase0_migration.sql:515,519) and backfilled for accounts that predate
+--     Phase 0 (phase0_migration.sql:127). There is also no INSERT policy on the
+--     table, so an INSERT grant would be dead privilege that no test could catch
+--     going wrong. §8c below reports whether any user is actually missing a row.
+--   • DELETE is NOT needed — no code path deletes, and Phase 0 grants no delete
+--     anywhere in the portal by design.
+--   • No SEQUENCE is involved: the primary key is user_id uuid, not an identity.
+--   • No function EXECUTE is involved: this path is PostgREST table access, not
+--     an RPC. The hub's OWN preference centre is the separate, finer-grained
+--     public.comms_preferences, reached through comms_prefs_get/comms_prefs_set,
+--     which ARE SECURITY DEFINER and need no table grant at all.
+do $preflight_np_contract$
 declare
-  t text;
-  v_direct text := '';
-  v_via_public text := '';
-  v_absent text := '';
-  v_privs text[] := array['SELECT','INSERT','UPDATE','DELETE'];
-  p text;
-  v_has_direct boolean;
-  v_has_effective boolean;
+  v_np constant text := 'public.notification_preferences';
+  v_cols constant text[] := array['portal_enabled','email_enabled','whatsapp_enabled'];
+  c text;
+  v_state text := '';
 begin
-  foreach t in array array['notifications','notification_events','notification_preferences',
-                           'notification_delivery_log','email_deliveries']
-  loop
-    if to_regclass('public.' || quote_ident(t)) is null then
-      v_absent := v_absent || ' ' || t;
-      continue;
-    end if;
-    foreach p in array v_privs loop
-      -- DIRECT grant: the grantee column literally says 'authenticated'.
-      v_has_direct := exists (
-        select 1 from information_schema.role_table_grants
-         where table_schema = 'public' and table_name = t
-           and grantee = 'authenticated' and privilege_type = p);
-      -- EFFECTIVE privilege: true even when it is only inherited from PUBLIC.
-      v_has_effective := has_table_privilege('authenticated', format('public.%I', t), p);
+  if to_regclass(v_np) is null then
+    raise notice 'NP CONTRACT — public.notification_preferences does not exist on this database; nothing to prove.';
+    return;
+  end if;
 
-      if v_has_effective and not v_has_direct then
-        v_via_public := v_via_public || ' ' || t || ':' || p;
-      elsif v_has_direct then
-        v_direct := v_direct || ' ' || t || ':' || p;
-      end if;
-    end loop;
+  -- Table-level SELECT: the literal probe, so the reading is unambiguous.
+  raise notice 'NP CONTRACT — the caller whose breakage is being ruled out is lib/portal/account.ts:32 (read) and '
+               'lib/portal/account.ts:42 (write), reached from components/portal/ProfileSettings.tsx. Both go '
+               'through PostgREST with a user JWT, so both execute as `authenticated`.';
+  raise notice 'NP CONTRACT — required SELECT (table, every column, for select=* and for return=representation): effective = %',
+               has_table_privilege('authenticated', v_np, 'SELECT');
+  foreach c in array v_cols loop
+    v_state := v_state || ' ' || c || '=' ||
+               has_column_privilege('authenticated', v_np, c, 'UPDATE')::text;
   end loop;
+  raise notice 'NP CONTRACT — required UPDATE, per column (has_column_privilege, NOT has_table_privilege):%', v_state;
+  raise notice 'NP CONTRACT — the same three columns as seen by the TABLE-level probe: has_table_privilege(UPDATE) = % '
+               '· has_any_column_privilege(UPDATE) = %',
+               has_table_privilege('authenticated', v_np, 'UPDATE'),
+               has_any_column_privilege('authenticated', v_np, 'UPDATE');
+  raise notice 'NP CONTRACT — ⚠️ IF THOSE TWO DISAGREE, that disagreement IS the bug the earlier run hit: the grant '
+               'is column-level, and the table-level probe cannot see it.';
 
-  if v_absent <> '' then
-    raise notice 'AUTHENTICATED DEPENDENCY — absent table(s), nothing to prove:%', v_absent;
+  -- Privileges that must NOT be there, so the operator sees the starting drift.
+  raise notice 'NP CONTRACT — types that are NOT required (each must read false): %',
+               (select string_agg(p || '=' || has_table_privilege('authenticated', v_np, p)::text, ' · ')
+                  from unnest(array['INSERT','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p);
+  raise notice 'NP CONTRACT — user_id writable by authenticated (must be false; a writable user_id lets one user '
+               'hand its row to another): %',
+               has_column_privilege('authenticated', v_np, 'user_id', 'UPDATE');
+
+  -- Non-vacuity: prove the probes can actually SEE a privilege, so a row of
+  -- `false` is a finding rather than a broken query. public.profiles carries
+  -- BOTH kinds — a table-level SELECT and a column-level UPDATE grant
+  -- (phase0_migration.sql:768,778) — so one control covers both probes.
+  if to_regclass('public.profiles') is null then
+    raise notice 'NON-VACUITY — public.profiles absent; no control available for the probes above.';
+    return;
   end if;
-  raise notice 'AUTHENTICATED DEPENDENCY — held DIRECTLY (survives a PUBLIC revocation untouched):%',
-               coalesce(nullif(v_direct, ''), ' (none)');
-  if v_via_public <> '' then
-    raise notice 'AUTHENTICATED DEPENDENCY — ⚠️ held ONLY VIA PUBLIC:%', v_via_public;
-    raise notice 'AUTHENTICATED DEPENDENCY — ⚠️ a bare PUBLIC revocation WOULD have removed these. '
-                 '§13.b of the RUNME re-grants them to authenticated FIRST, so the account '
-                 'preferences screen (lib/portal/account.ts) keeps working. No action needed here.';
+  raise notice 'NON-VACUITY — control on public.profiles: has_table_privilege(SELECT) = % (expect true) · '
+               'has_column_privilege(full_name, UPDATE) = % (expect true) · '
+               'has_column_privilege(account_type, UPDATE) = % (expect FALSE — proves the column probe discriminates)',
+               has_table_privilege('authenticated', 'public.profiles', 'SELECT'),
+               has_column_privilege('authenticated', 'public.profiles', 'full_name', 'UPDATE'),
+               has_column_privilege('authenticated', 'public.profiles', 'account_type', 'UPDATE');
+end $preflight_np_contract$;
+
+-- ─── 8c) IS ANY USER MISSING A PREFERENCE ROW? ─────────────────────────────
+-- The reason this matters: updateMyPrefs PATCHes; a PATCH that matches no row
+-- succeeds and returns an empty array, so getMyPrefs returns null and
+-- ProfileSettings.tsx:136 renders no toggles at all — silently, with no error.
+-- If this count is greater than zero, that is a PRE-EXISTING data gap in the
+-- signup trigger's coverage. It is NOT fixed by granting INSERT (there is no
+-- INSERT policy, so the browser still could not create the row); it is fixed by
+-- backfilling, exactly as phase0_migration.sql:127 does. Reported, not changed —
+-- this file writes nothing.
+do $preflight_np_rows$
+declare v_missing bigint;
+begin
+  if to_regclass('public.notification_preferences') is null then return; end if;
+  select count(*) into v_missing
+    from auth.users u
+   where not exists (select 1 from public.notification_preferences p where p.user_id = u.id);
+  if v_missing = 0 then
+    raise notice 'NP ROWS — every auth.users row has a preference row. The decision to withhold INSERT is safe.';
   else
-    raise notice 'AUTHENTICATED DEPENDENCY — nothing is held only via PUBLIC. The revocation is a no-op for authenticated.';
+    raise notice 'NP ROWS — ⚠️ % user(s) have NO preference row. Their preference toggles render blank today, '
+                 'before and after this migration. Backfill with the INSERT ... on conflict do nothing from '
+                 'phase0_migration.sql:127. Do NOT open INSERT for authenticated to paper over it.', v_missing;
   end if;
+exception when insufficient_privilege then
+  raise notice 'NP ROWS — auth.users is not readable from this session; run the count as the postgres role to check it.';
+end $preflight_np_rows$;
 
-  -- Non-vacuity: prove the probe can actually SEE a privilege, so an all-clear
-  -- is not simply a query that matches nothing.
-  if not has_table_privilege('authenticated', 'public.profiles', 'SELECT')
-     and to_regclass('public.profiles') is not null then
-    raise notice 'AUTHENTICATED DEPENDENCY — ⚠️ probe saw NO privilege even on public.profiles; '
-                 'treat the all-clear above as UNPROVEN and investigate before running the RUNME.';
-  end if;
-end $preflight_authenticated$;
+-- ─── 8d) ROW ISOLATION AS IT STANDS TODAY ──────────────────────────────────
+-- A table grant is worth exactly what the policy behind it is worth. These are
+-- the policies the RUNME's grant will operate under. What to look for:
+--   • USING on the SELECT policy must be keyed on auth.uid(), or every logged-in
+--     user reads every other user's preferences.
+--   • The UPDATE policy must have a WITH CHECK keyed on auth.uid(). Without one
+--     PostgreSQL falls back to USING — which is reported here as such rather
+--     than as a hole — and without either, a user rewrites someone else's row.
+select 'notification_preferences_policy' as check_kind,
+       p.polname || ' · ' ||
+       case p.polcmd when 'r' then 'SELECT' when 'a' then 'INSERT' when 'w' then 'UPDATE'
+                     when 'd' then 'DELETE' else 'ALL' end ||
+       case when p.polpermissive then '' else ' (restrictive)' end as name,
+       'USING ' || coalesce(pg_get_expr(p.polqual, p.polrelid), '(none)') ||
+       '  ·  WITH CHECK ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid),
+                                      '(none — PostgreSQL falls back to USING)') as state
+from pg_policy p
+where p.polrelid = to_regclass('public.notification_preferences')
+order by p.polname;
+
+select 'notification_preferences_rls' as check_kind,
+       'row level security enabled' as name,
+       case when c.relrowsecurity then 'YES' else 'NO — a table privilege here would expose every row' end as state
+from pg_class c
+where c.oid = to_regclass('public.notification_preferences');
 
 do $preflight_done$
 begin

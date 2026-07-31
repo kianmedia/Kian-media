@@ -16,6 +16,13 @@
 --   D. the legacy queue was not touched
 --   G. anon holds nothing outside an explicit ALLOWLIST, across ALL privilege
 --      types — not a denylist of the four CRUD verbs
+--   H. public.notification_preferences — the ONE table a browser session reaches
+--      directly with a user JWT — grants `authenticated` EXACTLY what
+--      lib/portal/account.ts uses and nothing else, DIRECTLY rather than through
+--      PUBLIC, and is row-isolated. Read from pg_class.relacl and
+--      pg_attribute.attacl at BOTH granularities: the run that failed before this
+--      one did so because a column-level grant is invisible to
+--      has_table_privilege() and to information_schema.role_table_grants.
 --
 -- Read every FAIL. The final block raises an ERROR only on a real failure.
 -- ════════════════════════════════════════════════════════════════════════════
@@ -43,6 +50,56 @@ allowed(table_name, grantee, privilege_type) as (
 legacy_tables(t) as (
   values ('notifications'), ('notification_events'), ('notification_preferences'),
          ('notification_delivery_log'), ('email_deliveries')
+),
+-- ─── THE authenticated CONTRACT ON notification_preferences ─────────────────
+-- The one table in this whole surface that a BROWSER session reaches directly,
+-- through PostgREST, with a user JWT — every other path is service_role or a
+-- SECURITY DEFINER function. The allowlist below is derived from the code, not
+-- from the error message the earlier failed run printed:
+--   lib/portal/account.ts:32  GET   ...?user_id=eq.<uid>&select=*   → table SELECT
+--   lib/portal/account.ts:42  PATCH ...?user_id=eq.<uid>            → UPDATE on
+--        exactly portal_enabled, email_enabled, whatsapp_enabled, plus SELECT
+--        again because lib/portal/client.ts:131 sends Prefer: return=representation
+-- INSERT is deliberately NOT on the list: the row is created at signup by the
+-- SECURITY DEFINER trigger handle_new_user() (phase0_migration.sql:515) and
+-- backfilled for older accounts (phase0_migration.sql:127); no browser path
+-- inserts, and there is no INSERT policy for one to use.
+-- to_regclass, so a database without the table produces `absent` rather than an
+-- error — every row below still reports.
+np(reloid) as ( select to_regclass('public.notification_preferences')::oid ),
+np_cols(c) as ( values ('portal_enabled'), ('email_enabled'), ('whatsapp_enabled') ),
+-- Direct table-level ACL entries, read from pg_class.relacl. information_schema
+-- is not used here: it shows table-level grants only, and only for roles the
+-- current session happens to have enabled. In an ACL, grantee 0 IS "PUBLIC".
+np_tbl_acl(grantee_name, priv) as (
+  select case when a.grantee = 0 then 'PUBLIC' else a.grantee::regrole::text end, a.privilege_type
+    from pg_class c
+    cross join lateral aclexplode(c.relacl) a
+   where c.oid = (select reloid from np)
+),
+-- Direct COLUMN-level ACL entries, from pg_attribute.attacl. This is the
+-- catalogue the earlier run never read, and the reason it misdiagnosed itself.
+np_col_acl(grantee_name, priv, column_name) as (
+  select case when a.grantee = 0 then 'PUBLIC' else a.grantee::regrole::text end,
+         a.privilege_type, at.attname::text
+    from pg_attribute at
+    cross join lateral aclexplode(at.attacl) a
+   where at.attrelid = (select reloid from np) and at.attnum > 0 and not at.attisdropped
+),
+np_policy(polname, cmd, polcmd, qual, wcheck, permissive) as (
+  select p.polname::text,
+         case p.polcmd when 'r' then 'select' when 'a' then 'insert' when 'w' then 'update'
+                       when 'd' then 'delete' else 'all' end,
+         p.polcmd,
+         coalesce(pg_get_expr(p.polqual, p.polrelid), ''),
+         -- The documented fallback: a policy with no WITH CHECK uses its USING
+         -- expression as the check. Evaluated here rather than reported as a
+         -- hole that is not one.
+         coalesce(nullif(coalesce(pg_get_expr(p.polwithcheck, p.polrelid), ''), ''),
+                  coalesce(pg_get_expr(p.polqual, p.polrelid), '')),
+         p.polpermissive
+    from pg_policy p
+   where p.polrelid = (select reloid from np)
 ),
 checks(sort_key, check_id, verdict, detail) as (
 
@@ -432,6 +489,169 @@ select 91, 'G5.allowlisted_public_rpc_intact',
        'the only entry on the public-callable allowlist'
 from (select to_regprocedure('public.submit_opportunity_request(text,text,text,text,text,text,jsonb,boolean)') as oid) a
 left join pg_proc p on p.oid = a.oid
+
+-- ─── H. THE authenticated CONTRACT ON notification_preferences ─────────────
+-- The section the previous run died in, rebuilt around what the code actually
+-- does. Everything here reads the ACL catalogues directly, at BOTH
+-- granularities, because a column-level grant is invisible to
+-- has_table_privilege() and to information_schema.role_table_grants — which is
+-- precisely how a table-level guard came to assert a requirement that had never
+-- been true. Read-only; nothing below calls a protected RPC, and nothing below
+-- depends on auth.uid(), so it is safe from the SQL editor.
+union all
+select 100, 'H.np_table_exists',
+       case when (select reloid from np) is not null then 'PASS' else 'FAIL — public.notification_preferences is absent' end,
+       'every H row below is about this table'
+
+union all
+select 101, 'H.np_anon_zero',
+       case when (select count(*) from np_tbl_acl where grantee_name = 'anon')
+               + (select count(*) from np_col_acl where grantee_name = 'anon') = 0
+            then 'PASS — anon holds ZERO privileges, table-level and column-level'
+            else 'FAIL — anon still holds privileges' end,
+       coalesce((select string_agg(distinct priv, ', ' order by priv)
+                   from np_tbl_acl where grantee_name = 'anon'), 'none (table)')
+       || ' · ' ||
+       coalesce((select string_agg(distinct priv || '(' || column_name || ')', ', ')
+                   from np_col_acl where grantee_name = 'anon'), 'none (column)')
+
+union all
+select 102, 'H.np_public_zero',
+       case when (select count(*) from np_tbl_acl where grantee_name = 'PUBLIC')
+               + (select count(*) from np_col_acl where grantee_name = 'PUBLIC') = 0
+            then 'PASS — PUBLIC holds ZERO privileges, table-level and column-level'
+            else 'FAIL — PUBLIC still holds privileges, and every role inherits them' end,
+       coalesce((select string_agg(distinct priv, ', ' order by priv)
+                   from np_tbl_acl where grantee_name = 'PUBLIC'), 'none (table)')
+       || ' · ' ||
+       coalesce((select string_agg(distinct priv || '(' || column_name || ')', ', ')
+                   from np_col_acl where grantee_name = 'PUBLIC'), 'none (column)')
+
+union all
+-- DIRECT, not merely effective. has_table_privilege() would also answer true for
+-- a privilege inherited from PUBLIC — the very state the revoke removes — so a
+-- grant arriving via PUBLIC must NOT be able to satisfy this row.
+select 103, 'H.np_authenticated_direct_select',
+       case when exists (select 1 from np_tbl_acl
+                          where grantee_name = 'authenticated' and priv = 'SELECT')
+            then 'PASS — DIRECT table SELECT, so it survives any future revocation of PUBLIC'
+            when coalesce(has_table_privilege('authenticated', (select reloid from np), 'SELECT'), false)
+            then 'FAIL — SELECT is only EFFECTIVE, not DIRECT: it is inherited, and revoking PUBLIC removes it'
+            else 'FAIL — no SELECT at all; lib/portal/account.ts:32 (select=*) would return nothing' end,
+       'required by account.ts:32 (GET select=*) and by account.ts:42 (Prefer: return=representation)'
+
+union all
+select 104, 'H.np_authenticated_direct_update_columns',
+       case when (select count(*) from np_col_acl
+                   where grantee_name = 'authenticated' and priv = 'UPDATE'
+                     and column_name in (select c from np_cols)) = (select count(*) from np_cols)
+             and (select count(*) from np_col_acl
+                   where grantee_name = 'authenticated' and priv = 'UPDATE'
+                     and column_name not in (select c from np_cols)) = 0
+             and not coalesce(has_table_privilege('authenticated', (select reloid from np), 'UPDATE'), false)
+            then 'PASS — exactly the three preference columns are directly writable; the whole-table privilege is absent'
+            when coalesce(has_table_privilege('authenticated', (select reloid from np), 'UPDATE'), false)
+            then 'FAIL — the write privilege covers the WHOLE TABLE; user_id and updated_at are writable too'
+            else 'FAIL — the three preference columns are not all directly updatable' end,
+       coalesce((select string_agg(column_name, ', ' order by column_name) from np_col_acl
+                  where grantee_name = 'authenticated' and priv = 'UPDATE'), 'none')
+       || '   (required: portal_enabled, email_enabled, whatsapp_enabled — account.ts:42)'
+
+union all
+-- INSERT is not on the allowlist and its absence is asserted, not shrugged at.
+-- The first-use path was checked specifically: updateMyPrefs PATCHes, it never
+-- POSTs, and the row is created at signup by a SECURITY DEFINER trigger.
+select 105, 'H.np_authenticated_no_insert',
+       case when not coalesce(has_table_privilege('authenticated', (select reloid from np), 'INSERT'), false)
+             and not exists (select 1 from np_col_acl
+                              where grantee_name = 'authenticated' and priv = 'INSERT')
+            then 'PASS — no INSERT, and none is needed: handle_new_user() creates the row as SECURITY DEFINER'
+            else 'FAIL — authenticated can INSERT; no code path does, so nothing would catch it going wrong' end,
+       'first-row creation is phase0_migration.sql:515 (signup trigger) and :127 (backfill), not the browser'
+
+union all
+select 106, 'H.np_authenticated_forbidden_zero',
+       case when (select count(*) from (
+                    select 1 from unnest(array['TRUNCATE','REFERENCES','TRIGGER','DELETE']) v(pt)
+                     where coalesce(has_table_privilege('authenticated', (select reloid from np), v.pt), false)
+                    union all
+                    select 1 from np_col_acl
+                     where grantee_name = 'authenticated' and priv in ('INSERT','REFERENCES')
+                  ) z) = 0
+            then 'PASS — none of the forbidden types is held, at either granularity'
+            else 'FAIL — a forbidden privilege is held' end,
+       'forbidden: ' || array_to_string(array['TRUNCATE','REFERENCES','TRIGGER','DELETE','INSERT'], ', ')
+         || ' — the first of those is NOT restricted by row level security at all'
+
+union all
+select 107, 'H.np_row_isolation_rls',
+       case when (select c.relrowsecurity from pg_class c where c.oid = (select reloid from np))
+            then 'PASS — row level security is enabled'
+            else 'FAIL — RLS is OFF; the grants above would expose every user''s row' end,
+       'a table privilege decides WHETHER; only RLS decides WHICH ROW'
+
+union all
+-- Structural, because a read-only check running with auth.uid() = NULL cannot
+-- impersonate two users. What it CAN prove is that no permissive policy is
+-- unconditionally true and that every read path is keyed on the caller's own id.
+select 108, 'H.np_cross_user_read_denied',
+       case when (select count(*) from np_policy
+                   where permissive and polcmd in ('r','*') and qual ~ 'auth\.uid\(\)') = 0
+            then 'FAIL — no own-row SELECT policy keyed on auth.uid()'
+            when (select count(*) from np_policy
+                   where permissive and polcmd in ('r','*') and (qual = '' or qual = 'true')) > 0
+            then 'FAIL — a permissive read policy is unconditionally true; every user reads every row'
+            else 'PASS — every permissive read path is keyed on auth.uid() (admins read all by design, via is_admin())'
+       end,
+       coalesce((select string_agg(polname || ' USING ' || qual, ' | ' order by polname)
+                   from np_policy where polcmd in ('r','*')), 'no read policy at all')
+
+union all
+select 109, 'H.np_cross_user_update_denied',
+       case when (select count(*) from np_policy
+                   where permissive and polcmd in ('w','*') and qual ~ 'auth\.uid\(\)') = 0
+            then 'FAIL — no own-row write policy keyed on auth.uid()'
+            when (select count(*) from np_policy
+                   where permissive and polcmd in ('w','a','*')
+                     and (wcheck = '' or wcheck = 'true' or wcheck !~ 'auth\.uid\(\)')) > 0
+            then 'FAIL — a write policy has no effective WITH CHECK keyed on auth.uid(); a user could rewrite another user''s row'
+            when exists (select 1 from np_col_acl
+                          where grantee_name = 'authenticated' and priv = 'UPDATE'
+                            and column_name = 'user_id')
+              or coalesce(has_column_privilege('authenticated', (select reloid from np), 'user_id', 'UPDATE'), false)
+            then 'FAIL — user_id is writable; the row can be re-pointed at another user'
+            else 'PASS — WITH CHECK keyed on auth.uid(), and user_id is not writable at all'
+       end,
+       coalesce((select string_agg(polname || ' WITH CHECK ' || wcheck, ' | ' order by polname)
+                   from np_policy where polcmd in ('w','a','*')), 'no write policy at all')
+
+union all
+-- The account.ts contract as a whole: the three columns it names must exist, and
+-- select=* must be able to return every column of the row.
+select 110, 'H.np_account_ts_contract',
+       case when (select count(*) from information_schema.columns
+                   where table_schema = 'public' and table_name = 'notification_preferences'
+                     and column_name in (select c from np_cols)) = (select count(*) from np_cols)
+             and coalesce(has_table_privilege('authenticated', (select reloid from np), 'SELECT'), false)
+            then 'PASS — the three toggles exist and the whole row is readable, so select=* and the PATCH representation both work'
+            else 'FAIL — the account preferences screen would break' end,
+       'lib/portal/account.ts:29-45 · components/portal/ProfileSettings.tsx:47,75'
+
+union all
+-- NON-VACUITY for the column probe. public.profiles carries a column-level
+-- UPDATE grant on five columns and NOT on account_type (phase0_migration.sql:778),
+-- so one control shows the probe both sees a column grant and discriminates
+-- between columns. A probe stuck on true or on false fails one half or the other.
+-- The regclass form, never the text form: the text form RAISES on a missing
+-- table, and SQL does not guarantee the `is null` branch of a CASE runs first
+-- when every argument is a constant. The regclass form returns NULL instead.
+select 111, 'H.np_column_probe_non_vacuous',
+       case when to_regclass('public.profiles') is null then 'INFO — public.profiles absent; no control available'
+            when coalesce(has_column_privilege('authenticated', to_regclass('public.profiles')::oid, 'full_name', 'UPDATE'), false)
+             and not coalesce(has_column_privilege('authenticated', to_regclass('public.profiles')::oid, 'account_type', 'UPDATE'), false)
+            then 'PASS — the column probe sees a real column-level privilege AND distinguishes a column without one'
+            else 'REVIEW — the control did not read as expected; treat H.np_* results as UNPROVEN until explained' end,
+       'control: profiles.full_name is column-granted, profiles.account_type is not (phase0_migration.sql:778)'
 )
 select check_id, verdict, detail from checks order by sort_key;
 
@@ -530,6 +750,82 @@ begin
      where not exists (
        select 1 from information_schema.role_table_grants
         where table_schema='public' and grantee in ('anon','PUBLIC'))
+
+    -- ─── H. THE authenticated CONTRACT ────────────────────────────────────
+    -- Every condition below reads pg_class.relacl / pg_attribute.attacl rather
+    -- than has_table_privilege() alone. Two reasons, both learned the hard way:
+    -- a column-level grant is invisible to the table-level probe, and
+    -- has_table_privilege() cannot tell a DIRECT grant from one inherited via
+    -- PUBLIC — so a grant arriving via PUBLIC must not be able to satisfy these.
+    -- Each is guarded on the table existing, so an absent table is `absent`,
+    -- never a false failure.
+    union all
+    select 'H.np_anon_or_public_hold_privileges' where
+      exists (select 1 from pg_class c cross join lateral aclexplode(c.relacl) a
+               where c.oid = to_regclass('public.notification_preferences')::oid
+                 and (a.grantee = 0 or a.grantee = to_regrole('anon')::oid))
+      or exists (select 1 from pg_attribute at cross join lateral aclexplode(at.attacl) a
+                  where at.attrelid = to_regclass('public.notification_preferences')::oid
+                    and at.attnum > 0 and not at.attisdropped
+                    and (a.grantee = 0 or a.grantee = to_regrole('anon')::oid))
+    union all
+    select 'H.np_authenticated_direct_select'
+     where to_regclass('public.notification_preferences') is not null
+       and not exists (select 1 from pg_class c cross join lateral aclexplode(c.relacl) a
+                        where c.oid = to_regclass('public.notification_preferences')::oid
+                          and a.grantee = to_regrole('authenticated')::oid
+                          and a.privilege_type = 'SELECT')
+    union all
+    select 'H.np_authenticated_direct_update_columns'
+     where to_regclass('public.notification_preferences') is not null
+       and ((select count(*) from pg_attribute at cross join lateral aclexplode(at.attacl) a
+              where at.attrelid = to_regclass('public.notification_preferences')::oid
+                and at.attnum > 0 and not at.attisdropped
+                and a.grantee = to_regrole('authenticated')::oid and a.privilege_type = 'UPDATE'
+                and at.attname = any (array['portal_enabled','email_enabled','whatsapp_enabled'])) <> 3
+         or (select count(*) from pg_attribute at cross join lateral aclexplode(at.attacl) a
+              where at.attrelid = to_regclass('public.notification_preferences')::oid
+                and at.attnum > 0 and not at.attisdropped
+                and a.grantee = to_regrole('authenticated')::oid and a.privilege_type = 'UPDATE'
+                and at.attname <> all (array['portal_enabled','email_enabled','whatsapp_enabled'])) > 0
+         or has_table_privilege('authenticated', to_regclass('public.notification_preferences')::oid, 'UPDATE'))
+    union all
+    select 'H.np_authenticated_forbidden_privileges'
+     where to_regclass('public.notification_preferences') is not null
+       and (has_table_privilege('authenticated', to_regclass('public.notification_preferences')::oid, 'TRUNCATE')
+         or has_table_privilege('authenticated', to_regclass('public.notification_preferences')::oid, 'REFERENCES')
+         or has_table_privilege('authenticated', to_regclass('public.notification_preferences')::oid, 'TRIGGER')
+         or has_table_privilege('authenticated', to_regclass('public.notification_preferences')::oid, 'DELETE')
+         or has_table_privilege('authenticated', to_regclass('public.notification_preferences')::oid, 'INSERT'))
+    union all
+    select 'H.np_row_isolation_rls' where exists (
+      select 1 from pg_class c
+       where c.oid = to_regclass('public.notification_preferences')::oid and not c.relrowsecurity)
+    union all
+    select 'H.np_cross_user_read_denied'
+     where to_regclass('public.notification_preferences') is not null
+       and (not exists (select 1 from pg_policy p
+                         where p.polrelid = to_regclass('public.notification_preferences')::oid
+                           and p.polpermissive and p.polcmd in ('r','*')
+                           and coalesce(pg_get_expr(p.polqual, p.polrelid), '') ~ 'auth\.uid\(\)')
+         or exists (select 1 from pg_policy p
+                     where p.polrelid = to_regclass('public.notification_preferences')::oid
+                       and p.polpermissive and p.polcmd in ('r','*')
+                       and coalesce(pg_get_expr(p.polqual, p.polrelid), '') in ('', 'true')))
+    union all
+    select 'H.np_cross_user_update_denied'
+     where to_regclass('public.notification_preferences') is not null
+       and (has_column_privilege('authenticated', to_regclass('public.notification_preferences')::oid,
+                                 'user_id', 'UPDATE')
+         or not exists (select 1 from pg_policy p
+                         where p.polrelid = to_regclass('public.notification_preferences')::oid
+                           and p.polpermissive and p.polcmd in ('w','*')
+                           and coalesce(pg_get_expr(p.polqual, p.polrelid), '') ~ 'auth\.uid\(\)')
+         or exists (select 1 from pg_policy p
+                     where p.polrelid = to_regclass('public.notification_preferences')::oid
+                       and p.polpermissive and p.polcmd in ('w','a','*')
+                       and coalesce(nullif(coalesce(pg_get_expr(p.polwithcheck, p.polrelid), ''), ''),
+                                    coalesce(pg_get_expr(p.polqual, p.polrelid), '')) !~ 'auth\.uid\(\)'))
   ) x;
 
   if v_fail > 0 then

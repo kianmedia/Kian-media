@@ -1461,6 +1461,40 @@ end $grants$;
 -- notification_delivery_log, email_deliveries, EVERY public.comms_* table, and
 -- the SEQUENCES those tables own. Grantees: anon AND PUBLIC.
 --
+-- TARGET STATE, stated up front so the block can be read against it:
+--   anon                     — 0 direct privileges, table AND column, on every
+--                              table in scope, plus 0 on their sequences.
+--   PUBLIC                   — the same, 0.
+--   authenticated            — on notification_preferences: EXACTLY
+--                              SELECT (table) + UPDATE (portal_enabled,
+--                              email_enabled, whatsapp_enabled), granted
+--                              DIRECTLY so it never depends on PUBLIC.
+--                              On the other tables in scope: unchanged, with
+--                              whatever it effectively held restated as a direct
+--                              grant at the same granularity.
+-- ORDER: capture what authenticated needs → revoke from anon → revoke from
+-- PUBLIC → apply the direct allowlist → verify every required privilege is
+-- present → verify every unexpected privilege is absent → verify row isolation.
+--
+-- ══ THE FAILURE THIS SECTION WAS REWRITTEN AFTER ══
+-- A previous run of this file aborted before COMMIT with
+--   HUB FAIL: the revoke stripped authenticated of SELECT/UPDATE on
+--             notification_preferences
+-- That message named the wrong culprit. The two revokes in this block are
+-- `from anon` and `from public`; neither can remove a grant whose grantee is
+-- `authenticated`. What actually happened is that the guard asked
+-- has_table_privilege(...,'UPDATE'), while docs/phase0_migration.sql:781 grants
+-- that privilege at COLUMN level:
+--     grant update (portal_enabled, email_enabled, whatsapp_enabled)
+--       on public.notification_preferences to authenticated;
+-- has_table_privilege() answers only for the table as a whole — a column grant
+-- does not make it true, which is exactly why PostgreSQL also ships
+-- has_any_column_privilege() and has_column_privilege(). The guard therefore
+-- asserted a requirement that was never true on ANY database where the shipped
+-- Phase-0 migration had been applied. Nothing had been broken; the check was
+-- measuring the wrong thing, at the wrong granularity, and then blaming a
+-- statement that had not run against that role at all.
+--
 -- WHAT CHANGED, AND WHY. An earlier pass revoked only REFERENCES, TRIGGER and
 -- TRUNCATE and deliberately left SELECT / INSERT / UPDATE / DELETE in place on
 -- the reasoning that "a public form might need them". That reasoning is now
@@ -1528,7 +1562,38 @@ declare
   v_seq record;
   v_nseq int := 0;
   v_priv text;
+  v_col text;
+  v_rec record;
   v_preserved text := '';
+  -- ★ THE PROVEN authenticated CONTRACT ON notification_preferences ★
+  -- Derived from the CODE, not from an error message. Every reader and writer of
+  -- public.notification_preferences in this repository:
+  --   lib/portal/account.ts:32  pget  'notification_preferences?user_id=eq.<uid>&select=*'
+  --                             → PostgREST GET with a user JWT → needs a REAL
+  --                               table SELECT covering EVERY column (select=*).
+  --   lib/portal/account.ts:42  ppatch 'notification_preferences?user_id=eq.<uid>'
+  --                             with Partial<portal_enabled|email_enabled|whatsapp_enabled>
+  --                             → PostgREST PATCH with a user JWT, sent with
+  --                               `Prefer: return=representation` (lib/portal/client.ts:131),
+  --                               so it needs UPDATE on exactly those three
+  --                               columns AND SELECT to return the row.
+  --   components/portal/ProfileSettings.tsx:47/75 — the only UI, calls the two above.
+  --   public.notify() (phase0_migration.sql:95), public.handle_new_user()
+  --   (phase0_migration.sql:515) and the project_core email helpers are all
+  --   SECURITY DEFINER: they run as the function owner and need NO grant here.
+  -- CONSEQUENCES, each one checked rather than assumed:
+  --   • INSERT is NOT required. The row is created at signup by the SECURITY
+  --     DEFINER trigger handle_new_user(), and backfilled for pre-existing users
+  --     (phase0_migration.sql:127). No browser path inserts, and there is no
+  --     INSERT policy on the table, so granting INSERT would be dead privilege.
+  --   • DELETE is NOT required — phase0 grants no delete anywhere by design.
+  --   • No sequence is involved: the primary key is user_id uuid, not identity.
+  --   • Function EXECUTE is not involved: nothing here is called as an RPC.
+  v_np  text   := 'public.notification_preferences';
+  v_np_cols text[] := array['portal_enabled','email_enabled','whatsapp_enabled'];
+  v_missing text := '';
+  v_extra   text := '';
+  v_badpol  text;
 begin
   -- The five legacy tables, plus every comms_* table that actually exists.
   select array(
@@ -1550,30 +1615,63 @@ begin
       continue;
     end if;
 
-    -- ★ PRESERVE authenticated BEFORE REVOKING PUBLIC ★
+    -- ★ MAKE authenticated's PRIVILEGES DIRECT BEFORE REVOKING PUBLIC ★
     -- Exactly the hazard §13.c already handles for FUNCTIONS, which applies to
-    -- TABLES for the same reason and was previously only ASSUMED away here.
-    -- `authenticated` is a MEMBER of PUBLIC, so `revoke ... from public` removes
-    -- any privilege authenticated holds ONLY by inheritance. One real caller
-    -- depends on that: lib/portal/account.ts reads and PATCHes
-    -- notification_preferences directly through PostgREST with a user JWT.
+    -- TABLES for the same reason. `authenticated` is a MEMBER of PUBLIC, so
+    -- `revoke ... from public` removes any privilege authenticated holds ONLY by
+    -- inheritance. One real caller depends on these tables: lib/portal/account.ts
+    -- reads and PATCHes notification_preferences directly through PostgREST with
+    -- a user JWT.
     --
-    -- The comment block above argues the stock Supabase grant names
-    -- `authenticated` directly, so this loop should be a no-op. It is kept
-    -- because "should be a no-op" is not a guarantee, and the failure mode is
-    -- silent: the migration reports success and the preferences screen starts
-    -- returning empty a day later. has_table_privilege() reports the EFFECTIVE
-    -- privilege — inherited ones included — so re-granting it changes nothing
-    -- authenticated could not already do. This WIDENS NOTHING: it can only
-    -- restate access that exists at this instant, and it runs per table inside
-    -- the same transaction as the revoke that would have removed it.
+    -- ══ WHAT THE PREVIOUS VERSION OF THIS LOOP GOT WRONG (it aborted the run) ══
+    -- It re-granted a privilege only when
+    --     has_table_privilege(...) AND NOT <a direct row in role_table_grants>.
+    -- Both halves are TABLE-LEVEL-ONLY probes:
+    --   • has_table_privilege() answers "is this privilege held ON THE TABLE".
+    --     A COLUMN-level grant does NOT make it true — that is precisely why
+    --     PostgreSQL ships has_any_column_privilege() / has_column_privilege()
+    --     as separate functions.
+    --   • information_schema.role_table_grants lists table-level grants only;
+    --     column grants live in information_schema.column_privileges.
+    -- docs/phase0_migration.sql:781 grants authenticated
+    --     update (portal_enabled, email_enabled, whatsapp_enabled)
+    --       on public.notification_preferences
+    -- i.e. UPDATE exists ONLY at column level. So on every database where the
+    -- shipped migration was applied, has_table_privilege(...,'UPDATE') is FALSE,
+    -- this loop skipped UPDATE, and the guard at the end of the block raised —
+    -- while blaming a revoke that had never touched `authenticated` at all
+    -- (the two revoke statements below name `anon` and `public`; neither can
+    -- remove a grant whose grantee is `authenticated`).
+    --
+    -- THE FIX: probe BOTH granularities, and re-grant at the SAME granularity
+    -- that was found. A table-level privilege is restated as table-level; a
+    -- column-level privilege is restated column by column. Nothing is widened:
+    -- every statement below can only restate access that exists at this instant,
+    -- and it runs per table inside the same transaction as the revoke that would
+    -- otherwise have removed it. Re-granting a privilege that is ALREADY direct
+    -- is a harmless no-op, so no "is it already direct?" test is needed — and
+    -- that test is what silently skipped the column case before.
     foreach v_priv in array array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] loop
-      if has_table_privilege('authenticated', format('public.%I', t), v_priv)
-         and not exists (select 1 from information_schema.role_table_grants
-                          where table_schema = 'public' and table_name = t
-                            and grantee = 'authenticated' and privilege_type = v_priv) then
+      if has_table_privilege('authenticated', format('public.%I', t), v_priv) then
         execute format('grant %s on table public.%I to authenticated', v_priv, t);
         v_preserved := v_preserved || ' ' || t || ':' || v_priv;
+      elsif v_priv = any (array['SELECT','INSERT','UPDATE','REFERENCES']) then
+        -- Not held on the table — but it can still be held on INDIVIDUAL
+        -- COLUMNS, which the branch above is structurally unable to see. Only
+        -- these four types can be granted per column in PostgreSQL; passing any
+        -- other type to the column functions raises, so the list is explicit.
+        for v_col in
+          select a.attname::text
+            from pg_attribute a
+           where a.attrelid = to_regclass(format('public.%I', t))
+             and a.attnum > 0 and not a.attisdropped
+           order by a.attnum
+        loop
+          if has_column_privilege('authenticated', format('public.%I', t), v_col, v_priv) then
+            execute format('grant %s (%I) on table public.%I to authenticated', v_priv, v_col, t);
+            v_preserved := v_preserved || ' ' || t || ':' || v_priv || '(' || v_col || ')';
+          end if;
+        end loop;
       end if;
     end loop;
 
@@ -1591,6 +1689,28 @@ begin
                       on table public.%I from anon', t);
     execute format('revoke select, insert, update, delete, truncate, references, trigger
                       on table public.%I from public', t);
+
+    -- COLUMN-LEVEL ACLs, cleared explicitly and for the same reason the
+    -- authenticated normalisation below does it: whether a table-level REVOKE
+    -- also clears the matching column grants is a rule this file refuses to
+    -- depend on, and a column grant is invisible to every table-level probe —
+    -- which is the exact class of mistake that aborted the previous run.
+    -- Driven off pg_attribute.attacl itself, so PUBLIC (grantee 0, which no
+    -- *_privilege() function will accept as a role name) is covered the same way
+    -- anon is. Only privileges actually present are revoked, so this emits no
+    -- "no privileges could be revoked" warnings.
+    for v_rec in
+      select at.attname::text as col, a.privilege_type as pt,
+             case when a.grantee = 0 then 'public' else 'anon' end as who
+        from pg_attribute at
+        cross join lateral aclexplode(at.attacl) a
+       where at.attrelid = to_regclass(format('public.%I', t))
+         and at.attnum > 0 and not at.attisdropped
+         and (a.grantee = 0 or a.grantee = 'anon'::regrole)
+    loop
+      execute format('revoke %s (%I) on table public.%I from %s',
+                     v_rec.pt, v_rec.col, t, v_rec.who);
+    end loop;
   end loop;
 
   -- SEQUENCES. `revoke all on table` does not reach them. An identity column
@@ -1630,19 +1750,240 @@ begin
   raise notice 'ANON REVOKE — anon/PUBLIC now hold NO table privilege of ANY type on % communications table(s).',
                array_length(v_targets, 1);
   if v_preserved <> '' then
-    raise notice 'ANON REVOKE — authenticated held these ONLY VIA PUBLIC and they were re-granted directly first '
-                 '(no widening; the account preferences screen would otherwise have broken silently):%', v_preserved;
+    -- Every EFFECTIVE privilege authenticated held is listed, whether it was
+    -- already direct (the re-grant was a no-op) or inherited from PUBLIC (the
+    -- re-grant is what saved it). The list does not claim to separate the two:
+    -- claiming a distinction the probe cannot draw is what produced the
+    -- misleading "the revoke stripped authenticated" message this file used to
+    -- raise. `name:PRIV` is table level, `name:PRIV(col)` is column level.
+    raise notice 'ANON REVOKE — authenticated''s effective privileges were restated as DIRECT grants before '
+                 'PUBLIC was revoked, at the granularity each was actually held:%', v_preserved;
   else
-    raise notice 'ANON REVOKE — authenticated held every privilege directly; nothing needed preserving.';
+    raise notice 'ANON REVOKE — authenticated holds no privilege of any type on these tables.';
   end if;
 
-  -- VERIFY THE OTHER DIRECTION TOO. A cleanup that closes anon and quietly
-  -- closes the one legitimate logged-in caller is not a success.
-  if to_regclass('public.notification_preferences') is not null
-     and not (has_table_privilege('authenticated', 'public.notification_preferences', 'SELECT')
-              and has_table_privilege('authenticated', 'public.notification_preferences', 'UPDATE')) then
-    raise exception 'HUB FAIL: the revoke stripped authenticated of SELECT/UPDATE on notification_preferences — '
-                    'lib/portal/account.ts reads and PATCHes it with a user JWT and would break.';
+  -- COLUMN-LEVEL RESIDUE. `revoke ... on table` does revoke the matching column
+  -- privileges, but role_table_grants above cannot SEE a column grant, so on its
+  -- own it would report "clean" for a table whose columns are still open. Read
+  -- the ACLs directly: pg_class.relacl for the table, pg_attribute.attacl for
+  -- every column. In an ACL, grantee 0 IS "PUBLIC".
+  select string_agg(distinct z.who || ' ' || z.pt || ' on ' || z.obj || z.col, ', ')
+    into v_left
+  from (
+    select c.relname::text as obj, a.privilege_type as pt, '' as col,
+           case when a.grantee = 0 then 'PUBLIC' else a.grantee::regrole::text end as who
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      cross join lateral aclexplode(c.relacl) a
+     where n.nspname = 'public' and c.relname::text = any (v_targets)
+       and (a.grantee = 0 or a.grantee = 'anon'::regrole)
+    union all
+    select c.relname::text, a.privilege_type, '.' || at.attname,
+           case when a.grantee = 0 then 'PUBLIC' else a.grantee::regrole::text end
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute at on at.attrelid = c.oid and at.attnum > 0 and not at.attisdropped
+      cross join lateral aclexplode(at.attacl) a
+     where n.nspname = 'public' and c.relname::text = any (v_targets)
+       and (a.grantee = 0 or a.grantee = 'anon'::regrole)
+  ) z;
+  if v_left is not null then
+    raise exception 'HUB FAIL: anon/PUBLIC still hold table OR COLUMN privilege(s) after the revoke: %', v_left;
+  end if;
+
+  -- ══════════════════════════════════════════════════════════════════════════
+  -- ★ THE authenticated ALLOWLIST ON notification_preferences ★
+  -- The contract is declared at the top of this block and is derived from the
+  -- code. It is applied UNCONDITIONALLY here rather than "preserved", because
+  -- preserving can only ever restate a privilege that already exists — and the
+  -- privilege this caller needs was, on this database, held at COLUMN level
+  -- where the old table-level probe could not see it.
+  --
+  -- NORMALISE, then GRANT — in three explicit steps, so that what follows is
+  -- EXACTLY the allowlist and nothing else and no privilege that drifted in from
+  -- an old pass survives. The table-level ACL and the column-level ACLs are
+  -- cleared SEPARATELY rather than assuming the first reaches the second; STEP 2
+  -- says why. It is one transaction, so there is no window in which the caller is
+  -- without its grant, and it is idempotent: on a database already in the target
+  -- state the end state is identical.
+  --
+  -- THE GRANTS ARE DIRECT. `to authenticated`, never relying on PUBLIC — the
+  -- revoke two statements up is exactly what would take a PUBLIC-derived
+  -- privilege away.
+  -- ══════════════════════════════════════════════════════════════════════════
+  if to_regclass(v_np) is not null then
+    -- STEP 1 — clear the TABLE-level ACL.
+    execute 'revoke all privileges on table public.notification_preferences from authenticated';
+
+    -- STEP 2 — clear whatever survives at COLUMN level. Whether a table-level
+    -- REVOKE also clears the matching column grants is a detail this file
+    -- deliberately refuses to depend on: the repository's own
+    -- docs/authz_fixD_profiles_direct_write_RUNME.sql:101 states one reading of
+    -- that rule and the PostgreSQL REVOKE notes state another, and the whole
+    -- reason this section is being rewritten is a column-level grant that a
+    -- table-level assumption could not see. So the column ACLs are cleared
+    -- explicitly. has_column_privilege() is asked AFTER step 1, so it now
+    -- reports column-level residue only — nothing is revoked that was not held,
+    -- which also keeps the run free of "no privileges could be revoked" noise.
+    for v_col in
+      select a.attname::text from pg_attribute a
+       where a.attrelid = to_regclass(v_np) and a.attnum > 0 and not a.attisdropped
+       order by a.attnum
+    loop
+      foreach v_priv in array array['SELECT','INSERT','UPDATE','REFERENCES'] loop
+        if has_column_privilege('authenticated', v_np, v_col, v_priv) then
+          execute format('revoke %s (%I) on table public.notification_preferences from authenticated',
+                         v_priv, v_col);
+        end if;
+      end loop;
+    end loop;
+
+    -- STEP 3 — grant exactly the allowlist, DIRECTLY.
+    execute 'grant select on table public.notification_preferences to authenticated';
+    execute 'grant update (portal_enabled, email_enabled, whatsapp_enabled) on table public.notification_preferences to authenticated';
+    raise notice 'AUTHENTICATED CONTRACT — notification_preferences normalised to: SELECT (table) + UPDATE (%).',
+                 array_to_string(v_np_cols, ', ');
+
+    -- VERIFY WHAT IS REQUIRED IS PRESENT — AND PRESENT AS A *DIRECT* GRANT.
+    -- has_table_privilege() would also answer true for a privilege inherited
+    -- from PUBLIC, which is the state this whole section exists to eliminate, so
+    -- the check reads the ACL and demands the grantee literally be
+    -- `authenticated`. A grant that arrives via PUBLIC does NOT satisfy it.
+    if not exists (
+      select 1
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        cross join lateral aclexplode(c.relacl) a
+       where n.nspname = 'public' and c.relname = 'notification_preferences'
+         and a.grantee = 'authenticated'::regrole and a.privilege_type = 'SELECT')
+    then
+      raise exception 'HUB FAIL: authenticated has no DIRECT table SELECT on notification_preferences — '
+                      'lib/portal/account.ts:32 reads it through PostgREST with a user JWT (select=*) '
+                      'and lib/portal/account.ts:42 needs it again to return the PATCHed row.';
+    end if;
+
+    foreach v_col in array v_np_cols loop
+      if not exists (
+        select 1
+          from pg_attribute at
+          cross join lateral aclexplode(at.attacl) a
+         where at.attrelid = to_regclass(v_np) and at.attname = v_col and not at.attisdropped
+           and a.grantee = 'authenticated'::regrole and a.privilege_type = 'UPDATE')
+      then
+        v_missing := v_missing || ' ' || v_col;
+      end if;
+    end loop;
+    if v_missing <> '' then
+      raise exception 'HUB FAIL: authenticated has no DIRECT column UPDATE on notification_preferences(%) — '
+                      'lib/portal/account.ts:42 PATCHes exactly these columns and would break.', trim(v_missing);
+    end if;
+
+    -- VERIFY WHAT IS NOT REQUIRED IS ABSENT. An allowlist that only checks the
+    -- privileges it wants is a wish list; this half is what makes it an
+    -- allowlist. Every type PostgreSQL defines is named, at both granularities.
+    foreach v_priv in array array['INSERT','DELETE','TRUNCATE','REFERENCES','TRIGGER'] loop
+      if has_table_privilege('authenticated', v_np, v_priv) then
+        v_extra := v_extra || ' ' || v_priv;
+      end if;
+    end loop;
+    foreach v_priv in array array['INSERT','REFERENCES'] loop
+      if has_any_column_privilege('authenticated', v_np, v_priv) then
+        v_extra := v_extra || ' ' || v_priv || '(column)';
+      end if;
+    end loop;
+    -- No column outside the three may be updatable. user_id is the one that
+    -- matters: a user who can write user_id can hand its own preference row to
+    -- somebody else, and a WITH CHECK is then the only thing standing in the
+    -- way. Here it cannot be written at all.
+    for v_col in
+      select a.attname::text from pg_attribute a
+       where a.attrelid = to_regclass(v_np) and a.attnum > 0 and not a.attisdropped
+       order by a.attnum
+    loop
+      if not (v_col = any (v_np_cols))
+         and has_column_privilege('authenticated', v_np, v_col, 'UPDATE') then
+        v_extra := v_extra || ' UPDATE(' || v_col || ')';
+      end if;
+    end loop;
+    if v_extra <> '' then
+      raise exception 'HUB FAIL: authenticated holds privilege(s) on notification_preferences that no code path '
+                      'uses, so nothing would ever catch them being wrong:%', v_extra;
+    end if;
+
+    -- ★ ROW ISOLATION — CHECKED HERE, NOT ASSUMED ★
+    -- A table grant is worth exactly as much as the policy behind it. The grant
+    -- above lets `authenticated` reach the table; only row level security decides
+    -- WHICH ROW. Three things are verified, because each one on its own is
+    -- insufficient:
+    --   1. RLS is actually enabled. A grant on a table with RLS off hands every
+    --      user every other user's preferences.
+    --   2. No permissive policy is unconditionally true. `using (true)` with an
+    --      UPDATE grant is how one user rewrites another user's row.
+    --   3. The UPDATE path has an effective WITH CHECK scoped by auth.uid().
+    --      PostgreSQL falls back to the USING expression when WITH CHECK is
+    --      absent, so the fallback is evaluated here rather than reported as a
+    --      hole that is not one.
+    -- The strongest guarantee is structural and was already established above:
+    -- user_id is NOT in the updatable column set, so the row cannot be re-pointed
+    -- at another user even if a policy were wrong.
+    if not (select c.relrowsecurity from pg_class c where c.oid = to_regclass(v_np)) then
+      raise exception 'HUB FAIL: row level security is OFF on notification_preferences — the SELECT/UPDATE '
+                      'grant above would expose every user''s row to every other logged-in user, for reading '
+                      'and for writing.';
+    end if;
+
+    select string_agg(z.polname || ' (' || z.cmd || ')', ', ')
+      into v_badpol
+    from (
+      select p.polname::text as polname,
+             case p.polcmd when 'r' then 'select' when 'a' then 'insert' when 'w' then 'update'
+                           when 'd' then 'delete' else 'all' end as cmd,
+             p.polcmd as polcmd,
+             coalesce(pg_get_expr(p.polqual, p.polrelid), '') as q,
+             -- The documented fallback: an UPDATE/ALL policy with no WITH CHECK
+             -- uses its USING expression as the check.
+             coalesce(nullif(coalesce(pg_get_expr(p.polwithcheck, p.polrelid), ''), ''),
+                      coalesce(pg_get_expr(p.polqual, p.polrelid), '')) as wc
+        from pg_policy p
+       where p.polrelid = to_regclass(v_np) and p.polpermissive
+    ) z
+    -- An INSERT policy (polcmd 'a') legitimately has NO USING expression —
+    -- PostgreSQL does not accept one — so an empty qual is only a finding for the
+    -- other command types. Flagging it there too would be a false alarm that
+    -- taught the next reader to ignore this check.
+    where (z.polcmd <> 'a' and (z.q = '' or z.q = 'true'))
+       or (z.polcmd in ('w','a','*') and (z.wc = '' or z.wc = 'true' or z.wc !~ 'auth\.uid\(\)'));
+    if v_badpol is not null then
+      raise exception 'HUB FAIL: notification_preferences has a permissive policy that is not scoped to the '
+                      'caller''s own row, so the grant above is not row-isolated: %', v_badpol;
+    end if;
+
+    if not exists (
+      select 1 from pg_policy p
+       where p.polrelid = to_regclass(v_np) and p.polpermissive and p.polcmd in ('r','*')
+         and coalesce(pg_get_expr(p.polqual, p.polrelid), '') ~ 'auth\.uid\(\)')
+    then
+      raise exception 'HUB FAIL: notification_preferences has no own-row SELECT policy keyed on auth.uid() — '
+                      'with the table SELECT granted above, a logged-in user could read every other user''s row.';
+    end if;
+    if not exists (
+      select 1 from pg_policy p
+       where p.polrelid = to_regclass(v_np) and p.polpermissive and p.polcmd in ('w','*')
+         and coalesce(pg_get_expr(p.polqual, p.polrelid), '') ~ 'auth\.uid\(\)')
+    then
+      raise exception 'HUB FAIL: notification_preferences has no own-row UPDATE policy keyed on auth.uid() — '
+                      'lib/portal/account.ts:42 would either fail or write somebody else''s row.';
+    end if;
+
+    -- NON-VACUITY OF THE PRIVILEGE PROBE ITSELF. The two halves above are
+    -- answered by the same function on the same table: three columns must read
+    -- TRUE and every other column must read FALSE. A probe stuck on true fails
+    -- the second half; a probe stuck on false fails the first. Neither can
+    -- report success. The same holds for the policy probe: it must find a
+    -- scoped policy (the two `not exists` checks) AND find no unscoped one.
+    raise notice 'AUTHENTICATED CONTRACT — verified DIRECT: SELECT on the table, UPDATE on % column(s), '
+                 'nothing else of any type at either granularity, RLS on, own-row policies keyed on auth.uid().',
+                 array_length(v_np_cols, 1);
   end if;
 end $anon_tables$;
 
@@ -2062,6 +2403,49 @@ begin
                                     'email_deliveries')));
   if v_n > 0 then
     raise exception 'HUB FAIL: anon/PUBLIC still hold % privilege(s) on sequences owned by the communications tables', v_n;
+  end if;
+
+  -- (9d-iv) THE authenticated CONTRACT SURVIVED THE WHOLE FILE.
+  --         §13.b normalises public.notification_preferences to exactly
+  --         SELECT (table) + UPDATE (portal_enabled, email_enabled,
+  --         whatsapp_enabled), granted DIRECTLY. §13.b verifies that at the
+  --         moment it runs; this re-verifies it at the END of the migration, so
+  --         a later section that widened or narrowed it cannot slip through.
+  --         Read from the ACL, not from has_table_privilege(): the point of the
+  --         grant is that it is DIRECT, and has_table_privilege() cannot tell a
+  --         direct grant from one inherited via PUBLIC.
+  if to_regclass('public.notification_preferences') is not null then
+    select count(*) into v_n
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      cross join lateral aclexplode(c.relacl) a
+     where n.nspname = 'public' and c.relname = 'notification_preferences'
+       and a.grantee = 'authenticated'::regrole and a.privilege_type = 'SELECT';
+    if v_n = 0 then
+      raise exception 'HUB FAIL: authenticated lost its DIRECT SELECT on notification_preferences before COMMIT — '
+                      'lib/portal/account.ts:32 reads it with a user JWT';
+    end if;
+    select count(distinct at.attname) into v_n
+      from pg_attribute at
+      cross join lateral aclexplode(at.attacl) a
+     where at.attrelid = to_regclass('public.notification_preferences')
+       and at.attname = any (array['portal_enabled','email_enabled','whatsapp_enabled'])
+       and a.grantee = 'authenticated'::regrole and a.privilege_type = 'UPDATE';
+    if v_n <> 3 then
+      raise exception 'HUB FAIL: authenticated holds DIRECT column UPDATE on only % of the 3 preference columns — '
+                      'lib/portal/account.ts:42 PATCHes all three', v_n;
+    end if;
+    if has_table_privilege('authenticated', 'public.notification_preferences', 'TRUNCATE')
+       or has_table_privilege('authenticated', 'public.notification_preferences', 'REFERENCES')
+       or has_table_privilege('authenticated', 'public.notification_preferences', 'TRIGGER')
+       or has_table_privilege('authenticated', 'public.notification_preferences', 'INSERT')
+       or has_table_privilege('authenticated', 'public.notification_preferences', 'DELETE') then
+      raise exception 'HUB FAIL: authenticated holds a privilege on notification_preferences that no code path uses';
+    end if;
+    if has_column_privilege('authenticated', 'public.notification_preferences', 'user_id', 'UPDATE') then
+      raise exception 'HUB FAIL: authenticated can UPDATE notification_preferences.user_id — a preference row could '
+                      'be re-pointed at another user';
+    end if;
   end if;
 
   -- (10) CHANNELS SHIP SAFE: nothing may send after this migration.

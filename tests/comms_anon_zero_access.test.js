@@ -565,14 +565,29 @@ test("tables read with a user JWT keep an explicit `authenticated` grant", () =>
         `${t} is read as authenticated, so §13 must grant SELECT to authenticated`
       );
     }
-    // The legacy tables' authenticated grant is the stock Supabase one, which
-    // names `authenticated` directly. §13.b must therefore never revoke from it.
-    for (const r of TABLE_REVOKES) {
-      assert.notEqual(
-        r.grantee,
-        "authenticated",
-        `§13.b revoked from 'authenticated'; ${t} is read with a user JWT and would break`
+    // §13.b DOES revoke from `authenticated` on notification_preferences — that
+    // is the normalisation that makes the end state exactly the allowlist. It is
+    // only safe because the allowlist is re-granted UNCONDITIONALLY, in the same
+    // transaction, immediately afterwards. Anything else revoked from
+    // authenticated, or a revoke with no re-grant after it, breaks the caller.
+    const f = flat(TABLE_BLOCK);
+    const revokeAuth = [...f.matchAll(/revoke\s+(.+?)\s+on\s+table\s+(\S+)\s+from\s+authenticated/gi)];
+    for (const m of revokeAuth) {
+      assert.match(
+        m[2],
+        /notification_preferences/,
+        `§13.b revoked from 'authenticated' on ${m[2]}, which has no proven contract; only ` +
+          `notification_preferences is normalised, and only because every caller of it is known`
       );
+    }
+    if (revokeAuth.length > 0) {
+      const lastRevoke = f.lastIndexOf("from authenticated");
+      const grantSel = f.indexOf("grant select on table public.notification_preferences to authenticated");
+      const grantUpd = f.indexOf(
+        "grant update (portal_enabled, email_enabled, whatsapp_enabled) on table public.notification_preferences to authenticated"
+      );
+      assert.ok(grantSel > lastRevoke, "the direct SELECT must be re-granted AFTER the last revoke from authenticated");
+      assert.ok(grantUpd > lastRevoke, "the direct column UPDATE must be re-granted AFTER the last revoke from authenticated");
     }
   }
 });
@@ -587,7 +602,7 @@ test("tables read with a user JWT keep an explicit `authenticated` grant", () =>
 // Supabase grant names authenticated directly. True in all likelihood, unproven
 // in fact, and the failure mode is silent: the migration reports success and
 // the account preferences screen starts returning empty rows.
-test("§13.b preserves authenticated's EFFECTIVE table privileges before revoking PUBLIC", () => {
+test("§13.b preserves authenticated's EFFECTIVE privileges — at BOTH granularities — before revoking PUBLIC", () => {
   const f = flat(RUNME);
 
   const preserve = f.indexOf("grant %s on table public.%I to authenticated");
@@ -602,25 +617,43 @@ test("§13.b preserves authenticated's EFFECTIVE table privileges before revokin
   // matters.
   assert.match(f, /has_table_privilege\('authenticated'/,
     "the preserve step does not test the EFFECTIVE privilege, so it cannot see an inherited one");
-  assert.match(f, /and not exists \(select 1 from information_schema\.role_table_grants/,
-    "the preserve step re-grants unconditionally instead of only what is missing as a direct grant");
 
-  // And it must fail loudly if the net effect still broke the one real caller.
-  assert.match(f, /HUB FAIL: the revoke stripped authenticated of SELECT\/UPDATE on notification_preferences/,
-    "nothing verifies that the legitimate authenticated caller survived the revoke");
+  // ★ THE REGRESSION THAT ABORTED A PRODUCTION RUN ★
+  // has_table_privilege() is TABLE-level only. phase0_migration.sql:781 grants
+  // UPDATE on notification_preferences at COLUMN level, so a preserve step built
+  // on has_table_privilege() alone silently skips it — and the guard built on the
+  // same probe then blames a revoke that never named the role.
+  assert.match(f, /has_column_privilege\('authenticated'/,
+    "the preserve step cannot see a COLUMN-level grant; phase0_migration.sql:781 grants exactly one");
+  assert.match(f, /grant %s \(%I\) on table public\.%I to authenticated/,
+    "a column-level privilege must be restated column by column — re-granting it table-wide would WIDEN it");
+
+  // And the false explanation must be gone.
+  assert.ok(!/HUB FAIL: the revoke stripped authenticated of SELECT\/UPDATE on notification_preferences/.test(f),
+    "the guard still blames a revoke that names only anon and public and cannot touch `authenticated`");
 });
 
-test("the PREFLIGHT proves the dependency the PUBLIC revoke rests on", () => {
+test("the PREFLIGHT proves the dependency the PUBLIC revoke rests on, at both granularities", () => {
   const pre = flat(PRE);
   assert.match(pre, /has_table_privilege\('authenticated'/,
     "PREFLIGHT does not measure authenticated's effective privileges before the change");
-  assert.match(pre, /via_public|VIA PUBLIC/,
+  assert.match(pre, /has_column_privilege\('authenticated'/,
+    "PREFLIGHT cannot see a COLUMN-level grant, which is the state that aborted the last run");
+  assert.match(pre, /has_any_column_privilege\('authenticated'/,
+    "PREFLIGHT must print the table-level and column-level answers side by side, or the disagreement stays invisible");
+  assert.match(pre, /INHERITED/,
     "PREFLIGHT does not distinguish a direct grant from one inherited via PUBLIC");
+  assert.match(pre, /DIRECT · column-level/,
+    "PREFLIGHT does not report a column-level grant as its own state");
   assert.ok(/lib\/portal\/account\.ts/.test(pre),
     "PREFLIGHT does not name the caller whose breakage is being ruled out");
   // Non-vacuity: an all-clear must not simply be a probe that matches nothing.
   assert.ok(/public\.profiles/.test(pre),
     "PREFLIGHT's privilege probe has no non-vacuity control");
+  // All three roles, not just the one that broke.
+  for (const role of ["anon", "authenticated", "PUBLIC"]) {
+    assert.ok(new RegExp(`'${role}'`).test(pre), `PREFLIGHT's privilege map omits ${role}`);
+  }
 });
 
 test("no browser component touches a communications table", () => {
