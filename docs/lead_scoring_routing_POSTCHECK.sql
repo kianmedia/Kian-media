@@ -730,9 +730,13 @@ from (
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'lsr\_%' and p.proacl is null
   union all
+  -- هذه الكتلة كانت تعمل — شروط ON فيها لا تذكر إلّا `a` — لكنّها بالشكل نفسه
+  -- الذي أسقط الكتلة التالية. تُحوَّل وقايةً: أوّل ON يذكر `p` كان سيُسقط
+  -- الترحيلة، والشكل الذي ينجح بالصدفة اليوم يفشل بعد أوّل تعديل.
   select p.proname
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace,
-         lateral aclexplode(p.proacl) a
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    cross join lateral aclexplode(p.proacl) a
     left join pg_roles r on r.oid = a.grantee
    where n.nspname = 'public' and p.proname like 'lsr\_%'
      and a.privilege_type = 'EXECUTE'
@@ -744,11 +748,19 @@ select 91, 'الصلاحيات', 'النوى الداخلية غير مكشوف�
   case when count(*) = 0 then 'lsr_score_core و lsr_route_core و lsr_event_emit داخلية فعلًا'
        else '★ مكشوف ★ ' || string_agg(distinct proname, ', ') end
 from (
+  -- ⚠️ شجرة ضمّ واحدة، بلا فاصلة. الفاصلة في FROM تُنشئ **عنصرًا شقيقًا**، لا
+  --    امتدادًا للشجرة: عندئذٍ لا يرى شرطُ ON في العنصر الثاني أسماءَ العنصر
+  --    الأوّل. وLATERAL يمدّ النطاق إلى **تعبير الدالّة** وحده — aclexplode(p...)
+  --    — ولا يمدّه إلى ON الضمّات المعلّقة عليها. لذلك كان
+  --    `join internal_fns i on i.f = p.proname` يسقط بـ42P01: «يوجد مدخل للجدول
+  --    p لكنّه غير قابل للإشارة من هذا الجزء». الترتيب أدناه يعرّف كلّ اسم قبل
+  --    استعماله، والدلالة لم تتغيّر: كلّ الضمّات داخلية كما كانت.
   select p.proname
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace,
-         lateral aclexplode(p.proacl) a
-    join pg_roles r on r.oid = a.grantee
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
     join internal_fns i on i.f = p.proname
+    cross join lateral aclexplode(p.proacl) a
+    join pg_roles r on r.oid = a.grantee
    where n.nspname = 'public' and a.privilege_type = 'EXECUTE'
      and r.rolname = 'authenticated') x
 
