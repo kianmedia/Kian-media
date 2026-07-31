@@ -179,6 +179,78 @@ test("(٩) ★ RUNME معاملة واحدة وقابلة لإعادة التش�
     "زرع الأنواع بلا on conflict — إعادة التشغيل تكرّرها");
 });
 
+// ─── (د) تصنيف الشروط: سابق صلب مقابل قابل للزرع ──────────────────────────
+
+const PRE = () => read("docs/vendor_compliance_center_PREFLIGHT.sql") || "";
+
+function preflightList(name) {
+  // ⚠️ مسح متوازن لا تعبير غير جشع: صفوف values تحوي `),` بنفسها، فالتعبير
+  //    يقف عند أوّل صفّ فيُرجع ثلاثة من ستّة — وقد أعطى ذلك «قائمة قصيرة».
+  const sql = PRE();
+  const at = sql.indexOf(`${name}(d) as (values`);
+  if (at < 0) return [];
+  // ⚠️ القوس المقصود هو قوس `values` لا قوس `(d)` الذي يلي الاسم مباشرةً:
+  //    البدء من الأوّل يلتقط `(d)` فيُرجع صفرًا ويبدو الفحص كأنّ القائمة فارغة.
+  let i = sql.indexOf("(", sql.indexOf("as (values", at) + 3), d = 0, j = i;
+  while (j < sql.length) {
+    if (sql[j] === "(") d++;
+    else if (sql[j] === ")") { d--; if (d === 0) break; }
+    j++;
+  }
+  return [...sql.slice(i, j).matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+}
+
+test("(١٠) ★★ التصنيف مطابق للواقع: الصلب من TVN والقابل للزرع من VCC ★★", () => {
+  // الصيغة الأولى لهذا الصفّ طلبت أن تكون العشرون موجودةً مسبقًا، فأعطت STOP
+  // على تركيب أوّل سليم: أربعة عشر منها تزرعها الحزمة نفسها. الغياب قبل
+  // التشغيل هو الحالة الطبيعية لا خللًا — والحكم يجب أن يفرّق.
+  const hard = preflightList("hard");
+  const seedable = preflightList("seedable");
+  assert.ok(hard.length >= 5, `قائمة الشروط الصلبة قصيرة: ${hard.length}`);
+  assert.ok(seedable.length >= 10, `قائمة القابل للزرع قصيرة: ${seedable.length}`);
+  const tvn = seeded(TVN());
+  const vcc = seeded(VCC());
+  for (const h of hard) {
+    assert.ok(tvn.has(h), `مُصنَّف شرطًا صلبًا وليس من زرع TVN: ${h}`);
+    assert.ok(!vcc.has(h), `مُصنَّف صلبًا لكنّ VCC تزرعه — فهو قابل للزرع: ${h}`);
+  }
+  for (const sd of seedable) {
+    assert.ok(vcc.has(sd), `مُصنَّف قابلًا للزرع ولا تزرعه VCC: ${sd}`);
+  }
+  // ولا مفتاح جاهزية خارج الاتّحاد — هذا هو فحص «المجهول» ساكنًا.
+  const union = new Set([...hard, ...seedable]);
+  const docs = requirements(VCC()).filter((r) => r.kind === "document").map((r) => r.docType);
+  const unknown = [...new Set(docs.filter((d) => d && !union.has(d)))].sort();
+  assert.deepEqual(unknown, [],
+    `doc_type في الترحيلة خارج hard ∪ seedable — الـPreflight لن يراه: ${unknown.join(", ")}`);
+});
+
+test("(١١) ★★ غياب القابل للزرع ليس STOP ★★", () => {
+  const pre = PRE();
+  // الحكم يشترط hard_missing / unknown / dupes للـSTOP، وseedable_missing
+  // يُنتج READY_TO_SEED لا STOP.
+  const verdict = pre.slice(pre.indexOf("select case when to_regclass('public.tvn_document_types') is null"),
+                            pre.indexOf("as verdict"));
+  assert.match(verdict, /hard_missing\) > 0\s+then 'STOP'/, "غياب الشرط الصلب لا يُنتج STOP");
+  assert.match(verdict, /unknown_types\) > 0 then 'STOP'/, "المفتاح المجهول لا يُنتج STOP");
+  assert.match(verdict, /dupes\) > 0\s+then 'STOP'/, "التعارض الدلاليّ لا يُنتج STOP");
+  assert.match(verdict, /seedable_missing\) > 0 then 'READY_TO_SEED'/,
+    "غياب القابل للزرع ما زال يُنتج STOP — إنذار كاذب على التركيب الأوّل");
+  // ولا يظهر seedable_missing في أيّ فرع STOP.
+  assert.doesNotMatch(verdict, /seedable_missing\)[^\n]*'STOP'/, "القابل للزرع مانع");
+});
+
+test("(١٢) ★ الـPreflight يعرض التصنيف كاملًا لا رقمًا واحدًا ★", () => {
+  const pre = PRE();
+  for (const col of ["verdict", "existing_required_types", "seedable_missing_types",
+                     "hard_missing_types", "unknown_requirement_types",
+                     "semantic_conflicts", "expected_seed_count"]) {
+    assert.match(pre, new RegExp(`as ${col}\\b`), `عمود مفقود من نتيجة الـPreflight: ${col}`);
+  }
+  // و«المجهول» لا يُكتب صفرًا ثابتًا يُقرأ نجاحًا حين لا يمكن قياسه.
+  assert.match(pre, /not_applicable/, "فحص المجهول يُصرّح صفرًا بدل الإعلان عن عدم قابليته للقياس");
+});
+
 test("SAFE: ساكن فقط (لا قاعدة بيانات ولا شبكة)", () => {
   const src = fs.readFileSync(__filename, "utf8");
   for (const bad of ["fet" + "ch(", "child_" + "process", "service_" + "role"]) {

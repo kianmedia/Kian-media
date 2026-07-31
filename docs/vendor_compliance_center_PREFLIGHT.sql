@@ -180,47 +180,86 @@ begin
 end $gate$;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- ★ عقد أنواع المستندات — يُفحَص قبل التشغيل لا بعد السقوط ★
---   سقطت الترحيلة مرّةً بـ23503 لأنّ doc_type = 'commercial_register' غير
---   موجود: سجلّ الأنواع القائم يحمل 'commercial_registration' لنفس الوثيقة.
---   هذا الصفّ يكشف الاختلاف قبل أن يكلّف دورةَ تشغيل كاملة، ويطبع **كلّ**
---   الناقص دفعةً واحدة لا أوّله.
+-- ★★ عقد أنواع المستندات — بالتصنيف لا بالجمع ★★
+--
+--   الصيغة الأولى لهذا الصفّ (كتبتُها أنا) طلبت أن تكون **العشرون** موجودةً
+--   مسبقًا، فأعطت STOP على تركيب أوّل سليم تمامًا: أربعة عشر منها **تزرعها هذه
+--   الحزمة نفسها** عند §٣، وغيابُها قبل التشغيل هو الحالة الطبيعية لا خللًا.
+--   والحكم الصادق يفرّق بين ما يجب أن يسبقنا وما نأتي به:
+--
+--     (أ) شرط سابق صلب — من حزمة المواهب والموردين، ولا تملك VCC زرعه:
+--         commercial_registration · vat_certificate · bank_letter ·
+--         insurance_policy · public_liability · drone_permit
+--     (ب) قابل للزرع — تُنشئه هذه الحزمة بـon conflict do nothing:
+--         أربعة عشر نوعًا (الغرفة · التأمينات · الزكاة · ZATCA · السعودة ·
+--         العنوان الوطنيّ · البلدية · التأسيس · التفويض · السلامة سياسةً
+--         وشهادةً · الخصوصية · ملفّ الشركة عربيًّا وإنجليزيًّا)
+--     (ج) مجهول — مفتاح في قواعد الجاهزية لا في (أ) ولا في (ب): خلل عقد.
+--
+--   STOP للفئتين (أ) و(ج) وللتعارض الدلاليّ. أمّا (ب) فـREADY_TO_SEED.
 -- ════════════════════════════════════════════════════════════════════════════
-with required(d) as (values
-  ('commercial_registration'),('vat_certificate'),('zatca_compliance'),('zakat_certificate'),
-  ('gosi_certificate'),('saudization_certificate'),('chamber_of_commerce'),('national_address'),
-  ('bank_letter'),('insurance_policy'),('hse_policy'),('privacy_policy_doc'),
-  ('company_profile_ar'),('company_profile_en'),('drone_permit'),('public_liability'),
-  ('hse_certificate'),('articles_of_association'),('municipality_license'),('authorized_signatory')),
-missing as (
-  select coalesce(string_agg(r.d, ' · ' order by r.d), '') as s
-    from required r
-   where to_regclass('public.tvn_document_types') is not null
-     and not exists (select 1 from public.tvn_document_types t where t.key = r.d)),
-seedable as (
-  select coalesce(string_agg(r.d, ' · ' order by r.d), '') as s
-    from required r
-   where to_regclass('public.tvn_document_types') is not null
-     and not exists (select 1 from public.tvn_document_types t where t.key = r.d)
-     and exists (select 1 from public.tvn_document_types t
-                  where t.key like left(r.d, 8) || '%')),
+with hard(d) as (values
+  ('commercial_registration'),('vat_certificate'),('bank_letter'),
+  ('insurance_policy'),('public_liability'),('drone_permit')),
+seedable(d) as (values
+  ('zatca_compliance'),('zakat_certificate'),('gosi_certificate'),
+  ('saudization_certificate'),('chamber_of_commerce'),('national_address'),
+  ('hse_policy'),('hse_certificate'),('privacy_policy_doc'),
+  ('company_profile_ar'),('company_profile_en'),('articles_of_association'),
+  ('municipality_license'),('authorized_signatory')),
+required as (select d from hard union select d from seedable),
+have as (select key from public.tvn_document_types),
+hard_missing as (
+  select coalesce(string_agg(h.d, ' · ' order by h.d), '') as s, count(*) as n
+    from hard h where not exists (select 1 from have v where v.key = h.d)),
+seedable_missing as (
+  select coalesce(string_agg(sd.d, ' · ' order by sd.d), '') as s, count(*) as n
+    from seedable sd where not exists (select 1 from have v where v.key = sd.d)),
+existing_required as (
+  select count(*) as n from required r where exists (select 1 from have v where v.key = r.d)),
+-- مفتاح تستعمله قواعد الجاهزية ولا هو قائم ولا معلَن في قائمة الزرع = خلل عقد.
+-- ⚠️ في التركيب الأوّل لا يمكن قياسه هنا: vcc_readiness_requirements لم يُنشأ
+--    بعد. فيُقاس **ساكنًا في المستودع** (tests/vcc_document_type_contract.test.js
+--    يُثبت أنّ كلّ doc_type في الترحيلة داخل hard ∪ seedable). وأمّا عند إعادة
+--    التشغيل — حيث الجدول قائم — فيُقاس هنا فعلًا. ولا يُكتب صفرٌ ثابت يُقرأ
+--    نجاحًا: الغياب يُعلَن غيابًا.
+unknown_types as (
+  select case when to_regclass('public.vcc_readiness_requirements') is null
+              then '' else coalesce((
+                select string_agg(distinct r.doc_type, ' · ' order by r.doc_type)
+                  from public.vcc_readiness_requirements r
+                 where r.kind = 'document' and r.doc_type is not null
+                   and not exists (select 1 from required q where q.d = r.doc_type)), '') end as s,
+         case when to_regclass('public.vcc_readiness_requirements') is null
+              then 0 else coalesce((
+                select count(distinct r.doc_type)
+                  from public.vcc_readiness_requirements r
+                 where r.kind = 'document' and r.doc_type is not null
+                   and not exists (select 1 from required q where q.d = r.doc_type)), 0) end as n,
+         (to_regclass('public.vcc_readiness_requirements') is null) as not_applicable),
 dupes as (
-  select coalesce(string_agg(a.label_ar || ': ' || a.key || ' / ' || b.key, ' · '), '') as s
+  select coalesce(string_agg(a.label_ar || ': ' || a.key || ' / ' || b.key, ' · '), '') as s,
+         count(*) as n
     from public.tvn_document_types a
     join public.tvn_document_types b on b.label_ar = a.label_ar and b.key > a.key
    where btrim(coalesce(a.label_ar, '')) <> '')
 select case when to_regclass('public.tvn_document_types') is null then 'STOP'
-            when (select s from missing) <> '' then 'STOP'
-            when (select s from dupes) <> ''   then 'STOP'
-            else 'READY' end                                              as doc_type_contract,
-       case when to_regclass('public.tvn_document_types') is null
-              then 'tvn_document_types غائب — شغّل talent_vendor_network أوّلًا'
-            when (select s from missing) <> ''
-              then '★ أنواع ناقصة (كلّها) ★ ' || (select s from missing)
-                   || case when (select s from seedable) <> ''
-                           then ' — وقد يكون لبعضها مفتاح قائم بتسمية مختلفة: ' || (select s from seedable)
-                           else '' end
-            else 'كلّ الأنواع المطلوبة موجودة بمفاتيحها القانونية' end     as detail,
-       case when (select s from dupes) <> ''
-              then '★ تعارض دلاليّ ★ ' || (select s from dupes)
-            else 'لا مرادف لوثيقة واحدة' end                               as semantic_conflict;
+            when (select n from hard_missing) > 0  then 'STOP'
+            when (select n from unknown_types) > 0 then 'STOP'
+            when (select n from dupes) > 0         then 'STOP'
+            when (select n from seedable_missing) > 0 then 'READY_TO_SEED'
+            else 'READY' end                                                as verdict,
+       (select n from existing_required)::text || '/' || (select count(*) from required)::text
+         || ' نوعًا مطلوبًا موجود'                                          as existing_required_types,
+       case when (select n from seedable_missing) = 0 then 'لا شيء — كلّها مزروعة'
+            else (select n from seedable_missing)::text || ': ' || (select s from seedable_missing) end as seedable_missing_types,
+       case when (select n from hard_missing) = 0 then 'لا شيء ✓'
+            else '★ شرط سابق مفقود ★ ' || (select s from hard_missing)
+                 || ' — شغّل talent_vendor_network أوّلًا؛ VCC لا تزرع هذه' end as hard_missing_types,
+       case when (select not_applicable from unknown_types)
+              then 'لا ينطبق — تركيب أوّل (الجدول غير موجود). يُفحَص ساكنًا في المستودع'
+            when (select n from unknown_types) = 0 then 'لا شيء ✓'
+            else '★ مفتاح جاهزية بلا مصدر ★ ' || (select s from unknown_types) end as unknown_requirement_types,
+       case when (select n from dupes) = 0 then 'لا مرادف لوثيقة واحدة ✓'
+            else '★ تعارض دلاليّ ★ ' || (select s from dupes) end             as semantic_conflicts,
+       (select count(*) from seedable)::text || ' نوعًا تزرعها هذه الحزمة'   as expected_seed_count;
