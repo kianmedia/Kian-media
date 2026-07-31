@@ -139,7 +139,7 @@ applied(pkg, t) as (values
 anon_role(r) as (select to_regrole('anon')),
 
 fin_proc(name, oid, secdef, pinned, acl, acl_null, src) as (
-  select p.proname::text, p.oid, p.prosecdef,
+  select p.proname::text collate "C", p.oid, p.prosecdef,
          (coalesce(array_to_string(p.proconfig, ','), '') ilike '%search_path%'),
          p.proacl, (p.proacl is null), p.prosrc
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -148,7 +148,7 @@ fin_proc(name, oid, secdef, pinned, acl, acl_null, src) as (
 -- جسم الدالّة وحده (prosrc) — لا تعريفٌ يحمل اسمها في ترويسته، فالنطاق محصور
 -- بالدالّة المفحوصة. التعليقات تُنزَع أوّلًا والحالة تُخفَّض.
 fin_body(name, body) as (
-  select fp.name,
+  select fp.name collate "C",
          lower(regexp_replace(regexp_replace(string_agg(fp.src, E'\n'), '/\*.*?\*/', ' ', 'g'),
                               '--[^\n]*', ' ', 'g'))
     from fin_proc fp group by fp.name),
@@ -156,31 +156,36 @@ fin_body(name, body) as (
 -- أضلاع رسم النداء: «مُعرِّف يليه قوس». ليس [^)]* — ذلك النمط يقف عند أوّل
 -- قوس وقد سبّب حادثة في هذا المستودع.
 fin_edge(caller, callee) as (
-  select b.name, rx.m[1]
+  -- ⚠️ COLLATE "C" على الطرفين. `pg_proc.proname` من نوع `name` وتجرّ ترتيب "C"،
+  --    بينما `regexp_matches` تُعيد `text` بالترتيب الافتراضيّ. التقاؤهما في حدّ
+  --    UNION تكراريّ يرفع 42P21. التثبيت هنا يجعل كل ما بعده متسقًا.
+  select b.name collate "C", (rx.m[1]) collate "C"
     from fin_body b, lateral regexp_matches(b.body, '([a-z_][a-z0-9_]*)\s*\(', 'g') as rx(m)
    where rx.m[1] like 'finops\_%' and rx.m[1] <> b.name),
 
 fin_tbl_ref(fn, tbl) as (
-  select distinct b.name, rx.m[1]
+  select distinct b.name collate "C", (rx.m[1]) collate "C"
     from fin_body b, lateral regexp_matches(b.body, '(fin_[a-z0-9_]+)', 'g') as rx(m)),
 
 -- ★ المشي ★ — من كلّ بوّابة، عبر الأضلاع، ويتوقّف عند الجذر (طرفيّ).
 gate_seed(gate, node, hops) as (
-  select name, name, 0 from owner_gate
-  union all select name, name, 0 from no_descent),
+  -- بذور من `values` تحمل الترتيب الافتراضيّ؛ تُثبَّت على "C" لتطابق fin_edge.
+  select name collate "C", name collate "C", 0 from owner_gate
+  union all select name collate "C", name collate "C", 0 from no_descent),
 gwalk(gate, node, hops) as (
-  select gate, node, hops from gate_seed
+  -- كلا الحدّين مثبَّتان صراحةً — لا اعتماد على ترتيب قاعدة البيانات الافتراضيّ.
+  select gate collate "C", node collate "C", hops from gate_seed
   union
-  select w.gate, e.callee, w.hops + 1
+  select w.gate collate "C", e.callee collate "C", w.hops + 1
     from gwalk w join fin_edge e on e.caller = w.node
    where w.hops < 8 and w.node <> 'finops_can_view_finance_sensitive'),
 
 -- ★ المشي من سطح التحصيل ★ — الإغلاق الكامل، لا الجسم الأوّل فقط.
 coll_seed(fn) as (values ('finops_collections_list'),('finops_collections_summary')),
 coll_walk(fn, hops) as (
-  select cs.fn, 0 from coll_seed cs
+  select cs.fn collate "C", 0 from coll_seed cs
   union
-  select e.callee, w.hops + 1 from coll_walk w join fin_edge e on e.caller = w.fn
+  select e.callee collate "C", w.hops + 1 from coll_walk w join fin_edge e on e.caller = w.fn
    where w.hops < 8),
 coll_tables(tbl) as (
   select distinct r.tbl from coll_walk w join fin_tbl_ref r on r.fn = w.fn),
