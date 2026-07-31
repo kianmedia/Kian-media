@@ -227,14 +227,18 @@ opsnumeric as (
 -- ⚠️ أنماط regex تُبنى بـchr(59) لا بفاصلة منقوطة حرفية: هذا الملفّ **جملة
 --    واحدة** بحكم عقده، ومحرّر Supabase يعرض النتيجة الأخيرة فقط. فاصلة
 --    منقوطة داخل سلسلة نصّية تبدو للقارئ الآليّ جملةً ثانيةً وتُسقط العقد.
+-- ⚠️ ولا حدّ تكرار {n,m} في أيّ نمط هنا: محرّك regex في PostgreSQL يسقُف الحدّ
+--    عند 255 (RE_DUP_MAX)، و{0,400} خطأ ترجمة 2201B لا نمط ضيّق — وهو ما أسقط
+--    RUNME على الإنتاج. الصنف المَنفيّ `[^;]` خطّيّ أصلًا فالحدّ لم يشترِ شيئًا،
+--    وإزالته أصحّ: تقنيعٌ أطول من الحدّ كان يفلت من الحذف فيُقرأ تسريبًا كاذبًا.
 pat as (
   select chr(45) || chr(45) || '[^' || chr(10) || ']*' as p_comment,
          '''[a-z_]+''\s*,\s*case\s+when\s+v_price\s+then[^' || chr(59)
-           || ']{0,400}?else\s+null\s+end' as p_masked_key,
+           || ']*?else\s+null\s+end' as p_masked_key,
          'case\s+when\s+v_price\s+then[^' || chr(59)
-           || ']{0,400}?else\s+null\s+end' as p_masked,
+           || ']*?else\s+null\s+end' as p_masked,
          '-\s*''[a-z_]+''' as p_dropped,
-         'return\s+jsonb_build_object\(([^' || chr(59) || ']{0,4000}?)\)' || chr(59) as p_return),
+         'return\s+jsonb_build_object\(([^' || chr(59) || ']*?)\)' || chr(59) as p_return),
 
 -- ★ المال لا يخرج من سطح موظّف بلا مفتاح الأسعار ★
 -- المنهج: احذف الذكر المُقنَّع (case when v_price … else null end) والمُسقَط

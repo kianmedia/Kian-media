@@ -2860,10 +2860,14 @@ begin
     --     ليس ارتكابَها. بدون هذا يفشل الفحص على تعليق يذكر اسم عمود سعر.
     v_txt := regexp_replace(v_def, chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g');
     -- (١) احذف الذكر المُقنَّع، بمفتاحه إن سبقه.
+    --     ⚠️ بلا حدّ تكرار: محرّك regex في PostgreSQL يسقُف حدّ التكرار عند
+    --     255 (RE_DUP_MAX)، فـ{0,400} خطأ ترجمة 2201B لا نمط ضيّق. وصنف
+    --     مَنفيّ `[^;]` خطّيّ أصلًا فالحدّ لم يكن يشتري شيئًا — بل كان يضرّ:
+    --     تقنيعٌ أطول من الحدّ كان يفلت من الحذف فيُقرأ تسريبًا كاذبًا.
     v_txt := regexp_replace(v_txt,
-      '''[a-z_]+''\s*,\s*case\s+when\s+v_price\s+then[^;]{0,400}?else\s+null\s+end', ' ', 'gi');
+      '''[a-z_]+''\s*,\s*case\s+when\s+v_price\s+then[^;]*?else\s+null\s+end', ' ', 'gi');
     v_txt := regexp_replace(v_txt,
-      'case\s+when\s+v_price\s+then[^;]{0,400}?else\s+null\s+end', ' ', 'gi');
+      'case\s+when\s+v_price\s+then[^;]*?else\s+null\s+end', ' ', 'gi');
     -- (٢) احذف الذكر المُسقَط بالاسم من كائن jsonb.
     v_txt := regexp_replace(v_txt, '-\s*''[a-z_]+''', ' ', 'gi');
     -- (٣) ما بقي من مفردات المال يخرج بلا تقنيع.
@@ -2920,8 +2924,9 @@ begin
     v_def := regexp_replace(pg_get_functiondef(to_regprocedure(f)),
                             chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g');
     -- ما يُعاد للمنادي: لا مفردة مال في أيّ jsonb_build_object للإرجاع.
+    -- ⚠️ بلا حدّ تكرار (سقف 255 في محرّك PostgreSQL)؛ `[^;]` يمنع تجاوز الجملة.
     for v_txt in select m[1] from regexp_matches(v_def,
-        'return\s+jsonb_build_object\(([^;]{0,4000}?)\);', 'g') m loop
+        'return\s+jsonb_build_object\(([^;]*?)\);', 'g') m loop
       foreach t in array PRICED_COLS loop
         if v_txt ~* ('\m' || t || '\M') then
           raise exception 'CSUB SELF-TEST: % تُعيد % في جواب المنادي — مبلغ بجوار عدد وحدات يُشتقّ منه سعر الوحدة بطرح واحد', f, t;

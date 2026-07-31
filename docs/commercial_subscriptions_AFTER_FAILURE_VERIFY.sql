@@ -1,6 +1,35 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- COMMERCIAL SUBSCRIPTIONS — AFTER-FAILURE VERIFY (READ-ONLY · ONE RESULT SET)
 --
+-- ⚠️ SECOND FAILURE — READ THIS FIRST (2026-07-31)
+--   After the repair below was applied to the file, the corrected PREFLIGHT ran
+--   and PASSED, and RUNME was run again. It ABORTED BEFORE COMMIT a second time,
+--   for a completely unrelated reason — not a self-test verdict but a REGEX
+--   COMPILE error, so no check ever ran:
+--
+--     ERROR 2201B: invalid regular expression: invalid repetition count(s)
+--     PL/pgSQL function inline_code_block line 255 at assignment
+--
+--   Block `do $st$` (the §15 pricing self-test) begins at file line 2609, so
+--   plpgsql line 255 is file line 2863 — `v_txt := regexp_replace(v_txt,` —
+--   whose pattern was:
+--       '[a-z_]+'\s*,\s*case\s+when\s+v_price\s+then[^;]{0,400}?else\s+null\s+end
+--   PostgreSQL caps a regex repetition bound at 255 (RE_DUP_MAX). {0,400}
+--   exceeds it, so the ENGINE refused to compile the pattern. JavaScript RegExp
+--   has no such cap, which is exactly why every Node test compiled it happily —
+--   the local tests were not under-covering, they were measuring with the wrong
+--   ruler. tests/sql_regex_postgres_compat.test.js now judges by PostgreSQL ARE
+--   rules instead, and refuses any bound over 255 anywhere in this package.
+--
+--   The fix removes the bound rather than shrinking it: `[^;]*?`. A negated
+--   class is already linear, so the bound bought nothing — and it did harm: a
+--   masked expression longer than 400 characters escaped the strip step and
+--   would have been read as an unmasked leak.
+--
+--   CONSEQUENCE FOR STATE: identical to the first failure. One transaction, one
+--   COMMIT, no CONCURRENTLY, aborted before COMMIT ⇒ FULL ROLLBACK, no partial
+--   state. Everything this file verifies below applies unchanged to both runs.
+--
 -- WHY THIS FILE EXISTS
 --   docs/commercial_subscriptions_PREFLIGHT.sql passed.
 --   docs/commercial_subscriptions_RUNME.sql then ABORTED BEFORE COMMIT, at
