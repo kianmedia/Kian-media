@@ -14,6 +14,18 @@
 -- ★ ولا مصيدة catch-all ★ كلّ صفّ قادر فعلًا على أن يُرجع FAIL.
 --   وكلّ قراءة لصفوف جداولنا تمرّ عبر query_to_xml كي يُبلّغ الملفّ عن ترحيلة
 --   فاشلة بدل أن ينهار معها بـ42P01.
+--
+-- ⚠️ أين يُشغَّل هذا الملفّ ⚠️
+--   هذا هو الفحص **العميق** (نحو خمسين صفًّا)، ومكانه اتّصال psql مباشر.
+--   محرّر Supabase Studio يقطع الطلب بمهلة أعلى المكدّس («upstream timeout»)
+--   لا يملكها المستعلِم؛ وقد قُطع هذا الملفّ فيها مرّتين — بلا خطأ SQL وبلا
+--   صفّ FAIL، أي أنّ القطع ليس حكمًا على الحزمة.
+--   ★ المسار الآمن في المحرّر:
+--     docs/lead_scoring_routing_POST_APPLY_SUMMARY.sql — ستّة عشر فحصًا في
+--     مجموعة نتائج واحدة، بكلفة خفيفة.
+--   وقد صُحّح هنا سببُ البطء نفسه (رسم النداءات كان يبني تعبيرًا نمطيًّا لكلّ
+--   زوج «دالّة × كلّ دوالّ public»)، فصار هذا الملفّ أسرع بمراتب؛ ومع ذلك
+--   يبقى الملخّص هو ما يُشغَّل في Studio.
 -- ════════════════════════════════════════════════════════════════════════════
 
 with
@@ -79,7 +91,10 @@ client_keys(k) as (values
   ('preferred_date'),('scheduled_date'),('decision_note')),
 
 -- تعريف كلّ دالّة مرّة واحدة.
-defs as (
+-- ★ MATERIALIZED ★ يُشار إلى defs عشرات المرّات أدناه، و pg_get_functiondef ليس
+--   مجّانيًّا. PostgreSQL 12+ يُثبّت عادةً CTE متعدّد الإشارات، لكنّ «عادةً»
+--   رهانٌ على المخطّط في ملفٍّ انقطع مرّتين. التثبيت هنا اختيار صريح.
+defs as materialized (
   select p.proname, pg_get_functiondef(p.oid) as d, p.prorettype
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'lsr\_%'),
@@ -89,45 +104,88 @@ defs as (
 -- lsr_contract_scan تقسم المصدر (كود / سلاسل) ثمّ تطابق **شكل الجملة**.
 -- وهي تُنشأ في الترحيلة نفسها؛ فغيابها إخفاق حقيقيّ لا حالة تُبلَّغ.
 -- حكم لوحة العميل: ماذا تُصدِر · هل تسكب صفًّا كاملًا · هل تقرأ بلا حصر.
-client_scan(c) as (
+client_scan(c) as materialized (
   select public.lsr_client_scan(d.d) from defs d where d.proname = 'lsr_dashboard_client'),
-client_emitted(k) as (
+client_emitted(k) as materialized (
   select x.value #>> '{}' from client_scan
    cross join lateral jsonb_array_elements(c -> 'keys') as x(value)),
 
-scan as (
+scan as materialized (
   select d.proname, public.lsr_contract_scan(d.d) as s
     from defs d
    where d.proname not in ('lsr_sql_partition','lsr_contract_scan',
                      'lsr_key_of','lsr_sql_literals','lsr_json_keys','lsr_client_scan')),
 
--- ما تناديه دوالّ الموديول مباشرة — أساس فحص الالتفاف غير المباشر.
-callees as (
-  select distinct q.proname as callee
+-- ★ تقسيمٌ واحد لكلّ دالّة ★ lsr_sql_partition حلقة plpgsql تمشي المصدر حرفًا
+--   بحرف. كانت تُستدعى **مرّتين في التعبير الواحد** (مرّة لـcode ومرّة
+--   لـstrings) وفي خمسة مواضع أدناه. هنا تُستدعى مرّة لكلّ دالّة، ويُقرأ
+--   المفتاحان من النتيجة نفسها. ولا استثناء هنا: النطاق كلّ دوالّ lsr_*، كما
+--   كان الفحص ٨٧ يقرؤه — الاستثناء موضعه رسمُ النداءات وحده.
+bodies as materialized (
+  select d.proname,
+         coalesce(z.pp ->> 'code', '') as code,
+         coalesce(z.pp ->> 'code', '') || chr(10) || coalesce(z.pp ->> 'strings', '') as body
     from defs d
-    cross join lateral (
-      select (public.lsr_sql_partition(d.d) ->> 'code') || chr(10)
-             || (public.lsr_sql_partition(d.d) ->> 'strings') as body) b
-    -- الاسم يُبنى داخل تعبير نمطيّ، فنستبعد أيّ اسم يحمل محرفًا ذا معنى في ARE:
-    -- اسمٌ شاذّ يُنتج «invalid regular expression» فيُسقط ملفّ الفحص كلّه.
-    join (select p.proname
-            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.prokind = 'f'
-             and p.proname ~ '^[a-z_][a-z0-9_]*$') q
-      on q.proname <> d.proname
-     and position(q.proname in b.body) > 0
-     and b.body ~ ('\m' || q.proname || '\s*\(')
-   where d.proname not in ('lsr_sql_partition','lsr_contract_scan',
-                     'lsr_key_of','lsr_sql_literals','lsr_json_keys','lsr_client_scan')
+    cross join lateral (select public.lsr_sql_partition(d.d) as pp) z),
+
+-- ما تناديه دوالّ الموديول مباشرة — أساس فحص الالتفاف غير المباشر.
+--
+-- ★ عكس اتّجاه البحث ★ الصيغة السابقة كانت تضمّ كلّ دالّة من دوالّ الموديول
+--   (٤٧ بعد الاستثناء) إلى **كلّ** دالّة في public (مئات)، وتبني لكلّ زوج
+--   تعبيرًا نمطيًّا من اسم المُنادَى ثمّ تطابقه على جسمٍ بحجم كيلوبايتات: عشرات
+--   الآلاف من الأزواج، وكلّ زوج ترجمةُ نمطٍ جديدة. تلك هي كلفة الانقطاع.
+--   الآن نستخرج **المُعرِّفات ذات شكل النداء** من كلّ جسم مرّة واحدة (تمشيط
+--   خطّيّ: ٥٣ مرّة)، ثمّ نضمّها بالاسم إلى pg_proc بضمٍّ تجزيئيّ.
+--   الدلالة نفسها: «مُعرِّف يليه قوس» هو عين ما كان المُسنَد القديم يختبره،
+--   والاستثناءات نفسها حرفًا بحرف: الفواحص الستّ، وcomms_%، وlsr_%، ونداء
+--   الدالّة نفسها. والاسم المستخرَج بالبناء يطابق ^[a-z_][a-z0-9_]*$ فلا
+--   يتسرّب اسم شاذّ يرفع «invalid regular expression».
+called_names as materialized (
+  select distinct b.proname as caller, m.tok[1] as callee
+    from bodies b
+    cross join lateral regexp_matches(b.body, '\m([a-z_][a-z0-9_]*)\s*\(', 'g') as m(tok)
+   where b.proname not in ('lsr_sql_partition','lsr_contract_scan',
+                     'lsr_key_of','lsr_sql_literals','lsr_json_keys','lsr_client_scan')),
+
+callees as materialized (
+  select distinct c.callee
+    from called_names c
+    join pg_proc q on q.proname = c.callee
+    join pg_namespace n on n.oid = q.pronamespace and n.nspname = 'public'
+   where q.prokind = 'f'
+     and c.callee <> c.caller
      -- مركز الاتصالات حدّ داخليّ مثبَّت بـdry_run (الفحص ٨٦ يُثبت التثبيت).
-     and q.proname not like 'comms\_%'
-     and q.proname not like 'lsr\_%'),
+     and c.callee not like 'comms\_%'
+     and c.callee not like 'lsr\_%'),
+
+-- ★ عمق واحد، ولا دورة ★ رسم النداءات هنا **مباشر** لا متعدٍّ: صفوفه مشتقّة
+--   من أجسام lsr_* وحدها، وlsr_% مستثنى، فلا يعود الرسم إلى نفسه ولا يتوسّع.
+--   وفحص عقدٍ واحد لكلّ مُنادى: lsr_contract_scan لا تُنادى أكثر من مرّة للدالّة.
+callee_scan as materialized (
+  select c.callee, public.lsr_contract_scan(pg_get_functiondef(q.oid)) as s
+    from callees c
+    join pg_proc q on q.proname = c.callee
+    join pg_namespace n on n.oid = q.pronamespace and n.nspname = 'public'
+   where q.prokind = 'f'),
 
 -- الحزم الستّ المطبَّقة على الإنتاج — يجب أن تبقى سليمة وغير ممسوسة.
 six(o, pkg, prefix) as (values
   (1,'communications_hub','comms\_%'), (2,'operations_center','ops\_%'),
   (3,'crm_sales_FOUNDATION','crm\_%'), (4,'finance_profitability','fin\_%'),
   (5,'commercial_subscriptions','csub\_%'), (6,'smart_quoting','sq\_%')),
+
+-- عدّ كائنات الحزم الستّ **مرّة واحدة**. مسحٌ على مستوى المخطّط بحكم العقد
+-- (السؤال عن حزم غير lsr_*)، لكنّه مسحٌ واحد لا أربعة وعشرون مسحًا مكرّرًا.
+pkg_objects as materialized (
+  select s.o, s.pkg,
+         (select count(*) from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relkind in ('r','p')
+             and c.relname like s.prefix) as tbls,
+         (select count(*) from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like s.prefix) as fns
+    from six s),
 
 results as (
 
@@ -520,18 +578,13 @@ union all
 select 76, 'العقود', 'لا خرق غير مباشر عبر ما يُنادى',
   case when count(*) = 0 then 'PASS' else 'FAIL' end,
   case when count(*) = 0 then 'كلّ روتين تبلغه دوالّ الموديول نظيف من الكتابة الماليّة والنداء الخارجيّ'
-       else '★ التفاف ★ ' || string_agg(x.callee, ', ') end
-from (
-  -- ★ نمسح ما يُنادى فقط ★ مسح كلّ دوالّ القاعدة كان سيكلّف ثوانيَ بلا فائدة.
-  select c.callee from callees c
-    cross join lateral (
-      select public.lsr_contract_scan(pg_get_functiondef(p.oid)) as s
-        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.prokind = 'f' and p.proname = c.callee
-       limit 1) z
-   where (z.s ->> 'finance_write')::boolean
-      or (z.s ->> 'external_call')::boolean
-      or (z.s ->> 'project_write')::boolean) x
+       else '★ التفاف ★ ' || string_agg(z.callee, ', ') end
+-- ★ نمسح ما يُنادى فقط ★ مسح كلّ دوالّ القاعدة كان سيكلّف ثوانيَ بلا فائدة.
+--   والمسح مثبَّت في callee_scan أعلاه، فلا استدعاء داخل lateral لكلّ صفّ.
+from callee_scan z
+where (z.s ->> 'finance_write')::boolean
+   or (z.s ->> 'external_call')::boolean
+   or (z.s ->> 'project_write')::boolean
 
 union all
 select 73, 'العقود', 'حالة السداد معلَنة كقراءة فقط',
@@ -560,11 +613,10 @@ select 78, 'العقود', 'محرّك التقييم والتوزيع بلا م
   case when count(*) = 0 then 'PASS' else 'FAIL' end,
   case when count(*) = 0
        then 'الدرجة والتوزيع يُحسبان من صفات الفرصة المعلنة وحدها. لا سعر ولا تكلفة ولا هامش يدخل الحساب، فلا شيء منها يُستنتَج من الدرجة أو من رمز السبب.'
-       else '★ مدخل ماليّ في محرّك القرار ★ ' || string_agg(d.proname, ', ') end
-from defs d
-where d.proname in ('lsr_context','lsr_score_core','lsr_rule_matches','lsr_route_core')
-  and (public.lsr_sql_partition(d.d) ->> 'code') || (public.lsr_sql_partition(d.d) ->> 'strings')
-      ~* '\m(public\.)?(fin_|finops_|sq_quotes|sq_quote_internal|csub_subscriptions)'
+       else '★ مدخل ماليّ في محرّك القرار ★ ' || string_agg(b.proname, ', ') end
+from bodies b
+where b.proname in ('lsr_context','lsr_score_core','lsr_rule_matches','lsr_route_core')
+  and b.body ~* '\m(public\.)?(fin_|finops_|sq_quotes|sq_quote_internal|csub_subscriptions)'
 
 union all
 select 79, 'العقود', 'رموز الأسباب بلا عتبة ماليّة',
@@ -641,22 +693,20 @@ union all
 --   التصنيف مشروط: dry_run مثبَّت كتابةً، ولا مُستقبِل يحدّده المستدعي، ولا
 --   إرسال حيّ. إن سقط الشرط سقط التصنيف، وصار الإدراج إرسالًا.
 select 86, 'الأحداث', 'تثبيت dry_run على طابور المركز',
-  case when coalesce((select
-         (public.lsr_sql_partition(d.d) ->> 'code') || (public.lsr_sql_partition(d.d) ->> 'strings')
+  case when coalesce((select b.body
            ~* 'update\s+public\.comms_outbox\s+set\s+dry_run\s*=\s*true'
-         from defs d where d.proname = 'lsr_event_emit'), false)
+         from bodies b where b.proname = 'lsr_event_emit'), false)
        then 'PASS' else 'FAIL' end,
   'الإدراج يُتبَع بكتابة تُجبر dry_run على صفوف هذا الموديول — حارس لا وعد'
 
 union all
 select 87, 'الأحداث', 'لا مُستقبِل يحدّده المستدعي ولا إرسال حيّ',
-  case when coalesce((select
-         (public.lsr_sql_partition(d.d) ->> 'code') || (public.lsr_sql_partition(d.d) ->> 'strings')
+  case when coalesce((select b.body
            ~* 'comms_enqueue\s*\(\s*\$1\s*,\s*\$2\s*,\s*\$3\s*,\s*null'
-         from defs d where d.proname = 'lsr_event_emit'), false)
+         from bodies b where b.proname = 'lsr_event_emit'), false)
        and not exists (
-         select 1 from defs d
-          where (public.lsr_sql_partition(d.d) ->> 'code')
+         select 1 from bodies b
+          where b.code
                 ~* '\m(comms_send|comms_relay|comms_dispatch|comms_process_outbox|notify_email_now)\s*\(')
        then 'PASS' else 'FAIL' end,
   'المُستقبِل يُمرَّر null (يحلّه المركز بقواعده)، ولا نداء إرسال حيّ في أيّ دالّة'
@@ -693,19 +743,13 @@ select 110, 'الخلاصة البنيوية', 'لا حالة جزئية',
 
 -- ─── (١٢) الحزم الستّ المطبَّقة سليمة ──────────────────────────────────────
 union all
-select 120 + s.o, 'الحزم القائمة', s.pkg || ' سليمة',
-  case when (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-              where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like s.prefix) > 0
-        and (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-              where n.nspname = 'public' and p.proname like s.prefix) > 0
-       then 'PASS' else 'FAIL' end,
-  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like s.prefix)::text
+select 120 + po.o, 'الحزم القائمة', po.pkg || ' سليمة',
+  case when po.tbls > 0 and po.fns > 0 then 'PASS' else 'FAIL' end,
+  po.tbls::text
     || ' جدولًا · '
-    || (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-         where n.nspname = 'public' and p.proname like s.prefix)::text
+    || po.fns::text
     || ' دالّة — هذه الحزمة مطبَّقة مسبقًا، وحزمة التقييم لا تُنشئ ولا تُعدّل ولا تُسقط شيئًا خارج lsr_*'
-from six s
+from pkg_objects po
 
 union all
 select 85, 'الأحداث', 'التسجيل في كتالوج المركز (إن وُجد)',
@@ -761,7 +805,8 @@ from (
     join internal_fns i on i.f = p.proname
     cross join lateral aclexplode(p.proacl) a
     join pg_roles r on r.oid = a.grantee
-   where n.nspname = 'public' and a.privilege_type = 'EXECUTE'
+   where n.nspname = 'public' and p.proname like 'lsr\_%'
+     and a.privilege_type = 'EXECUTE'
      and r.rolname = 'authenticated') x
 
 union all

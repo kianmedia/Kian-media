@@ -39,6 +39,7 @@ const GUARDED = [
   "docs/lead_scoring_routing_PREFLIGHT.sql",
   "docs/lead_scoring_routing_RUNME.sql",
   "docs/lead_scoring_routing_POSTCHECK.sql",
+  "docs/lead_scoring_routing_POST_APPLY_SUMMARY.sql",
   "docs/lead_scoring_routing_ROLLBACK.sql",
   "docs/lead_scoring_routing_AFTER_FAILURE_VERIFY.sql",
 ];
