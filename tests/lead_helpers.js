@@ -72,11 +72,28 @@ function stripComments(src) {
   return src.replace(/--[^\n]*/g, "");
 }
 
-/** نصّ تعريف دالّة كاملًا: من create … إلى $$; المقابل. */
+/**
+ * يحذف **سلسلة النمط** التي تلي عامل مطابقة (`~` `~*` `!~` `!~*`).
+ *
+ * ★ لماذا ★ سقطت هذه الترحيلة على الإنتاج لأنّ فحصًا بحث عن الكلمة `zoho`
+ * داخل تعريف دالّة، فطابق الجملة التي تقول «ولا تنادي Zoho». والعيب نفسه
+ * يتكرّر في اختبارات Node: حارسٌ يمنع `pg_net` يجب أن يذكر `pg_net` في نمطه،
+ * فيدين نفسه. التمييز الصحيح ليس «أيّ سطر فيه اقتباس» بل «الرمز واقع داخل
+ * مُعامل نمط لعامل مطابقة» — وذلك ذكرٌ يحمي، لا استعمال يخرق.
+ */
+function stripRegexOperands(src) {
+  return src.replace(/([!]?~\*?)\s*\(?\s*'(?:[^'\n]|'')*'/g, "$1 ''");
+}
+
+/**
+ * نصّ تعريف دالّة كاملًا: من create … إلى الوسم المقابل.
+ * الوسم ليس `$$` دائمًا — بعض الدوالّ تحمل `$` في جسمها فتُقتبس بوسم مسمّى
+ * (`$lsrpart$`). المرجع الخلفيّ \1 يضمن أنّ الإغلاق هو وسم الفتح نفسه.
+ */
 function funcSrc(name, src = SQL) {
   const re = new RegExp(
     "create\\s+or\\s+replace\\s+function\\s+public\\." + name +
-      "\\s*\\([^)]*\\)[\\s\\S]*?\\$\\$[\\s\\S]*?\\$\\$\\s*;",
+      "\\s*\\([^)]*\\)[\\s\\S]*?(\\$[a-zA-Z_]*\\$)[\\s\\S]*?\\1\\s*;",
     "i",
   );
   const m = src.match(re);
@@ -84,13 +101,14 @@ function funcSrc(name, src = SQL) {
   return m[0];
 }
 
-/** جسم الدالّة وحده (ما بين $$ و$$). */
+/** جسم الدالّة وحده (ما بين وسمَي الاقتباس). */
 function funcBody(name, src = SQL) {
   const whole = funcSrc(name, src);
-  const i = whole.indexOf("$$");
-  const j = whole.lastIndexOf("$$");
+  const tag = whole.match(/(\$[a-zA-Z_]*\$)/)[1];
+  const i = whole.indexOf(tag);
+  const j = whole.lastIndexOf(tag);
   assert.ok(i > 0 && j > i, `جسم الدالّة ${name} غير مقروء`);
-  return whole.slice(i + 2, j);
+  return whole.slice(i + tag.length, j);
 }
 
 /** توقيع الدالّة (ما بين القوسين). */
@@ -195,7 +213,7 @@ const FORBIDDEN_GATES = [/can_manage_projects/i, /is_kian_member/i];
 
 module.exports = {
   ROOT, read, exists, SQL, PREFLIGHT, POSTCHECK, ROLLBACK, DOCS,
-  stripCommentsAndStrings, stripComments,
+  stripCommentsAndStrings, stripComments, stripRegexOperands,
   funcSrc, funcBody, funcArgs, selfTest, tableSrc,
   TABLES, PREDICATES, API_FNS, INTERNAL_FNS, FACTORS, EVENTS,
   FORBIDDEN, FORBIDDEN_GATES,

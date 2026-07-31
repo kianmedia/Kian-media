@@ -1790,15 +1790,18 @@ begin
       'message', 'وحدة الاشتراكات غير مفعّلة على هذه القاعدة. لا رصيد ولا مبلغ يُعرض — الغياب يُعلَن ولا يُقرأ صفرًا.');
   end if;
 
+  -- ★ لا مبلغ هنا ★ العقد يسمح بقراءة **وجود** الاشتراك ومرجعه وحالته وتواريخه
+  --   ووجود رصيد — لا بقيمته. المبلغ التعاقديّ يُستنتَج منه قيمة الصفقة، ومن
+  --   المقارنة بين صفقتين تُشتقّ الأرضية والهامش. فالحجب هنا في **المصدر** لا
+  --   في الواجهة: ما لا يُقرأ لا يُسرَّب. المالك يرى الأرقام في لوحته وحده.
   execute '
     select jsonb_build_object(
       ''subscription_id'', s.id, ''code'', s.code, ''status'', s.status,
       ''contract_reference'', s.contract_reference,
       ''start_date'', s.start_date, ''end_date'', s.end_date, ''renewal_date'', s.renewal_date,
-      ''price_net'', s.price_net, ''vat_rate'', s.vat_rate, ''vat_amount'', s.vat_amount,
-      ''price_gross'', s.price_gross, ''currency'', s.currency,
-      ''renewal_amount_net'', s.price_net,
-      ''renewal_amount_note'', ''مبلغ التجديد = السعر التعاقديّ الحاليّ ما لم يُعتمد تغيير. لا فوترة ولا تحصيل من هنا.'')
+      ''currency'', s.currency,
+      ''amounts_excluded_by_contract'', true,
+      ''amounts_note'', ''القيم المالية محجوبة عن هذه الوحدة بالعقد. لا سعر ولا ضريبة ولا مبلغ تجديد — راجع لوحة المالك.'')
       from public.csub_subscriptions s where s.id = $1 and s.is_deleted = false'
     into v_sub using p_subscription;
 
@@ -1816,15 +1819,21 @@ begin
       into v_over using p_subscription;
   end if;
 
-  -- مرجع الذمم: **مرجع وحالة سداد للقراءة فقط**. لا تحصيل ولا إثبات دفع.
+  -- مرجع الذمم: **وجود ومرجع وحالة واستحقاق**. لا مبلغ، ولا تحصيل، ولا إثبات
+  -- دفع. حالة التحصيل تُعاد **عامّة** (سارية/مستحقّة/متأخّرة) لا رقمًا: المندوب
+  -- يحتاج أن يعرف «هل عليه متأخّرات» لا «كم عليه».
   v_ok := to_regclass('public.fin_receivables') is not null;
   if v_ok then
     begin
       execute '
         select coalesce(jsonb_agg(jsonb_build_object(
                  ''receivable_reference'', r.code, ''status'', r.status,
-                 ''due_date'', r.due_date, ''amount_net'', r.amount_net,
-                 ''vat_amount'', r.vat_amount)), ''[]''::jsonb)
+                 ''due_date'', r.due_date,
+                 ''collection_state'',
+                   case when r.status in (''paid'',''settled'',''closed'') then ''settled''
+                        when r.due_date is null then ''open''
+                        when r.due_date < current_date then ''overdue''
+                        else ''current'' end)), ''[]''::jsonb)
           from public.fin_receivables r
          where r.contract_reference = $1'
         into v_recv using (v_sub ->> 'contract_reference');
@@ -2469,6 +2478,153 @@ begin
 end $g$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- §13.9) ★★ كاشف العقد البنيويّ — لماذا يوجد هذا القسم ★★
+--
+--   سقطت هذه الترحيلة على الإنتاج قبل COMMIT بـ:
+--       ERROR P0001: LSR SELF-TEST: عقد المالية مكسور — كتابة أو نداء خارجيّ
+--   والسبب ليس خرقًا. كان الفحص القديم يبحث عن **الكلمة** `zoho` داخل
+--   pg_get_functiondef كاملًا، فطابقت الجملة التعاقدية داخل lsr_finance_reference
+--   نفسها: «… ولا تنادي Zoho …». أي أنّ الدالّة سقطت لأنّها **أعلنت** أنّها لا
+--   تنادي Zoho. الكاشف كان خطأً، والمخطّط كان سليمًا.
+--
+--   الدرس: المطابقة النصّية على تعريف الدالّة لا تفرّق بين **جملة تنفيذية**
+--   و**تعليق** و**نصّ رسالة**. والعلاج ليس إضعاف الفحص ولا تغيير الجملة كي
+--   تفلت منه — بل تقسيم المصدر بنيويًّا ثمّ المطابقة على **شكل الجملة**.
+--
+--   ودقّة حاسمة: lsr_finance_reference تقرأ عبر execute '...' — أي أنّ جملها
+--   الفعلية **تسكن داخل سلاسل نصّية**. فتجاهل السلاسل يُعمي الكاشف عن
+--   execute 'insert into public.fin_receivables …'. لذلك نمسح الكود والسلاسل
+--   معًا، لكن بشكل جملة/نداء لا بكلمة مفردة: جملة بشرية لا تحوي أبدًا
+--   «insert into public.fin_receivables»، بينما تحوي كلمة «Zoho» بسهولة.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- 13.9.1 تقسيم المصدر مرّة واحدة، بمرور حرفيّ واحد واعٍ بالاقتباس والتعليق.
+--        code    = الهيكل التنفيذيّ (بلا تعليقات، والسلاسل مُفرَّغة).
+--        strings = محتوى السلاسل النصّية مجموعًا (حيث يسكن SQL الديناميكيّ).
+--        '' داخل سلسلة هي اقتباس مهروب لا نهاية للسلسلة.
+--        وسوم اقتباس الدولار تُمحى وما بداخلها **كود** — لأنّ جسم الدالّة
+--        نفسه مقتبس بالدولار، فعدُّه سلسلةً كان سيُفرغ الهيكل التنفيذيّ تمامًا.
+create or replace function public.lsr_sql_partition(p_src text)
+returns jsonb language plpgsql immutable set search_path = public as $lsrpart$
+declare
+  v_code text := ''; v_str text := '';
+  i int := 1; n int; s int; d int; p int; v_seg int := 1; m text; c text;
+begin
+  if p_src is null then return jsonb_build_object('code', '', 'strings', ''); end if;
+  n := length(p_src);
+  -- الحالة الشائعة (حرف عاديّ) تكلّف استدعاء substr واحدًا لا أكثر: التعريفات
+  -- تبلغ آلاف الحروف وتُمسح عشرات المرّات في رسم النداءات.
+  while i <= n loop
+    c := substr(p_src, i, 1);
+    if c = '-' and substr(p_src, i + 1, 1) = '-' then
+      v_code := v_code || substr(p_src, v_seg, i - v_seg) || ' ';
+      p := position(chr(10) in substr(p_src, i));
+      if p = 0 then i := n + 1; else i := i + p; end if;
+      v_seg := i;
+    elsif c = '/' and substr(p_src, i + 1, 1) = '*' then
+      v_code := v_code || substr(p_src, v_seg, i - v_seg) || ' ';
+      d := 1; i := i + 2;
+      while i <= n and d > 0 loop
+        if substr(p_src, i, 2) = '/*' then d := d + 1; i := i + 2;
+        elsif substr(p_src, i, 2) = '*/' then d := d - 1; i := i + 2;
+        else i := i + 1; end if;
+      end loop;
+      v_seg := i;
+    elsif c = '''' then
+      v_code := v_code || substr(p_src, v_seg, i - v_seg) || ' '''' ';
+      s := i + 1; i := i + 1;
+      loop
+        exit when i > n;
+        if substr(p_src, i, 1) = '''' then
+          if substr(p_src, i, 2) = '''''' then i := i + 2; else exit; end if;
+        else i := i + 1; end if;
+      end loop;
+      v_str := v_str || replace(substr(p_src, s, i - s), '''''', '''') || chr(10);
+      i := i + 1; v_seg := i;
+    elsif c = '"' then
+      -- مُعرِّف مقتبس: يبقى ضمن الكود، لكن نعبره كي لا تنزلق حالة الاقتباس.
+      i := i + 1;
+      loop
+        exit when i > n;
+        if substr(p_src, i, 1) = '"' then
+          if substr(p_src, i, 2) = '""' then i := i + 2; else i := i + 1; exit; end if;
+        else i := i + 1; end if;
+      end loop;
+    elsif c = '$' then
+      -- (?: … ) غير آسِرة: substring(x from pat) تُعيد المجموعة الأولى لو وُجدت،
+      -- ومجموعة اختيارية آسِرة كانت ستُعيد NULL على الوسم الفارغ رغم المطابقة.
+      m := substring(substr(p_src, i, 66) from '^\$(?:[A-Za-z_][A-Za-z_0-9]{0,62})?\$');
+      if m is not null then
+        v_code := v_code || substr(p_src, v_seg, i - v_seg) || ' ';
+        i := i + length(m); v_seg := i;
+      else
+        i := i + 1;   -- ‎$1 وسيط لا وسم اقتباس.
+      end if;
+    else
+      i := i + 1;
+    end if;
+  end loop;
+  v_code := v_code || substr(p_src, v_seg, n - v_seg + 1);
+  return jsonb_build_object('code', v_code, 'strings', v_str);
+end $lsrpart$;
+
+comment on function public.lsr_sql_partition(text) is
+  'يقسم مصدر SQL إلى هيكل تنفيذيّ ومحتوى سلاسل، بمرور واحد واعٍ بالاقتباس والتعليق. أساس كلّ فحوص العقد الساكنة.';
+
+-- 13.9.2 الحكم: مطابقة على **شكل** الجملة أو النداء، لا على كلمة مفردة.
+create or replace function public.lsr_contract_scan(p_src text)
+returns jsonb language plpgsql immutable set search_path = public as $lsrscan$
+declare v_p jsonb; v_code text; v_str text; v_both text;
+begin
+  v_p := public.lsr_sql_partition(p_src);
+  v_code := coalesce(v_p ->> 'code', '');
+  v_str  := coalesce(v_p ->> 'strings', '');
+  v_both := v_code || chr(10) || v_str;
+  return jsonb_build_object(
+    -- كتابة ماليّة: تُفحص في الكود **وفي السلاسل** لأنّ القراءات تمرّ بـexecute.
+    'finance_write',
+      v_both ~* '(insert\s+into|update|delete\s+from|truncate)\s+(table\s+)?(only\s+)?(public\.)?(fin_|finops_)',
+    -- كتابة في منصّة المشاريع المجمَّدة.
+    'project_write',
+      v_both ~* '(insert\s+into|update|delete\s+from|truncate)\s+(table\s+)?(only\s+)?(public\.)?(projects|project_core|deliverable)',
+    -- نداء خارجيّ: **شكل نداء**. الكلمة المجرّدة `zoho` نثرٌ لا نداء — وهي
+    -- بالضبط ما أسقط الترحيلة سابقًا؛ فلا تُستعمل هنا أبدًا.
+    'external_call',
+      (v_both ~* '\m(pg_net|dblink|pg_background)\M'
+       or v_both ~* '\mhttp_(get|post|put|delete|head)\s*\('
+       or v_both ~* '\mnet\.http'
+       or v_both ~* '\mzoho[a-z_]*\s*\('
+       or v_code ~* '(https?://|\m(openai|anthropic|model_endpoint)\M)'),
+    -- صفة شخصية حسّاسة: في الهيكل التنفيذيّ وحده. ذكرها في تعليق ليس مدخلًا.
+    'sensitive_attribute',
+      v_code ~* '\m(gender|nationality|ethnic|religio|marital|date_of_birth|birth_date|age_group|age_band)',
+    'forbidden_gate',
+      v_code ~* '\m(can_manage_projects|is_kian_member)\M',
+    -- قراءة ماليّة ممنوعة بالعقد: تكلفة/هامش/ربح/أرضية سعر/سعر مورّد.
+    'forbidden_finance_read',
+      (v_both ~* '\m(public\.)?fin_costs\M'
+       or v_both ~* '\m(base_cost|cost_rate|margin_pct|gross_profit|floor_price|supplier_rate|sq_quote_internal)\M'));
+end $lsrscan$;
+
+comment on function public.lsr_contract_scan(text) is
+  'يحكم على مصدر دالّة وفق شكل الجملة/النداء بعد التقسيم البنيويّ. لا يطابق كلمة مجرّدة داخل نصّ بشريّ.';
+
+-- 13.9.3 صلاحيات الكاشفَين. كتلة المنح في §13 تسبق هذا القسم، فلو تُركا بلا
+--        سحب لبقيت منحة PUBLIC الافتراضية عليهما — وهي وحدها كافية لإسقاط
+--        صفّ «لا EXECUTE لـanon ولا PUBLIC» في POSTCHECK. الدالّتان أداتا فحص
+--        داخليّتان لا سطح تطبيق: لا تقرآن جدولًا ولا تفحصان صلاحية.
+do $gp$
+declare f text;
+begin
+  foreach f in array array['public.lsr_sql_partition(text)','public.lsr_contract_scan(text)']
+  loop
+    execute format('revoke all on function %s from public', f);
+    begin execute format('revoke all on function %s from anon', f); exception when undefined_object then null; end;
+    begin execute format('revoke all on function %s from authenticated', f); exception when undefined_object then null; end;
+  end loop;
+end $gp$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- §14) ★ الفحص الذاتيّ — ساكن بالكامل ★
 --     محرّر SQL يعمل بدور postgres و auth.uid() = NULL. استدعاء دالّة محميّة
 --     هنا يرفع «not authorized» ويُسقط الترحيلة — كلفنا ذلك دورتين. لذلك كلّ
@@ -2476,7 +2632,15 @@ end $g$;
 --     false بلا جلسة (وهو ما يجب أن يفعله أصلًا). ولا مصيدة تُنجِح بلا سبب.
 -- ════════════════════════════════════════════════════════════════════════════
 do $selftest$
-declare v_def text; v_n int; t text; f text; v_bad text;
+declare
+  v_def text; v_n int; t text; f text; v_bad text;
+  v_scan jsonb; v_body text; v_hop int;
+  v_seen text[] := '{}'; v_frontier text[] := '{}'; v_next text[] := '{}';
+  v_all text[] := '{}';
+  -- ★ الحدّ الداخليّ المسموح ★ مركز الاتصالات طابور داخليّ لا نداء خارجيّ، ما
+  --   دام dry_run مثبَّتًا — وهو ما يُثبته الفحص (٨-ب) أدناه كتابةً لا وعدًا.
+  --   ولذلك لا نَنزل داخله في رسم النداءات ولا نعدّه خرقًا.
+  v_boundary text[] := array['lsr_sql_partition','lsr_contract_scan'];
 begin
   -- (١) البنية موجودة كاملة.
   foreach t in array array[
@@ -2492,12 +2656,15 @@ begin
   end loop;
 
   -- (٢) ⛔ لا صفة شخصية حسّاسة في أيّ دالّة تقييم أو في كتالوج العوامل.
+  --     ★ يمرّ عبر التقسيم البنيويّ ★ الصيغة القديمة طابقت التعريف كاملًا،
+  --     فكان تعليقٌ يقول «لا نقرأ gender» كفيلًا بإسقاط الترحيلة — وهو العيب
+  --     الكامن نفسه الذي أسقط فحص المالية فعلًا. ذكرُ الاسم ليس استعماله.
   for v_def in
     select pg_get_functiondef(p.oid) from pg_proc p
       join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'public' and p.proname in ('lsr_context','lsr_score_core','lsr_rule_matches')
   loop
-    if v_def ~* '(gender|nationality|ethnic|religio|marital|date_of_birth|birth_date|age_group|age_band)' then
+    if (public.lsr_contract_scan(v_def) ->> 'sensitive_attribute')::boolean then
       raise exception 'LSR SELF-TEST: مدخل شخصيّ حسّاس ظهر في محرّك التقييم — هذا خرق للعقد لا خطأ تنسيق';
     end if;
   end loop;
@@ -2506,28 +2673,94 @@ begin
   if v_n <> 0 then
     raise exception 'LSR SELF-TEST: عامل شخصيّ حسّاس في الكتالوج (% صفًّا)', v_n; end if;
 
-  -- (٣) لا بوّابة ممنوعة في أيّ دالّة للموديول.
-  for v_def in
-    select pg_get_functiondef(p.oid) from pg_proc p
+  -- (٣+٤) ★★ العقد البنيويّ على كامل الموديول ★★
+  --     بوّابة ممنوعة · كتابة في منصّة المشاريع المجمَّدة · كتابة ماليّة ·
+  --     نداء خارجيّ · قراءة ماليّة ممنوعة — كلّها بشكل الجملة بعد التقسيم.
+  --     ⚠️ حدّ الكلمة يسبق السابقة ولا يتبعها: حدٌّ بعد شرطة سفلية لا يتحقّق
+  --     أبدًا، فيصير الفحص عاجزًا عن الإطلاق — وذلك أسوأ من غيابه لأنّه يمنح
+  --     طمأنينة كاذبة. لذلك تُكتب السوابق بحدّ بادئ فقط.
+  for t, v_def in
+    select p.proname, pg_get_functiondef(p.oid) from pg_proc p
       join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'public' and p.proname like 'lsr\_%'
+       and p.proname <> all (v_boundary)
   loop
-    if v_def ilike '%can_manage_projects%' or v_def ilike '%is_kian_member%' then
-      raise exception 'LSR SELF-TEST: بوّابة ممنوعة (can_manage_projects / is_kian_member) داخل الموديول';
+    v_scan := public.lsr_contract_scan(v_def);
+    if (v_scan ->> 'forbidden_gate')::boolean then
+      raise exception 'LSR SELF-TEST: بوّابة ممنوعة (can_manage_projects / is_kian_member) داخل % ', t;
+    end if;
+    if (v_scan ->> 'project_write')::boolean then
+      raise exception 'LSR SELF-TEST: كتابة في منصّة المشاريع المجمَّدة داخل %', t;
+    end if;
+    if (v_scan ->> 'finance_write')::boolean then
+      raise exception 'LSR SELF-TEST: كتابة ماليّة داخل % — العقد قراءة فقط', t;
+    end if;
+    if (v_scan ->> 'external_call')::boolean then
+      raise exception 'LSR SELF-TEST: نداء خارجيّ داخل %', t;
+    end if;
+    if (v_scan ->> 'forbidden_finance_read')::boolean then
+      raise exception 'LSR SELF-TEST: قراءة ماليّة ممنوعة (تكلفة/هامش/ربح/أرضية) داخل %', t;
     end if;
   end loop;
 
-  -- (٤) ★ لا كتابة في منصّة المشاريع المجمَّدة ★ ولا إنشاء مشروع.
-  --     ⚠️ بلا \m…\M هنا: الحدّ بعد سابقة مثل «fin_» أو «project_» لا يتحقّق،
-  --     فيصير الفحص عاجزًا عن الإطلاق أصلًا — وهو أسوأ من غيابه.
-  for v_def in
-    select pg_get_functiondef(p.oid) from pg_proc p
-      join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = 'public' and p.proname like 'lsr\_%'
-  loop
-    if v_def ~* '(insert\s+into\s+public\.projects|update\s+public\.projects|insert\s+into\s+public\.project_core|update\s+public\.project_core|insert\s+into\s+public\.deliverable)' then
-      raise exception 'LSR SELF-TEST: كتابة في منصّة المشاريع المجمَّدة داخل الموديول';
-    end if;
+  -- (٤-ب) ★★ رسم النداءات ★★ الفحص المباشر وحده سمح بالالتفاف في حزمة سابقة:
+  --       دالّة نظيفة تنادي دالّة تكتب. هنا نمشي المسار حتّى ثلاث قفزات ونحكم
+  --       على كلّ ما يُبلَغ. عمق ٣ يغطّي الالتفاف الواقعيّ بلا مسح القاعدة كلّها.
+  -- ⚠️ الأسماء تُبنى داخل تعبير نمطيّ أدناه، فنستبعد أيّ اسم يحمل محرفًا ذا
+  --    معنى في ARE. اسمٌ شاذّ كان سيُنتج «invalid regular expression» ويُسقط
+  --    الترحيلة — وهي بالضبط الفئة التي أسقطت هذا الإنتاج مرّتين من قبل.
+  select coalesce(array_agg(distinct p.proname), '{}') into v_all
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.prokind = 'f'
+     and p.proname ~ '^[a-z_][a-z0-9_]*$';
+  select coalesce(array_agg(distinct p.proname), '{}') into v_frontier
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname like 'lsr\_%' and p.proname <> all (v_boundary);
+
+  for v_hop in 1..3 loop
+    v_next := '{}';
+    foreach t in array v_frontier loop
+      continue when t = any(v_seen);
+      v_seen := v_seen || t;
+      -- مركز الاتصالات حدٌّ داخليّ مثبَّت بـdry_run: لا نَنزل داخله ولا نُدينه.
+      continue when t like 'comms\_%' or t = any(v_boundary);
+      v_def := null;
+      begin
+        select pg_get_functiondef(p.oid) into v_def from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = t limit 1;
+      exception when others then v_def := null; end;
+      continue when v_def is null;
+
+      if v_hop > 1 then
+        -- القفزة الأولى فُحصت أعلاه؛ ما بعدها هو الالتفاف غير المباشر.
+        v_scan := public.lsr_contract_scan(v_def);
+        if (v_scan ->> 'finance_write')::boolean then
+          raise exception 'LSR SELF-TEST: كتابة ماليّة غير مباشرة — الموديول يبلغ % عبر النداءات', t;
+        end if;
+        if (v_scan ->> 'external_call')::boolean then
+          raise exception 'LSR SELF-TEST: نداء خارجيّ غير مباشر — الموديول يبلغ %', t;
+        end if;
+        if (v_scan ->> 'project_write')::boolean then
+          raise exception 'LSR SELF-TEST: كتابة غير مباشرة في منصّة المشاريع المجمَّدة عبر %', t;
+        end if;
+      end if;
+
+      -- النداءات المُعلَنة: اسم دالّة عامّة يتبعه قوس، في الكود أو في SQL
+      -- الديناميكيّ. position أوّلًا لأنّها أرخص من التعبير النمطيّ بكثير.
+      v_scan := public.lsr_sql_partition(v_def);
+      v_body := coalesce(v_scan ->> 'code', '') || chr(10) || coalesce(v_scan ->> 'strings', '');
+      foreach f in array v_all loop
+        continue when f = t or f = any(v_seen) or f = any(v_next);
+        if position(f in v_body) > 0 and v_body ~ ('\m' || f || '\s*\(') then
+          v_next := v_next || f;
+        end if;
+      end loop;
+      exit when coalesce(array_length(v_seen, 1), 0) > 200;
+    end loop;
+    v_frontier := v_next;
+    exit when array_length(v_frontier, 1) is null
+           or coalesce(array_length(v_seen, 1), 0) > 200;
   end loop;
 
   -- (٥) محرّك التقييم مُفسَّر: يعيد المكوّنات والشرح والإجراء وعلم المراجعة.
@@ -2539,8 +2772,8 @@ begin
     if v_def not ilike '%' || f || '%' then
       raise exception 'LSR SELF-TEST: مخرَج التفسير «%» غائب عن lsr_score_core', f; end if;
   end loop;
-  -- ولا نداء خارجيّ ولا نموذج.
-  if v_def ~* '(net\.http|pg_net|https?://|openai|anthropic|\mmodel_endpoint\M)' then
+  -- ولا نداء خارجيّ ولا نموذج — بالتقسيم البنيويّ لا بالكلمة المجرّدة.
+  if (public.lsr_contract_scan(v_def) ->> 'external_call')::boolean then
     raise exception 'LSR SELF-TEST: نداء خارجيّ داخل محرّك التقييم — العقد يمنع الصندوق الأسود'; end if;
 
   -- (٦) التوزيع: كلّ منع مطلوب مذكور بالاسم في lsr_assign.
@@ -2569,6 +2802,32 @@ begin
   if v_def ilike '%comms_channels%' then
     raise exception 'LSR SELF-TEST: الموديول يلمس comms_channels — تفعيل قناة ليس من صلاحيته'; end if;
 
+  -- (٨-ب) ★ تثبيت dry_run — الحدّ الذي يجعل comms_enqueue طابورًا لا نداءً ★
+  --     نصنّف comms_enqueue **داخليًّا** لا خارجيًّا، وهذا التصنيف ليس مجّانيًّا:
+  --     ثمنه أن يكون dry_run مثبَّتًا بنيويًّا. فإن سقط التثبيت سقط التصنيف.
+  --     (أ) قيد الجدول يمنع صفًّا حيًّا في سجلّ الموديول أصلًا.
+  if not exists (
+    select 1 from pg_constraint c join pg_class k on k.oid = c.conrelid
+      join pg_namespace n on n.oid = k.relnamespace
+     where n.nspname = 'public' and k.relname = 'lsr_event_log'
+       and c.conname = 'lsr_event_dry_run_only' and c.contype = 'c') then
+    raise exception 'LSR SELF-TEST: قيد dry_run على lsr_event_log غائب — التصنيف الداخليّ لمركز الاتصالات بلا ثمن';
+  end if;
+  --     (ب) الإدراج في الطابور يُتبَع بكتابة تُجبر dry_run على صفوف هذا الموديول.
+  v_scan := public.lsr_sql_partition(v_def);
+  v_body := coalesce(v_scan ->> 'code', '') || chr(10) || coalesce(v_scan ->> 'strings', '');
+  if v_body !~* 'update\s+public\.comms_outbox\s+set\s+dry_run\s*=\s*true' then
+    raise exception 'LSR SELF-TEST: lsr_event_emit لا يكتب تثبيت dry_run على طابور المركز — الوعد ليس حارسًا';
+  end if;
+  --     (ج) ولا مُستقبِل يحدّده المستدعي: الوسيط الثالث للمركز يُمرَّر null.
+  if v_body !~* 'comms_enqueue\s*\(\s*\$1\s*,\s*\$2\s*,\s*\$3\s*,\s*null' then
+    raise exception 'LSR SELF-TEST: lsr_event_emit يمرّر مُستقبِلًا للمركز — العقد يمنع تحديد المُستقبِل';
+  end if;
+  --     (د) ولا إرسال حيّ من الموديول بأيّ اسم.
+  if v_body ~* '\m(comms_send|comms_relay|comms_dispatch|comms_process_outbox|notify_email_now)\s*\(' then
+    raise exception 'LSR SELF-TEST: الموديول ينادي إرسالًا حيًّا — الأحداث تُدرَج ولا تُرسَل';
+  end if;
+
   -- (٩) لوحة العميل: لا رمز داخليّ ولا تكلفة ولا هامش.
   v_def := pg_get_functiondef(to_regprocedure('public.lsr_dashboard_client(jsonb)'));
   foreach f in array array['internal_notes','internal_metadata','decision_reason',
@@ -2590,12 +2849,36 @@ begin
       raise exception 'LSR SELF-TEST: طابور العمليات يقرأ حقلًا ماليًّا (%)', f; end if;
   end loop;
 
-  -- (١١) المالية مرجع للقراءة فقط: لا كتابة ولا Zoho ولا اعتراف بإيراد.
+  -- (١١) ★ المالية مرجع للقراءة فقط ★
+  --     هنا سقطت الترحيلة سابقًا. الصيغة القديمة كانت:
+  --         v_def ~* '(… |zoho)'   على pg_get_functiondef كاملًا
+  --     فطابقت الكلمة `Zoho` داخل **جملة العقد** التي تقولها الدالّة عن نفسها:
+  --     «… ولا تنادي Zoho …». سقطت الدالّة لأنّها أعلنت براءتها. الكاشف كان
+  --     الخطأ، لا المخطّط. والعلاج: شكل النداء `zoho…(` لا الكلمة المجرّدة —
+  --     وجملة بشرية لا تحوي «insert into public.fin_receivables» أبدًا، فمسح
+  --     السلاسل بحثًا عن **شكل جملة** آمن، ومسحها بحثًا عن **كلمة** ليس كذلك.
   v_def := pg_get_functiondef(to_regprocedure('public.lsr_finance_reference(uuid)'));
-  if v_def ~* '(insert\s+into\s+public\.fin_|update\s+public\.fin_|delete\s+from\s+public\.fin_|zoho)' then
-    raise exception 'LSR SELF-TEST: عقد المالية مكسور — كتابة أو نداء خارجيّ'; end if;
+  v_scan := public.lsr_contract_scan(v_def);
+  if (v_scan ->> 'finance_write')::boolean then
+    raise exception 'LSR SELF-TEST: عقد المالية مكسور — كتابة في جدول ماليّ'; end if;
+  if (v_scan ->> 'external_call')::boolean then
+    raise exception 'LSR SELF-TEST: عقد المالية مكسور — نداء خارجيّ'; end if;
+  if (v_scan ->> 'forbidden_finance_read')::boolean then
+    raise exception 'LSR SELF-TEST: عقد المالية مكسور — قراءة تكلفة أو هامش'; end if;
   if v_def not ilike '%payment_status_is_read_only%' then
     raise exception 'LSR SELF-TEST: عقد المالية لا يعلن أنّ حالة السداد للقراءة فقط'; end if;
+
+  -- (١١-ب) ★ عرّافة السعر ★ المرجع الماليّ يُعيد **وجود** الذمّة ومرجعها
+  --     وحالتها وتاريخ استحقاقها — لا مبلغها. مندوب يقرأ مبلغًا تعاقديًّا
+  --     يستنتج منه قيمة العقد، ومن ذلك تُشتقّ الأرضية والهامش بالمقارنة.
+  v_body := coalesce(v_scan ->> 'code', '') || chr(10) || coalesce(v_scan ->> 'strings', '');
+  foreach f in array array['amount_net','vat_amount','amount_gross','price_net','price_gross',
+                           'renewal_amount_net','overage_amount_net','total_amount']
+  loop
+    if v_body ~* ('\m[a-z]\.' || f || '\M') then
+      raise exception 'LSR SELF-TEST: المرجع الماليّ يسرّب مبلغًا (%) — العقد يسمح بالمرجع والحالة والاستحقاق لا بالقيمة', f;
+    end if;
+  end loop;
 
   -- (١٢) المُسنَدات تُرجع boolean، ولا واحد منها يعيد NULL بلا جلسة.
   foreach f in array array['lsr_can_view','lsr_can_route','lsr_can_reassign',

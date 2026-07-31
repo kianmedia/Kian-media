@@ -15,7 +15,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   SQL, POSTCHECK, DOCS, read, funcBody, funcSrc, selfTest, tableSrc,
-  FACTORS, FORBIDDEN, stripComments,
+  FACTORS, FORBIDDEN, stripComments, stripRegexOperands,
 } = require("./lead_helpers.js");
 
 /** كلّ ما يشارك في حساب الدرجة. */
@@ -173,10 +173,11 @@ test("لا رمز ممنوع في الحزمة كلّها خارج سياق ال
     // أسطر الحراسة نفسها (تعبير نمطيّ يمنع الرمز) مستثناة — وهي الوحيدة
     // المسموح لها بذكره. ما عداها ذكرٌ حقيقيّ، وهو ما نبحث عنه.
     if (/lsr_factor_no_sensitive_attribute|SELF-TEST|forbidden/i.test(guardContext(n))) continue;
-    if (/[!]?~\*\s*'\(/.test(line)) continue;
+    // مُعامل النمط لعامل مطابقة ذكرٌ يحمي لا استعمال يخرق: الحارس الذي يمنع
+    // `gender` مضطرّ إلى كتابته في نمطه.
     for (const rx of FORBIDDEN) {
       assert.doesNotMatch(
-        line, rx,
+        stripRegexOperands(line), rx,
         `السطر ${n + 1} يذكر صفة شخصية خارج سياق المنع: ${line.trim()}`,
       );
     }

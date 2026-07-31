@@ -34,6 +34,13 @@ const GUARDED = [
   "docs/case_studies_platform_RUNME.sql",
   "docs/kian_ai_assistant_RUNME.sql",
   "docs/live_operations_dashboard_RUNME.sql",
+  // حزمة التقييم والتوزيع: كاشف العقد البنيويّ يحمل حدود تكرار في وسم
+  // اقتباس الدولار ({0,62})، وهي بالضبط الفئة التي أسقطت الإنتاج بـ{0,400}.
+  "docs/lead_scoring_routing_PREFLIGHT.sql",
+  "docs/lead_scoring_routing_RUNME.sql",
+  "docs/lead_scoring_routing_POSTCHECK.sql",
+  "docs/lead_scoring_routing_ROLLBACK.sql",
+  "docs/lead_scoring_routing_AFTER_FAILURE_VERIFY.sql",
 ];
 
 function read(rel) {

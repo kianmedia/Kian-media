@@ -8,7 +8,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  SQL, PREFLIGHT, POSTCHECK, ROLLBACK, exists, funcBody, selfTest,
+  SQL, PREFLIGHT, POSTCHECK, ROLLBACK, exists, funcBody, funcSrc, selfTest,
   stripCommentsAndStrings, stripComments, TABLES, API_FNS, INTERNAL_FNS, PREDICATES,
 } = require("./lead_helpers.js");
 
@@ -203,9 +203,20 @@ test("الفحص الذاتيّ ساكن ولا ينادي دالّة محميّ
   // to_regprocedure اسمٌ يُقرأ من الكتالوج، لا نداء. الخلط بينهما يُنتج
   // إنذارًا كاذبًا يُعطَّل الاختبار بسببه.
   const bare = st.replace(/'(?:[^']|'')*'/g, "''");
+  // كاشفا العقد نقيّان: نصّ ← نصّ، بلا فحص صلاحية وبلا لمس جدول، فلا يمكن
+  // أن يرفعا «not authorized». والسماح لهما ليس مجّانيًّا — يُثبَت أدناه.
+  const PURE = ["lsr_sql_partition", "lsr_contract_scan"];
+  for (const p of PURE) {
+    const body = funcBody(p);
+    assert.doesNotMatch(body, /not authorized|auth\.uid\(\)|lsr_can_|lsr_perm|lsr_is_/,
+      `${p} ليست نقيّة — نداؤها داخل الفحص الذاتيّ قد يُسقط ترحيلة سليمة`);
+    assert.doesNotMatch(body, /\bfrom\s+public\.|insert\s+into|update\s+public\./i,
+      `${p} تلمس جدولًا — الكاشف يجب أن يكون دالّة نصّ خالصة`);
+    assert.match(funcSrc(p), /immutable/i, `${p} ليست immutable`);
+  }
   const calls = [...bare.matchAll(/public\.(lsr_[a-z_]+)\s*\(/g)].map((m) => m[1]);
   for (const c of calls) {
-    if (allowed.has(c) || c === "lsr_event_keys") continue;
+    if (allowed.has(c) || c === "lsr_event_keys" || PURE.includes(c)) continue;
     assert.fail(
       `الفحص الذاتيّ ينادي ${c} — محرّر SQL بلا جلسة، والنداء سيرفع «not authorized» ` +
       `ويُسقط ترحيلة سليمة. الفحص يقرأ التعريف لا السلوك.`,

@@ -9,6 +9,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   SQL, POSTCHECK, DOCS, read, funcBody, tableSrc, selfTest, EVENTS,
+  stripRegexOperands,
 } = require("./lead_helpers.js");
 
 test("الأحداث الثلاثة عشر — لا أكثر ولا أقلّ، وقائمة مغلقة", () => {
@@ -138,10 +139,11 @@ test("لا مسار إرسال حقيقيّ في الحزمة كلّها", () =>
   // نتخطّى أسطر الحراسة نفسها (تعبير نمطيّ يمنع الرمز) — وهي الوحيدة
   // المسموح لها بذكره.
   for (const [n, line] of SQL.split("\n").entries()) {
-    if (/[!]?~\*\s*'\(/.test(line)) continue;
     if (/^\s*--/.test(line)) continue;
+    // نحذف مُعامل النمط لكلّ عامل مطابقة: الحارس الذي يمنع pg_net مضطرّ إلى
+    // ذكره في نمطه، فلا يُدان بذكره. ما بقي بعد الحذف استعمالٌ حقيقيّ.
     assert.doesNotMatch(
-      line, /net\.http_post|pg_net|smtp|sendgrid|twilio/i,
+      stripRegexOperands(line), /net\.http_post|pg_net|smtp|sendgrid|twilio/i,
       `مسار إرسال حقيقيّ في السطر ${n + 1}: ${line.trim()}`,
     );
   }

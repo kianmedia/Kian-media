@@ -67,6 +67,42 @@ defs as (
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'lsr\_%'),
 
+-- ★ الحكم البنيويّ ★ لا نطابق كلمة داخل تعريف دالّة — هذا بالضبط ما أسقط
+-- الترحيلة: الكلمة `zoho` طابقت جملةَ العقد التي تقول «ولا تنادي Zoho».
+-- lsr_contract_scan تقسم المصدر (كود / سلاسل) ثمّ تطابق **شكل الجملة**.
+-- وهي تُنشأ في الترحيلة نفسها؛ فغيابها إخفاق حقيقيّ لا حالة تُبلَّغ.
+scan as (
+  select d.proname, public.lsr_contract_scan(d.d) as s
+    from defs d
+   where d.proname not in ('lsr_sql_partition','lsr_contract_scan')),
+
+-- ما تناديه دوالّ الموديول مباشرة — أساس فحص الالتفاف غير المباشر.
+callees as (
+  select distinct q.proname as callee
+    from defs d
+    cross join lateral (
+      select (public.lsr_sql_partition(d.d) ->> 'code') || chr(10)
+             || (public.lsr_sql_partition(d.d) ->> 'strings') as body) b
+    -- الاسم يُبنى داخل تعبير نمطيّ، فنستبعد أيّ اسم يحمل محرفًا ذا معنى في ARE:
+    -- اسمٌ شاذّ يُنتج «invalid regular expression» فيُسقط ملفّ الفحص كلّه.
+    join (select p.proname
+            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.prokind = 'f'
+             and p.proname ~ '^[a-z_][a-z0-9_]*$') q
+      on q.proname <> d.proname
+     and position(q.proname in b.body) > 0
+     and b.body ~ ('\m' || q.proname || '\s*\(')
+   where d.proname not in ('lsr_sql_partition','lsr_contract_scan')
+     -- مركز الاتصالات حدّ داخليّ مثبَّت بـdry_run (الفحص ٨٦ يُثبت التثبيت).
+     and q.proname not like 'comms\_%'
+     and q.proname not like 'lsr\_%'),
+
+-- الحزم الستّ المطبَّقة على الإنتاج — يجب أن تبقى سليمة وغير ممسوسة.
+six(o, pkg, prefix) as (values
+  (1,'communications_hub','comms\_%'), (2,'operations_center','ops\_%'),
+  (3,'crm_sales_FOUNDATION','crm\_%'), (4,'finance_profitability','fin\_%'),
+  (5,'commercial_subscriptions','csub\_%'), (6,'smart_quoting','sq\_%')),
+
 results as (
 
 -- ─── (١) البنية ─────────────────────────────────────────────────────────────
@@ -356,22 +392,59 @@ select 70, 'العقود', 'لا كتابة في منصّة المشاريع',
   case when count(*) = 0 then 'PASS' else 'FAIL' end,
   case when count(*) = 0 then 'لا إنشاء مشروع ولا تعديل مرحلة ولا تسليم — المنصّة مجمَّدة'
        else '★ خرق التجميد ★ ' || string_agg(proname, ', ') end
-from defs
-where d ~* '(insert\s+into\s+public\.projects|update\s+public\.projects|insert\s+into\s+public\.project_core|update\s+public\.project_core|insert\s+into\s+public\.deliverable)'
+from scan where (s ->> 'project_write')::boolean
 
 union all
 select 71, 'العقود', 'لا بوّابة ممنوعة',
   case when count(*) = 0 then 'PASS' else 'FAIL' end,
   case when count(*) = 0 then 'لا can_manage_projects ولا is_kian_member في أيّ دالّة'
        else '★ خرق ★ ' || string_agg(proname, ', ') end
-from defs where d ilike '%can_manage_projects%' or d ilike '%is_kian_member%'
+from scan where (s ->> 'forbidden_gate')::boolean
 
 union all
-select 72, 'العقود', 'المالية مرجع للقراءة فقط',
-  case when coalesce((select d.d ~* '(insert\s+into\s+public\.fin_|update\s+public\.fin_|delete\s+from\s+public\.fin_|zoho)'
-                        from defs d where d.proname = 'lsr_finance_reference'), true)
-       then 'FAIL' else 'PASS' end,
-  'لا فاتورة ولا Zoho ولا ادّعاء تحصيل ولا اعتراف بإيراد'
+-- ★ هنا سقطت الترحيلة ★ الصيغة القديمة طابقت الكلمة المجرّدة `zoho` على
+--   pg_get_functiondef كاملًا، فأدانت الدالّةَ بجملتها التعاقدية «ولا تنادي
+--   Zoho». الحكم الآن على شكل الجملة/النداء بعد التقسيم — ويشمل السلاسل،
+--   لأنّ هذه الوحدة تقرأ بـexecute، فتجاهلها يُعمي الكاشف عن كتابة ديناميكية.
+select 72, 'العقود', 'لا كتابة ماليّة في أيّ دالّة',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0 then 'قراءة فقط: لا فاتورة، ولا إنشاء ذمّة، ولا تعديل مبلغ، ولا تسجيل تحصيل'
+       else '★ خرق ★ ' || string_agg(proname, ', ') end
+from scan where (s ->> 'finance_write')::boolean
+
+union all
+select 74, 'العقود', 'لا نداء خارجيّ في أيّ دالّة',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0 then 'لا Zoho، ولا HTTP، ولا pg_net، ولا dblink — بشكل النداء لا بالكلمة'
+       else '★ خرق ★ ' || string_agg(proname, ', ') end
+from scan where (s ->> 'external_call')::boolean
+
+union all
+select 75, 'العقود', 'قراءات ماليّة مسموحة فقط',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0
+       then 'المسموح: وجود الذمّة ومرجعها وحالتها واستحقاقها وحالة تحصيل عامّة، ووجود العميل، ووجود رصيد اشتراك، ووجود عرض معتمد، وقيم تصنيف غير ماليّة. ولا شيء غير ذلك.'
+       else '★ قراءة ممنوعة (تكلفة/هامش/ربح/أرضية/سعر مورّد) ★ ' || string_agg(proname, ', ') end
+from scan where (s ->> 'forbidden_finance_read')::boolean
+
+union all
+-- ★ الالتفاف ★ الفحص المباشر وحده سمح في حزمة سابقة بدالّة نظيفة تنادي دالّة
+--   تكتب. هنا نحكم على كلّ ما تبلغه دوالّ الموديول مباشرة.
+select 76, 'العقود', 'لا خرق غير مباشر عبر ما يُنادى',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0 then 'كلّ روتين تبلغه دوالّ الموديول نظيف من الكتابة الماليّة والنداء الخارجيّ'
+       else '★ التفاف ★ ' || string_agg(x.callee, ', ') end
+from (
+  -- ★ نمسح ما يُنادى فقط ★ مسح كلّ دوالّ القاعدة كان سيكلّف ثوانيَ بلا فائدة.
+  select c.callee from callees c
+    cross join lateral (
+      select public.lsr_contract_scan(pg_get_functiondef(p.oid)) as s
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.prokind = 'f' and p.proname = c.callee
+       limit 1) z
+   where (z.s ->> 'finance_write')::boolean
+      or (z.s ->> 'external_call')::boolean
+      or (z.s ->> 'project_write')::boolean) x
 
 union all
 select 73, 'العقود', 'حالة السداد معلَنة كقراءة فقط',
@@ -379,6 +452,63 @@ select 73, 'العقود', 'حالة السداد معلَنة كقراءة فق
                        where d.proname = 'lsr_finance_reference'), false)
        then 'PASS' else 'FAIL' end,
   'الإعلان جزء من العقد: من يقرأ المخرَج يعرف أنّه لا يملك تغيير حالة السداد من هنا'
+
+-- ─── (٧-ب) ★ عرّافة السعر والربح ★ ─────────────────────────────────────────
+-- المطلوب ليس إخفاء رقم في الواجهة، بل ألّا يكون الرقم مُستنتَجًا أصلًا. علامةٌ
+-- مثل «عالي القيمة» يجب ألّا تكون قابلة للبحث الثنائيّ حتّى عتبة ماليّة: تُعاد
+-- بسبب عامّ بلا قيمة وبلا عتبة.
+union all
+select 77, 'العقود', 'المرجع الماليّ بلا مبلغ',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0
+       then 'lsr_finance_reference تُعيد المرجع والحالة والاستحقاق وحالة تحصيل عامّة — لا سعرًا ولا ضريبة ولا مبلغ تجديد. القيمة التعاقدية غير مُستنتَجة من هذا السطح.'
+       else '★ تسريب قيمة ★ ' || string_agg(distinct t.col, ', ') end
+from (values ('price_net'),('price_gross'),('vat_rate'),('vat_amount'),
+             ('amount_net'),('amount_gross'),('renewal_amount_net'),('total_amount')) t(col)
+where coalesce((select d.d ~* ('\m[a-z]\.' || t.col || '\M') from defs d
+                 where d.proname = 'lsr_finance_reference'), false)
+
+union all
+select 78, 'العقود', 'محرّك التقييم والتوزيع بلا مدخل ماليّ',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0
+       then 'الدرجة والتوزيع يُحسبان من صفات الفرصة المعلنة وحدها. لا سعر ولا تكلفة ولا هامش يدخل الحساب، فلا شيء منها يُستنتَج من الدرجة أو من رمز السبب.'
+       else '★ مدخل ماليّ في محرّك القرار ★ ' || string_agg(d.proname, ', ') end
+from defs d
+where d.proname in ('lsr_context','lsr_score_core','lsr_rule_matches','lsr_route_core')
+  and (public.lsr_sql_partition(d.d) ->> 'code') || (public.lsr_sql_partition(d.d) ->> 'strings')
+      ~* '\m(public\.)?(fin_|finops_|sq_quotes|sq_quote_internal|csub_subscriptions)'
+
+union all
+select 79, 'العقود', 'رموز الأسباب بلا عتبة ماليّة',
+  case when count(*) = 0 then 'PASS' else 'FAIL' end,
+  case when count(*) = 0
+       then 'الأسباب المعادة نصوص تصنيف («ميزانية معلنة»، «قطاع استراتيجيّ») لا مبالغ. وعتبات التصنيف درجاتٌ من ١٠٠ لا نقود، فلا تُترجَم إلى سعر.'
+       else '★ عتبة ماليّة مكشوفة ★ ' || string_agg(x.src, ', ') end
+from (
+  -- ملاحظة على الحدّ: «ميزانية ٥٠ ألفًا فأكثر» و«خسارة سابقة بسبب السعر» صفتا
+  -- **فرصة** أعلنها العميل أو سجّلها المندوب، لا سعرَ كيان. لا يُشتقّ منهما
+  -- سعرُنا ولا هامشنا. الممنوع هو ذكر مبلغ بعملة، أو هامش/ربح/أرضية سعر.
+  select 'lsr_rules.label' as src
+   where coalesce((xpath('/row/c/text()', query_to_xml(
+           'select count(*) as c from public.lsr_rules
+             where label_ar ~ ''(ريال|ر\.س|هامش|ربح|أرضية سعر)''
+                or label_en ~* ''\m(sar|riyal|margin|profit|floor\s*price|supplier\s*rate)\M''',
+           false, true, '')))[1]::text::int, 0) > 0
+  union all
+  select 'lsr_score_core.thresholds'
+   where coalesce((select d.d ~* '\m(price|margin|profit|floor)_?(threshold|min|max)\M'
+                     from defs d where d.proname = 'lsr_score_core'), false)) x
+
+-- ─── (٧-ج) لا كتابة في مشروع ولا إنشاء مشروع من هذا الموديول ──────────────
+union all
+select 69, 'العقود', 'الموديول لا يُنشئ مشروعًا',
+  case when coalesce((select bool_or(d.d ilike '%ready_for_manual_handover%'
+                                  or d.d ilike '%لا يُنشئ مشروعًا%'
+                                  or d.d ilike '%handover%') from defs d), false)
+            or not exists (select 1 from scan where (s ->> 'project_write')::boolean)
+       then 'PASS' else 'FAIL' end,
+  'مسار CRM ينتهي عند «جاهز للتسليم اليدويّ». إنشاء المشروع قرار إنسان في منصّة مجمَّدة، لا أثر جانبيّ لتقييم عميل.'
 
 -- ─── (٨) الأحداث ───────────────────────────────────────────────────────────
 union all
@@ -418,6 +548,77 @@ select 84, 'الأحداث', 'قيد dry_run على سجلّ الأحداث',
                        and conrelid = to_regclass('public.lsr_event_log'))
        then 'PASS' else 'FAIL' end,
   'لا يمكن تسجيل «إرسال حقيقيّ» من هذا الموديول — القيد يمنع الكذب لا التوثيق فقط'
+
+union all
+-- ★ ثمن التصنيف ★ comms_enqueue **طابور داخليّ** لا نداء خارجيّ — وهذا
+--   التصنيف مشروط: dry_run مثبَّت كتابةً، ولا مُستقبِل يحدّده المستدعي، ولا
+--   إرسال حيّ. إن سقط الشرط سقط التصنيف، وصار الإدراج إرسالًا.
+select 86, 'الأحداث', 'تثبيت dry_run على طابور المركز',
+  case when coalesce((select
+         (public.lsr_sql_partition(d.d) ->> 'code') || (public.lsr_sql_partition(d.d) ->> 'strings')
+           ~* 'update\s+public\.comms_outbox\s+set\s+dry_run\s*=\s*true'
+         from defs d where d.proname = 'lsr_event_emit'), false)
+       then 'PASS' else 'FAIL' end,
+  'الإدراج يُتبَع بكتابة تُجبر dry_run على صفوف هذا الموديول — حارس لا وعد'
+
+union all
+select 87, 'الأحداث', 'لا مُستقبِل يحدّده المستدعي ولا إرسال حيّ',
+  case when coalesce((select
+         (public.lsr_sql_partition(d.d) ->> 'code') || (public.lsr_sql_partition(d.d) ->> 'strings')
+           ~* 'comms_enqueue\s*\(\s*\$1\s*,\s*\$2\s*,\s*\$3\s*,\s*null'
+         from defs d where d.proname = 'lsr_event_emit'), false)
+       and not exists (
+         select 1 from defs d
+          where (public.lsr_sql_partition(d.d) ->> 'code')
+                ~* '\m(comms_send|comms_relay|comms_dispatch|comms_process_outbox|notify_email_now)\s*\(')
+       then 'PASS' else 'FAIL' end,
+  'المُستقبِل يُمرَّر null (يحلّه المركز بقواعده)، ولا نداء إرسال حيّ في أيّ دالّة'
+
+-- ─── (٨-ب) العميل غير القابل للتواصل يُحتجَز ──────────────────────────────
+union all
+select 88, 'التوزيع', 'العميل المجهول لا يُوزَّع بل يُحتجَز',
+  case when coalesce((select d.d ilike '%anonymous_no_contact_channel%'
+                        from defs d where d.proname = 'lsr_score_core'), false)
+       and coalesce((select d.d ilike '%lsr_review_queue%'
+                        from defs d where d.proname = 'lsr_assign'), false)
+       and exists (select 1 from pg_indexes
+                    where schemaname = 'public' and tablename = 'lsr_review_queue'
+                      and indexdef ilike '%unique%' and indexdef ilike '%lead_id%')
+       then 'PASS' else 'FAIL' end,
+  'بلا قناة تواصل: سبب مراجعة معلن، ثمّ احتجاز في طابور المراجعة بصفّ واحد لا يتكرّر — لا إسناد إلى مندوب لعميل لا يمكن التواصل معه'
+
+-- ─── (١١) لا حالة جزئية ────────────────────────────────────────────────────
+union all
+select 110, 'الخلاصة البنيوية', 'لا حالة جزئية',
+  case when (select count(*) from defs) = 0 then 'FAIL'
+       when (select count(*) from tables_expected te
+              where to_regclass('public.' || te.t) is null) > 0 then 'FAIL'
+       when (select count(*) from api_fns a
+              where not exists (select 1 from defs d where d.proname = a.f)) > 0 then 'FAIL'
+       when to_regprocedure('public.lsr_sql_partition(text)') is null
+         or to_regprocedure('public.lsr_contract_scan(text)') is null then 'FAIL'
+       else 'PASS' end,
+  'الترحيلة معاملة واحدة بـCOMMIT واحد وبلا CONCURRENTLY: إمّا كلّ الكائنات أو لا شيء. '
+    || (select count(*) from defs)::text || ' دالّة lsr_* · '
+    || (select count(*) from tables_expected te where to_regclass('public.' || te.t) is not null)::text
+    || '/13 جدولًا · الكاشف البنيويّ '
+    || case when to_regprocedure('public.lsr_contract_scan(text)') is not null then 'موجود' else '★ غائب ★' end
+
+-- ─── (١٢) الحزم الستّ المطبَّقة سليمة ──────────────────────────────────────
+union all
+select 120 + s.o, 'الحزم القائمة', s.pkg || ' سليمة',
+  case when (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+              where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like s.prefix) > 0
+        and (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public' and p.proname like s.prefix) > 0
+       then 'PASS' else 'FAIL' end,
+  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like s.prefix)::text
+    || ' جدولًا · '
+    || (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname like s.prefix)::text
+    || ' دالّة — هذه الحزمة مطبَّقة مسبقًا، وحزمة التقييم لا تُنشئ ولا تُعدّل ولا تُسقط شيئًا خارج lsr_*'
+from six s
 
 union all
 select 85, 'الأحداث', 'التسجيل في كتالوج المركز (إن وُجد)',
