@@ -1801,11 +1801,40 @@ begin
              where ns.nspname='public' and c.relname = f) then
       raise exception 'ASSET SELF-TEST: RLS غير مفعّلة على %', f; end if;
   end loop;
-  select count(*) into n from pg_class c join pg_namespace ns on ns.oid = c.relnamespace
-   where ns.nspname='public' and c.relkind='r' and c.relname like 'asset\_%'
-     and c.relname <> 'asset_insurance_policies';
-  if n > 0 then
-    raise exception 'ASSET SELF-TEST: ظهر جدول باسم asset_* — هذا هو مصدر الحقيقة الثاني الذي مُنع صراحةً'; end if;
+  -- ★★ لا مصدر حقيقة ثانٍ للأصول — بالبنية لا بالاسم ★★
+  --   الصيغة السابقة كانت `relname like 'asset\_%'` مع استثناء مكتوب باليد
+  --   لـasset_insurance_policies. وهي تعمل، لكنّها تحرس ما عرفناه: جدولٌ
+  --   جديد يخزّن barcode وserial_number باسم لا يبدأ بـasset_ يمرّ بلا اعتراض،
+  --   وامتدادٌ بريء يبدأ بـasset_ يسقط ويحتاج استثناءً جديدًا كلّ مرّة.
+  --   والتعريف الصحيح صفتان معًا: يحمل **هويّة أصل** (عمودان فأكثر من مجموعة
+  --   الهويّة/الحالة)، **ولا** يملك رابطًا إلزاميًّا إلى المالك — لا مفتاح
+  --   أجنبيّ not null إلى custody_inventory_assets ولا جدول وصل بمفاتيح
+  --   not null. فبوليصة التأمين تمرّ لأنّها بلا أعمدة هويّة أصلًا، ولا
+  --   تحتاج أن تُذكر باسمها.
+  select coalesce(string_agg(x.relname, ', ' order by x.relname), '') into v_def
+    from (
+      select c.relname,
+             (select count(*) from pg_attribute a
+               where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                 and a.attname in ('asset_code','barcode','qr_code_value','asset_name',
+                                   'serial_number','category_id','condition_status',
+                                   'availability_status')) as ident,
+             (exists (select 1 from pg_constraint fk
+                       join pg_attribute a on a.attrelid = c.oid and a.attnum = fk.conkey[1]
+                      where fk.conrelid = c.oid and fk.contype = 'f'
+                        and fk.confrelid = to_regclass('public.custody_inventory_assets')
+                        and a.attnotnull)
+              or exists (select 1 from pg_constraint j1
+                          join pg_constraint j2 on j2.conrelid = j1.conrelid and j2.contype = 'f'
+                                               and j2.confrelid = to_regclass('public.custody_inventory_assets')
+                         where j1.contype = 'f' and j1.confrelid = c.oid)) as linked
+        from pg_class c join pg_namespace ns on ns.oid = c.relnamespace
+       where ns.nspname = 'public' and c.relkind in ('r','p')
+         and c.oid is distinct from to_regclass('public.custody_inventory_assets')
+    ) x
+   where x.ident >= 2 and not x.linked;
+  if v_def <> '' then
+    raise exception 'ASSET SELF-TEST: مصدر حقيقة ثانٍ للأصول (%) — يحمل أعمدة هويّة أصل بلا رابط إلزاميّ إلى custody_inventory_assets. المالك واحد، والامتداد يرتبط به لا يستنسخه', v_def; end if;
 
   -- (٢) البوّابات القائمة لم تُعَد كتابتها في هذه الحزمة
   --     (لو أُعيدت بلا coalesce لانهار «if not gate» إلى NULL في ~120 موضع)

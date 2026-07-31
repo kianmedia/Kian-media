@@ -84,12 +84,49 @@ applied_fns as materialized (
             where n.nspname = 'public' and p.proname = f)), '') as missing
     from sec19_fns),
 
--- ★ لا مصدر حقيقة ثانٍ للأصول ★ custody_inventory_assets هو المالك الوحيد.
+-- ★★ لا مصدر حقيقة ثانٍ للأصول — بالبنية لا بالاسم ★★
+--
+--  ⚠️ الصيغة الأولى في هذا الملفّ كانت `relname like 'asset\_%'`، فأبلغت عن
+--     asset_insurance_policies. وهي **بوليصة تأمين لا أصل**: لا asset_code ولا
+--     barcode ولا serial_number ولا اسم ولا فئة ولا حالة ولا توفّر — بل
+--     policy_number ومزوّد ومدّة وتغطية. وارتباطها بالأصول عبر جدول الوصل
+--     policy_assets (policy_id و asset_id كلاهما not null)، لأنّ البوليصة
+--     الواحدة تغطّي أصولًا كثيرة فلا يستقيم لها مفتاح أجنبيّ مفرد. وهي أصلًا
+--     من حزمة التأجير/التأمين السابقة، وRUNME وPREFLIGHT وPOSTCHECK يستثنونها
+--     صراحةً — والاستثناء هو ما سقط منّي هنا وحدي.
+--
+--  والعلاج ليس إضافة اسمها إلى قائمة استثناء: قائمة الاستثناءات تُصلح الحالة
+--  التي عرفناها وتترك التي لم نعرفها. المصدر الموازي يُعرَّف **بصفتين معًا**:
+--    (١) يحمل هويّة أصل: عمودان فأكثر من مجموعة الهويّة/الحالة أدناه.
+--    (٢) ولا يملك رابطًا **إلزاميًّا** إلى المالك: لا مفتاح أجنبيّ not null
+--        إلى custody_inventory_assets، ولا جدول وصل يربطه بمفاتيح not null.
+--  فامتدادٌ بلا أعمدة هويّة يمرّ ولو بدأ اسمه بـasset_، وجدولٌ يخزّن barcode
+--  وserial_number بلا رابط إلزاميّ يسقط ولو سُمّي inventory_widgets.
 rival_master as (
-  select coalesce(string_agg(c.relname, ' · ' order by c.relname), '') as s
-    from pg_class c join pg_namespace n on n.oid = c.relnamespace
-   where n.nspname = 'public' and c.relkind in ('r','p')
-     and (c.relname like 'asset\_%' escape '\' or c.relname like 'ai\_%' escape '\')),
+  select coalesce(string_agg(x.relname || ' (أعمدة هويّة: ' || x.ident::text
+                             || ' · رابط إلزاميّ: ' || case when x.linked then 'نعم' else 'لا' end || ')',
+                             ' · ' order by x.relname), '') as s
+    from (
+      select c.relname,
+             (select count(*) from pg_attribute a
+               where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                 and a.attname in ('asset_code','barcode','qr_code_value','asset_name',
+                                   'serial_number','category_id','condition_status',
+                                   'availability_status')) as ident,
+             (exists (select 1 from pg_constraint fk
+                       join pg_attribute a on a.attrelid = c.oid and a.attnum = fk.conkey[1]
+                      where fk.conrelid = c.oid and fk.contype = 'f'
+                        and fk.confrelid = to_regclass('public.custody_inventory_assets')
+                        and a.attnotnull)
+              or exists (select 1 from pg_constraint j1
+                          join pg_constraint j2 on j2.conrelid = j1.conrelid and j2.contype = 'f'
+                                               and j2.confrelid = to_regclass('public.custody_inventory_assets')
+                         where j1.contype = 'f' and j1.confrelid = c.oid)) as linked
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relkind in ('r','p')
+         and c.oid is distinct from to_regclass('public.custody_inventory_assets')
+    ) x
+   where x.ident >= 2 and not x.linked),
 
 -- ★ صدق التسمية على الأسماء الحيّة ★ لا على نصّ ملفّ ولا بـLIKE.
 dishonest_names as (

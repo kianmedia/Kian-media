@@ -188,6 +188,49 @@ test("(١٠) ★ إعادة التشغيل آمنة: كلّ زناد وسياس�
   assert.equal(plainCreate.length, 0, "جدول أو فهرس بلا if not exists — إعادة التشغيل تفشل");
 });
 
+// ─── (هـ) مصدر الحقيقة الواحد — بالبنية لا بالاسم ──────────────────────────
+
+test("(١١) ★★ كشف المصدر الموازي بنيويّ في الملفّات الثلاثة ★★", () => {
+  // asset_insurance_policies أبلغ عنه فحصٌ اسميّ كتبتُه أنا في هذه الجلسة، وهو
+  // بوليصة تأمين لا أصل: لا asset_code ولا barcode ولا serial_number، وارتباطها
+  // بالأصول عبر جدول الوصل policy_assets بمفتاحين not null. سادس ظهور لصنف
+  // «طابق اسمًا لا شكلًا» — وأوّل مرّة يكون المؤلّف هو من أدخله وهو يُصلح الصنف
+  // نفسه في الملفّ ذاته. فالقاعدة الآن بنيوية في الثلاثة معًا.
+  for (const f of ["docs/asset_intelligence_RUNME.sql",
+                   "docs/asset_intelligence_POSTCHECK.sql",
+                   "docs/asset_intelligence_AFTER_FAILURE_VERIFY.sql"]) {
+    const sql = read(f);
+    assert.ok(sql !== null, `ملفّ مفقود: ${f}`);
+    const code = noComments(sql);
+    assert.match(code, /a\.attnotnull/,
+      `${f}: القاعدة لا تشترط رابطًا **إلزاميًّا** — مفتاح أجنبيّ قابل للـNULL يسمح بصفّ بلا أصل`);
+    assert.match(code, /attname in \('asset_code'/,
+      `${f}: القاعدة لا تعدّ أعمدة الهويّة — فهي تحكم بالاسم لا بالبنية`);
+    assert.match(code, /custody_inventory_assets/, `${f}: المالك غير مذكور في القاعدة`);
+    // ولا استثناء مكتوب باليد: الاستثناء يُصلح ما عرفناه ويترك ما لم نعرفه.
+    assert.doesNotMatch(code, /relname\s*<>\s*'asset_insurance_policies'/,
+      `${f}: ما زال يستثني جدولًا باسمه بدل أن يحكم ببنيته`);
+    assert.doesNotMatch(code, /relname like 'asset\\_%'/,
+      `${f}: ما زال يحكم على البادئة asset_ — امتدادٌ بريء يسقط ومصدرٌ موازٍ بلا البادئة يمرّ`);
+  }
+});
+
+test("(١٢) ★ نموذج التصنيف: امتداد يمرّ ومصدر موازٍ يسقط ★", () => {
+  const IDENT = new Set(["asset_code", "barcode", "qr_code_value", "asset_name",
+                         "serial_number", "category_id", "condition_status", "availability_status"]);
+  const rival = (cols, linked) => cols.filter((c) => IDENT.has(c)).length >= 2 && !linked;
+  // يسقط
+  assert.ok(rival(["asset_code", "barcode", "serial_number"], false), "مصدر موازٍ كامل لم يسقط");
+  assert.ok(rival(["serial_number", "barcode"], false), "هويّة بلا رابط لم تسقط");
+  assert.ok(rival(["condition_status", "availability_status"], false), "حالة مستقلّة لم تسقط");
+  // يمرّ
+  assert.ok(!rival(["policy_number", "provider", "coverage_amount"], true),
+    "بوليصة التأمين سقطت — وهي بلا أعمدة هويّة");
+  assert.ok(!rival(["plan_code", "plan_name", "asset_id"], true), "خطّة صيانة سقطت");
+  assert.ok(!rival(["asset_id", "reading_value"], true), "قراءة عدّاد سقطت");
+  assert.ok(!rival(["policy_number", "provider"], false), "اسم asset_* وحده أسقط جدولًا");
+});
+
 test("SAFE: ساكن فقط (لا قاعدة بيانات ولا شبكة)", () => {
   const src = fs.readFileSync(__filename, "utf8");
   for (const bad of ["fet" + "ch(", "child_" + "process", "service_" + "role"]) {

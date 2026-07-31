@@ -113,7 +113,18 @@ test("★ project_id مرجع قراءة اختياريّ فقط — منصّة 
 });
 
 test("★ POSTCHECK يحرس الحكم الحاكم بنفسه بعد التطبيق", () => {
-  assert.match(POSTCHECK, /asset\\_%/, "POSTCHECK لا يفحص ظهور عائلة asset_*");
+  // كان هذا يشترط فحص البادئة asset_. وقد أبلغت تلك الصيغة عن
+  // asset_insurance_policies — بوليصة تأمين لا أصل، بلا عمود هويّة واحد،
+  // مرتبطة بالأصول عبر جدول الوصل policy_assets بمفتاحين not null.
+  // فالشرط الآن على **البنية**: عدّ أعمدة الهويّة، واشتراط رابط إلزاميّ.
+  // هذا أقوى لا أضعف: يمسك مصدرًا موازيًا لا يبدأ اسمه بـasset_ إطلاقًا.
+  assert.match(POSTCHECK, /attname in \('asset_code'/,
+    "POSTCHECK لا يعدّ أعمدة هويّة الأصل — يحكم بالاسم لا بالبنية");
+  assert.match(POSTCHECK, /a\.attnotnull/,
+    "POSTCHECK لا يشترط رابطًا إلزاميًّا — مفتاح أجنبيّ قابل للـNULL يسمح بصفّ بلا أصل");
+  assert.match(POSTCHECK, /custody_inventory_assets/, "POSTCHECK لا يذكر المالك الوحيد");
+  assert.doesNotMatch(POSTCHECK, /relname\s*<>\s*'asset_insurance_policies'/,
+    "POSTCHECK يستثني جدولًا باسمه بدل أن يحكم ببنيته");
   assert.match(POSTCHECK, /civ_can_manage/, "POSTCHECK لا يتحقّق من سلامة البوّابة القائمة");
 });
 

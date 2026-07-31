@@ -22,6 +22,25 @@
 
 with
 -- ─── مصادر مشتركة تُحسب مرّة واحدة ─────────────────────────────────────────
+rival as (
+  select c.relname,
+         (select count(*) from pg_attribute a
+           where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+             and a.attname in ('asset_code','barcode','qr_code_value','asset_name',
+                               'serial_number','category_id','condition_status',
+                               'availability_status')) as ident,
+         (exists (select 1 from pg_constraint fk
+                   join pg_attribute a on a.attrelid = c.oid and a.attnum = fk.conkey[1]
+                  where fk.conrelid = c.oid and fk.contype = 'f'
+                    and fk.confrelid = to_regclass('public.custody_inventory_assets')
+                    and a.attnotnull)
+          or exists (select 1 from pg_constraint j1
+                      join pg_constraint j2 on j2.conrelid = j1.conrelid and j2.contype = 'f'
+                                           and j2.confrelid = to_regclass('public.custody_inventory_assets')
+                     where j1.contype = 'f' and j1.confrelid = c.oid)) as linked
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relkind in ('r','p')
+     and c.oid is distinct from to_regclass('public.custody_inventory_assets')),
 src as (
   select
     to_regclass('public.custody_inventory_maintenance_plans')       as plans_rel,
@@ -145,15 +164,16 @@ select 2, 'RLS مفعّلة على الجدولين', 'true/true',
  where c.oid in ((select plans_rel from src), (select meter_rel from src))
 
 union all
--- ★ الحكم الحاكم: نظام أصول واحد. أيّ جدول asset_* جديد هو مصدر الحقيقة الثاني.
-select 3, '★ لا عائلة asset_* ثانية', '0 جدول',
-       coalesce((select string_agg(c.relname, ', ') from pg_class c
-                  join pg_namespace ns on ns.oid = c.relnamespace
-                 where ns.nspname = 'public' and c.relkind = 'r'
-                   and c.relname like 'asset\_%' and c.relname <> 'asset_insurance_policies'), 'لا شيء'),
-       not exists (select 1 from pg_class c join pg_namespace ns on ns.oid = c.relnamespace
-                    where ns.nspname = 'public' and c.relkind = 'r'
-                      and c.relname like 'asset\_%' and c.relname <> 'asset_insurance_policies')
+-- ★ الحكم الحاكم: نظام أصول واحد — ويُقاس بالبنية لا بالاسم.
+--   المصدر الموازي = يحمل هويّة أصل (عمودان فأكثر) **و** بلا رابط إلزاميّ إلى
+--   custody_inventory_assets. فبوليصة التأمين تمرّ لأنّها بلا أعمدة هويّة، لا
+--   لأنّها مذكورة في استثناء؛ وجدولٌ يخزّن barcode وserial_number يسقط ولو لم
+--   يبدأ اسمه بـasset_. ويُطبَع سببُ التصنيف لا الاسم وحده.
+select 3, '★ لا مصدر حقيقة ثانٍ للأصول', 'لا جدول يحمل هويّة أصل بلا رابط إلزاميّ',
+       coalesce((select string_agg(x.relname || ' (هويّة: ' || x.ident::text
+                                   || ' · رابط إلزاميّ: ' || case when x.linked then 'نعم' else 'لا' end || ')', ', ')
+                   from rival x where x.ident >= 2 and not x.linked), 'لا شيء'),
+       not exists (select 1 from rival x where x.ident >= 2 and not x.linked)
 
 -- ═══ ٢) البوّابة القائمة لم تُمَسّ ═══════════════════════════════════════════
 union all
