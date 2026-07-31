@@ -2458,7 +2458,16 @@ begin
     'public.lsr_agent_workload(uuid)','public.lsr_setting_int(text,int)','public.lsr_setting_bool(text,boolean)',
     'public.lsr_rule_matches(text,text,jsonb,text,text,numeric,numeric,text[])',
     'public.lsr_event_keys()','public.lsr_txt(jsonb,text)','public.lsr_num(jsonb,text)',
-    'public.lsr_bool(jsonb,text)','public.lsr_norm_city(text)']
+    'public.lsr_bool(jsonb,text)','public.lsr_norm_city(text)',
+    -- ★ دالّتا الزناد ★ سقطتا من القوائم الثلاث في الإصدار الأوّل فبقيتا
+    --   بـproacl NULL، أي EXECUTE لـPUBLIC بالافتراض — وهو ما رصده
+    --   POST_APPLY_SUMMARY على الإنتاج («مكشوف افتراضيًّا: 2»).
+    --   ليستا سطحًا ولا نواةً ولا أداة فحص، فلم تقع في أيّ قائمة. وهنا موضعها:
+    --   لا EXECUTE لأيّ دور API. (الاستدعاء المباشر مرفوض أصلًا بـ0A000 لأنّها
+    --   تُعيد trigger، لكنّ القرار يُكتب صراحةً ولا يُترك للافتراض.)
+    --   ⚠️ الإنتاج يُصلَح بـdocs/lead_scoring_routing_security_patch_RUNME.sql
+    --      لا بإعادة تشغيل هذا الملفّ — الحزمة مطبَّقة بالفعل.
+    'public.lsr_rules_frozen()','public.lsr_touch()']
   loop
     execute format('revoke all on function %s from public', f);
     begin execute format('revoke all on function %s from anon', f); exception when undefined_object then null; end;
