@@ -101,10 +101,53 @@
 --     • The excluded_by_design array was NOT edited to dodge the test. Deleting
 --       the declaration to satisfy a broken detector is concealment, not repair.
 --
+-- ── THIRD ABORT (THE READER, NOT THE RULE) ────────────────────────────────
+--   The corrected RUNME was re-run. It aborted again, before COMMIT, in §14:
+--
+--     ERROR P0001: LSR SELF-TEST: لوحة العميل تُصدر مفتاحًا خارج القائمة
+--                  المغلقة — أضفه (<computed>) …
+--     PL/pgSQL function inline_code_block line 243 at RAISE
+--
+--   This time THE RULE WAS RIGHT AND THE READER WAS WRONG. public.lsr_key_of
+--   turned one argument into one key with:
+--
+--     substring(btrim(coalesce(p_arg, '')) from '^''(.*)''$')
+--
+--   In PostgreSQL, btrim(str) IS btrim(str, ' '): it trims SPACES ONLY. It does
+--   not trim a newline and it does not trim a tab. jsonb_build_object arguments
+--   in a formatted file begin on new lines, so the argument text is literally
+--   chr(10) || '      ''message'''. btrim leaves the leading chr(10); the
+--   anchored pattern requires the string to START with a quote; it therefore
+--   does not match, and A PERFECTLY LITERAL KEY IS REPORTED AS <computed>.
+--   32 of the 63 keyed arguments in lsr_dashboard_client were mangled this way.
+--   The first in scan order is 'message', from the identity_not_enabled branch.
+--
+--   THE CLOSED LIST WAS CORRECT AND WAS NOT CHANGED. The 49 keys stand exactly
+--   as they were. Nothing was added to the allowlist to make the check pass —
+--   that would have been the concealment this file refused twice already.
+--
+--   WHY THE NODE SUITE DID NOT CATCH IT
+--     JavaScript's .trim() removes ALL whitespace, so the JS port read the key
+--     correctly while PostgreSQL did not. The suite measured with the wrong
+--     ruler — for the SECOND time (the first was a repetition bound of 400
+--     against RE_DUP_MAX = 255). tests/lead_json_key_parser.test.js now models
+--     btrim, and the anchored match, with PostgreSQL semantics, and fails if
+--     anyone "simplifies" the model back to .trim().
+--
+--   THE REPAIR (already in RUNME, nothing to do by hand)
+--     • lsr_key_of trims ' ' || chr(9) || chr(10) || chr(13), and on rejection
+--       returns the OFFENDING EXPRESSION instead of an opaque <computed> tag,
+--       so the next failure names itself instead of hiding.
+--     • The identical one-argument btrim in the "argument is empty" test inside
+--       lsr_json_keys was widened for the same reason: same rake, one step over.
+--     • No rule was weakened, no key was added, no evidence was edited.
+--
 -- WHAT IT PROVES
 --   V1  no partial lsr_* state — tables, functions, policies, triggers, types
 --   V2  the FIRST false positive, spelled out, and that no real violation existed
 --   V2c the SECOND false positive, spelled out, and that the new rule is not blind
+--   V2d the THIRD abort — a READER defect, reproduced on this server with plain
+--       built-ins, and that the corrected reader still refuses a computed key
 --   V3  the six ALREADY-APPLIED packages are intact and untouched
 --   V4  what to do next
 -- ════════════════════════════════════════════════════════════════════════════
@@ -161,6 +204,13 @@ sentence(txt) as (
 excluded_array(txt) as (
   values ('jsonb_build_array(''internal_notes'',''internal_metadata'',''decision_reason'',''cost'',''margin'',''floor_price'',''profit'',''supplier_rate'')')
 ),
+-- §V2d: the argument text that aborted the THIRD run, byte for byte. It is the
+-- SEVENTH argument of the identity_not_enabled branch of lsr_dashboard_client:
+-- a newline, six spaces, then the literal 'message'. Nothing exotic — this is
+-- simply what an argument looks like when a call is spread over two lines.
+third_arg(txt) as (
+  values (chr(10) || '      ''message''')
+),
 verdicts as (
   select
     -- the OLD check, exactly as it was written when it aborted
@@ -207,7 +257,22 @@ verdicts as (
     'this module never uses pg_net for anything'
       ~* '\m(pg_net|dblink|pg_background)[a-z_0-9]{0,40}\s*[(.]'   as new2_prose_pg_net_fires,
     'perform pg_net.http_collect_response(p_lead);'
-      ~* '\m(pg_net|dblink|pg_background)[a-z_0-9]{0,40}\s*[(.]'   as new2_catches_real_pg_net
+      ~* '\m(pg_net|dblink|pg_background)[a-z_0-9]{0,40}\s*[(.]'   as new2_catches_real_pg_net,
+
+    -- ── the THIRD abort: the READER, reproduced with built-ins only ───────
+    -- (a) the whole defect in one expression: btrim(str) trims SPACES ONLY.
+    btrim(chr(10) || '  x  ') = chr(10) || '  x'                as btrim_default_is_space_only,
+    -- (b) the OLD reader, exactly as written, on the exact argument
+    substring(btrim((select txt from third_arg)) from '^''(.*)''$') is null
+                                                                as old3_mangles_literal_key,
+    -- (c) the CORRECTED reader on the same argument: it is the key 'message'
+    substring(btrim((select txt from third_arg), ' ' || chr(9) || chr(10) || chr(13))
+              from '^''(.*)''$') = 'message'                    as new3_reads_literal_key,
+    -- (d) proof it is not simply permissive: a genuinely computed key is still
+    --     refused, so the closed list keeps its meaning
+    substring(btrim(chr(9) || 'case when x then ''a'' else ''b'' end',
+                    ' ' || chr(9) || chr(10) || chr(13)) from '^''(.*)''$') is null
+                                                                as new3_still_refuses_computed
 ),
 
 -- ─── §V2b: did the module ever get far enough to leave a trace? ─────────────
@@ -341,9 +406,45 @@ select 118, 'V2c.shape_alone_is_not_the_guard', 'INFO — what was ADDED, not we
          || 'Wide row projection (to_jsonb(row) / row_to_json / jsonb_agg(row)) is refused as an open list. Every client query must carry client_id = $1. '
          || 'Every amount on that allowlist is a SELLING amount billed to that same client: their own contract price, its VAT, and their own overage charges. None is cost, margin, floor price or supplier rate, and no two of them subtract to one.'
 
+-- ═══ V2d. ★ THE THIRD FINGERPRINT — THE READER, NOT THE RULE ★ ════════════
+union all
+select 119, 'V2d.the_third_abort_was_a_reader_defect',
+       case when v.old3_mangles_literal_key and v.new3_reads_literal_key
+              then 'CONFIRMED READER DEFECT — btrim(str) trims spaces only, so a literal key that begins on a new line was read as <computed>. The closed list was right; the reader was wrong. The list was NOT changed.'
+            when not v.old3_mangles_literal_key
+              then 'UNEXPECTED — the old expression reads the key correctly on this server; the third abort had another cause'
+            else 'FAIL — the corrected expression does not read the key either; do not run RUNME' end,
+       'btrim(str) behaves as btrim(str, '' '') on this server = ' || v.btrim_default_is_space_only::text
+         || '  ·  OLD reader returns NULL for chr(10) || ''      ''''message'''''' = ' || v.old3_mangles_literal_key::text
+         || '  ·  CORRECTED reader returns the key «message» = ' || v.new3_reads_literal_key::text
+from verdicts v
+
+union all
+select 120, 'V2d.why_it_matched', 'INFO — the characters, spelled out',
+       'jsonb_build_object arguments in a formatted file begin on NEW LINES, so the text of an argument is chr(10) followed by indentation and then the quoted key. '
+         || 'btrim with one argument does not remove chr(10), the pattern ''^''''(.*)''''$'' requires the string to START with a quote, so the match fails and a literal key is reported as computed. '
+         || '32 of the 63 keyed arguments in lsr_dashboard_client were mangled that way; the first in scan order is «message», in the identity_not_enabled branch. '
+         || 'This is not a schema problem, not a contract problem and not a naming problem — it is one missing function argument.'
+
+union all
+select 121, 'V2d.the_corrected_reader_is_not_blind',
+       case when v.new3_reads_literal_key and v.new3_still_refuses_computed
+              then 'CONFIRMED — the corrected reader reads a literal key that starts on a new line, and STILL refuses a CASE expression as a key. A computed key cannot be audited statically, so it is refused by design.'
+            else 'FAIL — the repair made the reader permissive instead of correct; do not run RUNME' end,
+       'literal key read = ' || v.new3_reads_literal_key::text
+         || '  ·  «case when x then ''a'' else ''b'' end» still refused = ' || v.new3_still_refuses_computed::text
+         || '   →  and on refusal the reader now returns the OFFENDING EXPRESSION, not an opaque tag, so the next failure names itself.'
+from verdicts v
+
+union all
+select 122, 'V2d.the_wrong_ruler', 'INFO — why the test suite did not catch it',
+       'the Node port of this reader used JavaScript''s .trim(), which removes ALL whitespace, so it read the key correctly while PostgreSQL did not: the suite measured the SQL with a ruler the SQL does not use. '
+         || 'That is the second occurrence of exactly this class — the first was a regex repetition bound of 400 against PostgreSQL''s RE_DUP_MAX of 255 (this file may not spell that bound out: the repository guard refuses the literal anywhere, mention or use). '
+         || 'tests/lead_json_key_parser.test.js now ports btrim, the anchored match, the literal scanner and the key scanner with PostgreSQL semantics, asserts the 49 keys against the allowlist PARSED FROM RUNME (no second copy), and fails if the btrim model is ever "simplified" to .trim().'
+
 -- ═══ V3. THE SIX APPLIED PACKAGES ARE INTACT ═══════════════════════════════
 union all
-select 120 + c.ord, 'V3.' || c.pkg || '_intact',
+select 130 + c.ord, 'V3.' || c.pkg || '_intact',
        case when c.n_tables > 0 and c.n_funcs > 0
               then 'PASS — present and untouched (the aborted transaction created, altered and dropped nothing outside lsr_*)'
             else 'REVIEW — this package looks absent on this database; verify with its own POSTCHECK before drawing any conclusion' end,
@@ -351,7 +452,7 @@ select 120 + c.ord, 'V3.' || c.pkg || '_intact',
 from six_counts c
 
 union all
-select 130, 'V3.why_they_cannot_have_changed', 'INFO',
+select 137, 'V3.why_they_cannot_have_changed', 'INFO',
        'the RUNME creates only lsr_* objects and reads the other modules through to_regclass / to_regprocedure guards. It issues no ALTER or DROP against comms_*, ops_*, crm_*, fin_*, csub_* or sq_*, and it aborted before COMMIT regardless. V3 above is the measurement.'
 
 -- ═══ V4. WHAT TO DO NEXT ═══════════════════════════════════════════════════
@@ -360,7 +461,7 @@ select 140, 'V4.next_step',
        case when (select n_tables + n_funcs from lsr) = 0
               then 'RE-RUN — apply the corrected docs/lead_scoring_routing_RUNME.sql, then docs/lead_scoring_routing_POSTCHECK.sql'
             else 'STOP — object state is not empty; resolve V1 before re-running' end,
-       'the correction is in the DETECTOR (lsr_sql_partition + lsr_contract_scan + the call-graph walk + lsr_json_keys/lsr_client_scan), not in the schema, not in the contract sentence and not in the excluded_by_design array. Nothing was renamed, no check was weakened — one was added — and no evidence was edited to pass.'
+       'the correction is in the DETECTOR (lsr_sql_partition + lsr_contract_scan + the call-graph walk + lsr_json_keys/lsr_client_scan) and, for the third attempt, in the READER (lsr_key_of''s btrim character set) — not in the schema, not in the contract sentence, not in the excluded_by_design array and not in the 49-key closed list, which is unchanged. Nothing was renamed, no check was weakened — one was added — and no evidence was edited to pass.'
 
 ) rows
 order by ord;

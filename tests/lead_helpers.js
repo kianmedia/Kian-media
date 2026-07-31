@@ -162,6 +162,19 @@ function sqlLiterals(src) {
  * لأنّ المؤشّر يتقدّم وسمًا لا كائنًا — فلا يفلت مفتاحٌ مدسوس في العمق.
  * مفتاحٌ غير حرفيّ يعود «<computed>»: ما لا يُدقَّق ساكنًا يُردّ بالتصميم.
  */
+/** مجموعة تشذيب lsr_key_of: ' ' || chr(9) || chr(10) || chr(13). */
+const PG_KEY_TRIM = " \t\n\r";
+
+/** btrim(string, characters) بدلالات PostgreSQL: يحذف محارف المجموعة وحدها. */
+function pgBtrim(s, chars) {
+  const str = s == null ? "" : String(s);
+  let a = 0;
+  let b = str.length;
+  while (a < b && chars.includes(str[a])) a += 1;
+  while (b > a && chars.includes(str[b - 1])) b -= 1;
+  return str.slice(a, b);
+}
+
 function jsonKeys(src) {
   const TOK = "jsonb_build_object";
   const out = [];
@@ -204,7 +217,12 @@ function jsonKeys(src) {
     let argi = 0;
     let seg = k;
     const take = (end) => {
-      const arg = src.slice(seg, end).trim();
+      // ‼️ لا `.trim()` هنا. ‏`.trim()` في JavaScript يحذف مسافات Unicode أيضًا،
+      //    فيصير الاختبار **أرحم** من PostgreSQL — وهي المسطرة الخطأ التي مرّرت
+      //    ترحيلةً سقطت فعلًا. مجموعة التشذيب هنا هي مجموعة lsr_key_of حرفًا
+      //    بحرف. النموذج الكامل لدلالات PostgreSQL في
+      //    tests/lead_json_key_parser.test.js — وهو المرجع.
+      const arg = pgBtrim(src.slice(seg, end), PG_KEY_TRIM);
       if (argi % 2 !== 0 || arg === "") return;
       const m = /^'([\s\S]*)'$/.exec(arg);
       out.push(m ? m[1] : "<computed>");

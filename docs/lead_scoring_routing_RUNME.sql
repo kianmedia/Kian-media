@@ -2636,9 +2636,21 @@ comment on function public.lsr_contract_scan(text) is
 
 -- (أ) قيمة وسيط واحد → مفتاح، أو وسم «محسوب» إن لم تكن سلسلة حرفية.
 --     المفتاح المحسوب لا يمكن تدقيقه ساكنًا، فيُردّ بالتصميم لا بالإهمال.
+-- ⚠️ التشذيب يشمل **كلّ** المسافات البيضاء لا الفراغ وحده.
+--    `btrim(str)` في PostgreSQL يساوي `btrim(str, ' ')`: يحذف الفراغات فقط،
+--    ولا يحذف سطرًا جديدًا ولا جدولة. ووسائط jsonb_build_object في ملفّ منسّق
+--    تبدأ على أسطر جديدة، فيبقى محرف chr(10) في صدر الوسيط، فلا يطابق النمط
+--    '^''(.*)''$' الذي يشترط أن تبدأ السلسلة باقتباس — فيُقرأ مفتاحٌ حرفيّ
+--    سليم «محسوبًا». هذا بالضبط ما أسقط الترحيلة: 32 من 63 وسيطًا.
+--    و`.trim()` في JavaScript يحذف كلّ المسافات، فاختبارات Node كانت تمرّ —
+--    المسطرة الخطأ مرّتين: مرّة في حدّ التكرار، ومرّة هنا.
+--    وعند الرفض نُعيد التعبير نفسه لا وسمًا مبهمًا، ليُقرأ سبب الفشل من رسالته.
 create or replace function public.lsr_key_of(p_arg text)
 returns text language sql immutable set search_path = public as $lsrkeyof$
-  select coalesce(substring(btrim(coalesce(p_arg, '')) from '^''(.*)''$'), '<computed>');
+  select coalesce(
+    substring(btrim(coalesce(p_arg, ''), ' ' || chr(9) || chr(10) || chr(13)) from '^''(.*)''$'),
+    '<computed: ' || left(regexp_replace(btrim(coalesce(p_arg, ''), ' ' || chr(9) || chr(10) || chr(13)),
+                                         '\s+', ' ', 'g'), 60) || '>');
 $lsrkeyof$;
 
 -- (ب) كلّ سلسلة حرفية على حدة — لا مجموعةً واحدة. الفرق حاسم: استعلام
@@ -2742,13 +2754,17 @@ begin
         d := d - 1;
         if d = 0 then
           arg := substr(p_src, seg, k - seg);
-          if argi % 2 = 0 and btrim(arg) <> '' then
+          -- ⚠️ المجموعة نفسها في lsr_key_of وللسبب نفسه: `btrim(arg)` بوسيط
+          --    واحد يحذف الفراغات وحدها، فوسيطٌ لا يحمل إلّا سطرًا جديدًا يُقرأ
+          --    **غير فارغ**، فيُصدَّر مفتاحًا محسوبًا من نداء بلا وسائط أصلًا،
+          --    فتسقط الترحيلة على تنسيق. نفس الرَّكيزة، خطوة واحدة جانبًا.
+          if argi % 2 = 0 and btrim(arg, ' ' || chr(9) || chr(10) || chr(13)) <> '' then
             v_out := v_out || public.lsr_key_of(arg); end if;
           exit;
         end if;
       elsif c = ',' and d = 1 then
         arg := substr(p_src, seg, k - seg);
-        if argi % 2 = 0 and btrim(arg) <> '' then
+        if argi % 2 = 0 and btrim(arg, ' ' || chr(9) || chr(10) || chr(13)) <> '' then
           v_out := v_out || public.lsr_key_of(arg); end if;
         argi := argi + 1; seg := k + 1;
       end if;
