@@ -1842,7 +1842,10 @@ begin
   -- (٥) سطح التشغيل خالٍ من المال فعلًا
   v_def := pg_get_functiondef(to_regprocedure('public.custody_inv_asset_utilization(uuid,timestamptz,timestamptz)'));
   foreach f in array array['purchase_price','current_value','book_value','salvage_value','cost'] loop
-    if v_def ilike '%' || f || '%' then
+    -- ⚠️ الشرطة السفلية تُهرَّب: في LIKE/ILIKE هي محرف بدل، فـ'purchase_price'
+    --    كان يطابق أيضًا purchaseXprice. هذا اتّجاه إنذارٍ كاذب لا ثغرة،
+    --    لكنّه الفخّ نفسه الذي أسقط الترحيلة عند 'ai_'. يُغلق حيث وُجد.
+    if v_def ilike '%' || replace(f, '_', '\_') || '%' escape '\' then
       raise exception 'ASSET SELF-TEST: دالّة الاستغلال التشغيلية تكشف % — العمليات لا ترى مالًا', f; end if;
   end loop;
   if v_def not ilike '%contains_financials%' then
@@ -1851,7 +1854,10 @@ begin
   -- (٦) الحمولة العامّة للـQR فقيرة عمدًا
   v_def := pg_get_functiondef(to_regprocedure('public.custody_inv_qr_public_payload(uuid)'));
   foreach f in array array['purchase_price','current_value','book_value','file_path','employee_user_id','auth.users'] loop
-    if v_def ilike '%' || f || '%' then
+    -- ⚠️ الشرطة السفلية تُهرَّب: في LIKE/ILIKE هي محرف بدل، فـ'purchase_price'
+    --    كان يطابق أيضًا purchaseXprice. هذا اتّجاه إنذارٍ كاذب لا ثغرة،
+    --    لكنّه الفخّ نفسه الذي أسقط الترحيلة عند 'ai_'. يُغلق حيث وُجد.
+    if v_def ilike '%' || replace(f, '_', '\_') || '%' escape '\' then
       raise exception 'ASSET SELF-TEST: حمولة QR العامّة تحمل % — يجب أن تخلو من التكلفة وبيانات الموظّف ومسارات التخزين', f; end if;
   end loop;
   if v_def ilike '%''asset_id''%' or v_def ilike '%''id'', a%' then
@@ -1939,10 +1945,57 @@ begin
   v_def := pg_get_functiondef(to_regprocedure('public.custody_inv_maintenance_signals(uuid)'));
   if v_def not ilike '%''basis''%' or v_def not ilike '%''rule''%' then
     raise exception 'ASSET SELF-TEST: إشارة بلا قاعدة أو بلا أساس رقميّ — لا تُراجَع ولا تُرفَض'; end if;
-  foreach f in array array['predict','ai_','machine_learning','forecast_model'] loop
-    if v_def ilike '%' || f || '%' then
-      raise exception 'ASSET SELF-TEST: الإشارات تُسمّى تنبّؤية (%) — هي قواعد صريحة', f; end if;
-  end loop;
+  -- ★★ صدق التسمية: يُحكَم على **الأسماء الحيّة** لا على نصّ الملفّ ★★
+  --
+  --  ⚠️ الصيغة السابقة كانت:  v_def ilike '%' || f || '%'   مع f = 'ai_'
+  --     وهي أسقطت الترحيلة هنا. والسبب ليس أنّ الحزمة تدّعي ذكاءً — بل أنّ
+  --     الشرطة السفلية في LIKE/ILIKE **محرف بدل** يطابق أيّ محرف واحد. فالنمط
+  --     '%ai_%' لا يعني «يبدأ بـai_» بل «ai يتبعها أيّ محرف»، فطابق 28 موضعًا
+  --     أوّلها اسم الدالّة نفسها: custody_inv_m·ai·ntenance_signals، ثمّ
+  --     days_rem·ai·ning و r·ai·se. كلمات إنجليزية عادية، لا ادّعاء فيها.
+  --     ولا معرّف واحد في الحزمة يبدأ فعلًا بـai_ ، و'predict' و'forecast_model'
+  --     و'machine_learning' صفر مطابقة.
+  --
+  --  والدرس أعمّ من الهروب: الحكم على **نصّ التعريف** يخلط الواجهة الحيّة
+  --  بالتعليق الذي ينفي الادّعاء. فالمصدر هنا كتالوج النظام: أسماء الدوالّ
+  --  والجداول والأعمدة كما هي فعلًا. والمطابقة بتعبير نمطيّ مرسّى لا بـLIKE،
+  --  فلا محرف بدل يتسلّل. وأمّا وسم الحزمة أنّها «ليست ذكاءً اصطناعيًّا» فيُقال
+  --  في التعليقات بحرّية: التعليق شرحٌ لا واجهة.
+  select coalesce(string_agg(distinct x.n, ' · ' order by x.n), '') into v_def
+    from (
+      select p.proname as n
+        from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+       where ns.nspname = 'public' and p.proname like 'custody\_inv\_%' escape '\'
+      union all
+      select c.relname
+        from pg_class c join pg_namespace ns on ns.oid = c.relnamespace
+       where ns.nspname = 'public' and c.relkind in ('r','p','v','m')
+         and c.relname like 'custody\_inv\_%' escape '\'
+      union all
+      select a.attname
+        from pg_attribute a
+        join pg_class c on c.oid = a.attrelid
+        join pg_namespace ns on ns.oid = c.relnamespace
+       where ns.nspname = 'public' and c.relkind in ('r','p')
+         and c.relname like 'custody\_inv\_%' escape '\'
+         and a.attnum > 0 and not a.attisdropped
+    ) x
+   where x.n ~ '^(ai|ml)_|_(ai|ml)$|predict|forecast|machine_learning|neural|deep_learning|intelligen|confidence_score';
+  if v_def <> '' then
+    raise exception 'ASSET SELF-TEST: اسم حيّ يدّعي التنبّؤ أو الذكاء (%) — الإشارات قواعد صريحة، فليُسمَّ ما هو عليه: maintenance_priority · due_soon · risk_indicator · rule_based', v_def;
+  end if;
+
+  -- والمفاتيح التي تخرج فعلًا من دالّة الإشارات: نفس الحكم، على المفاتيح
+  -- الحرفية في jsonb_build_object لا على كلّ نصّ الجسم.
+  select coalesce(string_agg(distinct m[1], ' · '), '') into v_def
+    from regexp_matches(
+           regexp_replace(pg_get_functiondef(to_regprocedure('public.custody_inv_maintenance_signals(uuid)')),
+                          chr(45) || chr(45) || '[^' || chr(10) || ']*', ' ', 'g'),
+           '''([a-z_][a-z0-9_]*)''\s*,', 'g') m
+   where m[1] ~ '^(ai|ml)_|_(ai|ml)$|predict|forecast|machine_learning|neural|intelligen|confidence_score';
+  if v_def <> '' then
+    raise exception 'ASSET SELF-TEST: مفتاح خارج من الإشارات يدّعي التنبّؤ (%) — القاعدة تُعلَن باسمها لا باسم نموذج', v_def;
+  end if;
 
   -- (١٢) التدقيق مكتوب في كلّ كتابة حسّاسة
   foreach f in array array[
