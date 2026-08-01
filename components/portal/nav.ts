@@ -43,6 +43,17 @@ const REG: Record<string, TabDef> = {
   // معتمَدة وتُنشئ مسوّدة تنتظر إنسانًا.
   // ⛔ ولا يمنح هذا السطر شيئًا: المساعد قراءة فقط، ولا ينفّذ إجراءً ولا يرسل.
   ai_assistant:  { href: "/client-portal/assistant",      ar: "مساعد كيان",   en: "Kian Assistant", adminAr: "مساعد كيان", adminEn: "Kian Assistant", staffAr: "مساعد كيان", staffEn: "Kian Assistant" },
+  // ★ ثلاثة أسطح مبنيّة بالكامل بقيت بلا مدخل تنقّل: كانت تُفتح بكتابة الرابط
+  //   يدويًّا فقط. وقد وثّق docs/COMMUNICATIONS_GO_LIVE_GUIDE.md:59 السببَ
+  //   صراحةً — «nav.ts كان يُعدَّل في دفعة متزامنة حين وصل هذا الموديول» —
+  //   وهو سهوُ تسجيل لا تأجيلٌ مقصود: مفتاح دراسات الحالة يحمل مبدّل السطح
+  //   العامّ (public_enabled)، فبقاؤه مظلمًا يعني تعذّر تشغيل الواجهة العامّة
+  //   من الواجهة أصلًا.
+  //   الثلاثة **داخليّة بحتة**: غائبة عن مجموعتَي client/lead، والمنع الحقيقيّ
+  //   في القاعدة لا في هذا السطر.
+  case_studies:  { href: "/client-portal/case-studies",   ar: "دراسات الحالة", en: "Case Studies", adminAr: "دراسات الحالة", adminEn: "Case Studies", staffAr: "دراسات الحالة", staffEn: "Case Studies" },
+  compliance:    { href: "/client-portal/compliance",     ar: "الامتثال",      en: "Compliance",   adminAr: "الامتثال",      adminEn: "Compliance",   staffAr: "الامتثال",      staffEn: "Compliance" },
+  communications:{ href: "/client-portal/communications", ar: "الاتّصالات",    en: "Communications", adminAr: "الاتّصالات",   adminEn: "Communications", staffAr: "الاتّصالات",  staffEn: "Communications" },
   // وحدة المبيعات (Phase 3) — داخليّة بحتة: غائبة عن مجموعتَي client/lead،
   // والقاعدة ترفض العميل حتى برابط مباشر (crm_can_view = is_staff + مفتاح صريح).
   // موظّف المبيعات يرى سجلّاته هو؛ رؤية الفريق مفتاح مستقلّ لا يمنحه هذا التبويب.
@@ -78,15 +89,15 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   sales:       ["employee", "crm", "ai_assistant", "quotes", "quoting", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   editor:      ["employee", "operations", "live_ops", "ai_assistant", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
