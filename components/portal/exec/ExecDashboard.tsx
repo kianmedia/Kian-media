@@ -18,9 +18,11 @@ import {
   execAccess, execDashboard, execExport, execRefresh, execSources,
   execCsvDownload, execRowsToCsv, departmentLabel, kpiLabel, isStale,
   freshnessLabel, stampLabel,
-  EXEC_DEPARTMENTS,
+  execRevenueBasis, revenueBasisWhy, currencyNote, vatNote,
+  EXEC_DEPARTMENTS, REVENUE_BASIS_LABEL,
   type ExecAccess, type ExecAlert, type ExecDashboard as ExecDash,
-  type ExecDepartment, type ExecFilters, type ExecKpi, type ExecSources, type Lang,
+  type ExecDepartment, type ExecFilters, type ExecKpi, type ExecRevenueBasis,
+  type ExecSources, type Lang,
 } from "@/lib/portal/execReport";
 import {
   Denied, Empty, ErrorBox, FreshnessBar, KpiCard, MigrationPending, SectionTitle,
@@ -250,6 +252,7 @@ export default function ExecDashboard() {
             )}
 
             <AlertsPanel alerts={d.alerts ?? []} />
+            <RevenueBasisPanel from={from} to={to} />
 
             {EXEC_DEPARTMENTS.map((dep) => {
               const keys = ORDER[dep];
@@ -337,6 +340,85 @@ function AlertsPanel({ alerts }: { alerts: ExecAlert[] }) {
 }
 
 // ─── حالة المصادر ──────────────────────────────────────────────────────────
+
+// ─── أسس المبالغ ───────────────────────────────────────────────────────────
+//
+// ★ كانت mgmt_revenue_basis مطبَّقة على الإنتاج وممنوحة لـauthenticated ولا
+//   سطرَ في التطبيق يناديها: خلفيّةٌ بلا واجهة. المالك لم يكن يرى الفصل الذي
+//   بُني له، ولا كان بند القبول «اقرأ وسوم الإيراد» قابلًا للتنفيذ أصلًا.
+//
+// أربعة مقاييس **لا يُجمع أيّها في رقم اسمه «الإيراد»**. والقيمة الغائبة تُقال
+// «غير متاح» مع سببها، ولا تُعرض صفرًا. والدالّة owner-only: غير المالك يتلقّى
+// ok:false ⇒ تظهر شاشة المنع، ولا تُخفى الشاشة تجميلًا.
+function RevenueBasisPanel({ from, to }: { from: string; to: string }) {
+  const { t, lang } = useI18n();
+  const L = lang as Lang;
+  const { st, reload } = useExecLoad<ExecRevenueBasis>(
+    () => execRevenueBasis(from, to, L), [from, to, L]);
+
+  const KEYS: (keyof ExecRevenueBasis)[] = [
+    "contract_value_net", "invoiced_revenue_net",
+    "collected_revenue_net", "recognized_revenue_net",
+  ];
+
+  return (
+    <div className={`${card} p-4`}>
+      <SectionTitle
+        note={t({
+          ar: "العقد ≠ المفوتَر ≠ المحصَّل ≠ المعترَف به. أربعة مقاييس مختلفة، ولا يُقرأ أيّها «إيرادًا».",
+          en: "Contract ≠ invoiced ≠ collected ≠ recognized. Four different measures; none of them is “revenue”.",
+        })}
+      >
+        {t({ ar: "أسس المبالغ", en: "Revenue basis" })}
+      </SectionTitle>
+
+      <StateView st={st} onRetry={reload}>
+        {(b) => (
+          <div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {KEYS.map((k) => {
+                const v = b[k] as number | null;
+                const why = revenueBasisWhy(b, k as string, L);
+                return (
+                  <div key={k as string} className="bg-stone-950 border border-stone-800 rounded-lg p-3">
+                    <div className="text-[11px] text-stone-500 mb-1">
+                      {REVENUE_BASIS_LABEL[k as string]?.[L] ?? (k as string)}
+                    </div>
+                    <div className={v === null ? "text-sm text-stone-500" : "text-lg text-stone-100"}>
+                      {v === null
+                        ? t({ ar: "غير متاح", en: "Unavailable" })
+                        : new Intl.NumberFormat(L === "ar" ? "ar-SA" : "en-US",
+                            { maximumFractionDigits: 2 }).format(v)}
+                    </div>
+                    {why && <div className="text-[11px] text-stone-600 mt-1 leading-relaxed">{why}</div>}
+                  </div>
+                );
+              })}
+            </div>
+
+            <ul className="mt-3 space-y-1 text-[11px] text-stone-500 leading-relaxed">
+              <li>{vatNote(b, L)}</li>
+              <li>{currencyNote(b, L)}</li>
+              <li>
+                {b.basis_complete
+                  ? t({ ar: "الأساس مكتمل: المصادر الثلاثة مقروءة.",
+                        en: "Basis complete: all three sources were readable." })
+                  : t({ ar: "الأساس ناقص — رقمٌ غائب يبقى «غير متاح» ولا يُقرأ صفرًا، والربح لا يُشتقّ.",
+                        en: "Basis incomplete — a missing figure stays “unavailable”, never zero, and profit is not inferred." })}
+              </li>
+              {b.freshness_at && (
+                <li>
+                  {t({ ar: "وقت الحساب: ", en: "Computed at: " })}
+                  <span dir="ltr">{new Date(b.freshness_at).toLocaleString(L === "ar" ? "ar-SA" : "en-US")}</span>
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+      </StateView>
+    </div>
+  );
+}
 
 function SourcesPanel() {
   const { t, lang } = useI18n();

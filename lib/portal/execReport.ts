@@ -241,6 +241,92 @@ export async function execAuditList(
   return toState(await prpc("mgmt_audit_list", { p_limit: limit }), lang);
 }
 
+// ─── أسس المبالغ — أربعة مقاييس مختلفة، ولا واحد منها اسمه «إيراد» ─────────
+//
+// ★ هذه الأسس كانت مُركَّبة في القاعدة وغير موصولة بأيّ شاشة: الدالّة مطبَّقة
+//   وممنوحة لـauthenticated، ولا سطر في التطبيق يناديها. خلفيّةٌ بلا واجهة
+//   ليست ميزة — المالك لم يكن يرى الفصل الذي بُني له.
+//
+// العقد الذي يحرسه هذا القسم:
+//   • أربعة حقول منفصلة بالاسم: العقد ≠ المفوتَر ≠ المحصَّل ≠ المعترَف به.
+//   • recognized_revenue_net يبقى null دائمًا ما لم يُوصَل مصدر اعتراف محاسبيّ،
+//     ولا يُشتقّ من المفوتَر ولا يُصفَّر.
+//   • عملتان أو أكثر ⇒ لا إجمالي: 'unavailable_grouped_by_currency'.
+//   • vat_included = false: الأرقام صافية قبل الضريبة، ويُقال ذلك صراحةً.
+//   • الدالّة نفسها owner-only وتُعيد ok:false/owner_only لغير المالك، فلا
+//     تُغلَّف هنا بأيّ منطق صلاحيات: المنع في القاعدة.
+export interface ExecRevenueBasis {
+  ok: boolean;
+  period?: { from: string; to: string };
+  contract_value_net: number | null;
+  invoiced_revenue_net: number | null;
+  collected_revenue_net: number | null;
+  recognized_revenue_net: number | null;
+  recognized_basis_status: "no_recognition_source" | "source_present_not_wired" | string;
+  vat_included: boolean;
+  currency: string | null;
+  cross_currency_total: "single_currency" | "unavailable_grouped_by_currency" | string;
+  missing_sources: string[];
+  basis_complete: boolean;
+  freshness_at: string;
+  note?: string;
+}
+
+export async function execRevenueBasis(
+  from: string, to: string, lang: Lang = "ar",
+): Promise<ExecState<ExecRevenueBasis>> {
+  return toState<ExecRevenueBasis>(
+    await prpc<ExecRevenueBasis>("mgmt_revenue_basis", { p_from: from, p_to: to }), lang);
+}
+
+export const REVENUE_BASIS_LABEL: Record<string, { ar: string; en: string }> = {
+  contract_value_net:     { ar: "قيمة العقد (صافي)",    en: "Contract value (net)" },
+  invoiced_revenue_net:   { ar: "المفوتَر (صافي)",       en: "Invoiced (net)" },
+  collected_revenue_net:  { ar: "المحصَّل (صافي)",       en: "Collected (net)" },
+  recognized_revenue_net: { ar: "المعترَف به (صافي)",    en: "Recognized (net)" },
+};
+
+/** لماذا لا قيمة؟ نصٌّ يشرح، ولا صفر يتظاهر بأنّه حقيقة. */
+export function revenueBasisWhy(
+  b: ExecRevenueBasis | null | undefined, key: string, lang: Lang,
+): string | null {
+  if (!b) return null;
+  if (key === "recognized_revenue_net") {
+    return b.recognized_basis_status === "no_recognition_source"
+      ? (lang === "ar"
+          ? "لا مصدر اعتراف محاسبيّ موصول — لا يُشتقّ من المفوتَر ولا يُعرض صفرًا"
+          : "no accounting-recognition source is wired — never derived from invoiced, never shown as zero")
+      : (lang === "ar"
+          ? "المصدر موجود ولم يُوصَل بعد"
+          : "the source exists but is not wired yet");
+  }
+  const missing = Array.isArray(b.missing_sources) ? b.missing_sources : [];
+  if (missing.length === 0) return null;
+  return lang === "ar"
+    ? `مصدر غير مركَّب: ${missing.join(" · ")}`
+    : `source not installed: ${missing.join(" · ")}`;
+}
+
+/** نصّ العملة: عملتان أو أكثر ⇒ يُقال «لا إجمالي» ولا يُجمع بسعر مُخترَع. */
+export function currencyNote(b: ExecRevenueBasis | null | undefined, lang: Lang): string {
+  if (!b) return "";
+  if (b.cross_currency_total === "unavailable_grouped_by_currency" || b.currency === "mixed_currency") {
+    return lang === "ar"
+      ? "أكثر من عملة في هذه الفترة — لا إجمالي موحّد، والأرقام تُقرأ مفصولة بالعملة"
+      : "more than one currency in this period — no combined total; read the figures per currency";
+  }
+  return b.currency
+    ? (lang === "ar" ? `العملة: ${b.currency}` : `Currency: ${b.currency}`)
+    : (lang === "ar" ? "العملة غير محدَّدة" : "Currency not determined");
+}
+
+export function vatNote(b: ExecRevenueBasis | null | undefined, lang: Lang): string {
+  if (!b) return "";
+  return b.vat_included
+    ? (lang === "ar" ? "⚠️ الأرقام تشمل الضريبة" : "⚠️ figures include VAT")
+    : (lang === "ar" ? "الأرقام صافية قبل ضريبة القيمة المضافة" : "figures are net of VAT");
+}
+
 // ─── التسميات ──────────────────────────────────────────────────────────────
 
 export const KPI_LABEL: Record<string, { ar: string; en: string }> = {
