@@ -105,8 +105,11 @@ test("(٦) ★★ PRE/RUN/POST تحمل العقد نفسه بالتوقيع ا�
     const c = noC(read(f));
     for (const sig of PUBLIC_SIGS)
       assert.ok(c.includes(`'${sig}'`), `${f}: التوقيع غير مذكور بالكامل: ${sig}`);
-    assert.match(c, /pg_get_function_identity_arguments/,
-      `${f}: يقارن بالاسم لا بالتوقيع — overload آخر يمرّ`);
+    // ⚠️ الشرط السابق كان يطلب pg_get_function_identity_arguments — وهو نفسه
+    //    سببُ السقوط: يُبقي أسماء الوسائط. الهويّة الآن OID، وoverload آخر
+    //    له OID مختلف فلا يدخل القائمة.
+    assert.match(c, /to_regprocedure\s*\(/,
+      `${f}: لا يحوّل التوقيع إلى OID — المقارنة النصّية تُخطئ الهويّة`);
   }
 });
 
@@ -116,6 +119,14 @@ test("(٦) ★★ PRE/RUN/POST تحمل العقد نفسه بالتوقيع ا�
  *    يكون آمنًا)، ومحرَّمٌ في **الصلاحية** (اسمٌ مجرَّد يفتح كلّ overload). فلا
  *    يُقاس الملفّ كلّه بقاعدة واحدة.
  */
+/** منطقة الكنس: الشرط الذي يقرّر ما يُعدّ انكشافًا. */
+function anonSweepRegion(f) {
+  const c = noC(read(f));
+  const i = c.indexOf("has_function_privilege('anon', p.oid, 'EXECUTE')");
+  if (i < 0) return "";
+  return c.slice(Math.max(0, i - 420), i + 420);
+}
+
 function allowlistRegion(f) {
   const c = noC(read(f));
   const out = [];
@@ -123,8 +134,8 @@ function allowlistRegion(f) {
   // (proname) وهي مشروعة بالاسم المجرَّد. التمييز بالمفتاح المُقارَن.
   // ⚠️ نافذة ثابتة لا التقاطٌ غير جشع: أوّل ")" يقع داخل "(jsonb)" فيقطع
   //    الالتقاط قبل التواقيع. الأقواس متداخلة، والتعبير النمطيّ لا يوازنها.
-  for (const m of c.matchAll(/\bsig\s+not\s+in\s*\(/g)) out.push(c.slice(m.index, m.index + 320));
-  for (const m of c.matchAll(/cs_public_allowlist\(sig\) as \(values([\s\S]{0,400}?)\n\)/g)) out.push(m[1]);
+  for (const m of c.matchAll(/cs_public_allowlist\(sig\) as \(values/g)) out.push(c.slice(m.index, m.index + 340));
+  for (const m of c.matchAll(/unnest\(array\[/g)) out.push(c.slice(m.index, m.index + 340));
   return out.join("\n");
 }
 
@@ -136,6 +147,10 @@ test("(٧) ★★ قائمة السماح بالتوقيع الكامل: لا ا
       assert.ok(!region.includes(bare), `${f}: سماحٌ بالاسم المجرَّد ${bare} — يفتح كلّ overload`);
     for (const sig of PUBLIC_SIGS)
       assert.ok(region.includes(`'${sig}'`), `${f}: التوقيع الكامل غائب عن قائمة السماح: ${sig}`);
+    // ★ ثلاثة بالضبط: «ولا رابعة». أيّ overload إضافيّ يدخل القائمة يُدان.
+    const listed = [...region.matchAll(/'public\.[a-z_]+\([^']*\)'/g)].map((m) => m[0].slice(1, -1));
+    assert.deepEqual([...new Set(listed)].sort(), [...PUBLIC_SIGS].sort(),
+      `${f}: قائمة السماح ليست الثلاثة بالضبط — ${listed.join(" · ")}`);
   }
 });
 
@@ -151,9 +166,11 @@ test("(٨) ★★ غياب السطح العامّ ≠ انكشاف: حكمان 
 test("(٩) ★★ mgmt_/liveops_/ai_ تبقى صفر anon ★★", () => {
   for (const f of [PRE, RUN, POST]) {
     const c = noC(read(f));
-    assert.match(c, /mgmt\\_%/, `${f}: البادئة الإدارية خرجت من الكنس`);
-    assert.match(c, /liveops\\_%/, `${f}: liveops خرجت من الكنس`);
-    assert.match(c, /ai\\_%/, `${f}: ai خرجت من الكنس`);
+    // ⚠️ داخل شرط الكنس نفسه: بقاؤها في مكانٍ آخر من الملفّ لا يحمي شيئًا.
+    const sweep = anonSweepRegion(f);
+    assert.match(sweep, /mgmt\\_%/, `${f}: البادئة الإدارية خرجت من كنس anon`);
+    assert.match(sweep, /liveops\\_%/, `${f}: liveops خرجت من كنس anon`);
+    assert.match(sweep, /ai\\_%/, `${f}: ai خرجت من كنس anon`);
     // ولا توقيع إداريّ **داخل قائمة السماح** (وجودُه في قائمة الكائنات
     // المطلوبة مشروع تمامًا — فالنطاق هو قائمة السماح وحدها).
     assert.ok(!/'public\.(mgmt|liveops|ai)_[a-z0-9_]*\(/.test(allowlistRegion(f)),
@@ -170,6 +187,51 @@ test("(١٠) ★★ RUNME يُثبت أمان الثلاثة لا وجودها �
   assert.match(c, /not p\.prosecdef/, "لا فحص SECURITY DEFINER");
   assert.match(c, /to_jsonb/, "لا فحص ضدّ تصدير الصفّ الكامل");
   assert.match(c, /cs_is_public/, "لا فحص لبوّابة النشر");
+});
+
+test("(١١) ★★ الحكم على OID لا على نصّ التوقيع ★★", () => {
+  for (const f of [PRE, RUN, POST]) {
+    const c = noC(read(f));
+    // ⚠️ pg_get_function_identity_arguments **يُبقي أسماء الوسائط** (يُسقط
+    //    القيم الافتراضيّة لا الأسماء)، فأنتج على الإنتاج
+    //    «cs_public_index(p_params jsonb)» ولم يطابق قائمةً بالأنواع.
+    //    فلا يجوز أن يدخل قرارَ صلاحيّة أبدًا.
+    assert.equal(c.match(/pg_get_function_identity_arguments/g), null,
+      `${f}: نصّ التوقيع يدخل قرار الصلاحيّة — أسماءُ الوسائط تُفسده`);
+    // التحويل إلى OID موجود، أيًّا كانت صياغته (a.sig أو المصفوفة المباشرة)
+    assert.match(c, /to_regprocedure\s*\(/, `${f}: قائمة السماح لا تُحوَّل إلى OID`);
+    assert.match(c, /::oid\b/, `${f}: لا تحويل صريح إلى oid`);
+    assert.match(c, /has_function_privilege\('anon',\s*p\.oid,\s*'EXECUTE'\)/,
+      `${f}: الصلاحيّة لا تُسأل بالoid`);
+    // واستبعاد NULL صريح **داخل شرط الكنس نفسه**: NOT IN مع NULL يُعيد NULL
+    // فيبتلع كلّ صفّ ويصير الفحص أعمى. وجودُه في مكانٍ آخر من الملفّ لا يحمي.
+    // ⚠️ العبارة بحدودها الحقيقيّة، بمسحٍ متوازن للأقواس. النوافذ الثابتة
+    //    خاسرة في الاتّجاهين: الضيّقة تقطع صيغة المصفوفة في RUNME، والواسعة
+    //    تلتقط "is not null" من كتلة مجاورة مشروعة في PREFLIGHT.
+    const ni = c.indexOf("p.oid not in (");
+    assert.ok(ni > 0, `${f}: لا استبعاد بالoid`);
+    const open = c.indexOf("(", ni);
+    let d = 0, end = c.length;
+    for (let i = open; i < c.length; i++) {
+      if (c[i] === "(") d++;
+      else if (c[i] === ")") { d--; if (d === 0) { end = i + 1; break; } }
+    }
+    assert.match(c.slice(open, end), /\bis not null\b/,
+      `${f}: NULL غير مُستبعَد داخل NOT IN — يُعيد NULL فيمرّ كلّ شيء`);
+  }
+});
+
+test("(١٢) ★ اسم الوسيط لا يُغيّر الهويّة — والتعريفات الحيّة تُثبته ★", () => {
+  const s2 = read(CS);
+  // التعريف يحمل أسماء وسائط، وقائمة السماح بالأنواع: الهويّة واحدة رغم ذلك
+  assert.match(s2, /function public\.cs_public_index\(p_params jsonb/, "التعريف تغيّر");
+  assert.match(s2, /function public\.cs_public_study\(p_slug text\)/, "التعريف تغيّر");
+  for (const f of [PRE, RUN, POST]) {
+    const c = noC(read(f));
+    assert.ok(c.includes("'public.cs_public_index(jsonb)'"), `${f}: التوقيع بالأنواع مفقود`);
+    assert.ok(!c.includes("p_params"), `${f}: اسم وسيط داخل عقد الصلاحيّة`);
+    assert.ok(!c.includes("p_slug"), `${f}: اسم وسيط داخل عقد الصلاحيّة`);
+  }
 });
 
 test("SAFE: ساكن فقط", () => {

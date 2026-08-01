@@ -264,18 +264,22 @@ begin
   -- ══ (د) السطح العامّ لدراسات الحالة: ثلاثة تواقيع، ولا رابع ═════════════
   --   العقد من الحزمة نفسها (القسم د في كتلة منحها). يُقاس بالتوقيع الكامل
   --   لا بالبادئة، فالبادئة تخلط السطح المقصود بالدوالّ الداخليّة.
+  -- ★ الحكم على OID لا على نصّ: pg_get_function_identity_arguments يُبقي
+  --   أسماء الوسائط، فأنتج على الإنتاج «cs_public_index(p_params jsonb)»
+  --   ولم يطابق قائمةً مكتوبةً بالأنواع. to_regprocedure تُحوّل، والنصّ للعرض.
+  --   ⚠️ NULL مُستبعَد: NOT IN مع NULL يُعيد NULL فيبتلع كلّ صفّ.
   select count(*) into v_n
-    from (
-      select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
-        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public'
-         and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
-           or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
-         and exists (select 1 from pg_roles where rolname = 'anon')
-         and has_function_privilege('anon', p.oid, 'EXECUTE')
-    ) x
-   where x.sig not in ('public.cs_public_index(jsonb)','public.cs_public_study(text)',
-                       'public.cs_public_slugs()');
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
+       or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
+     and exists (select 1 from pg_roles where rolname = 'anon')
+     and has_function_privilege('anon', p.oid, 'EXECUTE')
+     and p.oid not in (select o from unnest(array[
+           to_regprocedure('public.cs_public_index(jsonb)')::oid,
+           to_regprocedure('public.cs_public_study(text)')::oid,
+           to_regprocedure('public.cs_public_slugs()')::oid]) as t(o)
+                        where o is not null);
   insert into kian_acceptance_report values
     (340, 'السطح العامّ', 'anon.only_three_public_reads',
      case when v_n = 0 then 'PASS' else 'FAIL' end,

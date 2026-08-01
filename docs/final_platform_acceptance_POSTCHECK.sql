@@ -45,28 +45,41 @@ t_no_audit_trace as (
 -- ⚠️ قائمة سماحٍ بالتوقيع الكامل لا كنسٌ ببادئة: حزمة دراسات الحالة تُعلن
 --    «السطح العامّ: ثلاث دوالّ قراءة، ولا رابعة»، وتسحب PUBLIC ثمّ تمنح anon
 --    صراحةً. الكنسُ بـcs_% كان يُدين السطح المقصود.
+-- ★ هويّة الدالّة = OID، لا نصّ ★
+--   ⚠️ pg_get_function_identity_arguments **يُبقي أسماء الوسائط**: يُسقط القيم
+--      الافتراضيّة لا الأسماء. فأنتج على الإنتاج
+--        public.cs_public_index(p_params jsonb)
+--        public.cs_public_study(p_slug text)
+--      بينما قائمة السماح المكتوبة بالأنواع وحدها. ونجحت cs_public_slugs()
+--      وحدها لأنّها بلا وسائط فلا اسم يظهر — وهو ما كشف أنّ الخلل في العرض
+--      لا في الصلاحيّة: 8b نجح على الدوالّ الثلاث نفسها في اللحظة نفسها.
+--   لذا لا يُقارَن نصّ بنصّ إطلاقًا. to_regprocedure تُحوّل التوقيع المكتوب
+--   إلى OID، والحكم على OID، والنصّ للعرض البشريّ وحده.
+--   واسمُ الوسيط لا يُغيّر OID، وoverload آخر له OID مختلف فلا يدخل القائمة.
 cs_public_allowlist(sig) as (values
   ('public.cs_public_index(jsonb)'),
   ('public.cs_public_study(text)'),
   ('public.cs_public_slugs()')
 ),
+cs_public_oids as (
+  select a.sig, to_regprocedure(a.sig)::oid as fn_oid from cs_public_allowlist a
+),
 t_anon as (
-  select count(*) as n, coalesce(string_agg(distinct sig, ', '), '—') as detail
-  from (
-    select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
-      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = 'public'
-       and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
-         or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
-       and exists (select 1 from pg_roles where rolname = 'anon')
-       and has_function_privilege('anon', p.oid, 'EXECUTE')
-  ) x
-  where x.sig not in (select sig from cs_public_allowlist)
+  -- ⚠️ NULL مُستبعَد صراحةً: NOT IN مع NULL يُعمي الفحص كلّه.
+  select count(*) as n,
+         coalesce(string_agg(distinct p.oid::regprocedure::text, ', '), '—') as detail
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
+      or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
+    and exists (select 1 from pg_roles where rolname = 'anon')
+    and has_function_privilege('anon', p.oid, 'EXECUTE')
+    and p.oid not in (select fn_oid from cs_public_oids where fn_oid is not null)
 ),
 t_public_surface as (
-  select count(*) filter (where to_regprocedure(a.sig) is null) as n_missing,
-         coalesce(string_agg(a.sig, ', ') filter (where to_regprocedure(a.sig) is null), '—') as detail
-  from cs_public_allowlist a
+  select count(*) filter (where fn_oid is null) as n_missing,
+         coalesce(string_agg(sig, ', ') filter (where fn_oid is null), '—') as detail
+  from cs_public_oids
 ),
 t_public_default as (
   select count(*) as n, coalesce(string_agg(distinct p.proname, ', '), '—') as detail

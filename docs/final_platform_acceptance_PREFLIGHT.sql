@@ -107,37 +107,50 @@ t_packages as (
 --      وتحجب كلّ دالّة cs_ داخليّة عن anon وauthenticated معًا. فالمنح مقصود
 --      وموروثُ PUBLIC مسحوب — والكنسُ بالبادئة خلطَ السطحَ بالداخل.
 --   العقد الآن: anon يُنفّذ **هذه الثلاثة وحدها**، وصفرٌ فيما عداها.
+-- ★ هويّة الدالّة = OID، لا نصّ ★
+--   ⚠️ pg_get_function_identity_arguments **يُبقي أسماء الوسائط**: يُسقط القيم
+--      الافتراضيّة لا الأسماء. فأنتج على الإنتاج
+--        public.cs_public_index(p_params jsonb)
+--        public.cs_public_study(p_slug text)
+--      بينما قائمة السماح المكتوبة بالأنواع وحدها. ونجحت cs_public_slugs()
+--      وحدها لأنّها بلا وسائط فلا اسم يظهر — وهو ما كشف أنّ الخلل في العرض
+--      لا في الصلاحيّة: 8b نجح على الدوالّ الثلاث نفسها في اللحظة نفسها.
+--   لذا لا يُقارَن نصّ بنصّ إطلاقًا. to_regprocedure تُحوّل التوقيع المكتوب
+--   إلى OID، والحكم على OID، والنصّ للعرض البشريّ وحده.
+--   واسمُ الوسيط لا يُغيّر OID، وoverload آخر له OID مختلف فلا يدخل القائمة.
 cs_public_allowlist(sig) as (values
   ('public.cs_public_index(jsonb)'),
   ('public.cs_public_study(text)'),
   ('public.cs_public_slugs()')
 ),
+cs_public_oids as (
+  select a.sig, to_regprocedure(a.sig)::oid as fn_oid from cs_public_allowlist a
+),
 t_acl as (
+  -- ⚠️ يُستبعد NULL صراحةً: NOT IN مع NULL يُعيد NULL فيبتلع كلّ صفّ ويصير
+  --    الفحص أعمى تمامًا. غيابُ توقيعٍ يُعالَج في t_public_surface لا هنا.
   select count(*) as n,
-         coalesce(string_agg(distinct sig, ', '), '—') as detail
-  from (
-    select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
-      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = 'public'
-       and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
-         or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
-       and exists (select 1 from pg_roles where rolname = 'anon')
-       and has_function_privilege('anon', p.oid, 'EXECUTE')
-  ) x
-  where x.sig not in (select sig from cs_public_allowlist)
+         coalesce(string_agg(distinct p.oid::regprocedure::text, ', '), '—') as detail
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
+      or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
+    and exists (select 1 from pg_roles where rolname = 'anon')
+    and has_function_privilege('anon', p.oid, 'EXECUTE')
+    and p.oid not in (select fn_oid from cs_public_oids where fn_oid is not null)
 ),
 -- والسطح العامّ المُعلَن موجودٌ فعلًا ومنفَّذ من anon: غيابُه ليس انكشافًا،
 -- فيُفصَل حكمُه عن حكم الانكشاف ولا يُخلطان.
 t_public_surface as (
-  select count(*) filter (where oid is null) as n_missing,
-         count(*) filter (where oid is not null and not can_anon) as n_unreachable,
-         coalesce(string_agg(sig, ', ') filter (where oid is null), '—') as missing_list,
-         coalesce(string_agg(sig, ', ') filter (where oid is not null and not can_anon), '—') as unreachable_list
+  select count(*) filter (where fn_oid is null) as n_missing,
+         count(*) filter (where fn_oid is not null and not can_anon) as n_unreachable,
+         coalesce(string_agg(sig, ', ') filter (where fn_oid is null), '—') as missing_list,
+         coalesce(string_agg(sig, ', ') filter (where fn_oid is not null and not can_anon), '—') as unreachable_list
   from (
-    select a.sig, to_regprocedure(a.sig) as oid,
+    select o.sig, o.fn_oid,
            coalesce(exists (select 1 from pg_roles where rolname = 'anon')
-                    and has_function_privilege('anon', to_regprocedure(a.sig), 'EXECUTE'), false) as can_anon
-    from cs_public_allowlist a
+                    and has_function_privilege('anon', o.fn_oid, 'EXECUTE'), false) as can_anon
+    from cs_public_oids o
   ) y
 ),
 t_acl_public as (
