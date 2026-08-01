@@ -77,19 +77,57 @@ test("(ER-1) ★★ طبقة قراءة: لا كتابة على المصادر �
   }
 });
 
-test("(ER-2) ★★ لا خلط المحصَّل بالمفوتَر بقيمة العقد ★★", () => {
+test("(ER-2) ★★ أربعة أسس مفصولة — ولا واحد اسمه «إيراد» ★★", () => {
   const s = ER();
-  // المفاهيم الثلاثة يجب أن تُسمّى منفصلةً لا أن تُجمع تحت اسم واحد.
-  // ⚠️ ثغرة حقيقية مفتوحة: الحزمة تُخرج ربحًا وهامشًا (estimated_net_profit ·
-  //    gross_margin_pct) ولا تفصل **المحصَّل** عن **المفوتَر** عن **قيمة العقد**.
-  //    لم أُغلقها في هذه الجولة — إغلاقها قرار دلاليّ ماليّ يخصّ المالك، لا
-  //    إعادة تسمية. والحارس هنا يشترط أن تكون الثغرة **معلَنة** في الملفّ حتّى
-  //    لا يقرأ أحدٌ رقمًا مركّبًا على أنّه محصَّل. وهو يفشل إذا حُذف الإعلان.
-  const named = ["collected", "invoiced", "contract"].filter((k) => new RegExp(k, "i").test(s));
-  if (named.length < 2) {
-    assert.match(s, /BASIS_NOT_SEPARATED|أساس المبلغ غير مفصول/,
-      `التقرير لا يفرّق بين المحصَّل والمفوتَر وقيمة العقد، ولا يُعلن ذلك (وجد: ${named.join(", ") || "لا شيء"})`);
+  for (const k of ["contract_value_net", "invoiced_revenue_net",
+                   "collected_revenue_net", "recognized_revenue_net"]) {
+    assert.match(s, new RegExp(`'${k}'`), `أساس مفقود: ${k}`);
   }
+  assert.match(s, /mgmt_revenue_basis/, "لا دالّة تفصل الأسس");
+  // ولا يُعلَن الحدّ القديم بعد إغلاقه فعلًا.
+  assert.doesNotMatch(s, /BASIS_NOT_SEPARATED —? ?حدّ معلَن/, "ما زال يُعلن الحدّ وقد أُغلق");
+});
+
+test("(ER-2b) ★★ الاعتراف المحاسبيّ NULL لا صفرًا ولا مشتقًّا ★★", () => {
+  const s = ER();
+  const i = s.indexOf("'recognized_revenue_net'");
+  assert.ok(i > -1, "لا حقل اعتراف");
+  const near = s.slice(i, i + 200);
+  assert.match(near, /,\s*null/, "الاعتراف لا يُعاد NULL عند غياب المصدر");
+  assert.doesNotMatch(near, /invoiced|contract/i, "الاعتراف مشتقّ من الفاتورة أو العقد — اختلاق");
+  assert.match(s, /recognized_basis_status/, "لا سبب صريح لغياب الاعتراف");
+});
+
+test("(ER-2c) ★★ لا coalesce(ربح, 0) — الغياب ليس تعادلًا ★★", () => {
+  const s = ER();
+  // ⚠️ مسح متوازن لا [^)]*: التعبير الحقيقيّ يحوي أقواسًا متداخلة
+  //    (coalesce((((x)->'profit')->>'k')::numeric, 0)) فيقف الصنف المَنفيّ عند
+  //    أوّل قوس ويفوّت الحالة كلّها — وهي نفس العلّة التي أوقعتني سابقًا.
+  const bad = [];
+  for (const m of s.matchAll(/coalesce\s*\(/gi)) {
+    let d = 0, i = m.index + m[0].length - 1;
+    while (i < s.length) { if (s[i] === "(") d++; else if (s[i] === ")") { d--; if (d === 0) break; } i++; }
+    const call = s.slice(m.index, i + 1);
+    if (/\b(estimated_net_profit|gross_margin_pct|net_margin)\b/.test(call) && /,\s*0\s*$/.test(call.slice(0, -1))) {
+      bad.push(call.replace(/\s+/g, " ").slice(0, 70));
+    }
+  }
+  assert.deepEqual(bad, [], "صفرٌ مكان مجهول: مشروع بلا بيانات تكلفة يُقرأ متعادلًا:\n  " + bad.join("\n  "));
+});
+
+test("(ER-2d) ★ الضريبة ليست إيرادًا، ولا تُجمع عملتان ★", () => {
+  const s = ER();
+  assert.match(s, /'vat_included',\s*false/, "لا تصريح بأنّ الأسس صافية قبل الضريبة");
+  assert.match(s, /mixed_currency/, "لا كشف لتعدّد العملات");
+  assert.match(s, /unavailable_grouped_by_currency/, "يجمع عملات مختلفة بلا تحويل معتمد");
+});
+
+test("(ER-2e) ★ الأسس حسّاسة: للمالك وحده ★", () => {
+  const s = ER();
+  const i = s.indexOf("function public.mgmt_revenue_basis");
+  const body = s.slice(i, i + 900);
+  assert.match(body, /mgmt_can_view_sensitive/, "أسس المبالغ بلا بوّابة مالك");
+  assert.match(body, /owner_only/, "لا سبب صريح للمنع");
 });
 
 test("(ER-3) ★ NULL يبقى مجهولًا ولا يصير صفرًا صامتًا ★", () => {

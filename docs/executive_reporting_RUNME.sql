@@ -1,13 +1,14 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- ⚠️ BASIS_NOT_SEPARATED — حدّ معلَن، لا يُقرأ نجاحًا ⚠️
---   هذه الطبقة تُخرج ربحًا وهامشًا مقدَّرَين (estimated_net_profit ·
---   gross_margin_pct · estimated_profitability) اعتمادًا على مصادر المالية،
---   لكنّها **لا تفصل** في مخرجاتها بين ثلاثة مفاهيم مختلفة:
---       المحصَّل (collected) · المفوتَر (invoiced) · قيمة العقد (contract value)
---   ومن قرأ رقمًا واحدًا منها على أنّه «إيراد» فقد يقرأ مفوتَرًا غير محصَّل.
---   الفصل قرار دلاليّ ماليّ يخصّ المالك — أيّ مصدر يُعدّ إيرادًا ومتى — ولا
---   يجوز أن يُحسم بإعادة تسمية عمود. فهو **مفتوح ومعلَن** حتّى يُحسم، ومثبَّت
---   باختبار يفشل إذا حُذف هذا الإعلان قبل إغلاق الثغرة فعلًا.
+-- ★★ أسس المبالغ مفصولة — BASIS_NOT_SEPARATED مُغلَقة ★★
+--   أربعة مفاهيم لا تُجمع تحت اسم «إيراد»، ولكلٍّ مصدره ودلالته:
+--     contract_value_net     قيمة العقد/العرض المعتمد قبل الضريبة
+--     invoiced_revenue_net   قيمة الفواتير الصادرة قبل الضريبة
+--     collected_revenue_net  المحصَّل فعلًا قبل الضريبة
+--     recognized_revenue_net الاعتراف المحاسبيّ — **NULL** ما لم يوجد مصدر
+--                            اعتراف صريح ومعتمد. لا يُشتقّ من فاتورة ولا عقد.
+--   والضريبة ليست إيرادًا: كلّ الأسس صافية. ولا تُجمع عملتان بلا تحويل معتمد.
+--   والربح والهامش يبقيان NULL ما لم يكتمل الأساسان (إيراد وتكلفة)، ويُرافقهما
+--   revenue_basis · cost_basis · profitability_status · basis_complete.
 -- executive_reporting_RUNME.sql — المرحلة ٥: التقارير التنفيذية.
 -- idempotent · معاملة واحدة · لا anon · SECURITY DEFINER بمسار بحث مثبَّت.
 --
@@ -453,6 +454,78 @@ $$;
 --     ★ كلّ مصدر معزول باستثنائه ★: سقوط موديول واحد لا يُسقط اللوحة، ويظهر
 --     مؤشّره «غير متاح/ممنوع» بينما تبقى بقيّة المؤشّرات حيّة وصادقة.
 -- ════════════════════════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════════════════════
+-- ★★ mgmt_revenue_basis — أربعة أسس مفصولة، ولا واحد منها اسمه «إيراد» ★★
+--
+--   الخلط بين قيمة العقد والفاتورة والتحصيل هو أشيع خطأ في لوحات الإدارة،
+--   وأخطره أنّه لا يُنتج خطأً: يُنتج رقمًا كبيرًا يبدو صحيحًا. فكلّ أساس يُسمّى
+--   باسمه، ويحمل عملته، ويُعلن اكتماله.
+--
+--   ⛔ recognized_revenue_net يبقى NULL ما لم يوجد مصدر اعتراف محاسبيّ صريح.
+--      لا يُشتقّ من الفاتورة ولا من العقد — الاشتقاق اختلاق.
+--   ⛔ والضريبة ليست إيرادًا: الأسس كلّها صافية (net) قبل VAT.
+--   ⛔ ولا تُجمع عملتان: عند التعدّد يُعاد mixed_currency والمجموع unavailable.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.mgmt_revenue_basis(p_from date, p_to date)
+returns jsonb language plpgsql stable security definer set search_path = public as $mrb$
+declare
+  v_contract   numeric := null;
+  v_invoiced   numeric := null;
+  v_collected  numeric := null;
+  v_currencies text[]  := '{}';
+  v_missing    text[]  := '{}';
+begin
+  if not coalesce(public.mgmt_can_view_sensitive(), false) then
+    return jsonb_build_object('ok', false, 'reason', 'owner_only',
+      'note', 'أسس المبالغ حسّاسة — لا تُعرض لغير المالك');
+  end if;
+
+  -- (١) قيمة العقد: من عروض الأسعار المعتمدة، صافيةً قبل الضريبة.
+  if to_regclass('public.sq_quotes') is not null then
+    execute 'select sum(q.price_net), array_agg(distinct q.currency)
+               from public.sq_quotes q
+              where q.status = ''approved'' and q.is_deleted = false
+                and q.approved_at::date between $1 and $2'
+      into v_contract, v_currencies using p_from, p_to;
+  else v_missing := v_missing || 'sq_quotes'; end if;
+
+  -- (٢) المفوتَر و(٣) المحصَّل: من الذمم، وكلٌّ منهما مقياس مختلف تمامًا.
+  if to_regclass('public.fin_receivables') is not null then
+    execute 'select sum(r.amount_net),
+                    sum(case when r.status = ''paid'' then r.amount_net else 0 end)
+               from public.fin_receivables r
+              where r.issued_at::date between $1 and $2'
+      into v_invoiced, v_collected using p_from, p_to;
+  else v_missing := v_missing || 'fin_receivables'; end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'period', jsonb_build_object('from', p_from, 'to', p_to),
+    'contract_value_net',    v_contract,
+    'invoiced_revenue_net',  v_invoiced,
+    'collected_revenue_net', v_collected,
+    -- ★ الاعتراف المحاسبيّ: لا مصدر معتمد ⇒ NULL. لا يُشتقّ ولا يُصفَّر. ★
+    'recognized_revenue_net', null,
+    'recognized_basis_status',
+      case when to_regclass('public.fin_revenue_recognition') is null
+           then 'no_recognition_source' else 'source_present_not_wired' end,
+    'vat_included', false,
+    'currency', case when cardinality(coalesce(v_currencies,'{}')) = 1 then v_currencies[1]
+                     when cardinality(coalesce(v_currencies,'{}')) > 1 then 'mixed_currency'
+                     else null end,
+    'cross_currency_total',
+      case when cardinality(coalesce(v_currencies,'{}')) > 1 then 'unavailable_grouped_by_currency'
+           else 'single_currency' end,
+    'missing_sources', to_jsonb(v_missing),
+    'basis_complete', (v_contract is not null and v_invoiced is not null and v_collected is not null),
+    'freshness_at', now(),
+    'note', 'العقد ≠ المفوتَر ≠ المحصَّل ≠ المعترَف به. لا يُقرأ أيّها «إيرادًا» مطلقًا.');
+end $mrb$;
+
+revoke all on function public.mgmt_revenue_basis(date,date) from public;
+revoke all on function public.mgmt_revenue_basis(date,date) from anon;
+grant execute on function public.mgmt_revenue_basis(date,date) to authenticated;
+
 create or replace function public.mgmt_compute(p_norm jsonb)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare
@@ -826,7 +899,10 @@ begin
       if coalesce(((e_fin->'data')->>'profit_visible')::boolean, false) then
         v_kpis := v_kpis || public.mgmt_kpi('estimated_profitability','finance','money', true,
           'ok', null, null, null,
-          coalesce((((e_fin->'data')->'profit')->>'estimated_net_profit')::numeric, 0), null, 'filtered',
+          -- ★ لا coalesce(...,0) على الربح ★ غياب الربح ليس ربحًا صفرًا:
+          --   الأوّل «لا نعرف» والثاني «تعادُل». وخلطهما يجعل مشروعًا بلا
+          --   بيانات تكلفة يُقرأ متعادلًا. فيبقى NULL ويُرافقه سبب صريح.
+          (((e_fin->'data')->'profit')->>'estimated_net_profit')::numeric, null, 'filtered',
           jsonb_build_object(
             'gross_profit_net', ((e_fin->'data')->'profit')->'gross_profit_net',
             'gross_margin_pct', ((e_fin->'data')->'profit')->'gross_margin_pct',

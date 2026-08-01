@@ -27,7 +27,7 @@ git push origin main
 | 2 | `case_studies_platform_RUNME` | `COMMIT` بلا خطأ (معاملة واحدة) |
 | 3 | `case_studies_platform_POSTCHECK` | نتيجة واحدة · كلّ الصفوف PASS |
 | 4 | `live_operations_dashboard_PREFLIGHT` | `READY` |
-| 5 | `live_operations_dashboard_RUNME` | ⚠️ **معاملتان** (45→2163، 2170→2307) |
+| 5 | `live_operations_dashboard_RUNME` | `COMMIT` بلا خطأ — **معاملة واحدة** بعد الدمج |
 | 6 | `live_operations_dashboard_POSTCHECK` | نتيجة واحدة · كلّ الصفوف PASS |
 | 7 | `kian_ai_assistant_PREFLIGHT` | `READY` |
 | 8 | `kian_ai_assistant_RUNME` | `COMMIT` بلا خطأ (معاملة واحدة) |
@@ -40,8 +40,8 @@ git push origin main
 
 - أيّ `ERROR` في PREFLIGHT ⇒ **لا تُشغّل RUNME**.
 - أيّ صفّ `FAIL` في POSTCHECK ⇒ **لا تنتقل إلى الحزمة التالية**.
-- `live_operations_dashboard_RUNME` **ليس معاملة واحدة**: فشلٌ في معاملته
-  الثانية يترك الأولى ثابتة. أرسل لي نصّ الخطأ ورقم السطر قبل أيّ إجراء.
+- **لا حالة جزئية ممكنة الآن**: الحزم الأربع كلّها معاملة واحدة. أيّ فشل =
+  تراجع كامل. أرسل لي نصّ الخطأ ورقم السطر.
 
 ## ٦) ملفّات لا تُشغَّل
 
@@ -69,13 +69,31 @@ git push origin main
 
 ## ٩) حدود معلَنة بصدق
 
-- **`BASIS_NOT_SEPARATED`** — `executive_reporting` يُخرج ربحًا وهامشًا مقدَّرَين
-  ولا يفصل **المحصَّل** عن **المفوتَر** عن **قيمة العقد**. الفصل قرار دلاليّ
-  ماليّ يخصّك أنت، ولا يُحسم بإعادة تسمية عمود. **مفتوح ومعلَن**، ومثبَّت
-  باختبار يفشل إذا حُذف الإعلان قبل إغلاقه فعلًا.
+- **`BASIS_NOT_SEPARATED` — أُغلقت.** `mgmt_revenue_basis(date,date)` تُعيد
+  أربعة أسس مفصولة: `contract_value_net` · `invoiced_revenue_net` ·
+  `collected_revenue_net` · `recognized_revenue_net`. والأخير **NULL** ما لم
+  يوجد مصدر اعتراف محاسبيّ معتمد — لا يُشتقّ من فاتورة ولا عقد. والضريبة ليست
+  إيرادًا (`vat_included = false`)، ولا تُجمع عملتان
+  (`mixed_currency` + `unavailable_grouped_by_currency`). والربح لم يعد
+  `coalesce(...,0)`: يبقى NULL عند نقص الأساس. الدالّة **للمالك وحده**.
 - **AI Assistant** بلا مزوّد: يعمل بوضع معطَّل معلَن. لا مفاتيح، ولا اتصال، ولا
   ادّعاء ثقة. تفعيله لاحقًا قرار منفصل بإعدادات حقيقية.
-- **`live_operations_dashboard`** معاملتان لا واحدة — أُعلن ذلك ولم يُغيَّر،
-  لأنّ دمجهما تغيير بنيويّ في حزمة لم تُطبَّق بعد ويستحقّ قرارًا مستقلًّا.
+- **`live_operations_dashboard` — دُمجت معاملتاه.** كانت الثانية **لا تُنشئ
+  شيئًا**: كانت الفحص الذاتيّ **بعد** COMMIT، أي تقريرًا بعد الوقوع لا مانعًا
+  قبله — وفشلُه كان يترك 12 جدولًا و56 دالّة مطبَّقةً بلا مصادقة. ولا ضرورة
+  تقنية للفصل (لا CONCURRENTLY ولا VACUUM ولا CREATE EXTENSION). صار الفحص
+  يسبق COMMIT الوحيد.
 - لا شيء ممّا سبق مُثبَت على PostgreSQL: لا وصول لي إلى قاعدة. كلّ التحقّق
   **ساكن** على النصّ. الدليل القاطع هو تشغيلك.
+
+## ١٠) دلالات المقاييس المالية
+
+| المقياس | المعنى | المصدر | عند الغياب |
+|---|---|---|---|
+| `contract_value_net` | قيمة العرض المعتمد قبل الضريبة | `sq_quotes` (approved) | NULL |
+| `invoiced_revenue_net` | الفواتير الصادرة قبل الضريبة | `fin_receivables` | NULL |
+| `collected_revenue_net` | المحصَّل فعلًا قبل الضريبة | `fin_receivables` (paid) | NULL |
+| `recognized_revenue_net` | الاعتراف المحاسبيّ | **لا مصدر معتمد** | **NULL دائمًا** |
+| `estimated_net_profit` | ربح مقدَّر | المالية | **NULL** عند نقص الأساس |
+
+**لا يُعلَن ربح عند أساس ناقص.** ولا يُقرأ أيّ من الأربعة «إيرادًا» مطلقًا.
