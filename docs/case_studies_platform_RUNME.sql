@@ -2712,6 +2712,39 @@ end $perm$;
 -- كتالوج النظام. والـdeparser يرفع حالة الكلمات المفتاحية، فالمطابقة على
 -- مُعرِّفات صغيرة الحروف. ولا مصيدة catch-all: كلّ سطر قادر على الفشل.
 -- ════════════════════════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════════════════════
+-- cs_exec_code — الشيفرة التنفيذية وحدها من مصدر دالّة.
+--   التعليقات تُحذف، ومحتوى السلاسل يُفرَّغ مع إبقاء الحدود. فذكرُ اسم جدول
+--   في شرحٍ أو في رسالة أو كمفتاح JSON لا يُقرأ قراءةً منه. immutable وبلا
+--   وصول إلى بيانات: أداة فحص لا سطح تطبيق.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.cs_exec_code(p_src text)
+returns text language plpgsql immutable as $csx$
+declare i int := 1; n int := length(coalesce(p_src,'')); ch text; nx text;
+        q boolean := false; c boolean := false; out text := '';
+begin
+  while i <= n loop
+    ch := substr(p_src, i, 1); nx := substr(p_src, i+1, 1);
+    if c then
+      if ch = chr(10) then c := false; out := out || chr(10); end if;
+      i := i + 1; continue;
+    end if;
+    if q then
+      if ch = '''' and nx = '''' then i := i + 2; continue; end if;
+      if ch = '''' then q := false; out := out || ''''''; end if;
+      i := i + 1; continue;
+    end if;
+    if ch = '-' and nx = '-' then c := true; i := i + 2; continue; end if;
+    if ch = '''' then q := true; i := i + 1; continue; end if;
+    out := out || ch; i := i + 1;
+  end loop;
+  return out;
+end $csx$;
+
+revoke all on function public.cs_exec_code(text) from public;
+revoke all on function public.cs_exec_code(text) from anon;
+revoke all on function public.cs_exec_code(text) from authenticated;
+
 do $st$
 declare d text; n int; t text;
 begin
@@ -2844,9 +2877,25 @@ begin
                            'cs_public_row(uuid,boolean)','cs_upsert(jsonb)',
                            'cs_public_index(jsonb)','cs_public_study(text)','cs_publish(uuid,text)']
   loop
-    d := pg_get_functiondef(to_regprocedure('public.' || t));
-    if d ilike '%public.projects%' or d ilike '%project_core%' or d ilike '%deliverables%'
-       or d ilike '%deliverable_internal%' then
+    -- ★★ الحكم على **شكل القراءة** لا على ورود الاسم ★★
+    --
+    --  ⚠️ الصيغة السابقة كانت `d ilike '%deliverables%'` على نصّ التعريف كاملًا،
+    --     فأسقطت الترحيلة على cs_snapshot_build. والملتقَط لم يكن قراءةً من
+    --     منصّة المشاريع، بل عمودًا اسمه **deliverables_summary_ar** على
+    --     cs_case_studies نفسها — نصّ حرّ تكتبه دراسة الحالة عمّا سُلِّم، لا
+    --     الجدول المجمَّد. والسلسلة الجزئية لا تفرّق بين الاسمين.
+    --
+    --  والدالّة تقرأ من cs_* وحدها: cs_case_studies · cs_media · cs_metrics ·
+    --  cs_credits · cs_sectors · cs_services وجداول الربط. صفر جدول مشاريع.
+    --
+    --  فالمِجَسّ الآن: **جملة قراءة أو كتابة** تستهدف الاسم **كاملًا**
+    --  (حدّ كلمة على الطرفين)، على الشيفرة بعد حذف التعليقات وتفريغ السلاسل.
+    --  فـdeliverables_summary_ar لا تُطابق `\mdeliverables\M`، وقراءةٌ حقيقية
+    --  `from public.deliverables` تُطابق دائمًا.
+    d := public.cs_exec_code(pg_get_functiondef(to_regprocedure('public.' || t)));
+    if d ~* '\m(from|join|update|into|delete\s+from)\s+(only\s+)?(public\.)?(projects|project_core|deliverables|deliverable_internal)\M'
+       or d ~* '\m(public\.)?(projects|project_core|deliverables|deliverable_internal)\s*\.\s*[a-z_]'
+       or d ~* '\mto_jsonb\s*\(\s*(p|proj|projects|d|deliverables)\s*\)' then
       raise exception 'SELF-TEST: % تقرأ من منصّة المشاريع — النسخ التلقائيّ ممنوع', t;
     end if;
   end loop;

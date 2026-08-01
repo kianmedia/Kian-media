@@ -96,9 +96,25 @@ test("there is no cost or margin column anywhere in the module", () => {
 });
 
 test("nothing is ever copied from the frozen project platform", () => {
-  assert.ok(!/from public\.projects\b/.test(RUNME), "no read of public.projects");
-  assert.ok(!/from public\.project_core\b/.test(RUNME), "no read of project_core");
-  assert.ok(!/from public\.deliverables\b/.test(RUNME), "no read of deliverables");
+  // ⚠️ Executable code only. The self-test's own detector, and the comment that
+  // explains it, both quote "from public.deliverables" as the shape they look
+  // for — documenting a rule is not breaking it. Matching raw text convicted
+  // the explanation, which is the eleventh time in this programme a check has
+  // matched a name instead of a shape.
+  const execOnly = (() => {
+    let out = "", i = 0, q = false;
+    while (i < RUNME.length) {
+      const c = RUNME[i];
+      if (q) { if (c === "'") { if (RUNME.startsWith("''", i)) { i += 2; continue; } q = false; } out += c === "\n" ? "\n" : " "; i++; continue; }
+      if (c === "'") { q = true; out += " "; i++; continue; }
+      if (RUNME.startsWith("--", i)) { while (i < RUNME.length && RUNME[i] !== "\n") { out += " "; i++; } continue; }
+      out += c; i++;
+    }
+    return out;
+  })();
+  assert.ok(!/from public\.projects\b/.test(execOnly), "no read of public.projects");
+  assert.ok(!/from public\.project_core\b/.test(execOnly), "no read of project_core");
+  assert.ok(!/from public\.deliverables\b/.test(execOnly), "no read of deliverables");
   assert.ok(!/references public\.projects/.test(RUNME), "no FK into the frozen platform");
   assert.ok(/project_id\s+uuid,/.test(RUNME), "project_id exists as a plain optional reference");
   assert.ok(/r_no_project_read/.test(POST) && /r_no_frozen_fk/.test(POST),
