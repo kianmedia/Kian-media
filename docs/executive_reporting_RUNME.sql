@@ -1332,7 +1332,7 @@ end $g$;
 -- ════════════════════════════════════════════════════════════════════════════
 do $st$
 declare
-  t text; f text; v_def text; v jsonb; v_b boolean; v_n bigint; v_err text;
+  t text; f text; v_def text; v jsonb; v_b boolean; v_n bigint; v_err text; v_oid oid;
   v_anon boolean := exists (select 1 from pg_roles where rolname = 'anon');
   TABLES     constant text[] := array['mgmt_report_cache','mgmt_audit'];
   PREDICATES constant text[] := array['public.mgmt_can_view()','public.mgmt_can_view_sensitive()',
@@ -1373,10 +1373,18 @@ begin
                   where table_schema = 'public' and table_name = t and grantee = 'anon') then
         raise exception 'MGMT SELF-TEST: anon يملك صلاحية على %', t; end if;
     end loop;
-    for f in select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
-             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-             where n.nspname = 'public' and p.proname like 'mgmt\_%' loop
-      if has_function_privilege('anon', f, 'EXECUTE') then
+    -- ⚠️ الصلاحية تُسأل بـ**oid** لا بنصّ توقيع. تمرير نصّ يجعل PostgreSQL
+    --    يحوّله إلى regprocedure، وتحويلُ النصّ يقرأ **أنواعًا فقط**؛ فأيّ صفّ
+    --    في الكتالوج لا يعود توقيعه المُصاغ نصًّا قابلًا للتحليل يُسقط الترحيلة
+    --    كلّها بـ42601 «invalid type name». والoid لا يُحلَّل، فلا يفشل أصلًا.
+    --    (POSTCHECK يسأل بالoid منذ البداية — وكان RUNME وحده على النصّ.)
+    --    ويبقى النصّ للرسالة البشريّة وحدها: لا يُعاد تحليله أبدًا.
+    for f, v_oid in
+      select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')', p.oid
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname like 'mgmt\_%'
+    loop
+      if has_function_privilege('anon', v_oid, 'EXECUTE') then
         raise exception 'MGMT SELF-TEST: anon يملك EXECUTE على %', f; end if;
     end loop;
   end if;
@@ -1399,8 +1407,10 @@ begin
 
   -- (4) الدوالّ الداخلية لا تُنفَّذ من الواجهة
   foreach f in array INTERNAL loop
-    if to_regprocedure(f) is null then raise exception 'MGMT SELF-TEST: الدالّة الداخلية % مفقودة', f; end if;
-    if has_function_privilege('authenticated', f, 'EXECUTE') then
+    -- التحويل مرّة واحدة، ثمّ السؤال بالoid: لا تحليل نصّيّ ثانٍ.
+    v_oid := to_regprocedure(f);
+    if v_oid is null then raise exception 'MGMT SELF-TEST: الدالّة الداخلية % مفقودة', f; end if;
+    if has_function_privilege('authenticated', v_oid, 'EXECUTE') then
       raise exception 'MGMT SELF-TEST: authenticated يملك EXECUTE على الداخلية %', f; end if;
   end loop;
 
