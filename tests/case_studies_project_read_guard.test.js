@@ -130,6 +130,75 @@ test("(١٣) ★ لا مصدر حقيقة موازٍ: كلّ جداول الحز
   }
 });
 
+// ─── تطابق الحارسين: RUNME وPOSTCHECK ─────────────────────────────────────
+
+const POST = () => read("docs/case_studies_platform_POSTCHECK.sql") || "";
+
+test("(١٤) ★★ RUNME وPOSTCHECK يحكمان بالعقد نفسه ★★", () => {
+  // نجح الفحص الذاتيّ في RUNME وأدان POSTCHECK الشيفرة نفسها — وهذا وحده عطب،
+  // لأنّ أحد الحكمين كذبٌ حتمًا. القاعدة الآن نصٌّ واحد في الملفّين.
+  const RULE = /\\m\(from\|join\|update\|into\|delete\\s\+from\)\\s\+\(only\\s\+\)\?\(public\\\.\)\?\(projects\|project_core\|deliverables\|deliverable_internal\)\\M/;
+  for (const [name, sql] of [["RUNME", CS()], ["POSTCHECK", POST()]]) {
+    assert.match(sql, RULE, `${name} بلا قاعدة الشكل المشتركة`);
+    assert.match(sql, /cs_exec_code/, `${name} لا يجرّد التعليقات والسلاسل قبل الحكم`);
+  }
+  // ⚠️ الصيغة القديمة **سلسلة نصّية بذاتها** ('%deliverables%')، وexecCode
+  //    يُفرّغ محتوى السلاسل بحكم وظيفته — فالبحث عنها فيه مستحيل. تُقاس على
+  //    النصّ بعد حذف التعليقات فقط: الشرح يُستثنى، والشيفرة تُقاس بحرفها.
+  const noComments = (sql) => sql.split("\n").map((l) => {
+    let q = false;
+    for (let i = 0; i < l.length; i++) {
+      if (l[i] === "'") q = !q;
+      else if (!q && l[i] === "-" && l[i + 1] === "-") return l.slice(0, i);
+    }
+    return l;
+  }).join("\n");
+  for (const [name, sql] of [["RUNME", CS()], ["POSTCHECK", POST()]]) {
+    assert.doesNotMatch(noComments(sql), /ilike '%deliverables%'|ilike '%public\.projects%'|ilike '%project_core%'/,
+      `${name} ما زال يطابق سلسلة جزئية على نصّ التعريف`);
+    // وكلّ نداء pg_get_functiondef في فحص التجميد يمرّ عبر cs_exec_code.
+    const freeze = noComments(sql).match(/r_no_project_read[\s\S]{0,1400}/);
+    if (freeze) {
+      const raw = [...freeze[0].matchAll(/pg_get_functiondef\(/g)].length;
+      const wrapped = [...freeze[0].matchAll(/cs_exec_code\(pg_get_functiondef\(/g)].length;
+      assert.equal(raw, wrapped, `${name}: ${raw - wrapped} نداء pg_get_functiondef بلا تجريد`);
+    }
+  }
+});
+
+test("(١٥) ★★ الحكمان متطابقان على نفس الـFixtures ★★", () => {
+  const FIX = [
+    ["select public.cs_sanitize_block(c.deliverables_summary_ar) from public.cs_case_studies c;", false],
+    ["update public.cs_case_studies set deliverables_summary_ar = 'x';", false],
+    ["select c.project_id from public.cs_case_studies c;", false],
+    ["-- from public.projects\nselect 1 from public.cs_media;", false],
+    ["select 'from public.deliverables' from public.cs_media;", false],
+    ["select jsonb_build_object('project', 1) from public.cs_media;", false],
+    ["select 1 from public.projects;", true],
+    ["select 1 from public.cs_media m join public.deliverables d on d.id = m.id;", true],
+    ["update public.projects set name = 'x';", true],
+    ["select * from public.projects;", true],
+    ["select to_jsonb(p) from public.projects p;", true],
+  ];
+  for (const [sql, expected] of FIX) {
+    assert.equal(judge(sql), expected,
+      `حكم مختلف عن المتوقَّع على: ${sql.slice(0, 60)}`);
+  }
+});
+
+test("(١٦) ★ إزالة حدود الكلمة تُعيد الإنذار الكاذب — وتسقط ★", () => {
+  const loose = (sql) => /(from|join|update|into|delete\s+from)?[\s\S]*?(projects|deliverables)/i.test(execCode(sql));
+  const col = "select public.cs_sanitize_block(c.deliverables_summary_ar) from public.cs_case_studies c;";
+  assert.ok(loose(col), "الصيغة الفضفاضة لا تُظهر الإنذار الكاذب — المقارنة بلا معنى");
+  assert.ok(!judge(col), "الصيغة المرسّاة أدانت العمود");
+});
+
+test("(١٧) ★ تعطيل تنظيف التعليقات والسلاسل يُعيد الإدانة ★", () => {
+  const raw = "-- from public.projects\nselect 1 from public.cs_media;";
+  assert.ok(READS_PLATFORM(raw), "بلا تجريد، التعليق يُدان — وهذا ما نمنعه");
+  assert.ok(!judge(raw), "مع التجريد، التعليق يمرّ");
+});
+
 test("SAFE: ساكن فقط (لا قاعدة بيانات ولا شبكة)", () => {
   const src = fs.readFileSync(__filename, "utf8");
   for (const bad of ["fet" + "ch(", "child_" + "process", "service_" + "role"]) {

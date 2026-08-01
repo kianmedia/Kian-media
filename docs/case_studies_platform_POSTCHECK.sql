@@ -276,11 +276,26 @@ r_no_internal_leak as (
          'لا معرّف مشروع ولا ملاحظة داخلية ولا مرجع إذن ولا مصدر رقم ولا معرّف موظّف في مسار المخرَج العامّ' as detail
     from (values ('cs_mask(uuid,jsonb,boolean)'),('cs_snapshot_build(uuid)')) as t(f)),
 
+-- ★★ العقد نفسه المكتوب في الفحص الذاتيّ داخل RUNME — حرفًا بحرف ★★
+--
+--  ⚠️ كانت هذه الكتلة تستعمل `ilike '%deliverables%'` على نصّ التعريف كاملًا،
+--     بينما أُصلح حارس RUNME إلى تحليل شكليّ عبر cs_exec_code. فاختلف الحكمان
+--     على الشيفرة نفسها: نجح الفحص الذاتيّ وأدان POSTCHECK — وهذا وحده عطب،
+--     لأنّ أحد الحكمين كذبٌ حتمًا.
+--     والملتقَط في الحالتين عمودٌ اسمه **deliverables_summary_ar** على
+--     cs_case_studies: في cs_snapshot_build مفتاحُ إخراج، وفي cs_upsert طرفُ
+--     تعيين في SET. ولا واحدة منهما تلمس جدولًا مجمَّدًا.
+--
+--  فالحكم الآن: الشيفرة التنفيذية وحدها (cs_exec_code تحذف التعليقات وتُفرّغ
+--  السلاسل)، وشكلُ جملة قراءة أو كتابة على الاسم **كاملًا** بحدّ كلمة.
 r_no_project_read as (
   select case when to_regprocedure('public.' || f) is null then 'FAIL'
-              when pg_get_functiondef(to_regprocedure('public.' || f)) ilike '%public.projects%' then 'FAIL'
-              when pg_get_functiondef(to_regprocedure('public.' || f)) ilike '%project_core%' then 'FAIL'
-              when pg_get_functiondef(to_regprocedure('public.' || f)) ilike '%deliverables%' then 'FAIL'
+              when public.cs_exec_code(pg_get_functiondef(to_regprocedure('public.' || f)))
+                   ~* '\m(from|join|update|into|delete\s+from)\s+(only\s+)?(public\.)?(projects|project_core|deliverables|deliverable_internal)\M' then 'FAIL'
+              when public.cs_exec_code(pg_get_functiondef(to_regprocedure('public.' || f)))
+                   ~* '\m(public\.)?(projects|project_core|deliverables|deliverable_internal)\s*\.\s*[a-z_]' then 'FAIL'
+              when public.cs_exec_code(pg_get_functiondef(to_regprocedure('public.' || f)))
+                   ~* '\mto_jsonb\s*\(\s*(p|proj|projects|d|deliverables)\s*\)' then 'FAIL'
               else 'PASS' end as verdict,
          'تجميد المنصّة' as area, f as object,
          '⛔ لا نسخ تلقائيّ من منصّة المشاريع — كلّ حقل عامّ مُدخَل أو معتمَد يدويًّا' as detail
