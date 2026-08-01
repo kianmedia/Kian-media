@@ -2016,6 +2016,38 @@ end $st$;
 --     auth.uid() فارغة، فالبوّابة تعيد false ويُقرأ ذلك خطأً على أنّه عطل. هذا
 --     بالضبط ما كسر ترحيلتين في هذا المستودع. نقرأ الكتالوج بدل أن ننفّذ.
 -- ════════════════════════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════════════════════
+-- ai_exec_code — الشيفرة التنفيذية وحدها: التعليقات تُحذف ومحتوى السلاسل
+--   يُفرَّغ. ذكرُ اسم دالّة في شرحٍ أو رسالةٍ ليس نداءً لها، وترتيبُ الكلمات
+--   في النصّ ليس ترتيب التنفيذ.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.ai_exec_code(p_src text)
+returns text language plpgsql immutable set search_path = public as $aix$
+declare i int := 1; n int := length(coalesce(p_src,'')); ch text; nx text;
+        q boolean := false; c boolean := false; out text := '';
+begin
+  while i <= n loop
+    ch := substr(p_src, i, 1); nx := substr(p_src, i+1, 1);
+    if c then
+      if ch = chr(10) then c := false; out := out || chr(10); end if;
+      i := i + 1; continue;
+    end if;
+    if q then
+      if ch = '''' and nx = '''' then i := i + 2; continue; end if;
+      if ch = '''' then q := false; out := out || ''''''; end if;
+      i := i + 1; continue;
+    end if;
+    if ch = '-' and nx = '-' then c := true; i := i + 2; continue; end if;
+    if ch = '''' then q := true; i := i + 1; continue; end if;
+    out := out || ch; i := i + 1;
+  end loop;
+  return out;
+end $aix$;
+
+revoke all on function public.ai_exec_code(text) from public;
+revoke all on function public.ai_exec_code(text) from anon;
+revoke all on function public.ai_exec_code(text) from authenticated;
+
 do $selftest$
 declare v_missing text := ''; v_n int; f text;
 begin
@@ -2074,17 +2106,52 @@ begin
 
   -- (٩) ai_ask يمنع **قبل** الاسترجاع: نصّ المصدر يُقرأ من الكتالوج ويُتحقّق
   --     أنّ العودة عند المنع تسبق أوّل ذكر لـai_search_sources.
+  --  ⚠️ كان هذا الفحص يقارن **مواضع نصّية** في pg_get_functiondef الخام:
+  --       position('blocked_by_guard') > position('ai_search_sources')
+  --     فأسقط الترحيلة. والسبب أنّ **التعليق** الذي يوثّق أنّه «لا نداء
+  --     لـai_search_sources في فرع المنع» يذكر الاسم قبل الرمز، فبدا الاسترجاع
+  --     سابقًا للحارس. أي أنّ الشرحَ الذي ينفي الاسترجاع أُدين به.
+  --     وترتيبُ ظهور الكلمات ليس ترتيب التنفيذ أصلًا؛ فالقياس الآن على
+  --     **الشيفرة التنفيذية**: نداء الحارس، ثمّ عودةٌ مغلقة في فرع المنع،
+  --     ثمّ أوّل نداء استرجاع — بهذا الترتيب، وإلّا فشل.
   if to_regprocedure('public.ai_ask(text,uuid)') is not null then
-    declare src text := pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)'));
+    declare
+      src  text := public.ai_exec_code(pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)')));
+      p_g  int; p_ret int; p_ret2 int; p_ret_stmt int;
     begin
-      if position('blocked_by_guard' in src) = 0
-         or position('blocked_by_guard' in src) > position('ai_search_sources' in src) then
+      p_g   := coalesce(position('ai_guard_question(' in src), 0);
+      p_ret := coalesce(position('ai_search_sources(' in src), 0);
+      -- أوّل `return` بعد الحارس: فرع المنع يجب أن يخرج قبل أيّ استرجاع.
+      p_ret_stmt := case when p_g = 0 then 0
+                    else coalesce(nullif(position('return ' in substr(src, p_g)), 0), 0) + p_g - 1 end;
+      if p_g = 0 then
+        v_missing := v_missing || ' لا-نداء-للحارس-في-ai_ask';
+      elsif p_ret = 0 then
+        v_missing := v_missing || ' لا-استرجاع-في-ai_ask';   -- تغيّر العقد: يُراجَع
+      elsif p_g > p_ret then
         v_missing := v_missing || ' ترتيب-الحارس-قبل-الاسترجاع';
+      elsif p_ret_stmt = 0 or p_ret_stmt > p_ret then
+        v_missing := v_missing || ' فرع-المنع-لا-يعود-قبل-الاسترجاع';
       end if;
-      if position('execute ' in lower(src)) > 0 then
-        v_missing := v_missing || ' ai_ask-يستعمل-EXECUTE';
+      -- ولا مسار ثانٍ للاسترجاع يلتفّ على الحارس.
+      p_ret2 := case when p_ret = 0 then 0
+                else coalesce(nullif(position('ai_search_sources(' in substr(src, p_ret + 1)), 0), 0) end;
+      if p_ret2 > 0 and p_g > p_ret then
+        v_missing := v_missing || ' مسار-استرجاع-ثانٍ-بلا-حارس';
       end if;
     end;
+  end if;
+  if false then
+    declare src text := '';
+    begin
+      null;
+    end;
+  end if;
+  -- ولا SQL ديناميكيّ في مسار السؤال: EXECUTE يفتح بابًا لا يقفله الحارس.
+  if to_regprocedure('public.ai_ask(text,uuid)') is not null
+     and position('execute ' in lower(public.ai_exec_code(
+           pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)'))))) > 0 then
+    v_missing := v_missing || ' ai_ask-يستعمل-EXECUTE';
   end if;
 
   -- (١٠) القيود الحرجة قائمة بالاسم
