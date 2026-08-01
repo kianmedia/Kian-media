@@ -204,7 +204,9 @@ test("(C11) ★ لا حدّ تكرار regex يتجاوز 255 ★", () => {
 });
 
 test("(C15) ★ عدد المعاملات معلوم ومُعلَن — لا يُفترض ★", () => {
-  const declared = { case_studies_platform: 1, live_operations_dashboard: 2,
+  // live_operations كان معاملتين: الثانية لا تُنشئ شيئًا، كانت الفحص الذاتيّ
+  // بعد COMMIT — أي تقرير بعد الوقوع لا مانع قبله. دُمجتا، فصار واحدًا.
+  const declared = { case_studies_platform: 1, live_operations_dashboard: 1,
                      kian_ai_assistant: 1, executive_reporting: 1 };
   for (const p of PKGS) {
     const s = read(file(p, "RUNME"));

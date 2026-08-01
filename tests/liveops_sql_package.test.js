@@ -50,7 +50,17 @@ test("all four files ship", () => {
 test("RUNME is transactional, idempotent and never uses CONCURRENTLY", () => {
   assert.match(RUNME, /^begin;$/m);
   assert.match(RUNME, /^commit;$/m);
-  assert.ok(!/concurrently/i.test(RUNME), "CONCURRENTLY cannot run inside a transaction");
+  // ⚠️ الشيفرة وحدها: التعليق الذي يشرح **غياب** CONCURRENTLY ليس استعمالًا له.
+  //    الصيغة السابقة أدانت تعليقًا يوثّق سبب دمج المعاملتين — وهو تاسع ظهور
+  //    لصنف «طابق الاسم لا الشكل» في هذا البرنامج.
+  const codeOnlyRunme = RUNME.split("\n")
+    .map((l) => { let q = false;
+      for (let i = 0; i < l.length; i++) {
+        if (l[i] === "'") q = !q;
+        else if (!q && l[i] === "-" && l[i + 1] === "-") return l.slice(0, i);
+      }
+      return l; }).join("\n");
+  assert.ok(!/concurrently/i.test(codeOnlyRunme), "CONCURRENTLY cannot run inside a transaction");
 
   // Idempotent DDL only.
   const creates = RUNME.match(/^create table (?!if not exists)/gm) ?? [];
