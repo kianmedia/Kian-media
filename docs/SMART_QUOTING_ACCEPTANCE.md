@@ -1,5 +1,20 @@
 # قبول المرحلة ٤+٥ — التسعير الذكيّ وحُرّاس الربحية
 
+> # ⛔ DOCUMENTATION — DO NOT PASTE INTO THE SQL EDITOR
+> # ⛔ ملفّ توثيقيّ — لا يُنسخ إلى محرّر SQL
+>
+> **EN —** This is a **Markdown** checklist, not executable SQL. Pasting it into the
+> Supabase SQL Editor raises `ERROR: 42601 syntax error at or near "#"`. Nothing is
+> wrong with the database when that happens: the wrong kind of file was executed.
+> Perform these steps **in a browser**, signed in as the roles named below.
+>
+> **ع —** هذا ملفّ **Markdown** توثيقيّ ولا يُنسخ إلى محرّر SQL. نسخُه هناك يرفع
+> `ERROR: 42601` عند «#»، وليس في قاعدة البيانات عطل: نُفِّذ نوعُ ملفٍّ خاطئ.
+> نفِّذ الخطوات **في المتصفّح** بحسابات الأدوار المذكورة أدناه.
+>
+> ✅ `.sql` = يُنفَّذ في محرّر SQL  ·  📄 `.md` = يُقرأ ويُنفَّذ يدويًّا في المتصفّح
+
+
 > **الحالة:** الكود مكتوب ومُختبَر ومبنيّ. **الـSQL لم يُشغَّل على الإنتاج،
 > ولا شيء مدفوع.** هذا الملفّ يقول ما أُنجز، وما يجب أن يفعله المالك بيده،
 > وما لم يُنجَز — بلا تجميل.

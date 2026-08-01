@@ -446,9 +446,15 @@ union all
   -- ─── 17) خطوة التحقّق التي لا يستطيع هذا الملفّ أداءها ────────────────
   --   كلّ ما سبق يعمل بدور postgres وauth.uid() = NULL، فهو يُثبت الشكل لا
   --   السلوك تحت جلسة حقيقية.
+  -- ⚠️ هذا السطر كان يقول «run docs/…ACCEPTANCE.md»، فقُرئ حرفيًّا ونُسخ الملفّ
+  --    التوثيقيّ إلى محرّر SQL فرفع 42601 عند «#». الفعل «run» في مخرَج SQL
+  --    يعني عند القارئ «شغّله هنا». الصياغة الآن تسمّي المكان صراحةً: متصفّح،
+  --    لا محرّر SQL. ولا فعلَ أمرٍ بجوار امتداد ‎.md‎ في أيّ مخرَج تنفيذيّ.
   select 170, '17.live_test_still_required', 'INFO',
          'structure only — behaviour under a real session is NOT proven here',
-         'run docs/EXECUTIVE_REPORTING_ACCEPTANCE.md with owner + non-owner staff + client accounts'
+         'MANUAL, IN A BROWSER — NOT in this SQL editor: open the Markdown checklist '
+           || 'docs/EXECUTIVE_REPORTING_ACCEPTANCE.md and sign in as owner, non-owner staff, '
+           || 'and client. That file is documentation; pasting it here raises 42601.'
 )
 select check_id as "الفحص", verdict as "الحكم", expected as "المتوقّع", detail as "المرصود"
 from checks order by sort_key;
