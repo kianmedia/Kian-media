@@ -273,6 +273,28 @@ t_kpi_keys as (
 -- ════════════════════════════════════════════════════════════════════════
 -- الأحكام — صفّ لكلّ فحص، ولا فحص بلا قيمة متوقّعة مذكورة
 -- ════════════════════════════════════════════════════════════════════════
+-- ★★ التقارير آخر حزمة: لا تُعلَن جاهزيتها قبل إثبات كلّ سابقاتها ★★
+--   وهي طبقة قراءة فوق الجميع، فغياب مصدر يجعل رقمًا ناقصًا يُقرأ صفرًا
+--   صادقًا — وهو أخطر من خطأ ظاهر.
+--   ⚠️ كانت القائمة مكرّرة مرّتين: أزواج (اسم، بادئة) للتفصيل، وبادئات وحدها
+--      للحكم. مصدران لحقيقة واحدة ينحرفان. صارت القائمة واحدة، ومنها يُشتقّ
+--      الحكم والتفصيل معًا.
+t_prior_packages as (
+  select count(*) as n_missing,
+         coalesce(string_agg(x.pkg, ' · ' order by x.pkg), '—') as detail
+  from (values
+      ('communications_hub','comms\_%'), ('operations_center','ops\_%'),
+      ('crm_sales','crm\_%'), ('finance_profitability','fin\_%'),
+      ('commercial_subscriptions','csub\_%'), ('smart_quoting','sq\_%'),
+      ('lead_scoring_routing','lsr\_%'), ('asset_intelligence','custody\_inventory\_%'),
+      ('talent_vendor_network','tvn\_%'), ('vendor_compliance_center','vcc\_%'),
+      ('case_studies_platform','cs\_%'), ('live_operations_dashboard','liveops\_%'),
+      ('kian_ai_assistant','ai\_%')
+    ) as x(pkg, pre)
+  where not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                     where n.nspname = 'public' and c.relkind in ('r','p')
+                       and c.relname like x.pre escape '\')
+),
 checks(sort_key, check_id, verdict, expected, detail) as (
   select 10, '1.tables_rls_policies',
          case when good = total then 'PASS' else 'FAIL' end,
@@ -409,30 +431,16 @@ checks(sort_key, check_id, verdict, expected, detail) as (
          'all 17 KPI keys are built inside mgmt_compute (no dangling catalogue)',
          'missing: ' || detail from t_kpi_keys
   union all
--- ★★ التقارير آخر حزمة: لا تُعلَن جاهزيتها قبل إثبات كلّ سابقاتها ★★
---   كان يتحقّق من ستّ بادئات فقط؛ وهو طبقة قراءة فوق الجميع، فغياب مصدر
---   يجعل رقمًا ناقصًا يُقرأ صفرًا صادقًا — وهو أخطر من خطأ ظاهر.
-  select 91, '★ كلّ الحزم السابقة قائمة قبل إعلان الجاهزية',
-       '13 حزمة',
-       coalesce((select string_agg(x.pkg, ' · ' order by x.pkg) from (values
-           ('communications_hub','comms\_%'), ('operations_center','ops\_%'),
-           ('crm_sales','crm\_%'), ('finance_profitability','fin\_%'),
-           ('commercial_subscriptions','csub\_%'), ('smart_quoting','sq\_%'),
-           ('lead_scoring_routing','lsr\_%'), ('asset_intelligence','custody\_inventory\_%'),
-           ('talent_vendor_network','tvn\_%'), ('vendor_compliance_center','vcc\_%'),
-           ('case_studies_platform','cs\_%'), ('live_operations_dashboard','liveops\_%'),
-           ('kian_ai_assistant','ai\_%')
-         ) as x(pkg, pre)
-        where not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-                           where n.nspname='public' and c.relkind in ('r','p')
-                             and c.relname like x.pre escape '\')), 'كلّها قائمة'),
-       not exists (select 1 from (values
-           ('comms\_%'),('ops\_%'),('crm\_%'),('fin\_%'),('csub\_%'),('sq\_%'),('lsr\_%'),
-           ('custody\_inventory\_%'),('tvn\_%'),('vcc\_%'),('cs\_%'),('liveops\_%'),('ai\_%')
-         ) as y(pre)
-        where not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-                           where n.nspname='public' and c.relkind in ('r','p')
-                             and c.relname like y.pre escape '\'))
+  -- ⚠️ هذا الفرع كان يسقط الملفّ كلّه قبل إنتاج صفّ واحد: عمودٌ **منطقيّ**
+  --    (not exists) في خانة detail النصّية، فيرفض UNION التحليل بـ42804.
+  --    والسبب الأعمق أنّ عمود الحكم سقط فانزاحت الأعمدة يسارًا، فحلّ
+  --    '13 حزمة' محلّ verdict — أي حكمٌ لا يقول PASS ولا FAIL أبدًا.
+  --    أُعيد العمود، وصار الحكم مشتقًّا من العدّ كسائر الفروع.
+  select 91, '15b.all_prior_packages_present',
+         case when n_missing = 0 then 'PASS' else 'FAIL' end,
+         'all 13 prior packages installed before reporting declares readiness',
+         case when n_missing = 0 then 'كلّها قائمة' else 'ناقصة: ' || detail end
+  from t_prior_packages
 
 union all
   -- ─── 17) خطوة التحقّق التي لا يستطيع هذا الملفّ أداءها ────────────────
