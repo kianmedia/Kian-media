@@ -42,14 +42,31 @@ t_no_audit_trace as (
 ),
 
 -- ─── 3) الصلاحيات لم تتغيّر: صفر anon وصفر افتراضيّ PUBLIC ─────────────────
+-- ⚠️ قائمة سماحٍ بالتوقيع الكامل لا كنسٌ ببادئة: حزمة دراسات الحالة تُعلن
+--    «السطح العامّ: ثلاث دوالّ قراءة، ولا رابعة»، وتسحب PUBLIC ثمّ تمنح anon
+--    صراحةً. الكنسُ بـcs_% كان يُدين السطح المقصود.
+cs_public_allowlist(sig) as (values
+  ('public.cs_public_index(jsonb)'),
+  ('public.cs_public_study(text)'),
+  ('public.cs_public_slugs()')
+),
 t_anon as (
-  select count(*) as n, coalesce(string_agg(distinct p.proname, ', '), '—') as detail
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'public'
-    and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
-      or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
-    and exists (select 1 from pg_roles where rolname = 'anon')
-    and has_function_privilege('anon', p.oid, 'EXECUTE')
+  select count(*) as n, coalesce(string_agg(distinct sig, ', '), '—') as detail
+  from (
+    select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
+         or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
+       and exists (select 1 from pg_roles where rolname = 'anon')
+       and has_function_privilege('anon', p.oid, 'EXECUTE')
+  ) x
+  where x.sig not in (select sig from cs_public_allowlist)
+),
+t_public_surface as (
+  select count(*) filter (where to_regprocedure(a.sig) is null) as n_missing,
+         coalesce(string_agg(a.sig, ', ') filter (where to_regprocedure(a.sig) is null), '—') as detail
+  from cs_public_allowlist a
 ),
 t_public_default as (
   select count(*) as n, coalesce(string_agg(distinct p.proname, ', '), '—') as detail
@@ -130,10 +147,17 @@ checks(sort_key, check_id, verdict, expected, detail) as (
          case when n < 0 then 'mgmt_audit غير موجود' else 'found: ' || n end
   from t_no_audit_trace
   union all
-  select 30, '4.no_anon_function_grant',
+  select 30, '4.no_unexpected_anon_grant',
          case when n = 0 then 'PASS' else 'FAIL' end,
-         '0 anon-executable functions across the four packages',
-         'violations: ' || detail from t_anon
+         'anon executes ONLY the three declared public case-study reads',
+         'unexpected: ' || detail from t_anon
+  union all
+  select 33, '4b.public_surface_present',
+         case when n_missing = 0 then 'PASS' else 'FAIL' end,
+         'the three declared public reads still exist',
+         case when n_missing = 0 then 'قائمة'
+              else 'MISSING PUBLIC SURFACE (not an exposure): ' || detail end
+  from t_public_surface
   union all
   select 31, '5.no_default_public_acl',
          case when n = 0 then 'PASS' else 'FAIL' end,

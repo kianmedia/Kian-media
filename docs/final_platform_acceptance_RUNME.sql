@@ -261,6 +261,56 @@ begin
      'no function performs an outbound HTTP call',
      'functions naming an HTTP mechanism: ' || v_n);
 
+  -- ══ (د) السطح العامّ لدراسات الحالة: ثلاثة تواقيع، ولا رابع ═════════════
+  --   العقد من الحزمة نفسها (القسم د في كتلة منحها). يُقاس بالتوقيع الكامل
+  --   لا بالبادئة، فالبادئة تخلط السطح المقصود بالدوالّ الداخليّة.
+  select count(*) into v_n
+    from (
+      select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
+           or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
+         and exists (select 1 from pg_roles where rolname = 'anon')
+         and has_function_privilege('anon', p.oid, 'EXECUTE')
+    ) x
+   where x.sig not in ('public.cs_public_index(jsonb)','public.cs_public_study(text)',
+                       'public.cs_public_slugs()');
+  insert into kian_acceptance_report values
+    (340, 'السطح العامّ', 'anon.only_three_public_reads',
+     case when v_n = 0 then 'PASS' else 'FAIL' end,
+     'anon executes exactly the three declared public reads and nothing else',
+     'unexpected anon-executable signatures: ' || v_n);
+
+  -- والثلاثة قراءةٌ فقط، بإسقاطٍ صريح، ومحروسة بالنشر والإذن.
+  select count(*) into v_n
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('cs_public_index','cs_public_study','cs_public_slugs')
+     and (p.provolatile <> 's'                                  -- ليست stable
+       or not p.prosecdef                                       -- ليست definer
+       or coalesce(array_to_string(p.proconfig, ','), '') not like '%search_path%'
+       or lower(pg_get_functiondef(p.oid)) ~ '(insert[[:space:]]+into|update[[:space:]]|delete[[:space:]]+from)'
+       or lower(pg_get_functiondef(p.oid)) ~ 'to_jsonb[[:space:]]*\([[:space:]]*[a-z_]+[[:space:]]*\)'
+       or lower(pg_get_functiondef(p.oid)) ~ 'select[[:space:]]+\*[[:space:]]+from[[:space:]]+public\.cs_case_studies');
+  insert into kian_acceptance_report values
+    (341, 'السطح العامّ', 'public_reads_are_safe',
+     case when v_n = 0 then 'PASS' else 'FAIL' end,
+     'stable · security definer · pinned search_path · no writes · explicit projection',
+     'violating public functions: ' || v_n);
+
+  -- ولا مسوّدة تُقرأ: البوّابة cs_is_public في كلٍّ منها.
+  select count(*) into v_n
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('cs_public_index','cs_public_study','cs_public_slugs')
+     and pg_get_functiondef(p.oid) not like '%cs_is_public%';
+  insert into kian_acceptance_report values
+    (342, 'السطح العامّ', 'public_reads_gate_on_published',
+     case when v_n = 0 then 'PASS' else 'FAIL' end,
+     'every public read filters through cs_is_public (published + consent + no embargo)',
+     'public functions missing the gate: ' || v_n);
+
   insert into kian_acceptance_report
   select 330, 'الحزم', 'ai.provider_disabled',
          case when coalesce(bool_or(provider_enabled), false) then 'FAIL' else 'PASS' end,

@@ -99,18 +99,46 @@ t_packages as (
                        and c.relname like x.pre escape '\')
 ),
 
--- ─── لا صلاحية تنفيذ لـanon ولا لـPUBLIC على أسطح الحزم الأربع ─────────────
---   anon عضوٌ في PUBLIC، فمنحُ authenticated لا يُلغي الوراثة: يُقاس الأثر
---   الفعليّ بـhas_function_privilege لا بقراءة المنح المباشرة.
+-- ─── صلاحية anon: قائمة سماحٍ صريحة بالتوقيع الكامل، لا كنسٌ ببادئة ───────
+--   ⚠️ كان هذا الفحص يشترط «صفر anon على كلّ cs_%» فأدان **السطح العامّ
+--      المقصود**. وحزمة دراسات الحالة تُعلن في كتلة منحها، القسم (د):
+--        «★ السطح العامّ: ثلاث دوالّ قراءة، ولا رابعة ★»
+--      وتسحب PUBLIC أوّلًا ثمّ تمنح anon **صراحةً** لثلاثة تواقيع بأعيانها،
+--      وتحجب كلّ دالّة cs_ داخليّة عن anon وauthenticated معًا. فالمنح مقصود
+--      وموروثُ PUBLIC مسحوب — والكنسُ بالبادئة خلطَ السطحَ بالداخل.
+--   العقد الآن: anon يُنفّذ **هذه الثلاثة وحدها**، وصفرٌ فيما عداها.
+cs_public_allowlist(sig) as (values
+  ('public.cs_public_index(jsonb)'),
+  ('public.cs_public_study(text)'),
+  ('public.cs_public_slugs()')
+),
 t_acl as (
   select count(*) as n,
-         coalesce(string_agg(distinct p.proname, ', '), '—') as detail
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'public'
-    and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
-      or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
-    and exists (select 1 from pg_roles where rolname = 'anon')
-    and has_function_privilege('anon', p.oid, 'EXECUTE')
+         coalesce(string_agg(distinct sig, ', '), '—') as detail
+  from (
+    select 'public.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'mgmt\_%' or p.proname like 'cs\_%'
+         or p.proname like 'liveops\_%' or p.proname like 'ai\_%')
+       and exists (select 1 from pg_roles where rolname = 'anon')
+       and has_function_privilege('anon', p.oid, 'EXECUTE')
+  ) x
+  where x.sig not in (select sig from cs_public_allowlist)
+),
+-- والسطح العامّ المُعلَن موجودٌ فعلًا ومنفَّذ من anon: غيابُه ليس انكشافًا،
+-- فيُفصَل حكمُه عن حكم الانكشاف ولا يُخلطان.
+t_public_surface as (
+  select count(*) filter (where oid is null) as n_missing,
+         count(*) filter (where oid is not null and not can_anon) as n_unreachable,
+         coalesce(string_agg(sig, ', ') filter (where oid is null), '—') as missing_list,
+         coalesce(string_agg(sig, ', ') filter (where oid is not null and not can_anon), '—') as unreachable_list
+  from (
+    select a.sig, to_regprocedure(a.sig) as oid,
+           coalesce(exists (select 1 from pg_roles where rolname = 'anon')
+                    and has_function_privilege('anon', to_regprocedure(a.sig), 'EXECUTE'), false) as can_anon
+    from cs_public_allowlist a
+  ) y
 ),
 t_acl_public as (
   select count(*) as n,
@@ -173,10 +201,21 @@ rows_all(sort_key, check_id, verdict, expected, detail) as (
          case when n_missing = 0 then 'كلّها قائمة' else 'ناقصة: ' || detail end
   from t_packages
   union all
-  select 50, '8.no_anon_execute',
+  select 50, '8.no_unexpected_anon_execute',
          case when n = 0 then 'PASS' else 'FAIL' end,
-         '0 anon-executable functions across mgmt_/cs_/liveops_/ai_',
-         'violations: ' || detail from t_acl
+         'anon executes ONLY the three declared public case-study reads',
+         'unexpected: ' || detail from t_acl
+  union all
+  select 52, '8b.public_surface_present',
+         case when n_missing > 0 then 'FAIL'
+              when n_unreachable > 0 then 'FAIL' else 'PASS' end,
+         'the three public reads exist and anon can reach them',
+         case when n_missing > 0
+                then 'MISSING PUBLIC SURFACE (not an exposure): ' || missing_list
+              when n_unreachable > 0
+                then 'PRESENT BUT anon CANNOT REACH IT — the public site would go dark: ' || unreachable_list
+              else 'الثلاثة قائمة ومتاحة لـanon كما يقتضي العقد' end
+  from t_public_surface
   union all
   select 51, '9.no_default_public_acl',
          case when n = 0 then 'PASS' else 'FAIL' end,
@@ -206,7 +245,8 @@ verdict as (
     case
       when exists (select 1 from rows_all where verdict = 'FAIL'
                      and check_id in ('1.roles_present','5.required_functions','6.required_tables',
-                                      '7.all_14_packages_installed','8.no_anon_execute',
+                                      '7.all_14_packages_installed','8.no_unexpected_anon_execute',
+                                      '8b.public_surface_present',
                                       '9.no_default_public_acl','10.ai_provider_disabled'))
         then 'STOP'
       when exists (select 1 from rows_all where verdict = 'FAIL')
