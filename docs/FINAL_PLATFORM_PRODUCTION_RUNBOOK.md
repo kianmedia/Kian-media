@@ -18,7 +18,7 @@
 git push origin main
 ```
 
-**FINAL_HEAD المتوقَّع:** `(يُملأ بعد آخر التزام — انظر التقرير)`
+**FINAL_HEAD المتوقَّع:** `545908e2b46bf8ec088b8046ce764cd34b6f720b`
 
 تحقّق بعد الدفع: `git rev-parse origin/main` يساوي القيمة أعلاه.
 
