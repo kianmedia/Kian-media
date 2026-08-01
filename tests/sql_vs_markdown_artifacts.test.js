@@ -21,6 +21,16 @@ const DOCS = path.join(ROOT, "docs");
 const list = (ext) => fs.readdirSync(DOCS).filter((f) => f.endsWith(ext)).map((f) => `docs/${f}`);
 const read = (r) => fs.readFileSync(path.join(ROOT, r), "utf8");
 const SQL = list(".sql");
+
+/**
+ * فعلُ الأمر بحدٍّ **واعٍ باليونيكود**.
+ * ⚠️ ‎\b‎ في JavaScript حدُّ كلمةٍ لاتينيّ: يقوم على ‎\w‎ = [A-Za-z0-9_]. والحرف
+ *    العربيّ ليس منها، فـ‎/شغّل\b/‎ لا تُطابق أبدًا — كلّ الأفعال العربيّة في هذا
+ *    الحارس كانت **شيفرةً ميّتة**، ولم يكن يمسك إلّا الإنجليزيّة. البديل
+ *    ‎(?![\p{L}\p{N}_])‎ مع الراية u: ينفي أن يليه حرفٌ أو رقمٌ بأيّ خطّ، فيمسك
+ *    «شغّل ملفّ.md» ولا يمسك «شغّلها».
+ */
+const VERB = /(^|[\s(«"'`])(run|execute|paste|شغّل|شغل|نفّذ|نفذ|الصق|انسخ)(?![\p{L}\p{N}_])/iu;
 const MD = list(".md");
 
 /** أسطر الشيفرة: بلا تعليقات ‎--‎ ولا كتل ‎/* *​/‎ */
@@ -56,7 +66,7 @@ test("(١) ★★ لا ملفّ .md يظهر ضمن قائمة ملفّات SQL 
       if (!item) return;
       const namesMd = /\.md\b/.test(l);
       const nearSql = lines.slice(Math.max(0, i - 4), i + 5).some((x) => /\.sql\b/.test(x));
-      const runVerb = /(^|\s)(run|execute|شغّل|شغل|نفّذ|نفذ)\b/i.test(l);
+      const runVerb = VERB.test(l);
       if (namesMd && nearSql && runVerb) bad.push(`${f}:${i + 1}: ${l.trim().slice(0, 90)}`);
     });
   }
@@ -70,7 +80,7 @@ test("(٢) ★★ لا Runbook يأمر بتشغيل ملفّ .md ★★", () =>
   for (const f of MD.filter((x) => /RUNBOOK|RUN_ORDER|DEPLOY/i.test(x))) {
     for (const [i, l] of read(f).split("\n").entries()) {
       if (/^\s*>/.test(l)) continue;                       // اقتباس تحذيريّ
-      if (/(^|\s)(run|execute|paste|شغّل|شغل|نفّذ|نفذ|الصق|انسخ)\b[^\n]{0,80}?\.md\b/i.test(l)
+      if (VERB.test(l) && /\.md\b(?!\d)/.test(l)
           && !/(لا|not|never|do not|don't|بدل|instead)/i.test(l))
         bad.push(`${f}:${i + 1}: ${l.trim().slice(0, 100)}`);
     }
@@ -147,7 +157,7 @@ test("(٧) ★★ لا مخرَج SQL يأمر بتشغيل ملفّ .md ★★"
         const t = m[1];
         // ⚠️ بحدود: pg_catalog.md5 يحوي «.md» وليس ملفًّا. الامتداد ينتهي بحدّ كلمة.
         if (!/\.md\b(?!\d)/.test(t)) continue;
-        if (/(^|\s)(run|execute|paste|شغّل|شغل|نفّذ|نفذ|الصق)\s/i.test(t)
+        if (VERB.test(t)
             && !/NOT in this SQL editor|MANUAL, IN A BROWSER|لا يُنسخ/i.test(t))
           bad.push(`${f}:${i + 1}: «${t.slice(0, 95)}»`);
       }
@@ -159,8 +169,7 @@ test("(٧) ★★ لا مخرَج SQL يأمر بتشغيل ملفّ .md ★★"
 
 test("(٨) ★ الفاحص غير أجوف ★", () => {
   // الحالة التي وقعت فعلًا تُدان، والصياغة المصحّحة تمرّ، وmd5 لا يُدان
-  const judge = (t) => /\.md\b(?!\d)/.test(t)
-    && /(^|\s)(run|execute|paste|شغّل|نفّذ)\s/i.test(t)
+  const judge = (t) => /\.md\b(?!\d)/.test(t) && VERB.test(t)
     && !/NOT in this SQL editor|MANUAL, IN A BROWSER|لا يُنسخ/i.test(t);
   assert.equal(judge("run docs/EXECUTIVE_REPORTING_ACCEPTANCE.md with owner"), true, "الحالة الأصليّة لم تُدَن");
   assert.equal(judge("MANUAL, IN A BROWSER — NOT in this SQL editor: open docs/X.md"), false, "الصياغة المصحّحة أُدينت");

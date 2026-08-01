@@ -13,7 +13,8 @@
 
 ## الخطوات
 1. ادفع الكود: `git push origin main`.
-2. شغّل ملفات SQL بالترتيب في `CUSTODY_ENTERPRISE_SQL_RUN_ORDER.md`.
+2. اقرأ `CUSTODY_ENTERPRISE_SQL_RUN_ORDER.md` (ملفّ Markdown يُقرأ ولا يُنسخ إلى
+   محرّر SQL)، ثمّ شغّل ملفّات **`.sql`** المذكورة فيه بالترتيب.
 3. أضِف `CRON_SECRET` في Vercel → إعادة نشر (يُفعّل الـ cron في `vercel.json`).
 4. Vercel `npm install` سيثبّت `qrcode` تلقائيًا (مطلوب لطباعة QR).
 5. فعّل الأعلام من إعدادات النظام.

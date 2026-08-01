@@ -178,7 +178,8 @@ checks(sort_key, check_id, verdict, expected, detail) as (
   union all
   select 900, '12.browser_acceptance_outstanding', 'MANUAL_REQUIRED',
          'six UI journeys can only be proven in a browser with real sessions',
-         'docs/FINAL_PLATFORM_ACCEPTANCE_MANUAL.md — Markdown: read it, never paste it here'
+         'MANUAL, IN A BROWSER — NOT in this SQL editor: '
+           || 'docs/FINAL_PLATFORM_ACCEPTANCE_MANUAL.md is Markdown documentation.'
 )
 
 select check_id as "الفحص", verdict as "الحكم", expected as "المتوقّع", detail as "المرصود"
