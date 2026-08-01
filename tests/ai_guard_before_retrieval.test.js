@@ -34,16 +34,25 @@ function execCode(sql) {
   return out;
 }
 
-/** العقد نفسه المكتوب في الفحص الذاتيّ. يُعيد سبب الرفض أو null. */
+/**
+ * العقد نفسه المكتوب في الفحص الذاتيّ، بمحاكاة **أمينة** لحساب SQL:
+ * position() تُعيد 0 عند الغياب (لا -1)، والفهرسة من 1.
+ * ⚠️ نموذج indexOf كان يستر نفيًا صامتًا: الصياغة الأولى في RUNME كانت
+ *    coalesce(nullif(position('return ' in substr(src,p_g)),0),0) + p_g - 1،
+ *    فإذا غاب `return` بعد الحارس أعطت p_g - 1 — لا صفرًا ولا أكبر من p_ret —
+ *    فتمرّ دالّة تنادي الحارس ثمّ تتجاهله وتسترجع بلا شرط. صُحّح المصدران معًا.
+ */
 function judge(sql) {
   const src = execCode(sql);
-  const g = src.indexOf("ai_guard_question(");
-  const ret = src.indexOf("ai_search_sources(");
-  if (g < 0) return "لا-نداء-للحارس";
-  if (ret < 0) return "لا-استرجاع";
-  if (g > ret) return "ترتيب-الحارس-قبل-الاسترجاع";
-  const retStmt = src.indexOf("return ", g);
-  if (retStmt < 0 || retStmt > ret) return "فرع-المنع-لا-يعود-قبل-الاسترجاع";
+  const pos = (n) => { const i = src.indexOf(n); return i < 0 ? 0 : i + 1; };
+  const p_g = pos("ai_guard_question(");
+  const p_ret = pos("ai_search_sources(");
+  if (p_g === 0) return "لا-نداء-للحارس";
+  if (p_ret === 0) return "لا-استرجاع";
+  if (p_g > p_ret) return "ترتيب-الحارس-قبل-الاسترجاع";
+  const rel = src.slice(p_g - 1).indexOf("return ");
+  const p_ret_stmt = rel < 0 ? 0 : rel + p_g;
+  if (p_ret_stmt === 0 || p_ret_stmt > p_ret) return "فرع-المنع-لا-يعود-قبل-الاسترجاع";
   return null;
 }
 
@@ -91,6 +100,24 @@ test("(٦) ★★ اسم الاسترجاع في تعليق لا يُدان — 
     for r in select * from public.ai_search_sources(v_q, v_roles, 5) loop null; end loop;`),
     null, "التعليق الذي ينفي الاسترجاع أُدين به — العطل نفسه عاد");
 });
+test("(٦ب) ★★ الحارس مُنادى ومُتجاهَل بلا عودة بعده — يُدان ★★", () => {
+  assert.equal(judge(`
+    v_guard := public.ai_guard_question(v_q);
+    for r in select * from public.ai_search_sources(v_q, v_roles, 5) loop null; end loop;`),
+    "فرع-المنع-لا-يعود-قبل-الاسترجاع",
+    "نداء الحارس ثمّ تجاهله مرّ — النفي الصامت عاد");
+});
+
+test("(٦ج) ★ حساب p_ret_stmt يُبقي «غير موجود» صفرًا في الملفّين ★", () => {
+  for (const [f, src] of [["RUNME", AI()],
+                          ["POSTCHECK", read("docs/kian_ai_assistant_POSTCHECK.sql") || ""]]) {
+    assert.doesNotMatch(src, /coalesce\(nullif\(position\('return '[\s\S]{0,80}?\+\s*\w*p_g\s*-\s*1/,
+      `${f}: الغياب يتحوّل إلى p_g - 1 بدل الصفر — نفي صامت`);
+    assert.match(src, /position\('return ' in substr\([\s\S]{0,40}?\)\s*=\s*0 then 0/,
+      `${f}: لا فرع صريح يُبقي الغياب صفرًا`);
+  }
+});
+
 test("(٧) ★ ai_ask الحقيقية تمرّ بالعقد الجديد ★", () => {
   const s = AI();
   const i = s.indexOf("create or replace function public.ai_ask");

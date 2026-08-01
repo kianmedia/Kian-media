@@ -2122,8 +2122,13 @@ begin
       p_g   := coalesce(position('ai_guard_question(' in src), 0);
       p_ret := coalesce(position('ai_search_sources(' in src), 0);
       -- أوّل `return` بعد الحارس: فرع المنع يجب أن يخرج قبل أيّ استرجاع.
+      -- ⚠️ «غير موجود» يجب أن يبقى صفرًا. الصياغة الأولى كانت
+      --    coalesce(nullif(position(...),0),0) + p_g - 1، فإذا لم يوجد `return`
+      --    بعد الحارس البتّة أعطت p_g - 1 — وهي ليست صفرًا ولا أكبر من p_ret،
+      --    فتمرّ دالّة تنادي الحارس ثمّ تتجاهله وتسترجع بلا شرط. نفي صامت.
       p_ret_stmt := case when p_g = 0 then 0
-                    else coalesce(nullif(position('return ' in substr(src, p_g)), 0), 0) + p_g - 1 end;
+                         when position('return ' in substr(src, p_g)) = 0 then 0
+                         else position('return ' in substr(src, p_g)) + p_g - 1 end;
       if p_g = 0 then
         v_missing := v_missing || ' لا-نداء-للحارس-في-ai_ask';
       elsif p_ret = 0 then

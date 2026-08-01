@@ -169,18 +169,71 @@ r_public_surface_service_only as (
     from (values ('ai_public_ask(text,text)'),('ai_public_lead_draft(jsonb,text,text,text,text)')) as v(f)),
 
 -- ─── (٣) المحتوى المسترجَع بيانات لا تعليمات ───────────────────────────────
-r_guard_before_retrieval as (
-  select case when to_regprocedure('public.ai_ask(text,uuid)') is null then 'FAIL'
-              when position('blocked_by_guard' in pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)'))) > 0
-               and position('blocked_by_guard' in pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)')))
-                 < position('ai_search_sources' in pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)')))
-              then 'PASS' else 'FAIL' end as verdict,
-         'حقن التعليمات' as area, 'المنع يسبق الاسترجاع' as object,
-         '★ عند المنع تعود ai_ask قبل بلوغ ai_search_sources، فلا يُقرأ صفّ معرفة واحد ويبقى retrieved_count = 0' as detail),
+-- ⚠️ كان هذا الفحص يقارن **مواضع نصّية** في pg_get_functiondef الخام:
+--       position('blocked_by_guard') < position('ai_search_sources')
+--    فأدان تركيبًا ناجحًا (145 PASS / 1 FAIL) والدالّة سليمة. والسبب أنّ
+--    **التعليق** في فرع المنع يوثّق أنّه «لا نداء لـai_search_sources في هذا
+--    الفرع إطلاقًا»، فيذكر الاسم نصّيًّا قبل الرمز — فبدا الاسترجاع سابقًا
+--    للحارس. أي أنّ الجملة التي تنفي الاسترجاع هي التي أدانت الشيفرة.
+--    وترتيبُ ظهور الكلمات ليس ترتيب التنفيذ أصلًا.
+--    العقد الآن هو عقد RUNME نفسه حرفًا بحرف (الالتزام 2ea378e): يُجرَّد النصّ
+--    من التعليقات ويُفرَّغ محتوى السلاسل عبر public.ai_exec_code، ثمّ يُقاس
+--    **التدفّق**: نداء الحارس ← عودةٌ مغلقة في فرع المنع ← أوّل نداء استرجاع.
+--    ملاحظة اقتران: ai_exec_code تُركّبها RUNME في المعاملة نفسها التي تُركّب
+--    فيها ai_ask، فوجودها مضمون بعد تركيب ناجح. وغيابها يرفع 42883 عند
+--    التحليل النحويّ — وهي إشارة صريحة إلى أنّ RUNME لم تُركَّب، لا إخفاء فشل.
+ask_flow as (
+  select s.src,
+         coalesce(position('ai_guard_question(' in s.src), 0) as p_g,
+         coalesce(position('ai_search_sources(' in s.src), 0) as p_ret
+    from (select case when to_regprocedure('public.ai_ask(text,uuid)') is null then null
+                      else public.ai_exec_code(
+                             pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)')))
+                 end as src) s),
 
+-- أوّل `return` بعد الحارس: فرع المنع يجب أن يخرج قبل أيّ استرجاع.
+ask_flow_pos as (
+  select f.src, f.p_g, f.p_ret,
+         -- ⚠️ «غير موجود» يبقى صفرًا: coalesce(nullif(...,0),0) + p_g - 1 كانت
+         --    تعطي p_g - 1 عند غياب `return` بعد الحارس، فتمرّ دالّة تنادي
+         --    الحارس ثمّ تتجاهله وتسترجع بلا شرط.
+         case when f.p_g = 0 then 0
+              when position('return ' in substr(f.src, f.p_g)) = 0 then 0
+              else position('return ' in substr(f.src, f.p_g)) + f.p_g - 1
+         end as p_ret_stmt
+    from ask_flow f),
+
+r_guard_before_retrieval as (
+  select case when src is null then 'FAIL'
+              when p_g   = 0   then 'FAIL'
+              when p_ret = 0   then 'FAIL'
+              when p_g > p_ret then 'FAIL'
+              when p_ret_stmt = 0 or p_ret_stmt > p_ret then 'FAIL'
+              else 'PASS' end as verdict,
+         'حقن التعليمات' as area, 'المنع يسبق الاسترجاع' as object,
+         case when src is null then 'ai_ask(text,uuid) غير موجودة'
+              when p_g   = 0 then 'لا نداء لـai_guard_question في الشيفرة التنفيذية لـai_ask'
+              when p_ret = 0 then 'لا نداء لـai_search_sources: تغيّر عقد الاسترجاع ويجب مراجعته'
+              when p_g > p_ret then 'الاسترجاع يسبق الحارس في التدفّق'
+              when p_ret_stmt = 0 or p_ret_stmt > p_ret
+                   then 'فرع المنع لا يبلغ return قبل أوّل استرجاع'
+              else '★ القياس على التدفّق لا على ترتيب الكلمات: حارس ← عودة مغلقة ← أوّل استرجاع. '
+                   || 'عند المنع تعود ai_ask قبل بلوغ ai_search_sources، فلا يُقرأ صفّ معرفة واحد ويبقى retrieved_count = 0'
+         end as detail
+    from ask_flow_pos),
+
+-- ⚠️ فحوص **النفي** (تُدين عند العثور) تُقاس على الشيفرة المجرَّدة لا على
+--    النصّ الخام: تعليقٌ أو سلسلة تذكر الرمز كانت تُدين شيفرة سليمة — وهو
+--    الصنف نفسه الذي أسقط «المنع يسبق الاسترجاع».
+--    والاتّجاه آمن بالبرهان: ai_exec_code تحذف ولا تضيف، فالمجرَّد ⊆ الخام،
+--    فالنفي لا ينتقل إلا من FAIL إلى PASS — ولا يُنشئ فشلًا جديدًا أبدًا.
+--    أمّا فحوص **الإثبات** (تُنجح عند العثور) فتُترك على النصّ الخام عمدًا:
+--    تجريدُها يجعلها أشدّ وقد يقلب PASS إلى FAIL، وذلك تغييرٌ آخر بمخاطرة
+--    مختلفة لا تُدرَج في إصلاح إنذار كاذب.
 r_no_execute_in_ask as (
   select case when to_regprocedure('public.ai_ask(text,uuid)') is null then 'FAIL'
-              when lower(pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)'))) ~ '\yexecute\y'
+              when lower(public.ai_exec_code(
+                     pg_get_functiondef(to_regprocedure('public.ai_ask(text,uuid)')))) ~ '\yexecute\y'
               then 'FAIL' else 'PASS' end as verdict,
          'حقن التعليمات' as area, 'ai_ask بلا EXECUTE' as object,
          'نصّ المستخدم ونصّ المصدر لا يبلغان أيّ سياق تنفيذيّ' as detail),
@@ -194,7 +247,7 @@ r_execute_census as (
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'ai\_%'
      and p.proname not in ('ai_gate','ai_perm')
-     and lower(pg_get_functiondef(p.oid)) ~ '\yexecute\y'),
+     and lower(public.ai_exec_code(pg_get_functiondef(p.oid))) ~ '\yexecute\y'),
 
 r_gate_uses_catalog as (
   select case when to_regprocedure('public.ai_gate(text)') is null then 'FAIL'
@@ -233,7 +286,8 @@ r_no_project_membership as (
          'عضوية المشروع ليست صلاحية معرفة. دوالّ تخالف: ' || count(*) as detail
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'ai\_%'
-     and lower(pg_get_functiondef(p.oid)) ~ '(project_members|is_project_member|can_access_project|pc_can_read_project)'),
+     and lower(public.ai_exec_code(pg_get_functiondef(p.oid)))
+           ~ '(project_members|is_project_member|can_access_project|pc_can_read_project)'),
 
 r_unapproved_never_indexed as (
   select case when to_regprocedure('public.ai_source_reindex(uuid)') is null then 'FAIL'
@@ -276,7 +330,8 @@ r_no_http as (
          'دوالّ ai_ التي تذكر http/pg_net/dblink/curl: ' || count(*) || ' — يجب أن تكون صفرًا' as detail
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'ai\_%'
-     and lower(pg_get_functiondef(p.oid)) ~ '(net\.http|http_post|http_get|pg_net|dblink|curl_)'),
+     and lower(public.ai_exec_code(pg_get_functiondef(p.oid)))
+           ~ '(net\.http|http_post|http_get|pg_net|dblink|curl_)'),
 
 r_no_relay as (
   select case when count(*) = 0 then 'PASS' else 'FAIL' end as verdict,
@@ -284,7 +339,7 @@ r_no_relay as (
          'دوالّ ai_ التي تكتب في طابور بريد أو إشعار خارجيّ: ' || count(*) || ' — يجب أن تكون صفرًا' as detail
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'ai\_%'
-     and lower(pg_get_functiondef(p.oid)) ~
+     and lower(public.ai_exec_code(pg_get_functiondef(p.oid))) ~
          'insert[[:space:]]+into[[:space:]]+(public\.)?(email_outbox|notification_queue|notifications|comms_messages|whatsapp_messages)\y'),
 
 r_no_entity_creation as (
@@ -293,7 +348,7 @@ r_no_entity_creation as (
          'دوالّ ai_ التي تُنشئ مشروعًا أو عميلًا أو فرصة أو عرض سعر: ' || count(*) || ' — يجب أن تكون صفرًا' as detail
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'ai\_%'
-     and lower(pg_get_functiondef(p.oid)) ~
+     and lower(public.ai_exec_code(pg_get_functiondef(p.oid))) ~
          'insert[[:space:]]+into[[:space:]]+(public\.)?(projects|project_core|deliverables|clients|crm_leads|crm_opportunities|opportunity_requests|sq_quotes|invoices)\y'),
 
 r_provider_off as (
