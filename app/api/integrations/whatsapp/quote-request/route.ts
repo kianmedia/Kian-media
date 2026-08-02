@@ -8,14 +8,59 @@
 // touch the existing quote_requests portal table; writes whatsapp_quote_requests.
 // ════════════════════════════════════════════════════════════════════════
 
+// ─────────────────────────────────────────────────────────────────────────
+// Wave 0 · V2-0.6-A — SECURITY HARDENING OF AN EXISTING ROUTE.
+// This is NOT a WhatsApp feature and NOT an expansion of the integration
+// (G7 keeps it frozen). Nothing about the RPC, its parameters, the flags or
+// the credentials changes; the functional path is byte-for-byte the same.
+// Two defects found by docs/PUBLIC_POST_RATE_LIMIT_COVERAGE.md are closed:
+//
+//   1. NO RATE LIMIT. Public, unauthenticated, and every accepted call reaches
+//      Postgres through the SERVICE KEY. Reuses lib/server/rateLimit.ts — the
+//      same helper /api/public/intake and /api/public/secure-document use.
+//      No second limiter, no new dependency.
+//
+//   2. RESPONSE ORACLE. Failures returned the RAW PostgREST message
+//      (`error: r.error`), so a caller could tell "this conversation exists but
+//      is closed" from "no such conversation" from "database error" — i.e.
+//      probe whether a conversation id, and by extension a customer, is real.
+//      The raw text also leaked the RPC name and schema detail to anonymous
+//      callers, the exact leak /api/public/intake already fixed. Every failure
+//      now returns ONE opaque code with ONE status.
+//
+// Safe to make uniform because the only caller is fire-and-forget:
+// app/quote-request/page.tsx does `void fetch(...).catch(() => {})` and never
+// reads the status or the body. Success keeps its exact previous shape.
+// ─────────────────────────────────────────────────────────────────────────
 import { NextResponse } from "next/server";
 import { rpcAsService } from "@/lib/server/supabaseAdmin";
 import { sendQuoteConfirmations } from "@/lib/server/quoteConfirm";
+import { rateLimit, clientKey } from "@/lib/server/rateLimit";
+import { pgRedact } from "@/lib/portal/pgerror";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const asStr = (v: unknown) => (typeof v === "string" ? v : "");
+
+/**
+ * One shape for EVERY failure: same status, same body, no detail.
+ *
+ * Rate-limited, malformed JSON, missing conversation id, unknown conversation,
+ * closed conversation and database error are indistinguishable from outside.
+ * Status is 200 like the pre-existing RPC-failure path, so the public form is
+ * never shown a technical error — and so the two former 400s stop standing out
+ * as a separate, probe-able class.
+ */
+const notLinked = () => NextResponse.json({ ok: false, error: "not_linked" }, { status: 200 });
+
+/**
+ * Generous for a real visitor — the legitimate flow fires this at most once per
+ * submitted form — and hostile to probing. Per-instance memory, so like every
+ * other limiter in this repo it slows casual abuse rather than stopping a
+ * distributed one; stated as a residual risk, not sold as protection.
+ */
+const PER_IP = { limit: 10, windowMs: 60 * 60_000 };
 
 interface LinkedQuote {
   id?: string; external_request_id?: string | null; phone?: string | null; email?: string | null;
@@ -30,10 +75,14 @@ export async function POST(req: Request) {
     lead_source?: unknown; priority?: unknown; duration?: unknown; preferred_date?: unknown;
     mode?: unknown; quote_id?: unknown;
   };
-  try { b = await req.json(); } catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
+  // Before parsing and before the RPC, so a flood costs as little as possible
+  // and a limited caller never reaches the service key.
+  if (!rateLimit(`wa-quote:ip:${clientKey(req)}`, PER_IP.limit, PER_IP.windowMs).allowed) return notLinked();
+
+  try { b = await req.json(); } catch { return notLinked(); }
 
   const conversationId = asStr(b.conversation_id);
-  if (!conversationId) return NextResponse.json({ ok: false, error: "conversation_id_required" }, { status: 400 });
+  if (!conversationId) return notLinked();
 
   const services = Array.isArray(b.services) ? (b.services as unknown[]).map((s) => asStr(s)).filter(Boolean)
     : asStr(b.services) ? [asStr(b.services)] : [];
@@ -65,9 +114,15 @@ export async function POST(req: Request) {
     p_quote_id: quoteId,
   });
   if (!r.ok) {
-    // not_found_or_forbidden / bad conversation → 200 with ok:false so the public
-    // form never errors out the customer; the Sheets submission still succeeded.
-    return NextResponse.json({ ok: false, error: r.error }, { status: 200 });
+    // not_found_or_forbidden / bad conversation / DB error → ONE opaque code, so
+    // the customer never sees a technical error AND an outsider cannot tell which
+    // of those it was. The real reason is logged server-side (redacted) instead of
+    // being handed to an anonymous caller.
+    console.log(JSON.stringify({
+      tag: "WA_QUOTE_LINK_FAILED",
+      error: pgRedact(String(r.error)).slice(0, 200),
+    }));
+    return notLinked();
   }
   const q = r.data || {};
 
