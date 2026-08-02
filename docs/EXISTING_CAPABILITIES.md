@@ -175,6 +175,18 @@ WhyKian → Process → Industries → Clients → Reviews → Social → Contac
 | 37 | **PWA** | لا SQL | — | `lib/pwa/*`, `public/sw.js` | `app/manifest.ts`, `app/offline` |
 | 38 | **Mobile (Expo)** | يعيد استخدام Supabase | لا SQL | `apps/mobile/src/lib/{api,supabase}.ts` | `HomeScreen` · `LoginScreen` · `ScanScreen` |
 
+### 2.1 إضافة بعد قراءة v2.0 — قدرات لم يرصدها الجرد الأول
+
+راجعتُ هذا الملف بعد وصول `MASTER_BRIEF.md` (v2.0)، فكشف أن أربع قدرات يطلبها v2.0
+**موجودة بالفعل** ولم يرصدها الجرد الأول:
+
+| القدرة | الدليل | يقابل بند v2.0 |
+|---|---|---|
+| **CI فعّال على GitHub Actions** | `.github/workflows/ci.yml` — وظيفتان: `web` (lint → typecheck → test → build على `push` و`pull_request`) و`mobile` (typecheck + `expo-doctor`) | `V2-7.8-B` |
+| **ترويسات أمان شاملة حيّة** | `next.config.js:14-60` — `X-Content-Type-Options` · `X-Frame-Options` · `X-XSS-Protection` · `Referrer-Policy` · `Permissions-Policy` (بتعليل موثَّق لـ`geolocation=(self)` يمنع كسر تسجيل حضور الموظفين) · **CSP بنصفين: منفَّذ (`frame-ancestors` · `base-uri` · `form-action` · `object-src` · `upgrade-insecure-requests`) + Report-Only للباقي**. ⚠️ **`HSTS` غير مدرج** | `V2-0.6-B` |
+| **62 شعار عميل معالَج** | `public/clients` — v2.0 يقدّرها بـ22 | `V2-2.2-A` |
+| **`/quick-access` صفحة روابط لا نموذج** | `app/quick-access/page.tsx` — `href` فقط إلى `/quote-request` و`/book-meeting` و`/upload-files` | `V2-0.1-E` (مبني على مقدمة خاطئة) |
+
 ---
 
 ## 3) الأنظمة العرضية (Cross-cutting)
@@ -374,6 +386,10 @@ WhyKian → Process → Industries → Clients → Reviews → Social → Contac
 | N-12 | **Offline write/sync queue** | موثّق صراحةً كـ«ميزة غير موجودة عمدًا» في `FINAL_PRODUCTION_READINESS_MATRIX.md` §4 |
 | N-13 | **بيئة Demo/Preview منفصلة ببيانات وهمية** | لا أثر — لكن أيضًا **لا `DEMO_MODE` في Production** ✅ (الخطر غير قائم) |
 | N-14 | **QR يفتح صفحة عامة آمنة** | QR موجود (`custody_qr_events`, `lib/qr/*`) لكنه داخل البوابة؛ راجع `docs/QR_SECURITY_CONTRACT.md` قبل الحكم |
+| N-15 | **صفحة 404 مخصصة** | **لا `not-found.tsx` في `app/`**. `app/error.tsx` موجود (500) + 7 حدود خطأ داخل البوابة |
+| N-16 | **`lib/flags.ts`** (المصدر الذي يفترضه v2.0 §G6) | **غير موجود** — الأعلام في 18 جدول `*_settings` + ~20 متغير بيئة (§6) |
+| N-17 | **`HSTS`** ضمن ترويسات الأمان | غير مدرج في `next.config.js` رغم شمول بقية الترويسات |
+| N-18 | **حزم يفترضها v2.0 وغير مثبَّتة** | `next-intl` · `@vercel/og` · `suncalc` · `@sentry/nextjs` · `playwright` — لا واحدة منها في `package.json` |
 
 ---
 
