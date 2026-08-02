@@ -1,12 +1,15 @@
-# KIAN PLATFORM — MASTER EXECUTION BRIEF v2.1 (DRAFT — REALITY-RECONCILED)
+# KIAN PLATFORM — MASTER EXECUTION BRIEF v2.1 (APPROVED — REALITY-RECONCILED)
 
-> ## ⚠️ حالة هذا المستند
-> **مسودة `_DRAFT` جانبية.** لا تحلّ محل `MASTER_BRIEF.md` (v2.0) ولا تلغيه.
-> v2.0 **لم يُمس ولم يُنقل ولم يُعدَّل ولم يُؤرشف** أثناء إنتاج هذه المسودة.
-> ترقية هذا الملف إلى `MASTER_BRIEF_v2.1.md` وأرشفة v2.0 إلى `docs/archive/` تتمّان
-> **في مهمة منفصلة بعد اعتماد خالد في GATE A** — لا ضمن هذه المهمة إطلاقًا.
+> ## ✅ حالة هذا المستند
+> **معتمَد.** هذا هو **المرجع التنفيذي الوحيد** لمنصة كيان اعتبارًا من 2026-08-02.
+> اعتمده خالد صراحةً عند GATE A، ويحلّ محل v2.0 بالكامل.
 >
-> **الأساس:** `MASTER_BRIEF.md` v2.0 (170 سطرًا) + `MASTER_ORDER_FINAL.md` (Rev.2) +
+> **v2.0 مؤرشَف بلا تعديل** في
+> [`docs/archive/MASTER_BRIEF_v2.0.md`](docs/archive/MASTER_BRIEF_v2.0.md)
+> (`sha256 0cb5bbdc…9c2e7` — مطابق بايت ببايت للملف الذي سُلِّم).
+> يُرجَع إليه للمرجعية التاريخية فقط. ❌ **لا يُنفَّذ منه شيء.**
+>
+> **الأساس:** v2.0 (170 سطرًا) + `MASTER_ORDER_FINAL.md` (Rev.2) +
 > تدقيق واقع المستودع على `HEAD 7b92391` (2026-08-02).
 > **المستندات المرافقة:** [`EXISTING_CAPABILITIES.md`](docs/EXISTING_CAPABILITIES.md) ·
 > [`DATABASE_APPLICATION_STATUS.md`](docs/DATABASE_APPLICATION_STATUS.md) ·

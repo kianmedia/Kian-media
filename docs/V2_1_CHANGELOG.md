@@ -1,9 +1,9 @@
-# V2_1_CHANGELOG — سجل التغييرات من v2.0 إلى مسودة v2.1
+# V2_1_CHANGELOG — سجل التغييرات من v2.0 إلى v2.1 (المعتمَدة)
 
 > **الحالة:** مُنتَج ضمن مهمة `MASTER_ORDER_FINAL.md` (READ-ONLY audit).
 > **الفرع:** `docs/v2_1-audit` · **شجرة الكود:** `7b92391` (2026-08-02)
-> **المصدر:** `MASTER_BRIEF.md` v2.0 (170 سطرًا) — **لم يُمس ولم يُنقل ولم يُعدَّل.**
-> **الوجهة:** [`MASTER_BRIEF_v2.1_DRAFT.md`](../MASTER_BRIEF_v2.1_DRAFT.md)
+> **المصدر:** v2.0 (170 سطرًا) — مؤرشَف بلا تعديل في [`docs/archive/MASTER_BRIEF_v2.0.md`](archive/MASTER_BRIEF_v2.0.md).
+> **الوجهة:** [`MASTER_BRIEF_v2.1.md`](../MASTER_BRIEF_v2.1.md)
 > **الأدلة:** [`OVERLAP_DEDUP_MATRIX.md`](OVERLAP_DEDUP_MATRIX.md) — كل ID هنا له صف هناك.
 
 ---

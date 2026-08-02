@@ -11,7 +11,7 @@
 ## كيف تُقرأ هذه المصفوفة
 
 **IDs ثابتة** بصيغة `V2-<wave>.<item>-<letter>` — تُستخدم **نفسها** في
-[`MASTER_BRIEF_v2.1_DRAFT.md`](../MASTER_BRIEF_v2.1_DRAFT.md) و
+[`MASTER_BRIEF_v2.1.md`](../MASTER_BRIEF_v2.1.md) و
 [`V2_1_CHANGELOG.md`](V2_1_CHANGELOG.md) و[`V2_1_EXECUTIVE_SUMMARY_AR.md`](V2_1_EXECUTIVE_SUMMARY_AR.md).
 
 **Overlap Level:** `None` · `Low` · `Medium` · `High` · `Exact Duplicate`
