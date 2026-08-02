@@ -40,6 +40,7 @@ export async function POST(req: Request) {
     type?: unknown; email?: unknown; phone?: unknown; name?: unknown; company?: unknown; city?: unknown;
     reference?: unknown; services?: unknown; details?: unknown; preferred_date?: unknown;
     preferred_contact?: unknown; source?: unknown; files?: unknown;
+    consent_given?: unknown; consent_at?: unknown; consent_version?: unknown;
   };
   // Reject an oversized body BEFORE parsing it — an unbounded req.json() on a public
   // endpoint is free memory pressure for anyone who wants it.
@@ -100,5 +101,33 @@ export async function POST(req: Request) {
     console.log(JSON.stringify({ tag: "PUBLIC_INTAKE_FAILED", error: String(r.error).slice(0, 200) }));
     return NextResponse.json({ ok: false, error: "capture_failed" }, { status: 200 });
   }
-  return NextResponse.json({ ok: true, id: r.data }, { status: 200 });
+
+  // ─── Wave 0 · V2-0.1-F — record consent, additively ────────────────────────
+  // DELIBERATELY A SECOND CALL, NOT NEW PARAMETERS ON capture_public_intake.
+  // PostgREST resolves RPCs by argument NAME: adding p_consent_* to the call above
+  // would make EVERY public submission fail with PGRST202 until the migration is
+  // applied — turning a privacy improvement into a total intake outage. This leg is
+  // strictly additive: the row is already committed before we get here, so a missing
+  // function costs a log line and nothing else.
+  let consentRecorded = false;
+  if (b.consent_given === true && r.data) {
+    const c = await rpcAsService<boolean>("public_intake_set_consent", {
+      p_intake_id: r.data,
+      p_given: true,
+      p_at: cap(asStr(b.consent_at), CAP.short) || new Date().toISOString(),
+      p_version: cap(asStr(b.consent_version), CAP.short),
+    });
+    consentRecorded = c.ok;
+    if (!c.ok) {
+      // Named tag so an unapplied migration is visible in the Vercel log instead of
+      // silently degrading to "we have consent" when we do not.
+      console.log(JSON.stringify({
+        tag: "PUBLIC_INTAKE_CONSENT_NOT_RECORDED",
+        hint: "run docs/consent_capture_EXTENSION_RUNME.sql",
+        error: String(c.error).slice(0, 200),
+      }));
+    }
+  }
+
+  return NextResponse.json({ ok: true, id: r.data, consent_recorded: consentRecorded }, { status: 200 });
 }

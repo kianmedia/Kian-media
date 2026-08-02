@@ -5,6 +5,8 @@ import { Label, TextField, TextArea, SelectField } from "@/components/forms/Fiel
 import { submitToSheets, makeRef, isValidMobile, isValidEmail, captureIntake } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
+import ConsentField from "@/components/forms/ConsentField";
+import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentPayload } from "@/lib/consent";
 
 const WA_NUMBER = "966503422999";
 
@@ -33,6 +35,7 @@ function Form() {
   // leg is no-cors and unreadable, so this is the only honest success signal we have.
   const [confirmed, setConfirmed] = useState(true);
   const [sending, setSending] = useState(false);
+  const [agreed, setAgreed] = useState(false);   // V2-0.1 privacy consent
   const [reference, setReference] = useState("");
   const [f, setF] = useState({
     "Name": "", "Company": "", "Mobile": "", "Email": "",
@@ -56,6 +59,11 @@ function Form() {
     // honest success gate below meaningful.
     if (!f["Email"] || !isValidEmail(f["Email"])) {
       alert(isAr ? "البريد الإلكتروني مطلوب وصحيح" : "A valid email address is required");
+      return;
+    }
+    // V2-0.1-C. Inert while the flag is off.
+    if (consentBlocksSubmit(agreed)) {
+      alert(isAr ? CONSENT_REQUIRED_MESSAGE.ar : CONSENT_REQUIRED_MESSAGE.en);
       return;
     }
     setSending(true);
@@ -101,6 +109,7 @@ function Form() {
       preferred_date: f["Preferred Date"],
       preferred_contact: meetingTypeLabel,
       source: "book-meeting",
+      ...(consentPayload(agreed) ?? {}),
     });
     setConfirmed(mirror.ok);
     setSending(false);
@@ -134,6 +143,9 @@ function Form() {
       <div><Label htmlFor="no">{t({ ar: "ملاحظات", en: "Notes" })}</Label><TextArea id="no" value={f["Notes"]} onChange={(v) => set("Notes", v)} rows={4} /></div>
       <div><Label htmlFor="ls">{t({ ar: "كيف تعرفت علينا؟", en: "How did you hear about us?" })}</Label>
         <SelectField id="ls" value={f["Lead Source"]} onChange={(v) => set("Lead Source", v)} options={LEAD_SOURCES.map((l) => ({ value: l.en, label: isAr ? l.ar : l.en }))} /></div>
+
+      {/* V2-0.1-C — renders nothing while the flag is off. */}
+      <ConsentField id="meeting-privacy-consent" checked={agreed} onChange={setAgreed} isAr={isAr} />
 
       <button onClick={submit} disabled={sending} className="btn-red" style={{ width: "100%", justifyContent: "center", marginTop: "8px", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         <span>{sending ? "..." : t({ ar: "تأكيد الحجز", en: "Confirm Booking" })}</span>

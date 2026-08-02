@@ -5,6 +5,8 @@ import { Label, TextField, TextArea } from "@/components/forms/Field";
 import { submitToSheets, makeRef, isValidMobile, isValidEmail, captureIntake } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
+import ConsentField from "@/components/forms/ConsentField";
+import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentPayload } from "@/lib/consent";
 
 function Form() {
   const { t, isAr } = useI18n();
@@ -13,6 +15,7 @@ function Form() {
   // leg is no-cors and unreadable, so this is the only honest success signal we have.
   const [confirmed, setConfirmed] = useState(true);
   const [sending, setSending] = useState(false);
+  const [agreed, setAgreed] = useState(false);   // V2-0.1 privacy consent
   const [reference, setReference] = useState("");
   const [f, setF] = useState({
     "Client Name": "", "Company": "", "Mobile": "", "Email": "", "Project Name": "",
@@ -43,6 +46,11 @@ function Form() {
       alert(isAr ? "الرجاء إضافة رابط واحد على الأقل" : "Please add at least one link");
       return;
     }
+    // V2-0.1-D. Inert while the flag is off.
+    if (consentBlocksSubmit(agreed)) {
+      alert(isAr ? CONSENT_REQUIRED_MESSAGE.ar : CONSENT_REQUIRED_MESSAGE.en);
+      return;
+    }
     setSending(true);
     const ref = makeRef("upload");
     await submitToSheets("upload", { ...f, "Reference": ref, "Language": isAr ? "AR" : "EN" });
@@ -58,6 +66,7 @@ function Form() {
       reference: ref,
       details: [f["Project Name"], f["Notes"]].filter(Boolean).join(" — "),
       source: "upload-files",
+      ...(consentPayload(agreed) ?? {}),
       files: [
         { label: "Google Drive", url: f["Google Drive Link"] },
         { label: "WeTransfer", url: f["WeTransfer Link"] },
@@ -94,6 +103,9 @@ function Form() {
       <div><Label htmlFor="wt">{t({ ar: "رابط WeTransfer", en: "WeTransfer Link" })}</Label><TextField id="wt" type="url" dir="ltr" placeholder="https://wetransfer.com/..." value={f["WeTransfer Link"]} onChange={(v) => set("WeTransfer Link", v)} /></div>
       <div><Label htmlFor="db">{t({ ar: "رابط Dropbox", en: "Dropbox Link" })}</Label><TextField id="db" type="url" dir="ltr" placeholder="https://dropbox.com/..." value={f["Dropbox Link"]} onChange={(v) => set("Dropbox Link", v)} /></div>
       <div><Label htmlFor="no">{t({ ar: "ملاحظات المشروع", en: "Project Notes" })}</Label><TextArea id="no" value={f["Notes"]} onChange={(v) => set("Notes", v)} rows={4} /></div>
+
+      {/* V2-0.1-D — renders nothing while the flag is off. */}
+      <ConsentField id="upload-privacy-consent" checked={agreed} onChange={setAgreed} isAr={isAr} />
 
       <button onClick={submit} disabled={sending} className="btn-red" style={{ width: "100%", justifyContent: "center", marginTop: "8px", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         <span>{sending ? "..." : t({ ar: "إرسال الروابط", en: "Submit Links" })}</span>

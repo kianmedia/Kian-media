@@ -5,6 +5,8 @@ import { Label, TextField, TextArea, SelectField, CheckField } from "@/component
 import { submitToSheets, captureIntake, makeRef, isValidEmail, isValidMobile } from "@/lib/submitForm";
 import SuccessCard from "@/components/forms/SuccessCard";
 import { useI18n } from "@/lib/i18n";
+import ConsentField from "@/components/forms/ConsentField";
+import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentPayload } from "@/lib/consent";
 
 // Full Kian Media services — value is the canonical EN; ar is the Arabic label.
 const SERVICES = [
@@ -68,6 +70,7 @@ function Form() {
   // leg is no-cors and unreadable, so this is the only honest success signal we have.
   const [confirmed, setConfirmed] = useState(true);
   const [sending, setSending] = useState(false);
+  const [agreed, setAgreed] = useState(false);   // V2-0.1 privacy consent
   const [reference, setReference] = useState("");
 
   const [f, setF] = useState({
@@ -118,6 +121,11 @@ function Form() {
       alert(isAr ? "الرجاء اختيار نطاق الميزانية" : "Please select a budget range");
       return;
     }
+    // V2-0.1-B. Inert while the flag is off.
+    if (consentBlocksSubmit(agreed)) {
+      alert(isAr ? CONSENT_REQUIRED_MESSAGE.ar : CONSENT_REQUIRED_MESSAGE.en);
+      return;
+    }
     setSending(true);
     const ref = makeRef("quote");
 
@@ -163,6 +171,7 @@ function Form() {
       type: "quote", email: f["Email"], phone: f["Mobile"], name: f["Full Name"], company: f["Company"],
       city: f["City"], reference: ref, services, details: f["Description"], preferred_date: f["Delivery Date"],
       source: "quote-request",
+      ...(consentPayload(agreed) ?? {}),
     });
 
     // WhatsApp link-back: ONLY when the form was opened from a conversation
@@ -280,6 +289,9 @@ function Form() {
 
       {/* Large project description */}
       <div><Label htmlFor="de">{t({ ar: "اشرح مشروعك بالتفصيل", en: "Describe your project in detail" })}</Label><TextArea id="de" value={f["Description"]} onChange={(v) => set("Description", v)} rows={6} /></div>
+
+      {/* V2-0.1-B — renders nothing while the flag is off. */}
+      <ConsentField id="quote-privacy-consent" checked={agreed} onChange={setAgreed} isAr={isAr} />
 
       <button onClick={submit} disabled={sending} className="btn-red" style={{ width: "100%", justifyContent: "center", marginTop: "8px", opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
         <span>{sending ? "..." : t({ ar: "إرسال الطلب", en: "Submit Request" })}</span>

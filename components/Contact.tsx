@@ -2,6 +2,8 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import ConsentField from "@/components/forms/ConsentField";
+import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentEnabled } from "@/lib/consent";
 
 const PROJECT_TYPES_AR = ["فيلم مؤسّسي", "إعلان تجاري", "تصوير جوي بالدرون", "بثّ مباشر", "تغطية فعالية", "تصوير عقاري", "فيلم وثائقي", "أعراس", "محتوى سوشيال", "غير ذلك"];
 const PROJECT_TYPES_EN = ["Corporate Film", "Commercial / Ad", "Drone Cinematography", "Live Streaming", "Event Coverage", "Real Estate", "Documentary", "Wedding", "Social Reels", "Other"];
@@ -19,8 +21,16 @@ export default function Contact() {
     project: "", budget: "", message: "",
   });
 
+  const [agreed, setAgreed] = useState(false);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    // V2-0.1-A. With the flag off consentBlocksSubmit() is always false, so this
+    // guard is inert and the form behaves exactly as it did before Wave 0.
+    if (consentBlocksSubmit(agreed)) {
+      alert(isAr ? CONSENT_REQUIRED_MESSAGE.ar : CONSENT_REQUIRED_MESSAGE.en);
+      return;
+    }
     const msg =
       `طلب عرض إنتاج | Kian Media Proposal Request\n\n` +
       `👤 Name: ${form.name}\n🏢 Company: ${form.company}\n` +
@@ -223,6 +233,9 @@ export default function Contact() {
               </div>
             </div>
 
+            {/* V2-0.1-A — renders nothing while the flag is off. */}
+            <ConsentField id="contact-privacy-consent" checked={agreed} onChange={setAgreed} isAr={isAr} />
+
             <div className="mt-8 flex flex-wrap gap-3 items-center">
               <button type="submit" className="btn-red">
                 <span>{t({ ar: "إرسال عبر واتساب", en: "Send via WhatsApp" })}</span>
@@ -230,8 +243,13 @@ export default function Contact() {
               </button>
             </div>
 
+            {/* Once the explicit checkbox is live the implied-consent clause must go:
+                keeping both would claim consent twice, once in a form the visitor
+                never actively agreed to. The response-time promise stays either way. */}
             <p className="f-sans mt-6" style={{ fontSize: "10px", letterSpacing: "1px", color: "rgba(255,255,255,0.3)" }}>
-              {t({ ar: "بإرسال النموذج، توافق على تواصلنا بخصوص مشروعك. الردّ خلال ٢٤ ساعة.", en: "By submitting, you agree we'll contact you about your project. Response within 24 hours." })}
+              {consentEnabled()
+                ? t({ ar: "الردّ خلال ٢٤ ساعة.", en: "Response within 24 hours." })
+                : t({ ar: "بإرسال النموذج، توافق على تواصلنا بخصوص مشروعك. الردّ خلال ٢٤ ساعة.", en: "By submitting, you agree we'll contact you about your project. Response within 24 hours." })}
             </p>
           </motion.form>
         </div>
