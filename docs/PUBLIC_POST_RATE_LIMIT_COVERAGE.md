@@ -1,0 +1,60 @@
+# PUBLIC_POST_RATE_LIMIT_COVERAGE — تدقيق تغطية حدّ المعدّل
+
+> **Wave 0 · V2-0.6-A** · تاريخ التدقيق: 2026-08-02 · شجرة الكود: `7b92391`
+
+## لماذا تدقيق بدل بناء
+
+v2.0 §0.6 يطلب «rate limiting middleware على مسارات POST». **النظام مبني ومطبَّق على
+Production بدليل مؤرَّخ** (2026-07-27، `public_rate_limits` و`rl_consume` يردّان `42501`):
+`lib/server/rateLimit.ts` + جدول + RPC. بناء middleware ثانٍ = **محرك حدّ ثانٍ**، وهو
+ما يمنعه G13-6.
+
+فتحوّل البند إلى سؤال واحد: **أي مسار POST عام ما زال بلا حدّ؟**
+
+## المنهج
+
+```bash
+for f in $(find app/api -name route.ts); do
+  grep -c 'export async function POST' "$f"      # يقبل POST؟
+  grep -cE 'rateLimit\(|rl_consume' "$f"          # محدود؟
+  grep -cE 'authGetUserId|CRON_SECRET|Bearer|…'   # محروس؟
+done
+```
+**٣٤ مسارًا** يقبل POST.
+
+## النتيجة
+
+### أ) عامّ + محدود ✅
+
+| المسار | الحدّ |
+|---|---|
+| `/api/public/intake` | ١٢/ساعة/IP · ٦/ساعة/بريد · جسم ≤١٠٠KB · سقوف طول |
+| `/api/public/assistant` | محدود + `AI_PUBLIC_FP_SALT` |
+| `/api/public/live-status` | محدود + `LIVE_STATUS_FP_SALT` |
+| `/api/comms/legacy-notify` | محدود + سرّ توقيع |
+
+### ب) 🔴 عامّ + **بلا حدّ** — ما وجده هذا التدقيق
+
+| # | المسار | الحماية القائمة | الفجوة | القرار |
+|---|---|---|---|---|
+| **١** | `/api/public/secure-document` | رمز ≥٣٢ محرفًا · تفويض في القاعدة (`vcc_grant_open`) · تدقيق شامل للرفض · بصمة مملَّحة · ردّ موحّد للمجهول والملغى | **لا حدّ إطلاقًا**، وكل نداء مقبول يصل إلى Postgres **بمفتاح الخدمة** ⇒ تخمين رموز بلا عدّاد + تضخيم مجاني | ✅ **أُصلح في Wave 0** — ٣٠/ساعة/IP بنفس `lib/server/rateLimit.ts`. الردّ عند التجاوز **بشكل «رمز غير صالح»** لا `429`، كي لا يؤكّد للمُعدِّد أنه يطرق بابًا حقيقيًا |
+| **٢** | `/api/integrations/whatsapp/quote-request` | لا شيء — لا حدّ ولا مصادقة. يستدعي `wa_link_quote_request_public` بصلاحية service_role | مسار عام بلا أي كابح | ⏳ **مُبلَّغ، لم يُصلَح** — 🔒 **G7: تكامل WhatsApp مجمَّد.** لمسه يحتاج قرار خالد. **بند GATE مقترح لـWave 1** |
+
+### ج) غير عامّ — محروس بآلية أخرى (لا يحتاج حدًّا)
+
+| العائلة | الحارس |
+|---|---|
+| `/api/cron/*` (٣) | `CRON_SECRET` — تفشل مغلقة بـ٥٠٠ بدونه |
+| `/api/integrations/zoho/*` (٧) | Bearer مُتحقَّق منه أو سرّ webhook |
+| `/api/integrations/{hr,project,custody,rental,custody-inventory}/notify` | سرّ داخلي أو جلسة موظف |
+| `/api/portal/*` · `/api/rental/evidence/*` | جلسة مُصادَقة + RLS |
+| `/api/integrations/whatsapp/incoming` | `N8N_WHATSAPP_INGEST_SECRET` |
+
+## المخاطر المتبقّية (تُذكر ولا تُخفى)
+
+1. **الحدّ في ذاكرة النسخة (per-instance).** Vercel تشغّل عدّة نسخ ⇒ الحدّ الفعّال
+   مضروب في عددها، والهجوم الموزّع يمرّ. يُبطئ العبث العابر ولا يوقف هجومًا منظَّمًا.
+   العلاج الحقيقي WAF (مرتبط بقرار ترقية Vercel Pro — سؤال GATE A).
+2. **`rl_consume` في القاعدة موجود ومطبَّق لكنه غير مستخدَم من كل المسارات** — الحدّ
+   الحالي في الذاكرة. توحيدهما تحسين مؤجَّل، لا فجوة أمنية.
+3. **البند (٢) يبقى مفتوحًا** حتى قرار خالد بشأن G7.

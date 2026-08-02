@@ -23,9 +23,26 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
+import { rateLimit, clientKey } from "@/lib/server/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// ─── Wave 0 · V2-0.6-A — abuse brake ────────────────────────────────────────
+// Found by the coverage audit in docs/PUBLIC_POST_RATE_LIMIT_COVERAGE.md: this
+// route was the only endpoint under /api/public/* with NO limit, while every
+// accepted call reaches Postgres through the SERVICE KEY. Two consequences:
+//   • unmetered token guessing (the DB audits denials, but auditing an attack
+//     is not the same as slowing it), and
+//   • free amplification — one cheap HTTP POST per privileged round trip.
+// Reuses lib/server/rateLimit.ts, the same helper /api/public/intake uses. No
+// second limiter, no new dependency (G13).
+//
+// 30/hour is generous for a real recipient (open a grant, then download a few
+// documents from it) and hostile to enumeration. Same per-instance caveat the
+// intake route documents: this slows casual abuse, it does not stop a
+// distributed one — stated as a residual risk, not sold as protection.
+const PER_IP = { limit: 30, windowMs: 60 * 60_000 };
 
 const SUPABASE_URL = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -84,6 +101,17 @@ export async function POST(req: Request) {
     // Honest: the feature is not configured. Not "invalid link" — that would
     // send the recipient chasing the wrong problem.
     return NextResponse.json({ ok: false, error: "server_not_configured" }, { status: 503, headers: NO_STORE });
+  }
+
+  // Applied BEFORE parsing the body so a flood costs as little as possible, and
+  // BEFORE the RPC so a rate-limited caller never reaches the service key.
+  // Deliberately shaped like an unknown token rather than a 429: a distinct
+  // "you are rate limited" reply would confirm to an enumerator that they are
+  // hitting a real endpoint worth continuing against. Same reasoning as the
+  // module's existing rule that a revoked link is indistinguishable from an
+  // unknown one.
+  if (!rateLimit(`secdoc:ip:${clientKey(req)}`, PER_IP.limit, PER_IP.windowMs).allowed) {
+    return NextResponse.json({ ok: false, reason: "invalid_or_expired" }, { status: 200, headers: NO_STORE });
   }
 
   let token = "";

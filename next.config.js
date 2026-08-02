@@ -21,6 +21,25 @@ const nextConfig = {
           { key: "X-XSS-Protection",                  value: "1; mode=block" },
           { key: "Referrer-Policy",                   value: "strict-origin-when-cross-origin" },
 
+          // ── Wave 0 · V2-0.6-B — HSTS ────────────────────────────────────────
+          // The only header from the v2.1 Wave-0 list that was genuinely absent;
+          // everything else here already shipped in Phase 2.
+          //
+          // Vercel already serves this app over HTTPS and redirects HTTP, but that
+          // redirect is one plaintext round trip on the FIRST visit — enough for an
+          // attacker on a hostile network to intercept before the redirect lands.
+          // HSTS removes that window for every subsequent visit.
+          //
+          // ⚠️ NO `preload`, deliberately. Preload submits the apex domain to a
+          // browser-baked list that is slow and painful to reverse, and it would
+          // cover EVERY subdomain of kianmedia.com — including any that is not on
+          // HTTPS yet. `includeSubDomains` is already the aggressive part; preload
+          // is a separate, irreversible decision that needs Khaled's sign-off and a
+          // confirmed inventory of subdomains.
+          //
+          // Two years, matching the common baseline.
+          { key: "Strict-Transport-Security",         value: "max-age=63072000; includeSubDomains" },
+
           // ── Phase 2 hardening ──────────────────────────────────────────────
           // Deny the hardware APIs this app provably does not use, so an injected script
           // or an embedded third party cannot reach them.
