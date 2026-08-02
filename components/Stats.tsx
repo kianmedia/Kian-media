@@ -2,18 +2,14 @@
 import { motion } from "framer-motion";
 import { useI18n } from "@/lib/i18n";
 import Counter from "@/components/Counter";
+import { STATS, statDisplay } from "@/content/stats";
 
 /**
  * Prominent stats band — cinematic black/red, large animated numbers.
  * Reinforces credibility for B2B / government audience.
  * Self-contained; place anywhere in the homepage (e.g. after <About/> or <Portfolio/>).
  */
-const STATS = [
-  { to: 20,   suffix: "+", ar: "سنة خبرة",       en: "Years of Experience" },
-  { to: 4000, suffix: "+", ar: "إنتاج مكتمل",     en: "Productions Delivered" },
-  { to: 2000, suffix: "+", ar: "عميل",            en: "Clients Served" },
-  { to: 13,   suffix: "",  ar: "منطقة في المملكة", en: "Regions Across KSA" },
-];
+// V2-1.2-A — figures moved to content/stats.ts (one source of truth).
 
 export default function Stats() {
   const { t, isAr } = useI18n();
@@ -42,14 +38,14 @@ export default function Stats() {
         <div className="grid grid-cols-2 md:grid-cols-4" style={{ gap: "1px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.07)" }}>
           {STATS.map((s, i) => (
             <motion.div
-              key={s.en}
+              key={s.key}
               initial={{ opacity: 0, y: 24 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: "-60px" }}
               transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1], delay: (i % 4) * 0.1 }}
               className="text-center"
               style={{ background: "#070707", padding: "clamp(28px, 4vw, 48px) clamp(12px, 2vw, 24px)" }}
             >
               <div className="f-display text-white" style={{ fontSize: "clamp(38px, 6vw, 68px)", lineHeight: 1, fontWeight: 400, marginBottom: "12px" }}>
-                <Counter to={s.to} suffix={s.suffix} />
+                <Counter to={s.to} suffix={s.suffix} display={statDisplay(s)} />
               </div>
               <div className="f-sans" style={{ fontSize: "clamp(10px, 1.4vw, 12px)", letterSpacing: isAr ? "1px" : "2.5px", color: "rgba(255,255,255,0.5)", textTransform: isAr ? "none" : "uppercase", fontWeight: 500, fontFamily: isAr ? "var(--arabic-display)" : "var(--sans)" }}>
                 {t({ ar: s.ar, en: s.en })}

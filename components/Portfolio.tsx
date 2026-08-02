@@ -2,41 +2,17 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useMemo, useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
+// V2-1.4-A — the catalogue now lives in the content layer, not in this component.
+import { WORKS as ITEMS, CATEGORIES, type CatKey as ContentCat, type Work as Item } from "@/content/portfolio";
 
-type CatKey =
-  | "all"
-  | "corporate"
-  | "commercial"
-  | "realestate"
-  | "events"
-  | "documentary"
-  | "cinematic"
-  | "festivals"
-  | "weddings";
+// V2-1.4-A — the eight category keys are owned by content/portfolio.ts.
+// "all" is a UI-only pseudo-category, so it is added here rather than there.
+type CatKey = ContentCat | "all";
 
-type Item = {
-  id: number;
-  yt: string;
-  cats: CatKey[]; // an item can belong to multiple categories
-  ar: string;
-  en: string;
-  vertical?: boolean; // true for 9:16 YouTube Shorts
-  dAr?: string;       // optional per-project description (AR) — falls back to category desc
-  dEn?: string;       // optional per-project description (EN)
-};
+
 
 // ─── Categories in the exact order from the brief ──────────────────────────
-const CATEGORIES: { key: CatKey; ar: string; en: string }[] = [
-  { key: "all",          ar: "كل الأعمال",                en: "All" },
-  { key: "corporate",    ar: "إنتاج الشركات",             en: "Corporate Productions" },
-  { key: "commercial",   ar: "الإعلانات التجارية",        en: "Commercial Ads" },
-  { key: "realestate",   ar: "التصوير العقاري",           en: "Real Estate Production" },
-  { key: "events",       ar: "تغطية الفعاليات",           en: "Events Coverage" },
-  { key: "documentary",  ar: "الأفلام الوثائقية",         en: "Documentary Films" },
-  { key: "cinematic",    ar: "الإنتاج السينمائي",         en: "Cinematic Productions" },
-  { key: "festivals",    ar: "مهرجانات الأفلام",          en: "Film Festivals" },
-  { key: "weddings",     ar: "الأعراس",                  en: "Weddings" },
-];
+
 
 // Premium per-category descriptions (varied tone, not templated)
 const DESC: Record<Exclude<CatKey, "all">, { ar: string; en: string }> = {
@@ -61,126 +37,7 @@ const DESC: Record<Exclude<CatKey, "all">, { ar: string; en: string }> = {
 // ─── Items — manually curated per the exact brief categorization ───────────
 // Some items appear in multiple categories on purpose (e.g. Maaden Open Day
 // is both a "Corporate Production" and an "Events Coverage").
-const ITEMS: Item[] = [
-  // ━━━ 1. CORPORATE PRODUCTIONS ━━━
-  { id:  1, yt: "XMjZBgROUIg", cats: ["corporate"],
-    ar: "برومو شركة العطيشان",                  en: "Al-Otaishan — Corporate Promo",
-    dAr: "فيلم مؤسسي يقدّم العطيشان بهوية بصرية قوية ولغة سينمائية تعكس مكانتها.", dEn: "A corporate film introducing Al-Otaishan with a bold visual identity and cinematic language." },
-  { id:  2, yt: "F0MTiYeWZyw", cats: ["corporate"],
-    ar: "شركة ريفايفا",                          en: "Reviva — Brand Promo",
-    dAr: "برومو علامة تجارية يبرز شخصية ريفايفا بإيقاع بصري حديث وألوان نابضة.", dEn: "A brand promo capturing Reviva\u2019s personality with a modern visual rhythm." },
-  { id:  3, yt: "eG7K22u6xEU", cats: ["corporate", "realestate"],
-    ar: "شركات عقارية متنوعة — تصوير جوي",       en: "Real Estate Companies — Aerial Reel" },
-  { id:  4, yt: "2xNe8PbjmZE", cats: ["corporate", "events"],
-    ar: "شركة معادن — اليوم المفتوح",            en: "Maaden — Open Day",
-    dAr: "تغطية اليوم المفتوح لمعادن — توثيق حدث ضخم بأسلوب سينمائي متعدد الكاميرات.", dEn: "Coverage of Maaden\u2019s Open Day \u2014 a large-scale event captured cinematically." },
-  { id: 41, yt: "0LuP0-3FqnI", cats: ["corporate", "events", "cinematic"],
-    ar: "اليوم المفتوح لشركة معادن — ٢٠٢٥",      en: "Maaden — Open Day 2025",
-    dAr: "النسخة الأحدث من تغطية اليوم المفتوح لمعادن لعام ٢٠٢٥ بإنتاج سينمائي متكامل.", dEn: "The 2025 edition of Maaden\u2019s Open Day, delivered as a full cinematic production." },
-  { id:  5, yt: "9o8HL_IZjFA", cats: ["corporate"],
-    ar: "الموارد البشرية والتنمية الاجتماعية",  en: "Ministry of Human Resources & Social Development",
-    dAr: "إنتاج حكومي لوزارة الموارد البشرية يوثّق مبادراتها برسالة بصرية واضحة.", dEn: "A government production for MHRSD documenting its initiatives with a clear visual message." },
-  { id:  6, yt: "MIs6GbXBxV4", cats: ["corporate", "events"],
-    ar: "اليوم المفتوح — شركة دايسر",            en: "Daycer — Open Day" },
-  { id:  7, yt: "eroGztKVLwY", cats: ["corporate"],
-    ar: "معرض الصناعات الدولي — البحرين",        en: "International Industries Exhibition — Bahrain" },
-  { id:  8, yt: "robGTKwobn0", cats: ["corporate", "realestate"],
-    ar: "شركة روانا",                            en: "Rawana Company" },
-  { id:  9, yt: "k7WQOJbUSB8", cats: ["corporate"],
-    ar: "منتدى الصناعات السعودي",                 en: "Saudi Industries Forum" },
-  { id: 38, yt: "EjOMCO9pA6E", cats: ["corporate"],
-    ar: "شركة ريفي",                              en: "Refi Company",
-    dAr: "فيلم تعريفي لشركة ريفي يترجم نشاطها إلى سرد بصري أنيق.", dEn: "A profile film for Refi translating its business into an elegant visual narrative." },
-  { id: 39, yt: "GIyi34PPFG8", cats: ["corporate"],
-    ar: "شركة زد",                                en: "Zed Company",
-    dAr: "إنتاج مؤسسي لشركة زد بإخراج معاصر يعكس طموح العلامة.", dEn: "A corporate production for Zed with contemporary direction reflecting the brand\u2019s ambition." },
 
-  // ━━━ 2. COMMERCIAL ADS ━━━
-  { id: 10, yt: "xvzneIB-OFs", cats: ["commercial"],
-    ar: "إعلانات متنوعة للمطاعم والمجمعات",      en: "Restaurants & Complexes — Commercial Reel" },
-  { id: 11, yt: "naAnvH5DoM0", cats: ["commercial"],
-    ar: "افتتاح مسكوب",                          en: "Miskob — Opening Commercial" },
-  { id: 12, yt: "z7S6YWiO6xw", cats: ["commercial"],
-    ar: "مجمع عيادات الحقيل",                    en: "Al-Hekail Medical Clinics" },
-  { id: 40, yt: "uhWmJrDfT78", cats: ["commercial"],
-    ar: "بوفيه عمر",                             en: "Omar Buffet",
-    dAr: "إعلان تجاري لبوفيه عمر يقدّم المنتج بإضاءة شهية وحركة كاميرا ديناميكية.", dEn: "A commercial for Omar Buffet presenting the product with appetizing lighting and dynamic camera work." },
-  { id: 42, yt: "3HCrw8toqAA", cats: ["commercial"], vertical: true,
-    ar: "إعلان قصير",                            en: "Short Ad" },
-  { id: 43, yt: "Rn1WYI0n-ck", cats: ["commercial"], vertical: true,
-    ar: "إعلان قصير",                            en: "Short Ad" },
-  { id: 44, yt: "YZIipE09lpg", cats: ["commercial"], vertical: true,
-    ar: "إعلان قصير",                            en: "Short Ad" },
-
-  // ━━━ 3. REAL ESTATE PRODUCTION ━━━
-  // eG7K22u6xEU & robGTKwobn0 already added with cats: ["corporate", "realestate"] above
-  { id: 13, yt: "mGO5WGSeZTQ", cats: ["realestate"],
-    ar: "تصوير عمارة لشركة روانا",               en: "Rawana — Building Showcase" },
-  { id: 14, yt: "cUgTk6do7mA", cats: ["realestate"],
-    ar: "إنشاء مجمع فيلل — شركة الدارة",          en: "Al-Darah — Villa Complex Construction" },
-  { id: 15, yt: "zTf-qf0ml4c", cats: ["realestate"],
-    ar: "تدشين فيلا عرض — مشروع بيوت تيل",        en: "Beot Til — Show Villa Launch" },
-  { id: 16, yt: "BlB2YGo1T3U", cats: ["realestate"],
-    ar: "فيلا عرض — شركة روانا",                 en: "Rawana — Show Villa" },
-
-  // ━━━ 4. EVENTS COVERAGE ━━━
-  // 2xNe8PbjmZE & MIs6GbXBxV4 already included with corporate
-  { id: 17, yt: "1MFZP6WZx3E", cats: ["events", "cinematic"],
-    ar: "افتتاح المدينة العالمية بالدمام",        en: "Global City Dammam — Opening" },
-  { id: 18, yt: "We8sFkpd1b0", cats: ["events", "cinematic"],
-    ar: "فعالية وندر هيلز",                       en: "Wonder Hills — Event" },
-  { id: 19, yt: "DwXwknux7kw", cats: ["events"],
-    ar: "شركة عبدالواحد للتصوير",                 en: "Abdulwahid — Photography Event" },
-  { id: 20, yt: "Zs1yheEgEzw", cats: ["events"],
-    ar: "فعاليات فيلاجيو مول",                    en: "Villaggio Mall — Events" },
-  { id: 21, yt: "u-5S5jkRk0c", cats: ["events"],
-    ar: "تريادا ايفنت — الشرفات بارك",            en: "Triada Event — Al-Shorfat Park" },
-  { id: 22, yt: "IPaDI1hcupo", cats: ["events"],
-    ar: "احتفال اليوم الوطني — شركة الزاهد",      en: "Saudi National Day — Al-Zahid" },
-
-  // ━━━ 5. DOCUMENTARY FILMS (preserved as-is) ━━━
-  { id: 23, yt: "vPaH2dnBiFA", cats: ["documentary"],
-    ar: "وثائقي البيت القطيفي",                  en: "Qatif House — Heritage Documentary" },
-  { id: 24, yt: "muzsqmUzA0k", cats: ["documentary"],
-    ar: "وثائقي البخنق التاريخي",                en: "Al-Bakhnaq — Historical Documentary" },
-  { id: 25, yt: "se5_3BW-9FY", cats: ["documentary"],
-    ar: "وثائقي البيت القطيفي — ج٢",             en: "Qatif House — Documentary Part 2" },
-  { id: 26, yt: "4Lhm-2Gne7Q", cats: ["documentary"],
-    ar: "وثائقي الحوي التاريخي",                 en: "Al-Huwi — Historical Documentary" },
-  { id: 27, yt: "totRI62nzRs", cats: ["documentary"],
-    ar: "وثائقي الدروازة التاريخي",              en: "Al-Darwazah — Historical Documentary" },
-  { id: 28, yt: "YCCEQhRdmd8", cats: ["documentary"],
-    ar: "وثائقي الدروازة — ج٢",                  en: "Al-Darwazah — Documentary Part 2" },
-
-  // ━━━ 6. CINEMATIC PRODUCTIONS ━━━
-  // 1MFZP6WZx3E & We8sFkpd1b0 already included with events
-  { id: 29, yt: "vVeFXeJTTm0", cats: ["cinematic"],
-    ar: "فيديو كليب البخنق",                     en: "Al-Bakhnaq — Music Video" },
-
-  // ━━━ 7. FILM FESTIVALS ━━━
-  { id: 30, yt: "Tp4m2EA1C3o", cats: ["festivals"],
-    ar: "مهرجان أفلام السعودية — ٠١",            en: "Saudi Film Festival — Vol. 01" },
-  { id: 31, yt: "ubj3cgC7jOs", cats: ["festivals"],
-    ar: "مهرجان أفلام السعودية",                 en: "Saudi Film Festival" },
-  { id: 32, yt: "voeIqpOlmqk", cats: ["festivals"],
-    ar: "مهرجان أفلام السعودية",                 en: "Saudi Film Festival" },
-
-  // ━━━ 8. WEDDINGS ━━━
-  { id: 50, yt: "S6JdnS6s1Tc", cats: ["weddings"],
-    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
-  { id: 51, yt: "ngXJJd4wUAs", cats: ["weddings"],
-    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
-  { id: 52, yt: "VJjZWEwmFJU", cats: ["weddings"],
-    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
-  { id: 53, yt: "b2OuWey3qCc", cats: ["weddings"],
-    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
-  { id: 54, yt: "jul59VwBM94", cats: ["weddings"],
-    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
-  { id: 55, yt: "bOiD92ojI_4", cats: ["weddings"],
-    ar: "تصوير عرس سينمائي",                     en: "Cinematic Wedding Film" },
-  { id: 56, yt: "YcsbeqHlm9I", cats: ["weddings"],
-    ar: "برومو تصوير الأعراس",                   en: "Wedding Cinematography Promo" },
-];
 
 // ─── Thumbnail with smart fallback ────────────────────────────────────────
 function Thumb({ yt, alt, hovering, vertical }: { yt: string; alt: string; hovering: boolean; vertical?: boolean }) {
