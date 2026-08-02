@@ -1,0 +1,164 @@
+# ════════════════════════════════════════════════════════════════════════════
+# KIAN — WAVE 0 · V2-0.4-A · نسخ احتياطي لقاعدة البيانات
+#
+# قبل هذا الملف: **لا نسخ احتياطي على الإطلاق** — لا سكربت ولا إجراء ولا وجهة.
+# الاستعادة: docs/RESTORE_RUNBOOK.md  (هدف RTO ≤ 60 دقيقة)
+#
+# ★ manual trigger only — بقصد ★
+# ─────────────────────────────
+# `workflow_dispatch` وحده، بلا `schedule:`. سببان:
+#
+#   ١. v2.1 §4 WAVE 0 يقول حرفيًا «workflow_dispatch حتى تُضبط الأسرار». تفعيل
+#      جدولة قبل وجود الأسرار يُنتج بريد فشل يوميًا يعتاد الجميع تجاهله — وهي
+#      أسوأ حالة: مراقبة تبدو قائمة وهي عمياء.
+#   ٢. G8 يمنع أي cron إضافي. GitHub Actions ليست Vercel cron، لكن الالتزام
+#      بالنصّ الأضيق أأمن، والتفعيل قرار خالد لا قرار هذا الملف.
+#
+# لتفعيل الجدولة الليلية لاحقًا: أزِل التعليق عن كتلة `schedule` أدناه.
+# الخطوات الكاملة في docs/RESTORE_RUNBOOK.md §2.
+#
+# ★ الأسرار — تُضبط في GitHub لا في هذا الملف ★
+# Settings → Secrets and variables → Actions:
+#   SUPABASE_DB_URL     سلسلة اتصال Postgres للقاعدة المستهدَفة
+#   BACKUP_S3_BUCKET    (اختياري) وجهة تخزين خارج GitHub
+#   BACKUP_S3_ACCESS_KEY_ID / BACKUP_S3_SECRET_ACCESS_KEY / BACKUP_S3_REGION
+#
+# ❌ لا تُكتب أي قيمة هنا ولا تُطبع في السجلّ (G5).
+#    السكربت لا يردّد سلسلة الاتصال، و`set -x` ممنوعة عمدًا.
+# ════════════════════════════════════════════════════════════════════════════
+name: DB Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "أي بيئة؟ (production | preview) — للتسمية والتأكيد فقط"
+        required: true
+        default: preview
+        type: choice
+        options: [preview, production]
+
+  # ── فعّلها بعد ضبط الأسرار (V2-0.4-A) ──────────────────────────────────────
+  # schedule:
+  #   - cron: "0 1 * * *"   # 01:00 UTC = 04:00 بتوقيت الرياض — قبل كرونات Vercel الثلاث
+
+# القراءة وحدها تكفي: هذه الوظيفة لا تكتب في المستودع إطلاقًا.
+permissions:
+  contents: read
+
+concurrency:
+  # نسختان متزامنتان على نفس القاعدة = ملفّان نصفيّان لا نسخة واحدة سليمة.
+  group: db-backup-${{ github.event.inputs.target || 'scheduled' }}
+  cancel-in-progress: false
+
+jobs:
+  dump:
+    name: pg_dump → artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Preflight — الأسرار مضبوطة؟
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DB_URL:-}" ]; then
+            echo "::error title=SUPABASE_DB_URL مفقود::أضف السرّ في Settings → Secrets and variables → Actions. راجع docs/RESTORE_RUNBOOK.md §1."
+            exit 1
+          fi
+          # اسم المتغيّر فقط — لا طول ولا بادئة ولا أي جزء من القيمة (G5).
+          echo "SUPABASE_DB_URL: Configured"
+
+      - name: تثبيت عميل Postgres 16
+        run: |
+          set -euo pipefail
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          pg_dump --version
+
+      - name: أخذ النسخة
+        env:
+          # يمرّ بالبيئة لا بسطر الأوامر: `ps` على الـrunner يكشف الوسائط.
+          PGCONN: ${{ secrets.SUPABASE_DB_URL }}
+          TARGET: ${{ github.event.inputs.target || 'scheduled' }}
+        run: |
+          set -euo pipefail   # ❌ لا set -x — تطبع سلسلة الاتصال
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          OUT="kian-${TARGET}-${STAMP}.dump"
+          echo "kian_backup_name=${OUT}" >> "$GITHUB_ENV"
+
+          # -Fc = أرشيف مضغوط مخصّص: يسمح باستعادة انتقائية لجدول واحد عبر
+          # pg_restore -t، وهو الفرق بين استعادة جدول في دقائق واستعادة القاعدة
+          # كاملة في ساعة. --no-owner/--no-privileges لأن أدوار Supabase مُدارة
+          # ولا تُستعاد كما هي.
+          pg_dump "$PGCONN" \
+            --format=custom \
+            --no-owner --no-privileges \
+            --schema=public \
+            --file="$OUT"
+
+          BYTES=$(stat -c%s "$OUT")
+          echo "الحجم: ${BYTES} بايت"
+          # نسخة بحجم تافه = فشل صامت. أفضل أن تفشل الوظيفة الآن من أن يُكتشف
+          # ذلك يوم الاستعادة.
+          if [ "$BYTES" -lt 51200 ]; then
+            echo "::error title=النسخة صغيرة بشكل مريب::${BYTES} بايت (<50KB). يُرجَّح فشل صامت — لا تعتمدها."
+            exit 1
+          fi
+
+      - name: تحقّق من سلامة الأرشيف
+        run: |
+          set -euo pipefail
+          # يقرأ فهرس الأرشيف: يُثبت أنه قابل للاستعادة فعلًا لا مجرد ملف بحجم معقول.
+          pg_restore --list "${kian_backup_name}" > /tmp/toc.txt
+          LINES=$(wc -l < /tmp/toc.txt)
+          echo "عناصر الأرشيف: ${LINES}"
+          if [ "$LINES" -lt 50 ]; then
+            echo "::error title=فهرس الأرشيف شبه فارغ::${LINES} عنصرًا — النسخة غير صالحة."
+            exit 1
+          fi
+
+      - name: رفع النسخة كـartifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.kian_backup_name }}
+          path: ${{ env.kian_backup_name }}
+          # سقف GitHub للاحتفاظ ٩٠ يومًا. **هذه ليست أرشفة طويلة الأمد** —
+          # الوجهة الخارجية أدناه هي الحلّ الدائم.
+          retention-days: 90
+          if-no-files-found: error
+
+      # ── وجهة خارج GitHub (اختيارية حتى تُضبط أسرارها) ─────────────────────
+      # الاحتفاظ ٩٠ يومًا داخل GitHub لا يكفي كسياسة نسخ احتياطي وحيدة، ونسخة
+      # تعيش في نفس المنصة التي تحوي الكود ليست عزلًا حقيقيًا.
+      # `secrets` غير متاح داخل تعبير `if` على مستوى الخطوة، لذلك يُمرَّر عبر env
+      # ويُفحص داخل السكربت — لا يفشل حين لا تكون الوجهة مضبوطة بعد.
+      - name: رفع إلى تخزين خارجي
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.BACKUP_S3_REGION }}
+          BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUCKET:-}" ]; then
+            echo "::notice title=لا وجهة خارجية::BACKUP_S3_BUCKET غير مضبوط — النسخة محفوظة كـartifact لمدة ٩٠ يومًا فقط."
+            exit 0
+          fi
+          aws s3 cp "${kian_backup_name}" "s3://${BUCKET}/db/${kian_backup_name}" --only-show-errors
+          echo "رُفعت إلى التخزين الخارجي."
+
+      - name: الخلاصة
+        if: always()
+        run: |
+          {
+            echo "### نسخة احتياطية — ${{ github.event.inputs.target || 'scheduled' }}"
+            echo ""
+            echo "- الملف: \`${kian_backup_name:-（لم يُنشأ）}\`"
+            echo "- الحالة: ${{ job.status }}"
+            echo "- الاستعادة: \`docs/RESTORE_RUNBOOK.md\` (هدف RTO ≤ ٦٠ دقيقة)"
+          } >> "$GITHUB_STEP_SUMMARY"
