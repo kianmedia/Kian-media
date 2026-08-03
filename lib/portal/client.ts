@@ -140,3 +140,53 @@ export function prpc<T>(fn: string, args?: Record<string, unknown>): Promise<Res
 export function enc(v: string): string {
   return encodeURIComponent(v);
 }
+
+// ─── Wave 7 · V2-7.1 · البحث الشامل ─────────────────────────────────────────
+//
+// ⛔ لا طبقة بحث ثانية: نفس `prpc`. العلم مطفأ ⇒ لا استدعاء ولا مستمع لوحة مفاتيح.
+
+/** هل يُفعَّل البحث الشامل؟ الافتراض **مطفأ**. */
+export const globalSearchEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_GLOBAL_SEARCH === "true";
+
+export interface SearchHit {
+  kind: "project" | "deliverable" | "asset" | "client";
+  id: string;
+  title: string | null;
+  code?: string | null;
+  href: string;
+  rank: number;
+}
+
+/**
+ * ⛔ الخادم يُصفّي حسب الصلاحية **داخل الاستعلام** — هذه الدالّة لا تُصفّي شيئًا،
+ * ولا تُرجع مبلغًا ولا هاتفًا ولا مسار تخزين.
+ */
+export const globalSearch = (q: string, limit = 20) =>
+  prpc<{ ok: boolean; q: string; rows: SearchHit[]; reason?: string }>(
+    "global_search", { p_q: q, p_limit: limit });
+
+// ─── Wave 7 · V2-7.3 · عارض سجلّ التدقيق (قراءة فقط) ────────────────────────
+
+export const auditViewerEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_AUDIT_VIEWER === "true";
+
+export interface AuditRow {
+  id: number;
+  actor_id: string | null;
+  actor_role: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  created_at: string;
+  /** ⛔ مفاتيح لا قيم — `metadata` حرّ كتبه مستدعٍ سابق. */
+  metadata_keys: string[];
+}
+
+export const auditViewerList = (filters: Record<string, unknown> = {}) =>
+  prpc<{ ok: boolean; rows: AuditRow[]; source: string; is_complete_audit: boolean }>(
+    "audit_viewer_list", { p_filters: filters });
+
+export const auditSourcesRegistry = () =>
+  prpc<{ ok: boolean; sources: { table: string; in_viewer: boolean }[]; note: string }>(
+    "audit_sources_registry", {});

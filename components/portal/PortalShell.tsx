@@ -3,6 +3,8 @@
 // Kian Portal — shell: session→profile bootstrap, account gates, tab nav.
 // Wraps every /client-portal/* route (see app/client-portal/layout.tsx).
 // ════════════════════════════════════════════════════════════════════════
+import { globalSearchEnabled } from "@/lib/portal/client";
+import CommandPalette from "./CommandPalette";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -289,6 +291,8 @@ export default function PortalShell({ children, wide = false }: { children: Reac
       </div>
 
       <div className={`${wrap} pt-shell-body`}>{children}</div>
+      {/* Wave 7 · V2-7.1 — العلم مطفأ ⇒ لا مكوّن ولا مستمع لوحة مفاتيح ولا طلب. */}
+      {globalSearchEnabled() && <CommandPalette />}
 
       {/* ─── Mobile navigation (<768px) ───
           Rendered next to the strip above, never instead of it by a separate
