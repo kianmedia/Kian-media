@@ -19,7 +19,7 @@ const {
 const ATOMS = read("components/portal/quoting/QuotingAtoms.tsx");
 const BUILDER = read("components/portal/quoting/QuoteBuilder.tsx");
 const OWNER = read("components/portal/quoting/OwnerPricingPanel.tsx");
-const PAGE = read("app/client-portal/quoting/page.tsx");
+const PAGE = read("app/(portal)/client-portal/quoting/page.tsx");
 
 // ─── (١) ★ sent_placeholder لا تعني أنّ رسالة غادرت ★ ────────────────────────
 

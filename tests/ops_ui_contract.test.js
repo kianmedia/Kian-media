@@ -13,7 +13,7 @@ const ATOMS = read("components/portal/operations/OpsAtoms.tsx");
 const CENTER = read("components/portal/operations/OpsCenter.tsx");
 const PANEL = read("components/portal/operations/OpsJobPanel.tsx");
 const FORM = read("components/portal/operations/OpsChildForm.tsx");
-const PAGE = read("app/client-portal/operations/page.tsx");
+const PAGE = read("app/(portal)/client-portal/operations/page.tsx");
 const UI = [ATOMS, CENTER, PANEL, FORM, PAGE].join("\n");
 
 test("كشف الميزة: needs_migration حالة مستقلّة عن denied — لا خلط", () => {
@@ -162,7 +162,7 @@ test("مقاومة الشبكة الضعيفة: مهلة + آخر-طلب-يفو�
 
 test("المسار مسجَّل وله حدّ خطأ محلّيّ", () => {
   assert.match(PAGE, /OpsCenter/, "الصفحة لا تركّب المركز");
-  const err = read("app/client-portal/operations/error.tsx");
+  const err = read("app/(portal)/client-portal/operations/error.tsx");
   assert.match(err, /تعذّر تحميل مركز التشغيل/, "لا حدّ خطأ محلّيّ");
   const nav = read("components/portal/nav.ts");
   assert.match(nav, /"\/client-portal\/operations"/, "المسار غير مسجَّل في التنقّل");

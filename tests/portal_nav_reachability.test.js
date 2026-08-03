@@ -15,7 +15,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const ROOT = path.resolve(__dirname, "..");
 const NAV = fs.readFileSync(path.join(ROOT, "components/portal/nav.ts"), "utf8");
-const DIR = path.join(ROOT, "app/client-portal");
+const DIR = path.join(ROOT, "app/(portal)/client-portal");
 
 /** كلّ مسار داخليّ مبنيّ فعلًا: مجلّد ثابت فيه page.tsx. */
 function builtRoutes() {

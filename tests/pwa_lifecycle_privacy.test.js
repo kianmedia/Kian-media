@@ -179,7 +179,12 @@ test("RTL and Arabic throughout the PWA surfaces", () => {
     assert.ok(!/(^|[^a-zA-Z])right:\s*["'0-9]/.test(src), `${name} uses no physical right offset`);
   }
   assert.ok(/env\(safe-area-inset-bottom/.test(MNAV), "the bar respects the iOS home indicator");
-  assert.ok(/html lang="ar" dir="rtl"/.test(R("app/layout.tsx")), "the document itself is Arabic/RTL");
+  // Wave 1 (D-3): the single root layout became three, one per locale, all
+  // rendering components/RootDocument.tsx. Same guarantee, two halves now:
+  // the Arabic root asks for ar/rtl, and the shell is what puts them on <html>.
+  assert.ok(/lang="ar" dir="rtl"/.test(R("app/(ar)/layout.tsx")), "the Arabic document is Arabic/RTL");
+  assert.ok(/<html lang=\{lang\} dir=\{dir\}>/.test(R("components/RootDocument.tsx")),
+    "the shell must put lang/dir on <html>");
 });
 
 // ─── Install prompt handling ────────────────────────────────────────────────

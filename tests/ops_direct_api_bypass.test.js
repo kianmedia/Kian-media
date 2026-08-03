@@ -111,7 +111,7 @@ test("لا مسار خادم يتجاوز RLS في هذا الموديول", () 
   const root = path.join(__dirname, "..");
   const files = [
     "lib/portal/opsCenter.ts",
-    "app/client-portal/operations/page.tsx",
+    "app/(portal)/client-portal/operations/page.tsx",
     ...fs.readdirSync(path.join(root, "components/portal/operations"))
         .map((f) => `components/portal/operations/${f}`),
   ];

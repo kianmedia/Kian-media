@@ -90,7 +90,7 @@ for (const c of COMPONENTS) {
 // ─── (ب) نقطة التركيب: صفحة تفاصيل المشروع عبر سجلّ التبويبات ──────────────
 
 test("صفحة تفاصيل المشروع تُركِّب ProjectOps (سلسلة التركيب سليمة)", () => {
-  const PAGE = read("app/client-portal/project-core/[projectId]/page.tsx");
+  const PAGE = read("app/(portal)/client-portal/project-core/[projectId]/page.tsx");
   assert.match(PAGE, /from "@\/components\/portal\/projectcore\/ProjectOps"/);
   assert.match(PAGE, /<ProjectOps[\s\S]{0,300}projectId=\{projectId\}/);
 });
@@ -118,7 +118,7 @@ test("التبويبان لا يضيفان أيّ شرط صلاحية جديد",
   // لا شرط خاصّ بالمفتاحين ⇒ يرثان بوّابة الصفحة (فريق كيان) كتبويب «المخرجات».
   assert.doesNotMatch(filter[0], /"large"|"matrix"/, "لا يجوز اختراع بوّابة خاصّة لهذين التبويبين");
   // بوّابة الصفحة نفسها لم تُلمَس.
-  const PAGE = read("app/client-portal/project-core/[projectId]/page.tsx");
+  const PAGE = read("app/(portal)/client-portal/project-core/[projectId]/page.tsx");
   assert.match(PAGE, /if \(!\(caps\.isStaff \|\| caps\.isAdminArea\)\) \{ setPhase\("denied"\); return; \}/);
 });
 

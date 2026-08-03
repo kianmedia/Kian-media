@@ -583,7 +583,7 @@ test("انحدار: سطح العميل يستدعي المُحرِّك برؤي
 test("انحدار: سطح العميل له مستهلك حيّ", () => {
   const consumer = read("components/portal/projectcore/ClientProgramSummary.tsx");
   assert.match(consumer, /programClientSummary\(projectId\)/, "المستهلك لا يستدعي RPC العميل");
-  const page = read("app/client-portal/projects/[id]/page.tsx");
+  const page = read("app/(portal)/client-portal/projects/[id]/page.tsx");
   assert.match(page, /<ClientProgramSummary projectId=\{id\}/, "الصفحة لا تُركّب سطح العميل");
 });
 

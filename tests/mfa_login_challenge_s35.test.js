@@ -219,7 +219,7 @@ test("S3.5 the user lands back on the route they asked for", () => {
 
 test("S3.5 the challenge lives in the shell, so every portal route is covered", () => {
   assert.match(shell, /type Phase = .*"mfa_challenge"/);
-  assert.match(R("app/client-portal/layout.tsx"), /PortalShell/,
+  assert.match(R("app/(portal)/client-portal/layout.tsx"), /PortalShell/,
     "the shell wraps every /client-portal/* route, which is what covers a pasted deep link");
 });
 

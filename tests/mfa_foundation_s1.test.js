@@ -249,7 +249,7 @@ test("S1b is read-only and leaks no claim content in errors", () => {
 });
 
 test("S1b the temporary diagnostic surface is gone from the app", () => {
-  for (const f of ["app/api/admin/mfa-probe/route.ts", "app/client-portal/mfa-diagnostics/page.tsx"]) {
+  for (const f of ["app/api/admin/mfa-probe/route.ts", "app/(portal)/client-portal/mfa-diagnostics/page.tsx"]) {
     assert.ok(!fs.existsSync(path.join(root, f)),
       `${f} answered M-009 and was removed; it must not ship to production`);
   }

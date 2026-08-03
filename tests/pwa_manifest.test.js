@@ -58,7 +58,8 @@ test("theme and background colours are declared and are real hex colours", () =>
     assert.ok(/^#[0-9a-fA-F]{3,8}$/.test(m[key] || ""), `${key} is a hex colour`);
   }
   // Must match the shipped chrome, or the splash screen flashes a different colour.
-  const layout = R("app/layout.tsx");
+  // D-3: the <head> now lives in the shared shell, not in a root layout.
+  const layout = R("components/RootDocument.tsx");
   const meta = layout.match(/<meta name="theme-color" content="([^"]+)"/);
   assert.ok(meta, "the document still declares a theme-color meta tag");
   assert.equal(
@@ -122,26 +123,34 @@ test("shortcuts point at real routes", () => {
   for (const s of m.shortcuts) {
     assert.ok(s.name && s.url, "each shortcut has a name and a url");
     const p = s.url.split("?")[0].replace(/\/$/, "");
-    const page = path.join(ROOT, "app", p, "page.tsx");
-    assert.ok(fs.existsSync(page), `shortcut ${s.url} must resolve to an existing route (${p}/page.tsx)`);
+    // D-3: routes now live inside route groups — (ar), (en), (portal) — which
+    // are invisible in the URL. So a shortcut URL maps to a file under ONE of
+    // those prefixes. Same guarantee as before (the URL must resolve to a real
+    // page), just resolved the way the router actually resolves it.
+    const GROUPS = ["", "(ar)", "(en)", "(portal)"];
+    const found = GROUPS.some((g) => fs.existsSync(path.join(ROOT, "app", g, p, "page.tsx")));
+    assert.ok(found, `shortcut ${s.url} must resolve to an existing route (${p}/page.tsx)`);
   }
 });
 
 test("the document does not hand-roll a second <link rel=manifest>", () => {
   // Next injects the tag from app/manifest.ts. A hand-written one in the layout
   // would ship two tags that can disagree after a rename.
-  const layout = R("app/layout.tsx");
+  // D-3: the <head> moved to the shared shell.
+  const layout = R("components/RootDocument.tsx");
   assert.ok(
     !/rel=["']manifest["']/.test(layout),
-    "app/layout.tsx must not add its own manifest link — Next injects it from app/manifest.ts"
+    "RootDocument must not add its own manifest link — Next injects it from app/manifest.ts"
   );
 });
 
 test("iOS installation metadata is present (iOS ignores the manifest for these)", () => {
-  const layout = R("app/layout.tsx");
+  // D-3: `metadata` is per-root now; the Arabic root is the public default.
+  const layout = R("app/(ar)/layout.tsx");
   assert.ok(/appleWebApp/.test(layout), "appleWebApp metadata is declared");
   assert.ok(/capable:\s*true/.test(layout), "the app is declared web-app capable on iOS");
   assert.ok(/statusBarStyle/.test(layout), "the iOS status bar style is declared");
   assert.ok(/applicationName/.test(layout), "applicationName is declared");
-  assert.ok(/viewport-fit=cover/.test(layout), "viewport-fit=cover for standalone safe areas");
+  // D-3: the <meta viewport> lives in the shared shell, not in a root layout.
+  assert.ok(/viewport-fit=cover/.test(R("components/RootDocument.tsx")), "viewport-fit=cover for standalone safe areas");
 });

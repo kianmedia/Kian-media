@@ -167,7 +167,7 @@ test("الحزمة لا تلمس أيّ ملفّ من مسارات التجمي�
     "docs/crm_sales_FOUNDATION_POSTCHECK.sql", "docs/crm_sales_FOUNDATION_ROLLBACK.sql",
     "lib/portal/crm.ts", "components/portal/crm/CrmCenter.tsx",
     "components/portal/crm/CrmAtoms.tsx", "components/portal/crm/CrmLeadPanel.tsx",
-    "components/portal/crm/CrmOpportunityPanel.tsx", "app/client-portal/crm/page.tsx",
+    "components/portal/crm/CrmOpportunityPanel.tsx", "app/(portal)/client-portal/crm/page.tsx",
     CONTRACT_DOC, "docs/CRM_ROLE_MATRIX.md", "docs/CRM_GO_LIVE_GUIDE.md",
   ];
   for (const f of mine) {

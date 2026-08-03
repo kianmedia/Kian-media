@@ -6,7 +6,7 @@
 // and NO UI — the RPC was unreachable from the product. Backend existence is not a
 // feature. These pins tie the action to the actual route the user opens.
 //
-// Route: app/client-portal/project-core/[projectId]/page.tsx → ProjectOps (the lifecycle
+// Route: app/(portal)/client-portal/project-core/[projectId]/page.tsx → ProjectOps (the lifecycle
 // section) → ProjectActionsMenu.
 // Static only — no DB, no network.
 // ════════════════════════════════════════════════════════════════════════════
@@ -17,7 +17,7 @@ const path = require("node:path");
 const root = path.join(__dirname, "..");
 const R = (p) => fs.readFileSync(path.join(root, p), "utf8");
 
-const ROUTE = R("app/client-portal/project-core/[projectId]/page.tsx");
+const ROUTE = R("app/(portal)/client-portal/project-core/[projectId]/page.tsx");
 const OPS = R("components/portal/projectcore/ProjectOps.tsx");
 const MENU = R("components/portal/projectcore/ProjectActionsMenu.tsx");
 const CORE = R("lib/portal/projectCore.ts");

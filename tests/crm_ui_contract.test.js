@@ -13,17 +13,17 @@ const ATOMS = read("components/portal/crm/CrmAtoms.tsx");
 const CENTER = read("components/portal/crm/CrmCenter.tsx");
 const LEADP = read("components/portal/crm/CrmLeadPanel.tsx");
 const OPPP = read("components/portal/crm/CrmOpportunityPanel.tsx");
-const PAGE = read("app/client-portal/crm/page.tsx");
+const PAGE = read("app/(portal)/client-portal/crm/page.tsx");
 const UI = [["CrmAtoms", ATOMS], ["CrmCenter", CENTER], ["CrmLeadPanel", LEADP],
             ["CrmOpportunityPanel", OPPP], ["page", PAGE]];
 
 test("كلّ ملفّات الواجهة موجودة، وللمسار حدّ خطأ خاصّ به", () => {
   for (const f of ["components/portal/crm/CrmAtoms.tsx", "components/portal/crm/CrmCenter.tsx",
                    "components/portal/crm/CrmLeadPanel.tsx", "components/portal/crm/CrmOpportunityPanel.tsx",
-                   "app/client-portal/crm/page.tsx", "app/client-portal/crm/error.tsx"]) {
+                   "app/(portal)/client-portal/crm/page.tsx", "app/(portal)/client-portal/crm/error.tsx"]) {
     assert.ok(exists(f), `ملفّ الواجهة مفقود: ${f}`);
   }
-  const err = read("app/client-portal/crm/error.tsx");
+  const err = read("app/(portal)/client-portal/crm/error.tsx");
   assert.match(err, /"use client"/, "حدّ الخطأ ليس مكوّن عميل");
   assert.match(err, /reset\(\)/, "حدّ الخطأ بلا إعادة محاولة");
   assert.match(err, /تعذّر تحميل وحدة المبيعات/, "حدّ الخطأ بلا رسالة عربية خاصّة بالمسار");

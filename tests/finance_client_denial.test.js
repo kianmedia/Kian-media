@@ -20,7 +20,7 @@ const {
 
 const NAV = read("components/portal/nav.ts");
 const CENTER = read("components/portal/finance/FinanceCenter.tsx");
-const PAGE = read("app/client-portal/finance/page.tsx");
+const PAGE = read("app/(portal)/client-portal/finance/page.tsx");
 
 test("(١) كلّ دالّة قراءة مالية تُغلق على العميل قبل قراءة صفّ", () => {
   for (const f of GATED_READ_FNS) {

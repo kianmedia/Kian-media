@@ -26,7 +26,7 @@ const DRAWER = R("components/portal/projectcore/GovernanceItemDrawer.tsx");
 const GOVTAB = R("components/portal/projectcore/GovernanceTab.tsx");
 const CLOSTAB = R("components/portal/projectcore/ClosureTab.tsx");
 const ACCEPT = R("components/portal/ClientFinalAcceptance.tsx");
-const CLIENTPAGE = R("app/client-portal/projects/[id]/page.tsx");
+const CLIENTPAGE = R("app/(portal)/client-portal/projects/[id]/page.tsx");
 const CLOSURELIB = R("lib/portal/projectClosure.ts");
 const GUARD = R("docs/project_post_closure_protection_RUNME.sql");
 

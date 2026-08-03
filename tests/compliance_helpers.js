@@ -39,8 +39,8 @@ const DOCS = {
 const CODE_FILES = {
   ts: "lib/portal/compliance.ts",
   route: "app/api/public/secure-document/route.ts",
-  publicPage: "app/secure-document/page.tsx",
-  portalPage: "app/client-portal/compliance/page.tsx",
+  publicPage: "app/(ar)/secure-document/page.tsx",
+  portalPage: "app/(portal)/client-portal/compliance/page.tsx",
   atoms: "components/portal/compliance/ComplianceAtoms.tsx",
   documents: "components/portal/compliance/ComplianceDocumentsPanel.tsx",
   grants: "components/portal/compliance/SecureGrantsPanel.tsx",

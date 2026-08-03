@@ -22,10 +22,10 @@ const FILES = {
   LIB: "lib/portal/aiAssistant.ts",
   PROVIDER: "lib/server/aiProvider.ts",
   ROUTE: "app/api/public/assistant/route.ts",
-  PUBLIC_PAGE: "app/assistant/page.tsx",
+  PUBLIC_PAGE: "app/(ar)/assistant/page.tsx",
   CENTER: "components/portal/ai/AiAssistantCenter.tsx",
   ATOMS: "components/portal/ai/AiAtoms.tsx",
-  PORTAL_PAGE: "app/client-portal/assistant/page.tsx",
+  PORTAL_PAGE: "app/(portal)/client-portal/assistant/page.tsx",
   NAV: "components/portal/nav.ts",
 };
 

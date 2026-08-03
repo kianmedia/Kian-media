@@ -17,7 +17,7 @@ const POST = R("docs/case_studies_platform_POSTCHECK.sql");
 const LIB = R("lib/portal/caseStudies.ts");
 const BUILDER = R("components/portal/CaseStudyBuilder.tsx");
 const BENCH = R("components/portal/CaseStudiesWorkbench.tsx");
-const PAGE = R("app/client-portal/case-studies/page.tsx");
+const PAGE = R("app/(portal)/client-portal/case-studies/page.tsx");
 const WORKFLOW_DOC = R("docs/CASE_STUDIES_EDITORIAL_WORKFLOW.md");
 
 function fnBody(sql, name) {

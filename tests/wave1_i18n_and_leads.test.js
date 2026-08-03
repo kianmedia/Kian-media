@@ -52,7 +52,7 @@ test("V2-1.1: '/english' ليس مسارًا إنجليزيًا — لا مطا�
 test("★ V2-1.1: كل مسار عربي عام له نظير /en فعلي على القرص", () => {
   for (const r of ["", "quote-request", "book-meeting", "upload-files",
                    "opportunities", "privacy-policy", "terms", "case-studies"]) {
-    const p = r ? `app/en/${r}/page.tsx` : "app/en/page.tsx";
+    const p = r ? `app/(en)/en/${r}/page.tsx` : "app/(en)/en/page.tsx";
     assert.ok(exists(p), `نظير إنجليزي مفقود: ${p}`);
     // نسخة واحدة من التنفيذ — النظير يعيد التصدير ولا يكرر الصفحة.
     assert.ok(/export \{ default \} from/.test(read(p)), `${p} يكرر التنفيذ بدل إعادة تصديره`);
@@ -61,18 +61,21 @@ test("★ V2-1.1: كل مسار عربي عام له نظير /en فعلي عل�
 
 test("🔒 V2-1.1: البوابة والإدارة وAPI لم تُنقل تحت [locale]", () => {
   assert.ok(!exists("app/[locale]"), "🔴 أُنشئ مقطع [locale] — البوابة «fragile cargo»");
-  for (const p of ["app/client-portal/layout.tsx", "app/admin/layout.tsx", "app/api/public/intake/route.ts"]) {
+  for (const p of ["app/(portal)/client-portal/layout.tsx", "app/(portal)/admin/layout.tsx", "app/api/public/intake/route.ts"]) {
     assert.ok(exists(p), `🔴 نُقل مسار محمي: ${p}`);
   }
-  for (const p of ["app/en/client-portal", "app/en/admin", "app/en/api"]) {
+  for (const p of ["app/(en)/en/client-portal", "app/(en)/en/admin", "app/(en)/en/api"]) {
     assert.ok(!exists(p), `🔴 أُنشئ نظير إنجليزي لمسار غير عام: ${p}`);
   }
 });
 
-test("V2-1.1: /en/layout يصحّح lang وdir قبل الرسم", () => {
-  const s = read("app/en/layout.tsx");
-  assert.ok(s.includes("documentElement.lang='en'"), "لا تصحيح للغة");
-  assert.ok(s.includes("documentElement.dir='ltr'"), "لا تصحيح للاتجاه");
+test("V2-1.1 (D-3): /en/layout لم يعد يصحّح lang بسكربت — الخادم يفعلها", () => {
+  // ⚠️ انقلب هذا العقد عمدًا بعد قرار خالد في D-3: التصحيح بسكربت **مرفوض**،
+  // والخادم صار يُخرج lang/dir صحيحين من أول بايت. الحارس الموجب في
+  // tests/wave1_ssr_lang_dir.test.js؛ والمطلوب هنا ألّا يعود السكربت أبدًا.
+  const s = read("app/(en)/en/layout.tsx");
+  assert.ok(!/documentElement\.(lang|dir)/.test(s),
+    "🔴 عاد تصحيح اللغة بسكربت — الخادم يجب أن يكون صحيحًا أصلًا");
 });
 
 // ═══ V2-1.3 · hreflang و OG ════════════════════════════════════════════════
@@ -92,7 +95,7 @@ test("★ V2-1.3: hreflang يُعلَن فقط للمسارات التي لها 
       assert.equal(langs["x-default"], SEO.canonicalFor(r.path), "x-default يجب أن يكون العربية");
       assert.equal(langs.ar, SEO.canonicalFor(r.path));
       // النظير المُعلَن يجب أن يوجد فعلًا على القرص — بديل مكسور أسوأ من غيابه.
-      const dir = r.path === "/" ? "app/en/page.tsx" : `app/en${r.path}/page.tsx`;
+      const dir = r.path === "/" ? "app/(en)/en/page.tsx" : `app/(en)/en${r.path}/page.tsx`;
       assert.ok(exists(dir), `🔴 hreflang يشير إلى صفحة غير موجودة: ${dir}`);
     } else {
       assert.equal(langs, undefined, `🔴 ${r.path} يعلن بديلًا إنجليزيًا لا وجود له`);
@@ -114,8 +117,9 @@ test("★ V2-1.3-B: بطاقة OG بقياس 1200×630 مطلقة — لا شع�
   assert.equal(img.height, 630);
   assert.ok(img.url.startsWith("https://"), "رابط OG يجب أن يكون مطلقًا");
   assert.ok(exists("public/og-default.svg"), "ملف بطاقة OG مفقود");
-  assert.ok(!/logo\.png/.test(read("app/layout.tsx")) || !/og:image/.test(read("app/layout.tsx")),
-    "الشعار المربّع ما زال بطاقة المشاركة");
+  // D-3: metadata moved into the per-locale roots; the OG image is asserted
+  // through lib/seo.ts above, which is the single builder both roots use.
+  assert.ok(!/logo\.png/.test(read("lib/seo.ts")), "الشعار المربّع ما زال بطاقة المشاركة");
 });
 
 // ═══ V2-1.6 · حفظ الطلب والإسناد ═══════════════════════════════════════════
@@ -188,8 +192,8 @@ test("★ V2-1.5: قسم التقييمات خلف علم مطفأ افتراض�
 // ═══ V2-1.8 / V2-1.9 ═══════════════════════════════════════════════════════
 
 test("V2-1.8-C: صفحة 404 بهوية وnoindex", () => {
-  assert.ok(exists("app/not-found.tsx"), "صفحة 404 مفقودة");
-  const s = read("app/not-found.tsx");
+  assert.ok(exists("app/(ar)/not-found.tsx"), "صفحة 404 مفقودة");
+  const s = read("app/(ar)/not-found.tsx");
   assert.ok(/index:\s*false/.test(s), "🔴 صفحة 404 قابلة للفهرسة — ستنافس الصفحات الحقيقية");
   assert.ok(s.includes("404") && s.includes("الصفحة غير موجودة"), "لا محتوى عربي");
   assert.ok(!s.includes('"use client"'), "لا داعي لجافاسكربت في صفحة 404");
@@ -205,7 +209,7 @@ test("★ V2-1.9-A: فيديو الهيرو لا يُحمَّل بلا داعٍ"
 });
 
 test("V2-1.9-C: الخطوط تُحمَّل بـdisplay=swap", () => {
-  assert.ok(/display=swap/.test(read("app/layout.tsx")), "الخطوط تحجب الرسم");
+  assert.ok(/display=swap/.test(read("components/RootDocument.tsx")), "الخطوط تحجب الرسم");
 });
 
 // ═══ حزمة SQL — ملفات فقط ══════════════════════════════════════════════════

@@ -1,3 +1,3 @@
 // English mirror of opportunities — re-exports the single implementation.
 // The locale is derived from the pathname by lib/i18n.tsx (V2-1.1).
-export { default } from "@/app/opportunities/page";
+export { default } from "@/app/(ar)/opportunities/page";

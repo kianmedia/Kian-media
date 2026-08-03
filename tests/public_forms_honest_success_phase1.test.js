@@ -30,9 +30,9 @@ const R = (p) => fs.readFileSync(path.join(root, p), "utf8");
 const SUBMIT = R("lib/submitForm.ts");
 const CARD = R("components/forms/SuccessCard.tsx");
 const PAGES = {
-  "quote-request": R("app/quote-request/page.tsx"),
-  "book-meeting": R("app/book-meeting/page.tsx"),
-  "upload-files": R("app/upload-files/page.tsx"),
+  "quote-request": R("app/(ar)/quote-request/page.tsx"),
+  "book-meeting": R("app/(ar)/book-meeting/page.tsx"),
+  "upload-files": R("app/(ar)/upload-files/page.tsx"),
 };
 const strip = (s) => s.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 

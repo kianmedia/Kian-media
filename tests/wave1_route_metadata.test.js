@@ -65,7 +65,7 @@ test("★ كل مسار له عنوان ووصف فريدان", () => {
 
 test("لكل مسار ملف layout.tsx يصدّر metadata من المصدر الموحّد", () => {
   for (const k of ROUTES) {
-    const rel = `app/${k}/layout.tsx`;
+    const rel = `app/(ar)/${k}/layout.tsx`;
     assert.ok(fs.existsSync(path.join(ROOT, rel)), `مفقود: ${rel}`);
     const src = read(rel);
     assert.ok(src.includes("export const metadata"), `${rel} لا يصدّر metadata`);
@@ -99,7 +99,7 @@ test("G13: مصدر واحد للـSEO — لا نسخة ثانية من نصو�
     const desc = SEO.ROUTE_SEO[k].description;
     // النصّ يجب أن يظهر مرة واحدة فقط في المستودع: داخل lib/seo.ts.
     assert.ok(seoSrc.includes(desc), `وصف /${k} ليس في المصدر الموحّد`);
-    assert.ok(!read(`app/${k}/layout.tsx`).includes(desc.slice(0, 25)),
+    assert.ok(!read(`app/(ar)/${k}/layout.tsx`).includes(desc.slice(0, 25)),
       `🔴 وصف /${k} مكرر داخل layout.tsx`);
   }
 });

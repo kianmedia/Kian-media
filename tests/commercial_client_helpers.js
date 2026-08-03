@@ -22,7 +22,7 @@ const TS = read("lib/portal/commercial.ts");
 const ATOMS = read("components/portal/commercial/CsubAtoms.tsx");
 const CREDITS = read("components/portal/commercial/ClientCredits.tsx");
 const FORM = read("components/portal/commercial/ProductionRequestForm.tsx");
-const PAGE = read("app/client-portal/production-credits/page.tsx");
+const PAGE = read("app/(portal)/client-portal/production-credits/page.tsx");
 const NAV = read("components/portal/nav.ts");
 
 /** قسم §17 وحده — ما أضافته المرحلة ٣ إلى الحزمة المشتركة. */

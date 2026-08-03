@@ -162,14 +162,14 @@ test("S2 the code field is numeric, one-time-code, and length-capped", () => {
 test("S2 the enrollment component is mounted on a real page", () => {
   assert.match(PROFILE, /import MfaEnrollment from "@\/components\/portal\/MfaEnrollment"/);
   assert.match(PROFILE, /<MfaEnrollment \/>/);
-  assert.match(R("app/client-portal/profile/page.tsx"), /ProfileSettings/,
+  assert.match(R("app/(portal)/client-portal/profile/page.tsx"), /ProfileSettings/,
     "and that component is what /client-portal/profile renders");
 });
 
 // ─── (G) the temporary diagnostic is gone ───────────────────────────────────
 
 test("S2 the temporary claim-diagnostic page and route were removed", () => {
-  for (const p of ["app/client-portal/mfa-diagnostics/page.tsx", "app/api/admin/mfa-probe/route.ts"]) {
+  for (const p of ["app/(portal)/client-portal/mfa-diagnostics/page.tsx", "app/api/admin/mfa-probe/route.ts"]) {
     assert.ok(!fs.existsSync(path.join(root, p)), `${p} must not ship to production`);
   }
 });

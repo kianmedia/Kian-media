@@ -1,73 +1,32 @@
-import type { Metadata } from "next";
+// ════════════════════════════════════════════════════════════════════════════
+// components/RootDocument.tsx — the ONE HTML document shell.
+//
+// Wave 1 · V2-1.1 (D-3) — server-rendered <html lang|dir>.
+//
+// ★ WHY THIS FILE EXISTS ★
+// Next renders exactly one <html>, from the root layout. To emit
+// lang="en" dir="ltr" for /en and lang="ar" dir="rtl" for the Arabic tree, the
+// two trees need SEPARATE root layouts — and Next only allows that when the
+// top-level app/layout.tsx is removed and every page route sits inside a route
+// group that has its own root layout.
+//
+// Three root layouts now exist: app/(ar), app/(en) and app/(portal). Without
+// this component each would carry its own copy of the head, the fonts, the
+// analytics snippet, the JSON-LD and the PWA provider — three copies that would
+// drift. They all render this instead, and differ only in `lang`/`dir` and their
+// own `metadata` export.
+//
+// ⚠️ The previous approach (an inline script that corrected documentElement
+// after parse) was rejected: it left the FIRST HTML tagged Arabic for an English
+// page, which is what a JS-less crawler reads. This is server-rendered, so the
+// attribute is correct in the very first byte and no script is involved.
+// ════════════════════════════════════════════════════════════════════════════
 import Script from "next/script";
-import "./globals.css";
 import PwaProvider from "@/components/pwa/PwaProvider";
 
 const GA_ID = "G-2XZ60NZSSV";
 const SITE = "https://kianmedia.com";
 
-export const metadata: Metadata = {
-  title: "Kian Media Production | Cinematic Video Production in Saudi Arabia",
-  description:
-    "Premium cinematic video production, drone filming, live streaming, event coverage, corporate films, commercials, and wedding films in Saudi Arabia.",
-  keywords: [
-    "Saudi video production","Dammam media production","drone filming Saudi Arabia",
-    "corporate video production","live streaming Saudi Arabia","event coverage",
-    "wedding videography","كيان الابتكار","إنتاج إعلامي السعودية","تصوير سينمائي",
-    "تصوير جوي بالدرون","بث مباشر","Kian Media","إنتاج فيديوهات الشركات",
-  ],
-  metadataBase: new URL(SITE),
-  openGraph: {
-    title: "Kian Media Production | Cinematic Video Production in Saudi Arabia",
-    description: "Premium cinematic video production, drone filming, live streaming, event coverage, corporate films, commercials, and wedding films in Saudi Arabia.",
-    type: "website",
-    url: SITE,
-    locale: "ar_SA",
-    siteName: "Kian Media",
-    // V2-1.3-B — branded 1200x630 card. The old 800x800 logo was square, so
-    // every platform cropped or letterboxed it. Absolute URL: most scrapers do
-    // not resolve a relative OG image.
-    images: [
-      {
-        url: `${SITE}/og-default.svg`,
-        width: 1200,
-        height: 630,
-        alt: "Kian Media Production",
-      },
-    ],
-  },
-  twitter: {
-    card: "summary_large_image",
-    site: "@kianalebtikar",
-    title: "Kian Media Production",
-    description: "Cinematic video production in Saudi Arabia.",
-    images: [`${SITE}/og-default.svg`],
-  },
-  robots: { index: true, follow: true },
-  // V2-1.1-B — hreflang for the homepage pair. Arabic is x-default: it serves
-  // anyone whose language we do not explicitly target.
-  alternates: {
-    canonical: SITE,
-    languages: { ar: SITE, en: `${SITE}/en`, "x-default": SITE },
-  },
-  formatDetection: { telephone: true },
-
-  // ─── PWA installation metadata ──────────────────────────────────────────
-  // The manifest link tag is injected by Next from app/manifest.ts — do NOT
-  // add a second one here or the document ships two tags that can disagree
-  // after a rename, and the browser picks whichever it saw first.
-  //
-  // iOS ignores the manifest for the home-screen title, the standalone flag and
-  // the status-bar colour; it reads these apple-* tags instead. Without them an
-  // installed iPhone icon is labelled with the truncated <title> and the app
-  // opens in a browser view rather than standalone.
-  applicationName: "كيان | Kian",
-  appleWebApp: {
-    capable: true,
-    title: "كيان | Kian",
-    statusBarStyle: "black-translucent",
-  },
-};
 
 // ─── Structured data: LocalBusiness + Organization ──────────────────────────
 const businessSchema = {
@@ -137,17 +96,45 @@ const videoSchema = {
   },
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootDocument({
+  lang,
+  dir,
+  children,
+}: {
+  lang: "ar" | "en";
+  dir: "rtl" | "ltr";
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="ar" dir="rtl">
+    <html lang={lang} dir={dir}>
+      {/* eslint-disable-next-line @next/next/no-head-element --
+          The rule assumes <head> only ever appears in app/layout.tsx. This file
+          IS the document shell for the three root layouts created in D-3
+          ((ar), (en), (portal)) — extracted precisely so the head, fonts,
+          analytics and JSON-LD exist once instead of in three copies that would
+          drift. Moving <head> back into the layouts would trade one lint
+          warning for three divergent copies of the document. */}
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         {/* Preconnect to YouTube thumbnail host for faster portfolio image loads */}
         <link rel="preconnect" href="https://img.youtube.com" />
         <link rel="dns-prefetch" href="https://img.youtube.com" />
+        {/* D-14 — Tajawal STAYS. Khaled declined the Almarai swap for Wave 1:
+            changing the Arabic face is a design change (G11), not an
+            optimisation, and display=swap was already in place.
+
+            What was optimised is the WEIGHT LIST — conservatively. Only two
+            weights were dropped, both provably unused: Tajawal 900 and Inter
+            Tight 200. Cormorant was left INTACT: a first pass trimmed it too,
+            until a grep showed weight 700 used 74 times and 600 used 105 times
+            across the codebase. Proving which of those land on the serif rather
+            than the sans is not something to guess at, and a silently
+            synthesised bold is a visible design regression — so the serif keeps
+            every weight it had. `display=swap` is unchanged, so text is
+            never invisible while a face loads. */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500&family=Inter+Tight:wght@200;300;400;500;600;700&family=Tajawal:wght@300;400;500;700;800;900&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500&family=Inter+Tight:wght@300;400;500;600;700&family=Tajawal:wght@300;400;500;700;800&display=swap"
           rel="stylesheet"
         />
         <meta name="theme-color" content="#000000" />

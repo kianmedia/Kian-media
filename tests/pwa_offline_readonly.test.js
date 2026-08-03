@@ -25,8 +25,8 @@ const NOTICE = "أنت غير متصل — بعض البيانات قديمة و
 // ─── The offline page ───────────────────────────────────────────────────────
 
 test("the offline route exists, is static, noindex, and carries no user data", () => {
-  const page = path.join(ROOT, "app/offline/page.tsx");
-  assert.ok(fs.existsSync(page), "app/offline/page.tsx exists");
+  const page = path.join(ROOT, "app/(ar)/offline/page.tsx");
+  assert.ok(fs.existsSync(page), "app/(ar)/offline/page.tsx exists");
   const src = fs.readFileSync(page, "utf8");
   assert.ok(/force-static/.test(src), "it is statically rendered so it can be precached");
   assert.ok(/index:\s*false/.test(src), "it is not indexed");

@@ -14,8 +14,8 @@ const ATOMS = read("components/portal/finance/FinAtoms.tsx");
 const CENTER = read("components/portal/finance/FinanceCenter.tsx");
 const FORMS = read("components/portal/finance/FinForms.tsx");
 const MINE = read("components/portal/finance/FinMyRequests.tsx");
-const PAGE = read("app/client-portal/finance/page.tsx");
-const ERR = read("app/client-portal/finance/error.tsx");
+const PAGE = read("app/(portal)/client-portal/finance/page.tsx");
+const ERR = read("app/(portal)/client-portal/finance/error.tsx");
 const UI = [ATOMS, CENTER, FORMS, MINE, PAGE].join("\n");
 
 test("كشف الميزة: needs_migration حالة مستقلّة عن denied — لا خلط", () => {

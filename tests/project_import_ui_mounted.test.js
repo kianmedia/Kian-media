@@ -97,7 +97,7 @@ test("ProjectOps يستورد الشاشة ويُركِّبها بمفتاح م�
 });
 
 test("صفحة تفاصيل المشروع تُركِّب ProjectOps (سلسلة التركيب سليمة)", () => {
-  const PAGE = read("app/client-portal/project-core/[projectId]/page.tsx");
+  const PAGE = read("app/(portal)/client-portal/project-core/[projectId]/page.tsx");
   assert.match(PAGE, /from "@\/components\/portal\/projectcore\/ProjectOps"/);
   assert.match(PAGE, /<ProjectOps[\s\S]{0,300}projectId=\{projectId\}/);
 });
@@ -119,7 +119,7 @@ test("الاستيراد مقصور على الفريق بنفس بوّابة «
   const panel = read(PANEL);
   assert.doesNotMatch(panel, /usePortal|caps\.|staff_role/, "الشاشة يجب أن ترث البوّابة من ProjectOps لا أن تخترع واحدة");
   // بوّابة الصفحة نفسها لم تُلمَس — العميل لا يبلغ هذه الشاشة إطلاقًا.
-  const PAGE = read("app/client-portal/project-core/[projectId]/page.tsx");
+  const PAGE = read("app/(portal)/client-portal/project-core/[projectId]/page.tsx");
   assert.match(PAGE, /if \(!\(caps\.isStaff \|\| caps\.isAdminArea\)\) \{ setPhase\("denied"\); return; \}/);
 });
 

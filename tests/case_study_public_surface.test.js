@@ -15,13 +15,13 @@ const R = (p) => fs.readFileSync(path.join(root, p), "utf8");
 const RUNME = R("docs/case_studies_platform_RUNME.sql");
 const SERVER = R("lib/server/publicCaseStudies.ts");
 const API = R("app/api/public/case-studies/route.ts");
-const INDEX_PAGE = R("app/case-studies/page.tsx");
-const DETAIL_PAGE = R("app/case-studies/[slug]/page.tsx");
+const INDEX_PAGE = R("app/(ar)/case-studies/page.tsx");
+const DETAIL_PAGE = R("app/(ar)/case-studies/[slug]/page.tsx");
 const TEASER = R("components/CaseStudiesTeaser.tsx");
 const INDEX_CLIENT = R("components/CaseStudiesIndexClient.tsx");
 const DETAIL_CLIENT = R("components/CaseStudyDetailClient.tsx");
 const SITEMAP = R("app/sitemap.ts");
-const HOME = R("app/page.tsx");
+const HOME = R("app/(ar)/page.tsx");
 const PORTFOLIO = R("components/Portfolio.tsx");
 
 test("the server read layer degrades to 'not enabled', never to 'zero results'", () => {

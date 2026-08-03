@@ -19,10 +19,10 @@ const FILES = {
   ROLLBACK: "docs/live_operations_dashboard_ROLLBACK.sql",
   LIB: "lib/portal/liveOps.ts",
   ROUTE: "app/api/public/live-status/route.ts",
-  PUBLIC_PAGE: "app/live-status/page.tsx",
+  PUBLIC_PAGE: "app/(ar)/live-status/page.tsx",
   CENTER: "components/portal/liveops/LiveOpsCenter.tsx",
   ATOMS: "components/portal/liveops/LiveOpsAtoms.tsx",
-  PORTAL_PAGE: "app/client-portal/live-operations/page.tsx",
+  PORTAL_PAGE: "app/(portal)/client-portal/live-operations/page.tsx",
   NAV: "components/portal/nav.ts",
 };
 

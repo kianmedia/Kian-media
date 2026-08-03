@@ -16,7 +16,7 @@ test("rental files exist (RUNME, rollback, lib, UI, page, fixtures)", () => {
     "docs/rental_insurance_production_RUNME.sql", "docs/rental_insurance_ROLLBACK.md",
     "docs/rental_insurance_fixtures_PREVIEW.sql", "lib/portal/rental.ts",
     "components/portal/rental/RentalConsole.tsx", "components/portal/rental/RentalDetail.tsx",
-    "components/portal/rental/RenterRentalView.tsx", "app/client-portal/rentals/page.tsx",
+    "components/portal/rental/RenterRentalView.tsx", "app/(portal)/client-portal/rentals/page.tsx",
   ]) assert.ok(existsSync(root + p), `missing ${p}`);
 });
 

@@ -72,12 +72,29 @@ function Thumb({ yt, alt, hovering, vertical }: { yt: string; alt: string; hover
     <>
       <div className="absolute inset-0 transition-opacity duration-500"
            style={{ background: "linear-gradient(135deg, #0d0d0d 0%, #050505 100%)", opacity: loaded ? 0 : 1 }} />
+      {/* ── D-5 — hardened, NOT converted to next/image ──────────────────────
+          A next/image version was built and reverted: its onLoad does not fire
+          for an already-complete image, and the full 46-card grid could not be
+          proven to render. A lint warning is not worth risking the portfolio.
+          The reasoning is recorded in WAVE_1_REPORT.md and D-5.
+
+          What changed here is only hardening, never behaviour:
+          • width/height give the browser an intrinsic 16:9 ratio, so the grid
+            reserves space and the card cannot jump when the image lands (CLS).
+            They are attributes, not layout — object-cover still fills the frame.
+          • opacity no longer starts at 0. It used to, so ANY failure of the
+            load handler left a permanently invisible thumbnail — exactly the
+            failure mode that killed the next/image attempt. The image is now
+            visible as soon as the browser paints it; `loaded` only fades the
+            placeholder out behind it.
+          • alt is the work's real title (V2-1.10-A), never "thumbnail". */}
       <img
         src={src} alt={alt}
+        width={1280} height={720}
         loading="lazy" decoding="async"
         onLoad={onLoad} onError={onError}
         className="absolute inset-0 w-full h-full object-cover transition-all duration-700 group-hover:scale-105"
-        style={{ opacity: loaded ? 0.55 : 0 }}
+        style={{ opacity: 0.55 }}
       />
       {/* Muted autoplay preview on hover (desktop). Pointer-events off so the
           card click still opens the full modal. */}

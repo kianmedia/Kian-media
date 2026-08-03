@@ -21,7 +21,7 @@ const ROLLBACK = R("docs/communications_hub_ROLLBACK.sql");
 const CLIENT = R("lib/portal/comms.ts");
 const HUB_UI = R("components/portal/CommunicationsHub.tsx");
 const PREFS_UI = R("components/portal/CommsPreferences.tsx");
-const PAGE = R("app/client-portal/communications/page.tsx");
+const PAGE = R("app/(portal)/client-portal/communications/page.tsx");
 const HUB = R("lib/server/commsHub.ts");
 const ROUTE = R("app/api/comms/process/route.ts");
 
@@ -171,7 +171,7 @@ test("the FROZEN project-platform tree is untouched by this module", () => {
   const mine = [
     "lib/portal/comms.ts", "lib/server/commsHub.ts", "lib/server/commsProvider.ts",
     "lib/server/commsLegacyAdapter.ts", "components/portal/CommunicationsHub.tsx",
-    "components/portal/CommsPreferences.tsx", "app/client-portal/communications/page.tsx",
+    "components/portal/CommsPreferences.tsx", "app/(portal)/client-portal/communications/page.tsx",
     "app/api/comms/process/route.ts",
   ];
   for (const m of mine) {

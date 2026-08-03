@@ -17,9 +17,9 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 
 const FORMS = [
   "components/Contact.tsx",
-  "app/quote-request/page.tsx",
-  "app/book-meeting/page.tsx",
-  "app/upload-files/page.tsx",
+  "app/(ar)/quote-request/page.tsx",
+  "app/(ar)/book-meeting/page.tsx",
+  "app/(ar)/upload-files/page.tsx",
 ];
 
 /**
@@ -88,7 +88,7 @@ test("V2-0.1-G: النصّ العربي مطابق لما يفرضه v2.1 وال
   assert.equal(ON.CONSENT_LABEL.ar, "أوافق على سياسة الخصوصية وعلى تواصل كيان معي بخصوص طلبي");
   assert.ok(ON.CONSENT_LABEL.en.length > 0);
   assert.equal(ON.PRIVACY_PATH, "/privacy-policy");
-  assert.ok(fs.existsSync(path.join(ROOT, "app/privacy-policy")), "صفحة سياسة الخصوصية غير موجودة");
+  assert.ok(fs.existsSync(path.join(ROOT, "app/(ar)/privacy-policy")), "صفحة سياسة الخصوصية غير موجودة");
 });
 
 test("★ النسخة مربوطة بالنصّ: تغيير النصّ بلا رفع CONSENT_VERSION يفشل هنا", () => {
@@ -119,7 +119,7 @@ test("G13: مصدر واحد للموافقة — لا نصّ مكرر في أي
 });
 
 test("V2-0.1-E: /quick-access لا يحوي نموذجًا فلا موافقة فيه", () => {
-  const s = read("app/quick-access/page.tsx");
+  const s = read("app/(ar)/quick-access/page.tsx");
   assert.ok(!s.includes("ConsentField"), "أُضيف حقل موافقة إلى صفحة روابط بلا نموذج");
   assert.ok(!/<form|onSubmit/.test(s), "صار فيها نموذج — راجع قرار شطب V2-0.1-E");
 });

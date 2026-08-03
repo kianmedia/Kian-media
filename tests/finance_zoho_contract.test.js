@@ -20,7 +20,7 @@ const FIN_FILES = {
   "components/portal/finance/FinAtoms.tsx": read("components/portal/finance/FinAtoms.tsx"),
   "components/portal/finance/FinForms.tsx": read("components/portal/finance/FinForms.tsx"),
   "components/portal/finance/FinMyRequests.tsx": read("components/portal/finance/FinMyRequests.tsx"),
-  "app/client-portal/finance/page.tsx": read("app/client-portal/finance/page.tsx"),
+  "app/(portal)/client-portal/finance/page.tsx": read("app/(portal)/client-portal/finance/page.tsx"),
 };
 
 test("★ صندوق الصادر لا يملك حالة إرسال أصلًا ★", () => {
