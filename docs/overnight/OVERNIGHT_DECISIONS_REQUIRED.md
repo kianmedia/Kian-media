@@ -1,5 +1,23 @@
 # OVERNIGHT_DECISIONS_REQUIRED — قرارات تنتظر خالد
 
+> ✅ **Wave 2: DEVELOPMENT COMPLETE / RELEASE VERIFICATION PENDING** (وسم
+> `overnight-wave-2-complete`). التفصيل في
+> [`WAVE_2_REPORT.md`](../wave-reports/WAVE_2_REPORT.md).
+>
+> ### قرارات Wave 2
+> | # | القرار | التصنيف |
+> |---|---|---|
+> | **W2-4** | 🔴 **نصوص `/trust`** — تعهّدات تقنية/قانونية تقرأها فرق المشتريات، **ولم يراجعها بشر** | PENDING CONTENT REVIEW |
+> | W2-1 | **حقوق استخدام ٦٢ شعار عميل** — الشريط مبنيّ وخلف علم مطفأ وغير مركَّب | BLOCKING ONE FEATURE ONLY |
+> | W2-2 | توحيد البريد `info@` / `sales@` / `contact@` | NON-BLOCKING CONTENT |
+> | W2-3 | الدراسة الرائدة السادسة + بذر الخمس | NON-BLOCKING CONTENT |
+> | W2-5 | جوائز/تغطية حقيقية لملء `content/recognition.ts` (فارغ عمدًا) | NON-BLOCKING CONTENT |
+> | W2-6 | **س.ت `1009179096` والرقم الضريبي `311047382900003`** منقولان من الـBrief — تأكّد منهما قبل نشر `/trust` | MANUAL VERIFICATION |
+>
+> ⚠️ **`/trust` ليست خلف علم وستُفهرس فور النشر** — فمراجعة W2-4 وW2-6 تسبق أي نشر.
+
+---
+
 > ✅ **Wave 1: DEVELOPMENT COMPLETE / RELEASE VERIFICATION PENDING** (وسم محلي
 > `overnight-wave-1-complete`). D-3 و D-5 و D-14 **أُغلقت جميعًا بقراراتك**.
 > ما تبقّى أدناه: قرارات محتوى، وتحقّق يحتاج متصفّحًا أو نشرة، وSQL لم يُشغَّل.

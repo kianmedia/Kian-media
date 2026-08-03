@@ -128,8 +128,13 @@ test("★ V2-1.6-A: النموذج الرئيسي يحفظ في Supabase قبل 
   const s = read("components/Contact.tsx");
   assert.ok(s.includes("captureIntake"), "🔴 النموذج الرئيسي ما زال لا يحفظ شيئًا");
   const iSave = s.indexOf("await captureIntake");
-  const iWa = s.indexOf("window.open(`https://wa.me");
-  assert.ok(iSave > -1 && iWa > -1);
+  // Wave 2 (V2-2.5-B) moved the number into content/nap.ts, so the hand-off is
+  // now waLink(msg) rather than a wa.me literal. The GUARANTEE is unchanged and
+  // is what is asserted: the save must come first.
+  const iWa = s.indexOf("window.open(");
+  assert.ok(iSave > -1, "🔴 النموذج الرئيسي لا يحفظ");
+  assert.ok(iWa > -1, "لم يُعثر على تسليم واتساب");
+  assert.ok(/window\.open\(waLink\(/.test(s), "تسليم واتساب يجب أن يمرّ عبر المصدر الموحّد");
   assert.ok(iSave < iWa, "🔴 واتساب يُفتح قبل الحفظ — الطلب قد يضيع");
   // Apps Script ليس قاعدة الـLeads: لا يسبق الحفظ في هذا النموذج.
   assert.ok(!s.includes("submitToSheets"), "النموذج الرئيسي يجب ألّا يعتمد Apps Script مخزنًا");

@@ -6,6 +6,7 @@ import ConsentField from "@/components/forms/ConsentField";
 import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentEnabled, consentPayload } from "@/lib/consent";
 import { captureIntake } from "@/lib/submitForm";
 import { captureAttribution } from "@/lib/attribution";
+import { NAP, primaryPhone, waLink } from "@/content/nap";
 
 const PROJECT_TYPES_AR = ["فيلم مؤسّسي", "إعلان تجاري", "تصوير جوي بالدرون", "بثّ مباشر", "تغطية فعالية", "تصوير عقاري", "فيلم وثائقي", "أعراس", "محتوى سوشيال", "غير ذلك"];
 const PROJECT_TYPES_EN = ["Corporate Film", "Commercial / Ad", "Drone Cinematography", "Live Streaming", "Event Coverage", "Real Estate", "Documentary", "Wedding", "Social Reels", "Other"];
@@ -69,7 +70,7 @@ export default function Contact() {
     });
     setSending(false);
 
-    window.open(`https://wa.me/966503422999?text=${encodeURIComponent(msg)}`, "_blank");
+    window.open(waLink(msg), "_blank");
   };
 
   const update = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
@@ -137,7 +138,7 @@ export default function Contact() {
                   {t({ ar: "المقر الرئيسي", en: "Main Headquarters" })}
                 </div>
                 <div className="text-white" style={{ fontSize: "17px", fontWeight: 600 }}>
-                  {t({ ar: "المنطقة الشرقية — الدمام", en: "Eastern Province — Dammam" })}
+                  {t({ ar: `${NAP.address.regionAr} — ${NAP.address.cityAr}`, en: `${NAP.address.regionEn} — ${NAP.address.cityEn}` })}
                 </div>
                 <div className="text-white/55 mt-1" style={{ fontSize: "13px" }}>
                   {t({ ar: "الرياض · جدة · المدينة المنورة", en: "Riyadh · Jeddah · Madinah" })}
@@ -147,7 +148,7 @@ export default function Contact() {
               <div>
                 <div className="f-sans mb-3" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "أرقامنا", en: "Our Numbers" })}</div>
                 <div className="phone-ltr space-y-2.5" dir="ltr">
-                  {[ "+966503422999", "+966543553038" ].map((num) => {
+                  {NAP.phones.map((p) => p.e164).map((num) => {
                     const intl = num.replace("+", "");
                     return (
                       <div key={num} className="flex items-center gap-3 group">
@@ -193,8 +194,8 @@ export default function Contact() {
 
               <div>
                 <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
-                <a href="mailto:info@kianmedia.com" className="block text-white hover:text-red-500 transition" style={{ fontSize: "15px" }}>info@kianmedia.com</a>
-                <a href="mailto:sales@kianmedia.com" className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "15px" }}>sales@kianmedia.com</a>
+                <a href={`mailto:${NAP.email.primary}`} className="block text-white hover:text-red-500 transition" style={{ fontSize: "15px" }}>{NAP.email.primary}</a>
+                <a href={`mailto:${NAP.email.sales}`} className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "15px" }}>{NAP.email.sales}</a>
               </div>
 
               <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
@@ -208,11 +209,11 @@ export default function Contact() {
             </div>
 
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href="https://wa.me/966503422999" target="_blank" rel="noopener noreferrer" className="btn-wa">
+              <a href={`https://wa.me/${primaryPhone.e164.replace("+", "")}`} target="_blank" rel="noopener noreferrer" className="btn-wa">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.7-.8-2-1-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.6-.8-2.7-1.4-3.8-3.2-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.5 0-.1-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.5 1.9.8 2.6.9 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.7.5 3.4 1.3 4.9L2 22l5.2-1.4c1.5.8 3.1 1.2 4.8 1.2 5.5 0 10-4.5 10-10S17.5 2 12 2z" /></svg>
                 <span>{t({ ar: "واتساب", en: "WhatsApp" })}</span>
               </a>
-              <a href="tel:+966503422999" className="btn-ghost">
+              <a href={`tel:${primaryPhone.e164}`} className="btn-ghost">
                 <span>{t({ ar: "اتّصل بنا", en: "Call Us" })}</span>
               </a>
             </div>

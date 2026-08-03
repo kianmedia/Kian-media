@@ -28,6 +28,9 @@ const SEO = loadTs("content/seo-pages.ts");
 const SD = loadTs("lib/structuredData.ts", (id) => {
   if (id === "@/lib/site") return { SITE_URL: "https://kianmedia.com" };
   if (id === "@/content/portfolio") return loadTs("content/portfolio.ts");
+  // Wave 2 (V2-2.5-B): the schema now reads NAP from the single contact source
+  // instead of literals, so the module under test needs it supplied.
+  if (id === "@/content/nap") return loadTs("content/nap.ts");
   return {};
 });
 const P = loadTs("content/portfolio.ts");
