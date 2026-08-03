@@ -12,6 +12,20 @@ const LINKS = [
   { h: "#contact",   ar: "تواصل",        en: "Contact", cta: true },
 ];
 
+/**
+ * Wave 8 · اللوح — مساحة لمس لروابط الشريط العلويّ.
+ *
+ * روابط الشريط كانت `<a>` سطريّة بلا حشو رأسيّ، فارتفاع صندوقها 13px فقط
+ * (والمزخرَفة منها 37px) — أصغر من الإصبع، والقاعدة الموثّقة في الاختبار
+ * هي **الارتفاع ≥ 44px دائمًا**.
+ *
+ * 🔴 والارتفاع هنا يوسّع مساحة اللمس **دون أن يُطيل الشريط**: علوّه محكوم
+ *    أصلًا بالشعار (w-11 h-11 = 44px)، فالروابط تملأ ما هو قائم لا تزيده.
+ * ⛔ ولا يُفرض عرض 44px: «الخدمات» رابط نصّيّ داخل سطر، وWCAG 2.5.5 يستثنيه،
+ *    وفرضُ العرض حشوٌ يُفسد التنضيد بلا مكسب.
+ */
+const TOUCH_AREA = { minHeight: "44px" } as const;
+
 // Project-start dropdown items (new isolated routes)
 const START_ITEMS = [
   { href: "/quote-request", ar: "اطلب عرض سعر",        en: "Request a Quote" },
@@ -91,11 +105,11 @@ export default function Navbar() {
               <a
                 href={l.h}
                 onClick={(e) => go(e, l.h)}
-                className="f-sans uppercase transition-all duration-300 hover:text-white"
+                className="f-sans uppercase transition-all duration-300 hover:text-white inline-flex items-center"
                 style={
                   l.cta
-                    ? { fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#E31E24", border: "1px solid #E31E24", padding: "9px 22px" }
-                    : { fontSize: "11px", letterSpacing: "2px", fontWeight: 500, color: "rgba(255,255,255,0.6)" }
+                    ? { ...TOUCH_AREA, fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#E31E24", border: "1px solid #E31E24", padding: "9px 22px" }
+                    : { ...TOUCH_AREA, fontSize: "11px", letterSpacing: "2px", fontWeight: 500, color: "rgba(255,255,255,0.6)" }
                 }
               >
                 {t({ ar: l.ar, en: l.en })}
@@ -110,7 +124,7 @@ export default function Navbar() {
           >
             <button
               className="f-sans uppercase transition-all duration-300 inline-flex items-center gap-1.5"
-              style={{ fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#fff", background: "#E31E24", padding: "9px 18px", border: "1px solid #E31E24", cursor: "pointer" }}
+              style={{ ...TOUCH_AREA, fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "#fff", background: "#E31E24", padding: "9px 18px", border: "1px solid #E31E24", cursor: "pointer" }}
               aria-haspopup="true"
               aria-expanded={startOpen}
             >
@@ -145,7 +159,7 @@ export default function Navbar() {
             <a
               href="/client-portal"
               className="f-sans uppercase transition-all duration-300 inline-flex items-center gap-1.5"
-              style={{ fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "rgba(255,255,255,0.85)", border: "1px solid rgba(255,255,255,0.25)", padding: "9px 16px" }}
+              style={{ ...TOUCH_AREA, fontSize: "11px", letterSpacing: "2px", fontWeight: 600, color: "rgba(255,255,255,0.85)", border: "1px solid rgba(255,255,255,0.25)", padding: "9px 16px" }}
               onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#E31E24"; e.currentTarget.style.color = "#fff"; }}
               onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.25)"; e.currentTarget.style.color = "rgba(255,255,255,0.85)"; }}
               aria-label={t({ ar: "بوابة العملاء", en: "Client Portal" })}

@@ -54,6 +54,70 @@ for (const route of ROUTES) {
   });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// انحدار Wave 8 — العَرَض الذي كاد يُصلَح في المكان الخطأ.
+//
+// ظهر في WebKit «فيض 492px» على بطاقات العرض. والسبب لم يكن تخطيطًا البتّة:
+// توجيه CSP `upgrade-insecure-requests` يرقّي الأصول الفرعية إلى https، وهذه
+// الحزمة تُقدّم بناء الإنتاج على http على loopback. Chromium يستثني loopback،
+// وWebKit **لا يستثنيه** — فسقطت ورقة الأنماط كلّها، فاختفت `.absolute`
+// و`.inset-0`، فارتدّت الصورة إلى static/inline/fill بعرضها الأصليّ.
+//
+// 🔴 الدرس المحفور هنا: **تأكّد أنّ CSS حُمِّل قبل أن تُصدّق قياس تخطيط.**
+//    فحصُ الفيض وحده كان سيُغري بحشوٍ يُخفي عَرَضًا سببُه ترويسة أمنية.
+// ⛔ ولا حلول عامّة: لا overflow-x:hidden على body، ولا max-width عشوائيّ،
+//    ولا استثناء للمحرّك — الإصلاح وقع في مصدره (next.config.js + الحزمة).
+// ════════════════════════════════════════════════════════════════════════════
+const WIDTHS = [390, 810, 1024];   // هاتف · لوح رأسيّ · لوح أفقيّ
+
+for (const width of WIDTHS) {
+  test(`عرض ${width}px: الأنماط محمَّلة فعلًا ولا فيض`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    await page.waitForTimeout(400);
+
+    const state = await page.evaluate(() => {
+      // ١. هل وصلت قواعد Tailwind فعلًا؟ نبحث عن القاعدتين بالاسم.
+      let hasAbsolute = false, hasInset = false, readable = 0, blocked = 0;
+      for (const sheet of Array.from(document.styleSheets)) {
+        try {
+          const rules = Array.from(sheet.cssRules);
+          readable++;
+          for (const r of rules) {
+            const t = r.cssText;
+            if (/^\.absolute\s*\{/.test(t)) hasAbsolute = true;
+            if (/^\.inset-0\s*\{/.test(t)) hasInset = true;
+          }
+        } catch { blocked++; }   // ورقة عبر-أصل (خطوط Google) — متوقَّعة
+      }
+      // ٢. وهل طُبِّقت فعليًّا على عنصر يعتمد عليها؟
+      const probe = document.querySelector<HTMLElement>(".absolute.inset-0");
+      const applied = probe ? getComputedStyle(probe).position : null;
+
+      const de = document.documentElement;
+      return {
+        hasAbsolute, hasInset, readable, blocked, applied,
+        diff: de.scrollWidth - de.clientWidth,
+      };
+    });
+
+    // 🔴 يُفحص أوّلًا: بلا CSS كلّ قياس بعده بلا معنى، ورسالة الفشل تقول السبب.
+    expect(
+      state.hasAbsolute && state.hasInset,
+      `قواعد Tailwind غائبة عن الـCSS المُرسَل (.absolute=${state.hasAbsolute} ` +
+      `.inset-0=${state.hasInset}, أوراق مقروءة=${state.readable}) — ` +
+      `الأرجح أنّ ورقة الأنماط لم تُحمَّل أصلًا (ترقية https على خادم http؟)، ` +
+      `ولا يصحّ عندئذ الحكم على التخطيط.`,
+    ).toBe(true);
+
+    if (state.applied !== null) {
+      expect(state.applied, "‏.absolute موجودة في CSS لكنّها لم تُطبَّق").toBe("absolute");
+    }
+
+    expect(state.diff, `فيض أفقيّ عند ${width}px بمقدار ${state.diff}px`).toBeLessThanOrEqual(1);
+  });
+}
+
 test("أهداف اللمس الأساسية ≥ 44px", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "desktop", "المقياس للمس لا للفأرة");
   await page.goto("/");
