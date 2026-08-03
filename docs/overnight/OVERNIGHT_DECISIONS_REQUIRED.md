@@ -296,3 +296,33 @@ lint واحد + ثبات تخطيط**، والخسارة المحتملة هي *
 | **D-W8-4** | **سياسة الأجهزة المكسورة الحماية** | 🟠 POLICY | الكشف قابل للتحايل دائمًا؛ والاختيار بين المنع والتحذير قرار عمل |
 | **D-W8-5** | **مراجعة أمنية لتغذية التقويم** | 🔴 SECURITY | `wave3_calendar_tokens` يمنح `anon` تنفيذًا — الرمز وحده يفصل الزائر عن المحتوى |
 | **D-W8-6** | **متى يُبنى محرّك الكتابة دون اتصال** | 🟠 ARCHITECTURE | حسم التعارض على بيانات تشغيلية قرار عمل. العقد جاهز، والمحرّك مؤجَّل لـWave 9 |
+
+
+---
+
+## قرارات جلسة ٥ أغسطس ٢٠٢٦
+
+### 🔴 W5-2 — القرارات المالية السبعة
+
+**التفصيل الكامل مع الخيارات والأثر:** `docs/release/WAVE_5_FINANCIAL_DECISION_PACK.md`
+**الأدلّة تُجمع من:** `docs/release/WAVE_5_PRODUCTION_READONLY_VERIFICATION.md`
+
+| # | القرار | الموصى به (محافظ) | اختيار خالد |
+|---|---|---|---|
+| ١ | Revenue Source of Truth | `fin_revenue` | ⬜ |
+| ٢ | **Cost Source of Truth** 🔴 الأخطر | `fin_costs` | ⬜ |
+| ٣ | Invoice Source of Truth | `zoho` (مرجعًا) | ⬜ |
+| ٤ | VAT Source of Truth | `stored` + قيد لاحق | ⬜ |
+| ٥ | Currency Conversion Policy | `reject_mixed` | ⬜ |
+| ٦ | Margin Calculation Policy | `net_of_vat` | ⬜ |
+| ٧ | Zoho Precedence | `flag_conflict` | ⬜ |
+
+⚠️ **والتوصيات مشروطة بأدلّة لم تُجمع بعد** — ⛔ ولا يُنفَّذ منها شيء.
+
+### قرارات أخرى
+
+| # | القرار | التصنيف |
+|---|---|---|
+| **D-R-1** | **تمرين الاسترجاع** — ⛔ لم يُنفَّذ، وهدفه **ليس** `kian-media-preview` | 🔴 MANUAL |
+| **D-R-2** | **مواصلة قراءة ٢٤٣ ملفّ SQL** أم قبول `NEEDS MANUAL REVIEW` | 🟠 SCOPE |
+| **D-R-3** | **ترتيب التراجع معكوس**: v2.1 أوّلًا ثمّ الأساس — يُعتمد كإجراء | 🟠 PROCESS |
