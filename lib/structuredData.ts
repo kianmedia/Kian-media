@@ -25,6 +25,7 @@
 import { SITE_URL } from "@/lib/site";
 import type { SeoPage } from "@/content/seo-pages";
 import type { Work } from "@/content/portfolio";
+import { NAP, primaryPhone } from "@/content/nap";
 import { thumb, watchUrl, embedUrl } from "@/content/portfolio";
 
 const abs = (p: string) => `${SITE_URL}${p === "/" ? "" : p}`;
@@ -40,26 +41,27 @@ export function localBusinessJsonLd() {
     "@context": "https://schema.org",
     "@type": "ProfessionalService",
     "@id": `${SITE_URL}#business`,
-    name: "Kian Media Production",
-    alternateName: "كيان الابتكار للإنتاج الفني",
+    name: NAP.nameEn,
+    alternateName: NAP.nameAr,
     url: SITE_URL,
     image: `${SITE_URL}/og-default.svg`,
     address: {
       "@type": "PostalAddress",
-      addressLocality: "Dammam",
-      addressRegion: "Eastern Province",
-      addressCountry: "SA",
+      addressLocality: NAP.address.cityEn,
+      addressRegion: NAP.address.regionEn,
+      addressCountry: NAP.address.countryCode,
     },
     areaServed: { "@type": "Country", name: "Saudi Arabia" },
-    // Both numbers are published on the contact page. Not secrets.
-    telephone: "+966503422999",
-    email: "info@kianmedia.com",
+    // Both published on the contact page. Not secrets. Read from content/nap.ts
+    // so the schema can never drift from the footer (V2-2.5-B).
+    telephone: primaryPhone.e164,
+    email: NAP.email.primary,
     // Published on components/Contact.tsx: all week, 07:00–23:45.
     openingHoursSpecification: {
       "@type": "OpeningHoursSpecification",
       dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-      opens: "07:00",
-      closes: "23:45",
+      opens: NAP.hours.opens,
+      closes: NAP.hours.closes,
     },
   };
 }

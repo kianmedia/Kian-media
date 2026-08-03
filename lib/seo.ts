@@ -179,6 +179,15 @@ export const ROUTE_SEO: Record<string, RouteSeo> = {
     description:
       "كيف تجمع كيان ميديا بياناتك وتستخدمها وتحميها، وحقوقك في الوصول إليها وتصحيحها وحذفها.",
   },
+  trust: {
+    path: "/trust",
+    title: "الثقة والامتثال | كيان ميديا",
+    description:
+      "أمن منصة كيان ميديا وحماية البيانات: عزل على مستوى الصف، تشفير، مصادقة ثنائية، صلاحيات مفصَّلة، والتزام بنظام حماية البيانات الشخصية.",
+    titleEn: "Trust & Compliance | Kian Media",
+    descriptionEn:
+      "Kian Media platform security and data protection: row-level isolation, encryption, two-factor authentication, granular permissions, and a commitment to Saudi PDPL.",
+  },
   terms: {
     path: "/terms",
     titleEn: "Terms of Use | Kian Media",

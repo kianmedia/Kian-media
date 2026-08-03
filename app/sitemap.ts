@@ -32,6 +32,9 @@ const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[numb
   { path: "/upload-files",    changeFrequency: "yearly",  priority: 0.4 },
   { path: "/privacy-policy",  changeFrequency: "yearly",  priority: 0.3 },
   { path: "/terms",           changeFrequency: "yearly",  priority: 0.3 },
+  // Wave 2 · V2-2.3-A — the procurement/trust page. Bilingual, so it is listed
+  // per locale with alternates like the rest.
+  { path: "/trust",           changeFrequency: "yearly",  priority: 0.5 },
 ];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {

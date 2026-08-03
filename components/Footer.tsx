@@ -1,5 +1,6 @@
 "use client";
 import { useI18n } from "@/lib/i18n";
+import { NAP, primaryPhone, waLink } from "@/content/nap";
 
 const SOCIALS = [
   { label: "Instagram", short: "IG", url: "https://www.instagram.com/kian.alebtikar" },
@@ -12,7 +13,8 @@ const SOCIALS = [
 export default function Footer() {
   const { t } = useI18n();
 
-  const wa = "https://wa.me/966503422999?text=" + encodeURIComponent(
+  // V2-2.5-B — built from content/nap.ts, never a literal.
+  const wa = waLink(
     t({ ar: "السلام عليكم، أود الاستفسار عن خدمات كيان ميديا", en: "Hello, I'd like to inquire about Kian Media's services." })
   );
 
@@ -40,10 +42,9 @@ export default function Footer() {
     {
       title: t({ ar: "تواصل", en: "Contact" }),
       links: [
-        { t: t({ ar: "المقر: الدمام", en: "HQ: Dammam" }), h: "#contact" },
-        { t: "0503422999", h: "tel:+966503422999", ltr: true },
-        { t: "0543553038", h: "tel:+966543553038", ltr: true },
-        { t: "info@kianmedia.com", h: "mailto:info@kianmedia.com" },
+        { t: t({ ar: `المقر: ${NAP.address.cityAr}`, en: `HQ: ${NAP.address.cityEn}` }), h: "#contact" },
+        ...NAP.phones.map((p) => ({ t: p.display, h: `tel:${p.e164}`, ltr: true })),
+        { t: NAP.email.primary, h: `mailto:${NAP.email.primary}` },
         { t: t({ ar: "كل أيام الأسبوع · ٧ ص — ١١:٤٥ م", en: "All week · 7 AM – 11:45 PM" }), h: "#contact" },
       ],
     },
