@@ -153,3 +153,41 @@ test("(S-8) ★★★ الواجهة لا تُصفّي · ولا تُغرق · �
   // وحرفان على الأقلّ قبل أيّ نداء.
   assert.match(ui, /text\.trim\(\)\.length < 2/, "🔴 يبحث بحرف واحد");
 });
+
+// ═══ V2-7.3-A · عارض سجلّ التدقيق ═══════════════════════════════════════════
+
+const AUD = () => read("docs/wave7_audit_viewer_RUNME.sql");
+
+test("(A-1) ★★★ لا سجلّ تدقيق سادس عشر · وقراءة فقط ★★★", () => {
+  const c = codeOnly(AUD());
+  assert.doesNotMatch(c, /create\s+table/i, "🔴 سجلّ تدقيق جديد");
+  // ⛔ ولا كتابة في أيّ سجلّ قائم.
+  for (const re of [/\binsert\s+into\s+public\./i, /\bupdate\s+public\./i, /\bdelete\s+from\b/i]) {
+    assert.doesNotMatch(c, re, "🔴 العارض يكتب");
+  }
+  for (const f of ["audit_viewer_list", "audit_sources_registry"]) {
+    assert.match(c, new RegExp(`create or replace function public\\.${f}`), `${f} مفقودة`);
+    assert.match(c, new RegExp(`revoke all on function public\\.${f}\\(`), `🔴 ${f} بلا REVOKE`);
+  }
+  assert.doesNotMatch(c, /grant execute on function[^;]*\banon\b/i, "🔴 سجلّ التدقيق لـanon");
+});
+
+test("(A-2) ★★★ يُعلن أنّه ليس كلّ التدقيق — ولا يدّعي الاكتمال ★★★", () => {
+  const fn = bodyOf(AUD(), "audit_viewer_list");
+  // 🔴 عارض يبدو كاملًا وهو ليس كذلك أخطر من عارض ناقص معلن.
+  assert.match(fn, /'is_complete_audit', false/, "🔴 لا يُعلن أنّه ناقص");
+  assert.match(fn, /'source', 'activity_log'/, "لا يُسمّي مصدره");
+  // وسجلّ الإحالة يُبنى من الكتالوج لا من قائمة تتقادم.
+  const reg = bodyOf(AUD(), "audit_sources_registry");
+  assert.match(reg, /from pg_class c join pg_namespace n/, "🔴 قائمة مكتوبة يدويًّا تتقادم");
+  assert.match(reg, /'in_viewer'/, "لا تمييز لما يُقرأ فعلًا");
+  assert.match(reg, /W7-1/, "القرار غير مسجَّل في المخرَج");
+});
+
+test("(A-3) ★★★ metadata لا يُعاد خامًّا ★★★", () => {
+  const fn = bodyOf(AUD(), "audit_viewer_list");
+  // 🔴 `metadata` jsonb حرّ كتبه مستدعٍ سابق — قد يحمل أيّ شيء.
+  assert.match(fn, /'metadata_keys'/, "لا إعادة للمفاتيح");
+  assert.match(fn, /jsonb_object_keys/, "🔴 لا استخراج للمفاتيح");
+  assert.doesNotMatch(fn, /'metadata', a\.metadata/, "🔴 metadata يُعاد خامًّا");
+});
