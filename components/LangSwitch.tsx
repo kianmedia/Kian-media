@@ -15,6 +15,9 @@ export default function LangSwitch({ compact = false }: { compact?: boolean }) {
         background: "transparent",
         border: "1px solid rgba(255,255,255,0.18)",
         padding: compact ? "7px 12px" : "9px 14px",
+        // 🔴 Wave 8 — كان ٣٣px ارتفاعًا. مبدّل اللغة زرّ يُضغط على الهاتف كثيرًا،
+        //    وحجمه أصغر من الإصبع. ٤٤px هو الحدّ الموثَّق (Apple/WCAG 2.5.5 AA).
+        minHeight: "44px",
         fontSize: "11px",
         letterSpacing: "2px",
         color: "rgba(255,255,255,0.85)",

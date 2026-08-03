@@ -155,7 +155,10 @@ export default function Contact() {
                         <a
                           href={`tel:${num}`}
                           className="text-white transition-colors group-hover:text-red-400"
-                          style={{ fontSize: "16px", letterSpacing: "0.5px", fontWeight: 500, fontVariantNumeric: "tabular-nums", flex: 1 }}
+                          style={{ fontSize: "16px", letterSpacing: "0.5px", fontWeight: 500, fontVariantNumeric: "tabular-nums", flex: 1,
+                                   // 🔴 Wave 8 — الضغط على رقم للاتصال فعل أساسيّ على
+                                   //    الهاتف، وكان ارتفاعه ٢٤px. ٤٤px هو الحدّ الموثَّق.
+                                   display: "flex", alignItems: "center", minHeight: "44px" }}
                           aria-label={`Call ${num}`}
                         >
                           {num}
@@ -164,7 +167,8 @@ export default function Contact() {
                           href={`tel:${num}`}
                           aria-label={`Call ${num}`}
                           className="inline-flex items-center justify-center transition-all"
-                          style={{ width: "32px", height: "32px", border: "1px solid rgba(255,255,255,0.18)", color: "rgba(255,255,255,0.75)" }}
+                          style={{ width: "32px", height: "32px", minWidth: "44px", minHeight: "44px",
+                                   border: "1px solid rgba(255,255,255,0.18)", color: "rgba(255,255,255,0.75)" }}
                           onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#E31E24"; (e.currentTarget as HTMLAnchorElement).style.color = "#E31E24"; }}
                           onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.18)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.75)"; }}
                         >
@@ -178,7 +182,8 @@ export default function Contact() {
                           rel="noopener noreferrer"
                           aria-label={`WhatsApp ${num}`}
                           className="inline-flex items-center justify-center transition-all"
-                          style={{ width: "32px", height: "32px", border: "1px solid rgba(37,211,102,0.4)", color: "#25D366" }}
+                          style={{ width: "32px", height: "32px", minWidth: "44px", minHeight: "44px",
+                                   border: "1px solid rgba(37,211,102,0.4)", color: "#25D366" }}
                           onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#25D366"; (e.currentTarget as HTMLAnchorElement).style.color = "#fff"; }}
                           onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "#25D366"; }}
                         >
@@ -194,8 +199,8 @@ export default function Contact() {
 
               <div>
                 <div className="f-sans mb-1.5" style={{ fontSize: "9px", letterSpacing: "3px", color: "rgba(227,30,36,0.85)", textTransform: "uppercase", fontWeight: 600 }}>{t({ ar: "البريد الإلكتروني", en: "Email" })}</div>
-                <a href={`mailto:${NAP.email.primary}`} className="block text-white hover:text-red-500 transition" style={{ fontSize: "15px" }}>{NAP.email.primary}</a>
-                <a href={`mailto:${NAP.email.sales}`} className="block text-white hover:text-red-500 transition mt-1" style={{ fontSize: "15px" }}>{NAP.email.sales}</a>
+                <a href={`mailto:${NAP.email.primary}`} className="text-white hover:text-red-500 transition" style={{ fontSize: "15px", display: "flex", alignItems: "center", minHeight: "44px" }}>{NAP.email.primary}</a>
+                <a href={`mailto:${NAP.email.sales}`} className="text-white hover:text-red-500 transition" style={{ fontSize: "15px", display: "flex", alignItems: "center", minHeight: "44px" }}>{NAP.email.sales}</a>
               </div>
 
               <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
