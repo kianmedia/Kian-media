@@ -12,6 +12,7 @@
 import Link from "next/link";
 import { liveTrustClaims } from "@/content/trust";
 import { NAP, formattedAddress } from "@/content/nap";
+import { REGISTRATION, registrationVerified } from "@/content/registration";
 import { breadcrumbListJsonLd, localBusinessJsonLd } from "@/lib/structuredData";
 
 export default function TrustPage({ locale }: { locale: "ar" | "en" }) {
@@ -81,10 +82,20 @@ export default function TrustPage({ locale }: { locale: "ar" | "en" }) {
             <dd style={{ margin: 0 }}>{ar ? NAP.nameAr : NAP.nameEn}</dd>
             <dt style={{ color: "rgba(255,255,255,0.45)" }}>{ar ? "المقر" : "Headquarters"}</dt>
             <dd style={{ margin: 0 }}>{formattedAddress(locale)}</dd>
-            <dt style={{ color: "rgba(255,255,255,0.45)" }}>{ar ? "السجل التجاري" : "Commercial Registration"}</dt>
-            <dd style={{ margin: 0 }} dir="ltr">{NAP.registration.commercialRegistration}</dd>
-            <dt style={{ color: "rgba(255,255,255,0.45)" }}>{ar ? "الرقم الضريبي" : "VAT Number"}</dt>
-            <dd style={{ margin: 0 }} dir="ltr">{NAP.registration.vat}</dd>
+            {/* 🔴 Legal identifiers appear ONLY when they have been checked
+                against the actual certificates (content/registration.ts →
+                REGISTRATION_VERIFIED). A wrong CR or VAT on a procurement page
+                is a misrepresentation of legal identity that a buyer may rely
+                on, so "we have the number" is not sufficient to publish it.
+                Status while false: PENDING OFFICIAL DOCUMENT VERIFICATION. */}
+            {registrationVerified() && (
+              <>
+                <dt style={{ color: "rgba(255,255,255,0.45)" }}>{ar ? "السجل التجاري" : "Commercial Registration"}</dt>
+                <dd style={{ margin: 0 }} dir="ltr">{REGISTRATION.commercialRegistration}</dd>
+                <dt style={{ color: "rgba(255,255,255,0.45)" }}>{ar ? "الرقم الضريبي" : "VAT Number"}</dt>
+                <dd style={{ margin: 0 }} dir="ltr">{REGISTRATION.vat}</dd>
+              </>
+            )}
             <dt style={{ color: "rgba(255,255,255,0.45)" }}>{ar ? "البريد" : "Email"}</dt>
             <dd style={{ margin: 0 }} dir="ltr">
               <a href={`mailto:${NAP.email.primary}`} style={{ color: "#E31E24" }}>{NAP.email.primary}</a>

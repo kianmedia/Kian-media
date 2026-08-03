@@ -22,6 +22,7 @@ import { SITE_URL } from "@/lib/site";
 import { publicCaseStudySlugs } from "@/lib/server/publicCaseStudies";
 import { BILINGUAL_ROUTES, localePath } from "@/lib/seo";
 import { SEO_PAGES, seoPagePath, seoPagesEnabled } from "@/content/seo-pages";
+import { trustPageEnabled } from "@/content/trust";
 
 /** Public routes only. changeFrequency/priority are hints, not guarantees. */
 const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[number]["changeFrequency"]; priority: number }[] = [
@@ -32,9 +33,7 @@ const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[numb
   { path: "/upload-files",    changeFrequency: "yearly",  priority: 0.4 },
   { path: "/privacy-policy",  changeFrequency: "yearly",  priority: 0.3 },
   { path: "/terms",           changeFrequency: "yearly",  priority: 0.3 },
-  // Wave 2 · V2-2.3-A — the procurement/trust page. Bilingual, so it is listed
-  // per locale with alternates like the rest.
-  { path: "/trust",           changeFrequency: "yearly",  priority: 0.5 },
+
 ];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
@@ -44,8 +43,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // the /en mirror does not exist; one that lists /en for a route WITHOUT an
   // English page is worse, because the alternate 404s. BILINGUAL_ROUTES is the
   // single list both this file and lib/seo.ts read, so the two cannot disagree.
+  // Wave 2 release gate — /trust is listed ONLY while its flag is on. It 404s
+  // otherwise, and a sitemap that lists a 404 is a defect, not an omission.
+  const routes = trustPageEnabled()
+    ? [...PUBLIC_ROUTES, { path: "/trust", changeFrequency: "yearly" as const, priority: 0.5 }]
+    : PUBLIC_ROUTES;
+
   const bilingual = new Set(BILINGUAL_ROUTES);
-  const base: MetadataRoute.Sitemap = PUBLIC_ROUTES.flatMap((r) => {
+  const base: MetadataRoute.Sitemap = routes.flatMap((r) => {
     const ar = {
       url: `${SITE_URL}${r.path}`,
       lastModified,

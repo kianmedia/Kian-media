@@ -56,13 +56,28 @@ test("★ V2-2.3-A: ولا ادّعاء مؤجَّل يتسرّب إلى HTML ا
   if (files.length === 0) return;                 // no build to inspect
   for (const f of files) {
     const html = fs.readFileSync(f, "utf8");
+
+    // ⛔ لا ادّعاء مؤجَّل — سواء نُشرت الصفحة أم لا.
     for (const c of TRUST.pendingTrustClaims()) {
       assert.ok(!html.includes(c.titleAr), `🔴 ${path.basename(f)} يعرض ادّعاءً مؤجَّلًا: ${c.titleAr}`);
       assert.ok(!html.includes(c.titleEn), `🔴 ${path.basename(f)} يعرض ادّعاءً مؤجَّلًا: ${c.titleEn}`);
     }
-    // وما هو حيّ يجب أن يظهر فعلًا — وإلا فالصفحة فارغة بلا سبب.
-    assert.ok(html.includes(TRUST.liveTrustClaims()[0].titleAr) ||
-              html.includes(TRUST.liveTrustClaims()[0].titleEn), "لم يُعرض أي ادّعاء حيّ");
+
+    // الصفحة خلف علم NEXT_PUBLIC_SHOW_TRUST_PAGE. وهي مغلقة تُبنى كمستند خطأ
+    // (404)، فالمطلوب حينها العكس تمامًا: ألّا يتسرّب أيّ نصّ منها — حيًّا كان
+    // أو مؤجَّلًا. البوّابة نفسها مُختبَرة في wave2_trust_release_gate.test.js.
+    const published = !/<html[^>]*id="__next_error__"/.test(html);
+    const live = TRUST.liveTrustClaims();
+    if (published) {
+      // وما هو حيّ يجب أن يظهر فعلًا — وإلا فالصفحة فارغة بلا سبب.
+      assert.ok(html.includes(live[0].titleAr) || html.includes(live[0].titleEn),
+        "لم يُعرض أي ادّعاء حيّ");
+    } else {
+      for (const c of live) {
+        assert.ok(!html.includes(c.titleAr) && !html.includes(c.titleEn),
+          `🔴 ${path.basename(f)} خلف بوّابة مغلقة ومع ذلك سرّب: ${c.titleAr}`);
+      }
+    }
   }
 });
 
