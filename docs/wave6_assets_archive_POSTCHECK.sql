@@ -41,3 +41,25 @@ select 'الجداول تُنشأ فارغة' as check,
              and (select count(*) from public.music_licenses)=0
              and (select count(*) from public.model_releases)=0
             then '✅' else '🟡 فيها صفوف — تحقّق من مصدرها' end as result;
+
+-- ─── W6-1 · الاحتفاظ ───────────────────────────────────────────────────────
+select '🔴 لا مدّة احتفاظ مفترضة' as check,
+       case when column_default is null then '✅ nullable بلا افتراض'
+            else '🔴 قيمة افتراضية مخترعة: '||column_default end as result
+from information_schema.columns
+where table_schema='public' and table_name='archive_media' and column_name='retention_until';
+
+select '🔴 AUTO-DELETION DISABLED' as check,
+       case when count(*)=1 then '✅ مقيَّد بـfalse' else '🔴 يمكن تفعيل حذف تلقائيّ' end as result
+from pg_constraint con join pg_class r on r.oid=con.conrelid
+where r.relname='archive_media' and pg_get_constraintdef(con.oid) like '%auto_delete_enabled = false%';
+
+select 'الحجز القانونيّ يمنع الإخفاء' as check,
+       case when count(*)=1 then '✅' else '🔴 مفقود' end as result
+from pg_constraint where conname='archive_media_hold_blocks_delete';
+
+-- ⛔ ولا مُشغِّل ولا دالّة حذف على الأرشيف في هذه الحزمة.
+select '⛔ لا مُشغِّل حذف على الأرشيف' as check,
+       case when count(*)=0 then '✅' else '🔴 '||string_agg(tgname,', ') end as result
+from pg_trigger t join pg_class c on c.oid=t.tgrelid
+where c.relname in ('archive_media','archive_project_links') and not t.tgisinternal;

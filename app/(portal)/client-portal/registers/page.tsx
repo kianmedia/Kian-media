@@ -10,7 +10,9 @@
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { wave6Enabled } from "@/lib/portal/custodyInventory";
+import { caseStudyDraftsEnabled } from "@/lib/portal/caseStudies";
 import Wave6Registers, { ProjectRights } from "@/components/portal/registers/Wave6Registers";
+import CaseStudyDrafts from "@/components/portal/registers/CaseStudyDrafts";
 
 function Inner() {
   const projectId = useSearchParams().get("p");
@@ -20,6 +22,8 @@ function Inner() {
   return (
     <div className="space-y-3">
       <Wave6Registers />
+      {/* V2-6.8 — علم مستقلّ: مسوّدات دراسات الحالة قد تُفعَّل وحدها. */}
+      {caseStudyDraftsEnabled() && <CaseStudyDrafts />}
       {/* ملخّص الحقوق يخصّ مشروعًا بعينه — يظهر حين يُمرَّر معرّفه. */}
       {projectId
         ? <ProjectRights projectId={projectId} />

@@ -358,9 +358,18 @@ test("(U-1) ★★★ العلم مطفأ ⇒ لا تبويب ولا صفحة و
 
 test("(U-2) ★★★ الواجهة: لا اسم شخص · والمسوّدة والمنتهي والمفقود معلَنة ★★★", () => {
   const ui = read("components/portal/registers/Wave6Registers.tsx");
-  // ⛔ ملخّص يُطبع ويُشارَك — لا اسم شخص فيه.
+  // ⛔ **الملخّص القابل للطباعة** وحده هو المقصود: نموذج الإدخال يحتاج حقل اسم
+  //    بالضرورة (لا بدّ من تسجيل من وقّع). فيُفحص مكوّن ProjectRights تحديدًا.
+  const summary = ui.slice(ui.indexOf("export function ProjectRights"),
+                           ui.indexOf("function QuickEntry"));
+  assert.ok(summary.length > 200, "تعذّر عزل مكوّن الملخّص");
   for (const pii of ["person_name", "contact_ref"]) {
-    assert.ok(!ui.includes(pii), `🔴 بيان شخصيّ في ملخّص قابل للطباعة: ${pii}`);
+    assert.ok(!summary.includes(pii), `🔴 بيان شخصيّ في ملخّص قابل للطباعة: ${pii}`);
+  }
+  // ونموذج الإدخال لا يطلب ما لا يقرؤه الخادم أصلًا.
+  const entry = ui.slice(ui.indexOf("function QuickEntry"));
+  for (const pii of ["national_id", "iqama", "passport", "address", "date_of_birth"]) {
+    assert.ok(!entry.includes(pii), `🔴 نموذج الإدخال يطلب بيانًا زائدًا: ${pii}`);
   }
   assert.match(ui, /لا أسماء في ملخّص قابل للطباعة/, "🔴 لا تُعلن أنّها أعداد فقط");
   // 🔴 مسوّدة تُعلَن مسوّدة، ومنتهٍ يُعلَن منتهيًا.

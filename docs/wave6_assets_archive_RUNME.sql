@@ -77,6 +77,19 @@ create table if not exists public.archive_media (
   filesystem      text,
   encrypted       boolean not null default false,
   notes           text,
+  -- ─── W6-1 · الاحتفاظ ────────────────────────────────────────────────────
+  -- 🔴 **nullable عمدًا، ولا قيمة افتراضية.** لم تُعتمَد مدّة احتفاظ بعد، ورقمٌ
+  --    مخترَع هنا يصير سياسة بحكم الأمر الواقع يُبنى عليها إتلاف مادّة عميل.
+  --    الحالة المعلنة: RETENTION POLICY DECISION PENDING.
+  retention_until   date,
+  retention_policy  text,
+  -- 🔴 **AUTO-DELETION DISABLED.** انقضاء المدّة **لا يحذف** شيئًا: لا مُشغِّل،
+  --    ولا cron، ولا مسار حذف في هذه الحزمة. الانقضاء إشارة للمراجعة البشرية.
+  auto_delete_enabled boolean not null default false
+                      check (auto_delete_enabled = false),
+  -- الحجز القانونيّ يمنع أيّ حذف مستقبليّ — ويتقدّم على أيّ مدّة.
+  legal_hold        boolean not null default false,
+  legal_hold_reason text,
   created_by      uuid references auth.users(id),
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
@@ -85,8 +98,18 @@ create table if not exists public.archive_media (
   deleted_by      uuid references auth.users(id),
   delete_reason   text,
   -- المستخدَم لا يتجاوز السعة — رقم مستحيل يُفسد كلّ تقرير مساحة.
-  constraint archive_media_capacity check (used_gb is null or capacity_gb is null or used_gb <= capacity_gb)
+  constraint archive_media_capacity check (used_gb is null or capacity_gb is null or used_gb <= capacity_gb),
+  -- حجز قانونيّ بلا سبب مكتوب ليس حجزًا قابلًا للتدقيق.
+  constraint archive_media_hold_pair check (
+    legal_hold = false or length(btrim(coalesce(legal_hold_reason,''))) >= 3),
+  -- 🔴 الحجز القانونيّ يمنع الإخفاء أيضًا، لا الحذف الفيزيائيّ وحده.
+  constraint archive_media_hold_blocks_delete check (
+    legal_hold = false or is_deleted = false)
 );
+
+comment on column public.archive_media.retention_until is
+  'W6-1 · RETENTION POLICY DECISION PENDING — nullable بلا افتراض. ⛔ انقضاؤها '
+  'لا يحذف شيئًا: AUTO-DELETION DISABLED، ولا مُشغِّل ولا cron حذف في المنصّة.';
 
 create index if not exists archive_media_health_idx
   on public.archive_media (health_status) where is_deleted = false;
@@ -197,7 +220,9 @@ create index if not exists mr_project_idx on public.model_releases (project_id) 
 
 comment on table public.model_releases is
   'V2-6.5-A — PDPL: أقلّ بيانات ممكنة، ⛔ لا رقم هويّة ولا عنوان. المستند في '
-  'دلو خاصّ بلا رابط مخزَّن، والسحب يُبطل النطاق فورًا.';
+  'دلو **خاصّ** بلا رابط مخزَّن، والسحب يُبطل النطاق فورًا. '
+  'W6-3: التوقيع قصير الصلاحية عند الطلب بعد إثبات القاعدة للصلاحية — '
+  '⛔ ولا يُخزَّن رابط موقَّع في أيّ عمود.';
 
 -- ─── §5 · RLS — deny by default على الجميع ─────────────────────────────────
 alter table public.asset_insurance_coverage    enable row level security;
@@ -285,9 +310,159 @@ begin
                             'music', v_music, 'model_releases', v_releases, 'archive', v_archive);
 end $$;
 
+
+-- ─── §6·١ · دوالّ الكتابة — جداول بلا كاتب ليست ميزة ──────────────────────
+--
+-- ⛔ لا سياسة كتابة على أيّ جدول: الكتابة تمرّ من هنا وحدها، فالتحقّق في مكان
+--    واحد لا في كلّ مستدعٍ.
+
+create or replace function public.archive_media_upsert(p_payload jsonb)
+returns uuid language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid := nullif(p_payload->>'id','')::uuid;
+begin
+  if not public.civ_can_manage_assets() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  if length(btrim(coalesce(p_payload->>'label',''))) < 2 then raise exception 'label_required'; end if;
+
+  if v_id is null then
+    insert into public.archive_media
+      (label, media_kind, serial_number, capacity_gb, used_gb, health_status,
+       health_checked_at, physical_location, filesystem, encrypted, notes,
+       retention_until, retention_policy, legal_hold, legal_hold_reason, created_by)
+    values
+      (btrim(p_payload->>'label'), coalesce(nullif(p_payload->>'media_kind',''),'hdd'),
+       nullif(p_payload->>'serial_number',''), nullif(p_payload->>'capacity_gb','')::numeric,
+       nullif(p_payload->>'used_gb','')::numeric,
+       coalesce(nullif(p_payload->>'health_status',''),'unknown'),
+       nullif(p_payload->>'health_checked_at','')::date,
+       nullif(p_payload->>'physical_location',''), nullif(p_payload->>'filesystem',''),
+       coalesce((p_payload->>'encrypted')::boolean,false), nullif(p_payload->>'notes',''),
+       -- 🔴 مدّة الاحتفاظ تُمرَّر أو تبقى NULL — ⛔ ولا قيمة تُفترض هنا (W6-1).
+       nullif(p_payload->>'retention_until','')::date, nullif(p_payload->>'retention_policy',''),
+       coalesce((p_payload->>'legal_hold')::boolean,false), nullif(p_payload->>'legal_hold_reason',''),
+       auth.uid())
+    returning id into v_id;
+  else
+    update public.archive_media set
+      label = coalesce(nullif(btrim(p_payload->>'label'),''), label),
+      media_kind = coalesce(nullif(p_payload->>'media_kind',''), media_kind),
+      capacity_gb = case when p_payload ? 'capacity_gb' then nullif(p_payload->>'capacity_gb','')::numeric else capacity_gb end,
+      used_gb = case when p_payload ? 'used_gb' then nullif(p_payload->>'used_gb','')::numeric else used_gb end,
+      health_status = coalesce(nullif(p_payload->>'health_status',''), health_status),
+      health_checked_at = case when p_payload ? 'health_checked_at' then nullif(p_payload->>'health_checked_at','')::date else health_checked_at end,
+      physical_location = case when p_payload ? 'physical_location' then nullif(p_payload->>'physical_location','') else physical_location end,
+      notes = case when p_payload ? 'notes' then nullif(p_payload->>'notes','') else notes end,
+      retention_until = case when p_payload ? 'retention_until' then nullif(p_payload->>'retention_until','')::date else retention_until end,
+      legal_hold = coalesce((p_payload->>'legal_hold')::boolean, legal_hold),
+      legal_hold_reason = case when p_payload ? 'legal_hold_reason' then nullif(p_payload->>'legal_hold_reason','') else legal_hold_reason end,
+      updated_at = now()
+    where id = v_id and is_deleted = false;
+    if not found then raise exception 'not_found'; end if;
+  end if;
+  return v_id;
+end $$;
+
+create or replace function public.music_license_upsert(p_payload jsonb)
+returns uuid language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid := nullif(p_payload->>'id','')::uuid;
+begin
+  if not public.can_manage_projects() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  if length(btrim(coalesce(p_payload->>'track_title',''))) < 1 then raise exception 'track_title_required'; end if;
+
+  if v_id is null then
+    insert into public.music_licenses
+      (track_title, artist, source, license_type, license_id, purchased_at, expires_at,
+       scope_note, proof_bucket, proof_path, created_by)
+    values
+      (btrim(p_payload->>'track_title'), nullif(p_payload->>'artist',''),
+       nullif(p_payload->>'source',''), coalesce(nullif(p_payload->>'license_type',''),'unknown'),
+       nullif(p_payload->>'license_id',''), nullif(p_payload->>'purchased_at','')::date,
+       nullif(p_payload->>'expires_at','')::date, nullif(p_payload->>'scope_note',''),
+       -- ⛔ دلو ومسار فقط — القيد يرفض رابطًا كاملًا (W6-3).
+       nullif(p_payload->>'proof_bucket',''), nullif(p_payload->>'proof_path',''), auth.uid())
+    returning id into v_id;
+  else
+    update public.music_licenses set
+      track_title = coalesce(nullif(btrim(p_payload->>'track_title'),''), track_title),
+      artist = case when p_payload ? 'artist' then nullif(p_payload->>'artist','') else artist end,
+      license_type = coalesce(nullif(p_payload->>'license_type',''), license_type),
+      license_id = case when p_payload ? 'license_id' then nullif(p_payload->>'license_id','') else license_id end,
+      expires_at = case when p_payload ? 'expires_at' then nullif(p_payload->>'expires_at','')::date else expires_at end,
+      scope_note = case when p_payload ? 'scope_note' then nullif(p_payload->>'scope_note','') else scope_note end,
+      updated_at = now()
+    where id = v_id and is_deleted = false;
+    if not found then raise exception 'not_found'; end if;
+  end if;
+  return v_id;
+end $$;
+
+create or replace function public.model_release_upsert(p_payload jsonb)
+returns uuid language plpgsql volatile security definer set search_path = public as $$
+declare v_id uuid := nullif(p_payload->>'id','')::uuid;
+begin
+  if not public.can_manage_projects() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  if length(btrim(coalesce(p_payload->>'person_name',''))) < 2 then raise exception 'person_name_required'; end if;
+
+  -- 🔴 PDPL: **لا حقل هنا خارج الحدّ الأدنى.** أيّ مفتاح إضافي في الحمولة
+  --    يُتجاهَل صامتًا — الدالّة تقرأ ما تعرفه فقط، فلا يتسلّل رقم هويّة.
+  if v_id is null then
+    insert into public.model_releases
+      (project_id, person_name, contact_ref, release_scope, signed_at, expires_at,
+       doc_bucket, doc_path, note, created_by)
+    values
+      (nullif(p_payload->>'project_id','')::uuid, btrim(p_payload->>'person_name'),
+       nullif(p_payload->>'contact_ref',''),
+       coalesce(nullif(p_payload->>'release_scope',''),'project_only'),
+       nullif(p_payload->>'signed_at','')::date, nullif(p_payload->>'expires_at','')::date,
+       nullif(p_payload->>'doc_bucket',''), nullif(p_payload->>'doc_path',''),
+       nullif(p_payload->>'note',''), auth.uid())
+    returning id into v_id;
+  else
+    update public.model_releases set
+      person_name = coalesce(nullif(btrim(p_payload->>'person_name'),''), person_name),
+      contact_ref = case when p_payload ? 'contact_ref' then nullif(p_payload->>'contact_ref','') else contact_ref end,
+      release_scope = coalesce(nullif(p_payload->>'release_scope',''), release_scope),
+      expires_at = case when p_payload ? 'expires_at' then nullif(p_payload->>'expires_at','')::date else expires_at end,
+      note = case when p_payload ? 'note' then nullif(p_payload->>'note','') else note end,
+      updated_at = now()
+    where id = v_id and is_deleted = false;
+    if not found then raise exception 'not_found'; end if;
+  end if;
+  return v_id;
+end $$;
+
+-- 🔴 سحب الإذن — PDPL يوجب أن يكون فعلًا مستقلًّا لا تعديلًا عابرًا.
+create or replace function public.model_release_withdraw(p_id uuid, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+begin
+  if not public.can_manage_projects() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  if length(btrim(coalesce(p_reason,''))) < 3 then raise exception 'reason_required'; end if;
+  update public.model_releases
+     set release_scope = 'withdrawn', withdrawn_at = now(),
+         withdrawn_reason = btrim(p_reason), updated_at = now()
+   where id = p_id and is_deleted = false;
+  if not found then raise exception 'not_found'; end if;
+  return jsonb_build_object('ok', true);
+end $$;
+
 -- ─── §7 · الصلاحيات ────────────────────────────────────────────────────────
 revoke all on function public.project_rights_summary(uuid) from public, anon;
 grant execute on function public.project_rights_summary(uuid) to authenticated;
+revoke all on function public.archive_media_upsert(jsonb) from public, anon;
+grant execute on function public.archive_media_upsert(jsonb) to authenticated;
+revoke all on function public.music_license_upsert(jsonb) from public, anon;
+grant execute on function public.music_license_upsert(jsonb) to authenticated;
+revoke all on function public.model_release_upsert(jsonb) from public, anon;
+grant execute on function public.model_release_upsert(jsonb) to authenticated;
+revoke all on function public.model_release_withdraw(uuid,text) from public, anon;
+grant execute on function public.model_release_withdraw(uuid,text) to authenticated;
 
 commit;
 

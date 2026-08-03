@@ -45,7 +45,8 @@ select 'operations_procedure', t.title, '', 'ar',
        -- 🔴 مسوّدة: غير معتمَدة، فلا تُرفَق بمهمّة (sop_attach_to_task يشترط approved).
        'draft', 'internal', 'inline',
        'بذرة تطوير — قائمة تشغيلية عملية. ليست سياسة سلامة معتمدة ولا إجراءً نظاميًّا.',
-       'seed:development-fixture'
+       -- 🔴 W6-2: الحالة المعلنة صراحةً في السجلّ نفسه، لا في وثيقة خارجية.
+       'seed:development-fixture · PENDING INTERNAL HSE REVIEW'
 from (values
   ('[SEED] ما قبل إقلاع الدرون'),
   ('[SEED] ما قبل البثّ المباشر'),

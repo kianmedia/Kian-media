@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   hseRegisterList, sopList, sopItemsList, projectRightsSummary,
+  archiveMediaUpsert, musicLicenseUpsert, modelReleaseUpsert,
   HSE_SOURCE_AR, MEDIA_HEALTH_AR,
   type HseRow, type SopRow, type SopItemRow, type ProjectRightsSummary,
 } from "@/lib/portal/custodyInventory";
@@ -263,11 +264,101 @@ export function ProjectRights({ projectId }: { projectId: string }) {
   );
 }
 
+/**
+ * إدخال سريع للسجلّات الثلاثة.
+ *
+ * ★ لماذا نموذج واحد لا ثلاثة ★
+ * الحقول المشتركة قليلة والفروق قليلة، وثلاث شاشات متطابقة تقريبًا تتباعد مع
+ * أوّل تعديل. النوع يُختار، والحقول تتبعه.
+ *
+ * 🔴 ولا يُطلب هنا رقم هويّة ولا عنوان لإقرار الظهور — الخادم لا يقرأهما أصلًا،
+ *    والواجهة لا تُغري بإدخالهما.
+ */
+function QuickEntry() {
+  const [kind, setKind] = useState<"archive" | "license" | "release">("archive");
+  const [f, setF] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState<{ t: string; bad: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k: string, v: string) => setF((o) => ({ ...o, [k]: v }));
+
+  const FIELDS: Record<string, { k: string; ar: string; type?: string }[]> = {
+    archive: [
+      { k: "label", ar: "اسم الوسيط" },
+      { k: "serial_number", ar: "الرقم التسلسليّ" },
+      { k: "capacity_gb", ar: "السعة (GB)", type: "number" },
+      { k: "physical_location", ar: "الموقع الفيزيائيّ" },
+      { k: "retention_until", ar: "الاحتفاظ حتى (اختياريّ)", type: "date" },
+    ],
+    license: [
+      { k: "track_title", ar: "اسم المقطوعة" },
+      { k: "artist", ar: "الفنّان" },
+      { k: "license_id", ar: "رقم الترخيص" },
+      { k: "expires_at", ar: "ينتهي في", type: "date" },
+    ],
+    release: [
+      { k: "person_name", ar: "اسم الشخص" },
+      { k: "contact_ref", ar: "وسيلة تواصل واحدة (اختياريّة)" },
+      { k: "signed_at", ar: "تاريخ التوقيع", type: "date" },
+      { k: "expires_at", ar: "ينتهي في", type: "date" },
+    ],
+  };
+
+  async function save() {
+    setBusy(true); setMsg(null);
+    const payload: Record<string, unknown> = {};
+    for (const { k } of FIELDS[kind]) if (f[k]) payload[k] = f[k];
+    const r = kind === "archive" ? await archiveMediaUpsert(payload)
+            : kind === "license" ? await musicLicenseUpsert(payload)
+            : await modelReleaseUpsert(payload);
+    setBusy(false);
+    if (r.ok) { setF({}); setMsg({ t: "حُفظ.", bad: false }); return; }
+    setMsg({ t: r.error ?? "تعذّر الحفظ.", bad: true });
+  }
+
+  return (
+    <section className={card}>
+      <h3 className="text-[13px] text-stone-100 mb-2">إدخال سريع</h3>
+      <select className="bg-stone-950 border border-stone-700 rounded px-2 py-1 text-[12px] text-stone-200 mb-2"
+        value={kind} onChange={(e) => { setKind(e.target.value as typeof kind); setF({}); }}
+        aria-label="نوع السجلّ">
+        <option value="archive">وسيط أرشيف</option>
+        <option value="license">ترخيص موسيقى</option>
+        <option value="release">إقرار ظهور</option>
+      </select>
+      <div className="grid grid-cols-2 gap-2">
+        {FIELDS[kind].map((x) => (
+          <label key={x.k} className="text-[11px] text-stone-400">
+            {x.ar}
+            <input type={x.type ?? "text"} value={f[x.k] ?? ""} onChange={(e) => set(x.k, e.target.value)}
+              className="block w-full bg-stone-950 border border-stone-700 rounded px-2 py-1 text-[12px] text-stone-200" />
+          </label>
+        ))}
+      </div>
+      {kind === "archive" && (
+        <p className="text-[10.5px] text-stone-500 mt-1 leading-relaxed">
+          مدّة الاحتفاظ **اختيارية** ولا تُفترض، وانقضاؤها **لا يحذف شيئًا** —
+          لم تُعتمَد سياسة إتلاف بعد.
+        </p>
+      )}
+      {kind === "release" && (
+        <p className="text-[10.5px] text-stone-500 mt-1 leading-relaxed">
+          ⛔ لا يُطلب رقم هويّة ولا عنوان ولا تاريخ ميلاد — الحدّ الأدنى وحده (PDPL).
+        </p>
+      )}
+      <button className={`${btn} mt-2`} onClick={save} disabled={busy}>
+        {busy ? "جارٍ الحفظ…" : "حفظ"}
+      </button>
+      {msg && <p className={`text-[12px] mt-1 ${msg.bad ? "text-red-400" : "text-emerald-500"}`}>{msg.t}</p>}
+    </section>
+  );
+}
+
 export default function Wave6Registers() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
       <HseRegister />
       <Sops />
+      <QuickEntry />
     </div>
   );
 }

@@ -550,3 +550,18 @@ export const MEDIA_HEALTH_AR: Record<string, string> = {
   unknown: "غير معروف", good: "سليم", degraded: "متدهور",
   failing: "يوشك على العطل", failed: "معطوب", retired: "خارج الخدمة",
 };
+
+/** ⛔ لا مدّة احتفاظ مفترضة — تُمرَّر أو تبقى فارغة (W6-1). */
+export const archiveMediaUpsert = (payload: Record<string, unknown>) =>
+  prpc<string>("archive_media_upsert", { p_payload: payload });
+
+export const musicLicenseUpsert = (payload: Record<string, unknown>) =>
+  prpc<string>("music_license_upsert", { p_payload: payload });
+
+/** ⛔ PDPL: الخادم يقرأ الحدّ الأدنى فقط — أيّ مفتاح زائد يُتجاهَل. */
+export const modelReleaseUpsert = (payload: Record<string, unknown>) =>
+  prpc<string>("model_release_upsert", { p_payload: payload });
+
+/** 🔴 سحب الإذن فعل مستقلّ بسبب مكتوب — لا تعديل عابر. */
+export const modelReleaseWithdraw = (id: string, reason: string) =>
+  prpc<{ ok: boolean }>("model_release_withdraw", { p_id: id, p_reason: reason });
