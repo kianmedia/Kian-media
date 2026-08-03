@@ -25,7 +25,9 @@ import {
   type CrmAccess, type CrmDashboard, type CrmLeadRow, type CrmOppRow, type CrmBoard,
   type CrmStale, type CrmRow, type CrmLookups, type CrmCommissionList, type CrmDuplicates,
   type CrmApprovals, type CrmImportPreview, type CrmStageColumn,
+  crmWave4Enabled,
 } from "@/lib/portal/crm";
+import CrmWave4Panel from "./CrmWave4Panel";
 import { csvDownload } from "@/lib/portal/csv";
 import {
   card, btnGhost, btnPrimary, fieldCls, Chip, Counter, Empty, Flash, Field,
@@ -34,7 +36,7 @@ import {
 import CrmLeadPanel from "./CrmLeadPanel";
 import CrmOpportunityPanel from "./CrmOpportunityPanel";
 
-type Tab = "board" | "opps" | "leads" | "activities" | "stale" | "targets"
+type Tab = "insights" | "board" | "opps" | "leads" | "activities" | "stale" | "targets"
          | "commission" | "approvals" | "tools";
 const S = (v: unknown): string => (v === null || v === undefined || v === "" ? "—" : String(v));
 const N = (v: unknown): number => (typeof v === "number" ? v : parseFloat(String(v ?? 0)) || 0);
@@ -69,6 +71,11 @@ export default function CrmCenter() {
           { k: "stale", label: t({ ar: "تنبيهات الركود", en: "Stale alerts" }) },
           { k: "targets", label: t({ ar: "الأهداف", en: "Targets" }) },
           { k: "commission", label: t({ ar: "العمولات", en: "Commission" }) },
+          // V2-4.1-C · V2-4.4 · V2-4.5 — العلم مطفأ ⇒ التبويب **غير موجود**،
+          // لا تبويب فارغ ولا استدعاء RPC خلف بوّابة مغلقة.
+          ...(crmWave4Enabled()
+            ? [{ k: "insights" as Tab, label: t({ ar: "مؤشّرات الأعمال", en: "Business insights" }) }]
+            : []),
           // صندوق الاعتماد يظهر لمن يعتمد ولمن ينتظر قرارًا — لا لغيرهما.
           ...(acc.can_approve_changes || acc.can_manage_targets || acc.can_manage_commission
             ? [{ k: "approvals" as Tab, label: t({ ar: "اعتماد المالك", en: "Owner approvals" }),
@@ -143,6 +150,7 @@ export default function CrmCenter() {
               ))}
             </div>
 
+            {active === "insights" && crmWave4Enabled() && <CrmWave4Panel />}
             {active === "board" && <BoardTab acc={acc} onOpenOpp={setOpenOpp} />}
             {active === "opps" && <OppsTab acc={acc} onOpen={setOpenOpp} />}
             {active === "leads" && <LeadsTab acc={acc} onOpen={setOpenLead} />}

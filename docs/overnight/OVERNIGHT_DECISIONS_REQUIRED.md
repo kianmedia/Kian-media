@@ -1,5 +1,14 @@
 # OVERNIGHT_DECISIONS_REQUIRED — قرارات تنتظر خالد
 
+> ### قرارات Wave 4
+> | # | القرار | التصنيف |
+> |---|---|---|
+> | **W4-1** | **مصدر الهامش.** التكلفة الفعلية غير مرتبطة بالفرصة في CRM، فـ`avg_margin_pct` يُعاد **null** ولا يُخمَّن. تحديد المصدر قرارك | **FINANCIAL SOURCE-OF-TRUTH DECISION** |
+> | **W4-2** | **نصوص الشهادات والأسماء المنشورة.** ⛔ لا شهادة تُنشر بلا `approved` **و**`consent` معًا (أُصلح: كان الاعتماد وحده كافيًا) | **PENDING CONTENT + RIGHTS APPROVAL** |
+> | W4-3 | تفعيل `civ_flag('testimonials_enabled')` على Production بعد تطبيق SQL | **MANUAL PRODUCTION VERIFICATION** |
+
+---
+
 > ### قرارات Wave 3
 > | # | القرار | التصنيف |
 > |---|---|---|

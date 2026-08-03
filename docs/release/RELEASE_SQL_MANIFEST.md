@@ -37,6 +37,8 @@
 | 2 | `wave3_calendar_tokens_*` | 3 | ✅ نعم |
 | 3 | `wave3_permits_media_*` | 3 | ✅ نعم |
 | — | `wave3_seeds_DEV_ONLY.sql` | 3 | ⛔ **ليست خطوة إصدار** — بذور تطوير محروسة |
+| 4 | `kian_testimonials_v1_RUNME.sql` | 4 | ✅ نعم |
+| 5 | `wave4_crm_business_*` | 4 | 🔴 **لا** — تعتمد `kian_testimonials` (٤ قبلها) |
 | — | `consent_capture_EXTENSION_*` | 0 | ✅ نعم — **سابقة، ولم تُطبَّق بعد** |
 
 ⚠️ الحزمتان تفترضان أنّ `operations_center_RUNME.sql` **مطبَّق مسبقًا** على
@@ -163,6 +165,48 @@ Production. كلتاهما تتحقّق من ذلك في §0 وترفع استث
 - 🔴 POSTCHECK يُظهر أيّ صلاحية لـ`anon`.
 - 🔴 POSTCHECK يُظهر أنّ محرّك التنبيهات ممنوح لغير `service_role`.
 - 🟡 POSTCHECK يُظهر صفوفًا في الجدولين بعد التطبيق مباشرة (يجب أن يكونا فارغين).
+
+---
+
+## ٣·٢. حزم Wave 4
+
+### `kian_testimonials_v1_RUNME.sql` (٤)
+
+| البند | القيمة |
+|---|---|
+| **Wave** | 4 · V2-4.2-A/C/D |
+| **الغرض** | جدول الشهادات + الاعتماد + القراءة العامّة |
+| **المصدر** | مستخرَجة من `feature/kian-operations-platform-v1` (لم يُدمج الفرع) |
+| **العلم** | `NEXT_PUBLIC_SHOW_TESTIMONIALS` (OFF) |
+| **مستقلّة؟** | ✅ نعم |
+| **نسخة احتياطية؟** | 🟢 لا — جدول جديد |
+| 🔴 **تعديل مقصود** | أُضيف `and consent = true` إلى `kian_public_testimonials`. الاعتماد قرار داخليّ، والموافقة إذن العميل — نشرٌ باسم عميل لم يأذن كان ممكنًا قبله |
+| ⚠️ **ناقصة** | لا PREFLIGHT/POSTCHECK/ROLLBACK لها (قادمة من فرع سابق). POSTCHECK حزمة ٥ يغطّي وجود جدولها |
+
+### `wave4_crm_business_*` (٥) — 🔴 **تعتمد على ٤**
+
+| البند | القيمة |
+|---|---|
+| **Wave** | 4 · V2-4.1-A/C · V2-4.2-B · V2-4.3-A · V2-4.4-A/C · V2-4.5-A |
+| **الغرض** | امتداد المناقصة · دعوات الشهادة · عرض صحّة العميل · تقارير الفوز والموسمية والصمت · الملخّص الأسبوعي |
+| **الاعتماديات** | `crm_opportunities` · `crm_companies` · `crm_activities` · **`kian_testimonials`** · `pgcrypto` · `crm_can_manage/read_opportunity/edit_opportunity` · 🟡 `can_see_financials` (غيابها ⇒ الهامش محجوب، وهو الافتراض الآمن) |
+| **العلم** | `NEXT_PUBLIC_SHOW_CRM_WAVE4` (OFF) |
+| **مستقلّة؟** | ❌ **لا** — `crm_testimonial_invites.testimonial_id` يشير إلى `kian_testimonials` |
+| **نسخة احتياطية؟** | 🟢 لا — جدولان جديدان + عرض. ⛔ لا تعديل على جدول قائم |
+
+**مخاطر التطبيق**
+
+| الخطر | التقييم |
+|---|---|
+| وصول `anon` لدالّة واحدة (`crm_testimonial_invite_check`) | 🟡 أقلّ من حزمة رموز التقويم: تُعيد `{ok}` فقط بلا أيّ بيانات |
+| عرض `crm_client_health_v` | 🟢 مشتقّ — لا يخزّن ولا يتقادم؛ إسقاطه بلا فقد بيانات |
+| قراءة مالية | 🟢 **لا توجد** — أُزيلت عمدًا (تقرير Wave 4 §٣) |
+
+**شروط التوقف**
+- 🔴 PREFLIGHT §PARALLEL_CHECK يُظهر `tenders`/`client_health`/`follow_ups` قائمًا.
+- 🔴 PREFLIGHT يُظهر `kian_testimonials` مفقودًا (طبّق ٤ أوّلًا).
+- 🔴 POSTCHECK يُظهر أنّ `anon` يملك أكثر من `crm_testimonial_invite_check`.
+- 🔴 POSTCHECK يُظهر صحّة العميل كجدول لا كعرض.
 
 ---
 

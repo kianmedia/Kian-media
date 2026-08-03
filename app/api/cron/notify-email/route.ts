@@ -107,6 +107,27 @@ async function run(req: Request) {
     else log("SLA_SCAN_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
   } catch (e) { errors.push("SLA_SCAN"); log("SLA_SCAN_ERROR", { error: String(e).slice(0, 200) }); }
 
+  // Wave 4 · V2-4.3-A/B — الملخّص الأسبوعي لـCRM.
+  //
+  // ⛔ لا مجدول رابع (G8): مطويّ في هذا الكرون القائم.
+  // ⛔ ولا إرسال من هنا: الدالّة **تبني** الملخّص وتعيد `digest_key` مشتقًّا من
+  //    رقم الأسبوع (IYYY-IW). المفتاح هو ضابط منع التكرار — تشغيلان في الأسبوع
+  //    نفسه يُنتجان المفتاح نفسه، فلا يصدر ملخّصان.
+  //
+  // 🔒 والعلم مطفأ ⇒ لا يُستدعى أصلًا: ميزة خلف علم لا تعمل في الخلفية.
+  let weeklyDigestKey: string | null = null;
+  if (process.env.NEXT_PUBLIC_SHOW_CRM_WAVE4 === "true") {
+    try {
+      const r = await rpcAsService<{ ok: boolean; digest_key: string }>("crm_weekly_digest", {});
+      if (r.ok) weeklyDigestKey = r.data?.digest_key ?? null;
+      else log("CRM_WEEKLY_DIGEST_SKIPPED", { error: String((r as { error?: string }).error ?? "").slice(0, 200) });
+    } catch (e) {
+      // معزول: فشله لا يُسقط بقيّة الكرون.
+      errors.push("CRM_WEEKLY_DIGEST");
+      log("CRM_WEEKLY_DIGEST_ERROR", { error: String(e).slice(0, 200) });
+    }
+  }
+
   // Batch 9E: structured drain telemetry (cron is the FALLBACK path; the primary
   // path is immediate bounded processing via the drain kick after each action).
   const t0 = Date.now();
