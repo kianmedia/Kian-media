@@ -191,3 +191,24 @@ test("(A-3) ★★★ metadata لا يُعاد خامًّا ★★★", () => {
   assert.match(fn, /jsonb_object_keys/, "🔴 لا استخراج للمفاتيح");
   assert.doesNotMatch(fn, /'metadata', a\.metadata/, "🔴 metadata يُعاد خامًّا");
 });
+
+test("(A-4) ★★★ W7-1: تحذير دائم · ولا ادّعاء شمول · ولا عدّاد يوحي به ★★★", () => {
+  const ui = read("components/portal/AuditViewer.tsx");
+  // 🔴 التحذير حرفيّ ودائم — لا يُطوى ولا يُغلق.
+  assert.match(ui, /PARTIAL AUDIT VIEW — NOT A COMPLETE INVESTIGATION RECORD/,
+    "🔴 لا تحذير جزئيّة صريح");
+  assert.doesNotMatch(ui, /useState[^;]*warning|dismiss|setHideWarning/i,
+    "🔴 التحذير قابل للإخفاء");
+  // ⛔ ولا عبارة توحي بالشمول في أيّ من الطبقتين.
+  const blob = ui + read("docs/wave7_audit_viewer_RUNME.sql");
+  for (const re of [/complete audit/i, /full history/i, /all actions/i,
+                    /سجلّ كامل/, /كلّ الإجراءات/, /السجلّ الشامل/]) {
+    assert.doesNotMatch(blob, re, "🔴 ادّعاء شمول");
+  }
+  // ⛔ ولا عدّاد نتائج يُقرأ كإجماليّ.
+  assert.doesNotMatch(ui, /rows\.length\}\s*(سجل|إجراء|نتيجة)/,
+    "🔴 عدّاد يوحي بالشمول");
+  // والحقول قائمة بيضاء — لا عرض للحمولة كاملة.
+  assert.doesNotMatch(ui, /Object\.entries\(r\)|JSON\.stringify\(r\)/,
+    "🔴 عرض الصفّ كاملًا بلا قائمة بيضاء");
+});

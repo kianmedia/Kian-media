@@ -43,6 +43,15 @@ export default function AuditViewer() {
 
   return (
     <section className={card}>
+      {/* 🔴 W7-1 — تحذير **دائم** لا يُطوى ولا يُغلق. سببه أنّ من يقرأ شاشة
+          تدقيق في تحقيق يفترض الشمول ما لم يُقَل له العكس صراحةً. */}
+      <p role="note"
+         className="mb-2 px-2 py-1.5 rounded border border-amber-700/60 bg-amber-950/30 text-[11px] text-amber-300 leading-relaxed">
+        <strong>PARTIAL AUDIT VIEW — NOT A COMPLETE INVESTIGATION RECORD</strong>
+        <span className="block text-amber-400/90 mt-0.5">
+          عرض جزئيّ من مصدر واحد. ⛔ ليس سجلّ تحقيق كاملًا، ولا يُعتمد وحده.
+        </span>
+      </p>
       <div className="flex items-center justify-between gap-2 mb-2">
         <h3 className="text-[13px] text-stone-100">سجلّ الإجراءات</h3>
         <input className={field} value={action} onChange={(e) => setAction(e.target.value)}

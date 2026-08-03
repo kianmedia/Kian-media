@@ -129,6 +129,35 @@ function ShowreelThumb({ id }: { id: string }) {
     if (isMaxres) setSrc(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
   };
 
+  /**
+   * 🔴 الحالة التي كانت تُبقي الملصق **غير مرئيّ إلى الأبد**.
+   *
+   * الصورة `loading="eager"`، فيبدأ تحميلها أثناء تحليل HTML من الخادم وتكتمل
+   * **قبل** أن يُميّه React ويُركّب `onLoad`. وحدث `load` لا يُعاد إطلاقه على
+   * صورة مكتملة — فلا يُستدعى `onLoad` أبدًا:
+   *   • `loaded` يبقى `false` ⇒ `opacity: 0` دائمًا.
+   *   • وتبديل maxres إلى hqdefault لا يقع ⇒ يبقى ملصق يوتيوب الرماديّ ١٢٠px.
+   *
+   * أي أنّ الزائر يرى مستطيلًا فارغًا مكان الشوريل. أثبته Playwright: الصورة
+   * `complete` و`naturalWidth = 120` و`opacity = 0` وتبقى كذلك بعد التمرير.
+   *
+   * فالمرجع يفحص الحالة **عند التركيب**: إن كانت الصورة مكتملة سلفًا نفّذ نفس
+   * المنطق يدويًّا. وإن لم تكتمل بعد فلا شيء — `onLoad` سيتكفّل كالمعتاد.
+   */
+  const settle = (img: HTMLImageElement | null) => {
+    if (!img || !img.complete) return;
+    // naturalWidth = 0 على صورة مكتملة تعني فشل تحميل — مسار onError.
+    if (img.naturalWidth === 0) {
+      if (isMaxres) setSrc(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+      return;
+    }
+    if (isMaxres && img.naturalWidth <= 120) {
+      setSrc(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+      return;
+    }
+    setLoaded(true);
+  };
+
   return (
     <>
       <div
@@ -139,6 +168,7 @@ function ShowreelThumb({ id }: { id: string }) {
         }}
       />
       <img
+        ref={settle}
         src={src}
         alt="Kian Media Showreel"
         loading="eager"
