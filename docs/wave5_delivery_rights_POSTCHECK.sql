@@ -40,3 +40,17 @@ select 'قدرات العميل بلا أدوار جديدة' as check,
        case when count(*)=2 then '✅' else '🔴 '||count(*)::text||'/2' end as result
 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
 where n.nspname='public' and p.proname in ('pc_client_can_approve','pc_client_can_view');
+
+select 'دوالّ الروابط والحقوق' as check,
+       case when count(*)=4 then '✅ 4/4' else '🔴 '||count(*)::text||'/4' end as result
+from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where n.nspname='public' and p.proname in
+  ('delivery_link_issue','delivery_link_revoke','delivery_link_check','deliverable_rights_set');
+
+-- 🔴 anon يملك التحقّق من الرمز وحده.
+select 'anon يملك delivery_link_check فقط' as check,
+       case when array_agg(routine_name order by routine_name) = array['delivery_link_check']
+            then '✅' else '🔴 '||array_to_string(array_agg(routine_name order by routine_name),', ') end as result
+from information_schema.role_routine_grants
+where routine_schema='public' and grantee='anon'
+  and routine_name in ('delivery_link_issue','delivery_link_revoke','delivery_link_check','deliverable_rights_set');

@@ -10,6 +10,12 @@ drop index if exists public.deliverable_versions_one_final;
 drop view if exists public.deliverable_showreel_v;
 drop function if exists public.pc_client_can_approve(uuid,uuid);
 drop function if exists public.pc_client_can_view(uuid,uuid);
+-- 🔴 أوّل ما يُسحب عمليًّا: وصول anon إلى التحقّق من الرمز.
+revoke all on function public.delivery_link_check(text) from anon;
+drop function if exists public.delivery_link_check(text);
+drop function if exists public.delivery_link_issue(uuid,uuid,integer,integer,text);
+drop function if exists public.delivery_link_revoke(uuid,text);
+drop function if exists public.deliverable_rights_set(uuid,jsonb);
 commit;
 
 -- §2 · إزالة أعمدة الحقوق — 🔴 تُفقد أذون العرض المسجَّلة. عن قصد فقط.

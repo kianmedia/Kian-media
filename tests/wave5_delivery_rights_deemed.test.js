@@ -366,7 +366,14 @@ test("(G-1) ★★★ كلّ دالّة محصَّنة · لا شيء لـanon �
     const paths = (c.match(/set\s+search_path\s*=\s*public/gi) || []).length;
     assert.equal(defs, paths, `🔴 ${name}: ${defs - paths} دالّة بلا search_path مثبَّت`);
     assert.doesNotMatch(c, /grant\s+all\b/i, `🔴 ${name}: منح شامل`);
-    assert.doesNotMatch(c, /grant execute on function[^;]*\banon\b/i, `🔴 ${name}: دالّة لـanon`);
+    // 🔴 مجموعة مثبَّتة لا نفي مطلق: `delivery_link_check` ممنوحة لـanon عمدًا
+    //    (رابط تسليم يُفتح بلا جلسة، والرمز هو بيان الاعتماد). وأيّ اسم آخر
+    //    يظهر هنا هو توسيع صامت لسطح عامّ.
+    const ANON_ALLOWED = { delivery_rights: ["delivery_link_check"], deemed_approval: [] };
+    const granted = [...c.matchAll(/grant execute on function public\.([a-z0-9_]+)\([^)]*\)\s+to\s+([^;]+);/gi)]
+      .filter((g) => /\banon\b/.test(g[2])).map((g) => g[1]).sort();
+    assert.deepEqual(granted, ANON_ALLOWED[name],
+      `🔴 ${name}: anon يملك [${granted.join(", ")}] بدل [${ANON_ALLOWED[name].join(", ")}]`);
     assert.match(c, /enable row level security/i, `🔴 ${name}: بلا RLS`);
     assert.doesNotMatch(c, /create policy[^;]*for\s+(insert|update|delete)/i,
       `🔴 ${name}: سياسة كتابة تتجاوز الدوالّ`);
@@ -380,6 +387,32 @@ test("(G-1) ★★★ كلّ دالّة محصَّنة · لا شيء لـanon �
         `🔴 ${name}: المُشغِّل ${m[1]} يُستبدَل صامتًا`);
     }
   }
+});
+
+test("(L-2) ★★★ التحقّق العامّ: حارس قبل SELECT · ردّ موحَّد · وبوّابة السداد تُحترم ★★★", () => {
+  const t = noComments(DR());
+  const i = t.indexOf("function public.delivery_link_check");
+  const fn = t.slice(i, t.indexOf("$$;", i));
+  const pre = fn.slice(0, fn.indexOf("select * into r"));
+  assert.match(pre, /p_token_hash is null/, "🔴 لا رفض صريح لـNULL");
+  assert.match(pre, /length\(p_token_hash\) <> 64/, "لا فحص طول");
+  assert.match(pre, /\^\[0-9a-f\]\{64\}\$/, "لا فحص شكل");
+  assert.match(fn, /where token_hash = p_token_hash/, "المطابقة ليست تامّة");
+  // ⛔ ردّ واحد لكلّ رفض — لا سبب يميّز وجود مشروع.
+  for (const r of [...fn.matchAll(/jsonb_build_object\('ok', false[^)]*\)/g)].map((m) => m[0])) {
+    assert.equal(r, "jsonb_build_object('ok', false)", `🔴 رفض يحمل سببًا: ${r}`);
+  }
+  // 🔴 والرابط لا يلتفّ على بوّابة السداد القائمة.
+  assert.match(fn, /pc_release_window_ok/, "🔴 الرابط يتجاوز بوّابة السداد");
+  // والعدّاد يُزاد فعلًا — سقف لا يُحسب ليس سقفًا.
+  assert.match(fn, /opens_used = opens_used \+ 1/, "🔴 العدّاد لا يُزاد");
+
+  catches("تجاوز بوّابة السداد", DR(),
+    (m) => m.replace(/  if to_regproc\('public\.pc_release_window_ok\(uuid\)'\) is not null then[\s\S]*?  end if;\n/, ""),
+    (m) => {
+      const tt = noComments(m); const j = tt.indexOf("function public.delivery_link_check");
+      assert.match(tt.slice(j, tt.indexOf("$$;", j)), /pc_release_window_ok/);
+    });
 });
 
 test("(G-2) ★★ PREFLIGHT/POSTCHECK لا يكتبان · وRUNME معاملة واحدة ★★", () => {

@@ -503,6 +503,11 @@ export interface DeliverableVersion {
   file_path?: string | null; client_visible?: boolean; approved_at?: string | null; approved_by?: string | null;
   is_final?: boolean; superseded?: boolean;
 }
+// ⚠️ W5-1 — يقرأ الجدول **المُجمَّد** `project_deliverable_versions`. القراءة
+//    مسموحة (التجميد يمنع الكتابة لا القراءة)، لكنّ هذا يعني أنّ هذه الشاشة
+//    تعرض تاريخ الإصدارات القديم لا المعتمَد. توحيد القارئ بند تالٍ مسجَّل
+//    في WAVE_5_REPORT §«ما لم يُنجَز» — ⛔ ولا يُغيَّر هنا بلا تدقيق W5-1،
+//    لأنّ التبديل الأعمى يُخفي إصدارات يراها المستخدم اليوم.
 export const pcListDeliverableVersions = (deliverableId: string) =>
   pget<DeliverableVersion[]>(`project_deliverable_versions?deliverable_id=eq.${enc(deliverableId)}&select=*&order=version.desc`);
 export const pcDeliverableVersionAdd = (deliverableId: string, data: Record<string, unknown>) =>
@@ -1011,3 +1016,61 @@ export const DLV_LABEL: Record<string, { ar: string; en: string }> = {
   client_review: { ar: "مراجعة العميل", en: "Client Review" }, revision_requested: { ar: "طلب تعديل", en: "Revision" },
   approved: { ar: "معتمد", en: "Approved" }, final_delivered: { ar: "تسليم نهائي", en: "Final Delivered" }, archived: { ar: "مؤرشف", en: "Archived" },
 };
+
+// ─── Wave 5 · حقوق العرض وروابط التسليم (V2-5.2 · V2-5.3) ───────────────────
+//
+// ⛔ لا طبقة تسليم ثانية: نفس `prpc` ونفس التصنيف. العلم مطفأ ⇒ لا استدعاء.
+
+/** هل تُعرض إضافات Wave 5؟ الافتراض **مطفأ**. */
+export const deliveryRightsEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_DELIVERY_RIGHTS === "true";
+
+export interface DeliverableRights {
+  showreel_allowed: boolean;
+  confidential: boolean;
+  rights_note: string | null;
+}
+
+export interface DeliveryShareLink {
+  id: string;
+  label: string | null;
+  token_hint: string | null;
+  status: string;
+  expires_at: string;
+  max_opens: number | null;
+  opens_used: number;
+  last_opened_at: string | null;
+}
+
+/**
+ * 🔴 الإذن التسويقيّ يُمنح ولا يُفترض، والسرّية تتقدّم عليه دائمًا.
+ * الخادم يرفض الجمع بينهما، والواجهة تمنعه قبل الإرسال.
+ */
+export const pcDeliverableRightsSet = (deliverableId: string, rights: DeliverableRights) =>
+  prpc<{ ok: boolean; showreel_allowed: boolean; confidential: boolean }>(
+    "deliverable_rights_set", { p_deliverable: deliverableId, p_payload: rights });
+
+/** ⚠️ الرمز يعود **مرّة واحدة** ولا يُخزَّن — من فقده يُصدر غيره ويُلغي القديم. */
+export const pcDeliveryLinkIssue = (projectId: string, opts: { deliverableId?: string | null; days?: number; maxOpens?: number | null; label?: string } = {}) =>
+  prpc<{ ok: boolean; id: string; token: string; hint: string; expires_in_days: number; auto_sent: boolean }>(
+    "delivery_link_issue", {
+      p_project: projectId, p_deliverable: opts.deliverableId ?? null,
+      p_days: opts.days ?? 14, p_max_opens: opts.maxOpens ?? null, p_label: opts.label ?? null,
+    });
+
+export const pcDeliveryLinkRevoke = (id: string, reason: string) =>
+  prpc<{ ok: boolean }>("delivery_link_revoke", { p_id: id, p_reason: reason });
+
+/**
+ * 🔴 سياسة الأرشفة (V2-5.3-D) — نصّ يُعرض مع كلّ رابط تسليم.
+ * تُذكر **قبل** التسليم لا بعده: عميل يعلم أنّ الاسترجاع بعد الأرشفة خدمة
+ * مدفوعة يحتفظ بنسخته، ومن يُفاجأ بها بعد سنة يقرؤها مطالبة لا سياسة.
+ */
+export const ARCHIVE_POLICY_AR =
+  "تُحفظ الملفّات النهائية على أنظمتنا لمدّة محدودة متّفق عليها. وبعد انقضاء " +
+  "فترة الأرشفة يبقى الاسترجاع ممكنًا لكنّه **خدمة مدفوعة** تُقدَّر حسب حجم " +
+  "المادّة ووسيط حفظها. نوصي بالاحتفاظ بنسخة لديكم فور التسليم.";
+export const ARCHIVE_POLICY_EN =
+  "Final files are retained on our systems for an agreed, limited period. After " +
+  "the archive window, retrieval remains possible but is a PAID service, priced " +
+  "by volume and storage medium. We recommend keeping your own copy on delivery.";

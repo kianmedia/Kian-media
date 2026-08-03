@@ -229,6 +229,120 @@ begin
   );
 end $$;
 
+
+-- ─── §5·١ · دوالّ روابط التسليم — جدول بلا دوالّ ليس ميزة ──────────────────
+--
+-- نفس عقد رموز التقويم (Wave 3): الرمز يُولَّد في الخادم، ويُعاد **مرّة واحدة**،
+-- ولا يُخزَّن إلّا مهشَّمًا. والرفض موحَّد فلا يكشف وجود مشروع.
+create or replace function public.delivery_link_issue(
+  p_project uuid, p_deliverable uuid default null,
+  p_days integer default 14, p_max_opens integer default null, p_label text default null
+) returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare v_raw text; v_hash text; v_id uuid; v_days int;
+begin
+  if not public.can_manage_projects() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  if p_project is null then raise exception 'project_required'; end if;
+  v_days := least(greatest(coalesce(p_days, 14), 1), 90);
+
+  v_raw  := encode(public.gen_random_bytes(32), 'hex');
+  v_hash := encode(digest(v_raw, 'sha256'), 'hex');
+
+  insert into public.delivery_share_links
+    (project_id, deliverable_id, label, token_hash, token_hint, expires_at, max_opens, issued_by)
+  values
+    (p_project, p_deliverable, nullif(btrim(coalesce(p_label,'')),''), v_hash, right(v_raw, 6),
+     now() + make_interval(days => v_days), p_max_opens, auth.uid())
+  returning id into v_id;
+
+  -- ⚠️ يظهر مرّة واحدة. ⛔ ولا إرسال من هنا: التسليم قرار بشريّ.
+  return jsonb_build_object('ok', true, 'id', v_id, 'token', v_raw,
+                            'hint', right(v_raw, 6), 'expires_in_days', v_days,
+                            'auto_sent', false);
+end $$;
+
+create or replace function public.delivery_link_revoke(p_id uuid, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+begin
+  if not public.can_manage_projects() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  if length(btrim(coalesce(p_reason,''))) < 3 then raise exception 'reason_required'; end if;
+  update public.delivery_share_links
+     set status = 'revoked', revoked_at = now(), revoked_by = auth.uid(), revoke_reason = btrim(p_reason)
+   where id = p_id and status = 'active';
+  if not found then raise exception 'not_found'; end if;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 🔴 التحقّق العامّ. الحارس قبل أيّ SELECT، ومطابقة تامّة، وردّ موحَّد.
+create or replace function public.delivery_link_check(p_token_hash text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  if p_token_hash is null
+     or length(p_token_hash) <> 64
+     or p_token_hash !~ '^[0-9a-f]{64}$' then
+    return jsonb_build_object('ok', false);
+  end if;
+  select * into r from public.delivery_share_links where token_hash = p_token_hash for update;
+  if r.id is null then return jsonb_build_object('ok', false); end if;
+  if r.status <> 'active' then return jsonb_build_object('ok', false); end if;
+  if r.expires_at <= now() then
+    update public.delivery_share_links set status = 'expired' where id = r.id and status = 'active';
+    return jsonb_build_object('ok', false);
+  end if;
+  if r.max_opens is not null and r.opens_used >= r.max_opens then
+    update public.delivery_share_links set status = 'exhausted' where id = r.id and status = 'active';
+    return jsonb_build_object('ok', false);
+  end if;
+
+  -- 🔴 بوّابة السداد القائمة تُحترم كما هي — الرابط لا يلتفّ عليها.
+  if to_regproc('public.pc_release_window_ok(uuid)') is not null then
+    if not public.pc_release_window_ok(r.project_id) then
+      return jsonb_build_object('ok', false);
+    end if;
+  end if;
+
+  update public.delivery_share_links
+     set opens_used = opens_used + 1, last_opened_at = now() where id = r.id;
+
+  -- ⛔ لا يُعاد معرّف مشروع ولا عنوان: الرمز يُثبت الحقّ ولا يكشف ما وراءه.
+  return jsonb_build_object('ok', true, 'deliverable_id', r.deliverable_id);
+end $$;
+
+-- ─── §5·٢ · ضبط حقوق العرض — العمودان بلا كاتب ليسا ميزة ───────────────────
+create or replace function public.deliverable_rights_set(p_deliverable uuid, p_payload jsonb)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare v_showreel boolean; v_conf boolean;
+begin
+  if not public.can_manage_projects() then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+  v_showreel := coalesce((p_payload->>'showreel_allowed')::boolean, false);
+  v_conf     := coalesce((p_payload->>'confidential')::boolean, false);
+  -- 🔴 التناقض يُرفض برسالة مفهومة قبل أن يرفضه القيد برسالة غامضة.
+  if v_showreel and v_conf then
+    raise exception 'confidential work cannot be showreel-allowed';
+  end if;
+
+  update public.deliverables
+     set showreel_allowed = v_showreel,
+         confidential     = v_conf,
+         rights_note      = nullif(btrim(coalesce(p_payload->>'rights_note','')),''),
+         rights_set_by    = auth.uid(),
+         rights_set_at    = now()
+   where id = p_deliverable;
+  if not found then raise exception 'not_found'; end if;
+
+  if to_regproc('public.log_activity(text,text,uuid,jsonb)') is not null then
+    perform public.log_activity('deliverable_rights_set', 'deliverable', p_deliverable,
+                                jsonb_build_object('showreel_allowed', v_showreel, 'confidential', v_conf));
+  end if;
+  return jsonb_build_object('ok', true, 'showreel_allowed', v_showreel, 'confidential', v_conf);
+end $$;
+
 -- ─── §6 · الصلاحيات ────────────────────────────────────────────────────────
 revoke all on function public.pc_client_can_approve(uuid,uuid) from public, anon;
 grant execute on function public.pc_client_can_approve(uuid,uuid) to authenticated;
@@ -238,6 +352,17 @@ grant execute on function public.pc_client_can_view(uuid,uuid) to authenticated;
 -- المُشغِّلان داخليّان: لا يُنفَّذان بنداء مستخدم.
 revoke all on function public.dv_block_legacy_writes() from public, anon, authenticated;
 revoke all on function public.dv_integrity_guard()    from public, anon, authenticated;
+
+revoke all on function public.delivery_link_issue(uuid,uuid,integer,integer,text) from public, anon;
+grant execute on function public.delivery_link_issue(uuid,uuid,integer,integer,text) to authenticated;
+revoke all on function public.delivery_link_revoke(uuid,text) from public, anon;
+grant execute on function public.delivery_link_revoke(uuid,text) to authenticated;
+revoke all on function public.deliverable_rights_set(uuid,jsonb) from public, anon;
+grant execute on function public.deliverable_rights_set(uuid,jsonb) to authenticated;
+
+-- 🔴 الوحيدة الممنوحة لـanon: التحقّق من الرمز. حارسها داخلها.
+revoke all on function public.delivery_link_check(text) from public;
+grant execute on function public.delivery_link_check(text) to anon, authenticated;
 
 revoke all on public.deliverable_showreel_v from anon, public;
 grant select on public.deliverable_showreel_v to authenticated;

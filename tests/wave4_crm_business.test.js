@@ -317,8 +317,17 @@ test("(M-2) ★★★ العلم مطفأ ⇒ لا قسم ولا طلب شبكة
   assert.match(r, /process\.env\.NEXT_PUBLIC_SHOW_TESTIMONIALS === "true"/, "العلم ليس مقارنة صارمة");
   // والتبويب يُحذف من القائمة لا يُعرض ثمّ يُمنع.
   const nav = read("components/portal/nav.ts");
-  assert.match(nav, /k !== "testimonials" \|\| process\.env\.NEXT_PUBLIC_SHOW_TESTIMONIALS === "true"/,
+  // ⚠️ صار المُرشِّح يحرس أكثر من علم (Wave 5 أضافت delivery_rights)، فيُثبَّت
+  //    الشرط الخاصّ بالشهادات وحده بدل السلسلة الكاملة — نفس المعنى، وأمتن أمام
+  //    إضافة أعلام لاحقة.
+  assert.match(nav, /k !== "testimonials"\s*\|\|\s*process\.env\.NEXT_PUBLIC_SHOW_TESTIMONIALS === "true"/,
     "🔴 تبويب يقود إلى ميزة معطّلة");
+  // وكلّ تبويب في المُرشِّح مقرون بعلمه — لا تبويب يمرّ بلا حارس.
+  const filt = nav.slice(nav.indexOf("const keys ="), nav.indexOf("return keys.map"));
+  for (const m of filt.matchAll(/k !== "(\w+)"/g)) {
+    assert.match(filt, new RegExp(`k !== "${m[1]}"\\s*\\|\\|\\s*process\\.env\\.\\w+ === "true"`),
+      `🔴 التبويب ${m[1]} في المُرشِّح بلا علم`);
+  }
 });
 
 test("(M-3) ★★★ الشهادات الملفَّقة حُذفت — والمسارات نُقلت لمجموعاتها ★★★", () => {
