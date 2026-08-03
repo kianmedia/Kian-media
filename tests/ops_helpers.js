@@ -10,6 +10,19 @@ const ROOT = path.resolve(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 const SQL = read("docs/operations_center_RUNME.sql");
 
+/**
+ * حزمة التشغيل لم تعد ملفًّا واحدًا: Wave 3 أضافت امتدادات على النطاق نفسه
+ * (`prodops_*` على جداول `ops_*`). عقد الواجهة يُفحص على **الحزمة كاملة** —
+ * وإلّا لبدت كلّ دالّة جديدة «غير معرَّفة» بينما هي معرَّفة في ملفّ شقيق.
+ * ⚠️ يُضاف هنا كلّ ملفّ يعرّف دوالّ `prodops_` — وإلّا فقد الفحص معناه.
+ */
+const OPS_PACKAGE = [
+  "docs/operations_center_RUNME.sql",
+  "docs/wave3_production_ops_RUNME.sql",
+  "docs/wave3_calendar_tokens_RUNME.sql",
+  "docs/wave3_permits_media_RUNME.sql",
+].map(read).join("\n");
+
 /** جسم دالّة plpgsql/sql مُعرَّفة بـ$$ … $$; */
 function funcBody(name, src = SQL) {
   const re = new RegExp(
@@ -61,4 +74,4 @@ const CHILD_KINDS = [
   "delay", "call_sheet",
 ];
 
-module.exports = { ROOT, read, SQL, funcBody, funcDecl, TABLES, WRITE_FNS, READ_FNS, PUBLIC_FNS, CHILD_KINDS };
+module.exports = { ROOT, read, SQL, OPS_PACKAGE, funcBody, funcDecl, TABLES, WRITE_FNS, READ_FNS, PUBLIC_FNS, CHILD_KINDS };

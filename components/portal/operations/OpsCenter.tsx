@@ -14,7 +14,9 @@ import {
   opsDate, opsTime, opsDateTime, opsIsoDay, readinessColor,
   type OpsAccess, type OpsDashboard, type OpsJobRow, type OpsAssignments,
   type OpsConflictReport, type OpsLookups, type OpsRow, type OpsJobType,
+  opsPermitsEnabled,
 } from "@/lib/portal/opsCenter";
+import OpsPermitsRegistry, { OpsLocationMedia } from "./OpsPermitsRegistry";
 import {
   card, btnGhost, btnPrimary, fieldCls, Chip, Counter, Empty, Flash,
   StateView, useOpsLoad, Denied,
@@ -22,7 +24,7 @@ import {
 import OpsJobPanel from "./OpsJobPanel";
 import OpsJobForm from "./OpsJobForm";
 
-type Tab = "today" | "mine" | "jobs" | "calendar" | "conflicts" | "refs";
+type Tab = "today" | "mine" | "jobs" | "calendar" | "conflicts" | "refs" | "permits";
 const S = (v: unknown): string => (v === null || v === undefined || v === "" ? "—" : String(v));
 
 export default function OpsCenter() {
@@ -49,6 +51,9 @@ export default function OpsCenter() {
               { k: "today", ar: "لوحة اليوم" }, { k: "mine", ar: "مهامّي" },
               { k: "jobs", ar: "أوامر العمل" }, { k: "calendar", ar: "التقويم" },
               { k: "conflicts", ar: "التعارضات" }, { k: "refs", ar: "المواقع والمركبات" },
+              // ⛔ العلم مطفأ ⇒ التبويب **غير موجود** أصلًا — لا تبويب فارغ ولا
+              // مكوّن يُحمَّل ولا استدعاء RPC خلف بوّابة مغلقة (V2-3.2-A).
+              ...(opsPermitsEnabled() ? [{ k: "permits" as Tab, ar: "سجلّ التصاريح" }] : []),
             ]
           : [{ k: "mine", ar: "مهامّي" }, { k: "today", ar: "لوحة اليوم" }, { k: "jobs", ar: "أوامر العمل" }];
         const active: Tab = tab ?? tabs[0].k;
@@ -80,6 +85,7 @@ export default function OpsCenter() {
             {active === "calendar" && <CalendarTab onOpen={setOpenJob} />}
             {active === "conflicts" && <ConflictsTab />}
             {active === "refs" && <RefsTab />}
+            {active === "permits" && opsPermitsEnabled() && <OpsPermitsRegistry />}
           </div>
         );
       }}
@@ -512,6 +518,13 @@ function RefsTab() {
                       {S(l.city)} · {S(l.contact_name)}
                       {l.contact_phone ? <> — <a className="text-red-300" href={`tel:${l.contact_phone}`}>{l.contact_phone}</a></> : null}
                     </div>
+                    {/* V2-3.4-B · وسائط الموقع. خلف العلم نفسه، ومعزولة: فشلها
+                        لا يمنع رؤية الموقع ولا فتح ورقة نداء تشير إليه. */}
+                    {opsPermitsEnabled() && (
+                      <div className="mt-2 pt-2 border-t border-stone-800">
+                        <OpsLocationMedia locationId={String(l.id)} />
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

@@ -113,6 +113,9 @@ export const CREW_STATUS_AR: Record<string, string> = {
 export const PERMIT_STATUS_AR: Record<string, string> = {
   not_required: "غير مطلوب", pending: "قيد الإعداد", submitted: "مُقدَّم",
   approved: "معتمد", rejected: "مرفوض", expired: "منتهٍ",
+  // Wave 3 · V2-3.2-A: السجلّ العامّ يضيف "revoked" (تصريح سُحب بعد إصداره).
+  // أُضيفت هنا لا في خريطة ثانية — مفردة واحدة للشيء الواحد.
+  revoked: "ملغى",
 };
 export const EQUIP_STATUS_AR: Record<string, string> = {
   requested: "مطلوب", reserved: "محجوز", handed_over: "مُسلَّم",
@@ -341,4 +344,84 @@ export function readinessColor(score: number): string {
   if (score >= 90) return "text-emerald-300";
   if (score >= 60) return "text-amber-300";
   return "text-red-300";
+}
+
+
+// ─── Wave 3 · V2-3.2-A / V2-3.4-B · سجلّ التصاريح ووسائط التشغيل ────────────
+//
+// ⛔ نفس عائلة `prodops_` (قرار D-2) ونفس `prpc` — لا مسار وصول ثانٍ.
+// العلم مطفأ ⇒ لا يُستدعى أيّ ممّا يلي، فلا طلب شبكة خلف بوّابة مغلقة.
+
+/** هل تُعرض واجهة سجلّ التصاريح والوسائط؟ الافتراض **مطفأ**. */
+export const opsPermitsEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_OPS_PERMITS_REGISTRY === "true";
+
+export interface OpsPermitRow {
+  id: string;
+  permit_type: string;
+  title: string;
+  authority_name: string | null;
+  reference_no: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  status: string;
+  scope: string;
+  project_id: string | null;
+  asset_id: string | null;
+  activity_note: string | null;
+  owner_user_id: string | null;
+  note: string | null;
+  /** مشتقّ في القاعدة — لا عمود مخزَّن يتعفّن كلّ منتصف ليل. */
+  days_left: number | null;
+  media_count: number;
+}
+
+export interface OpsMediaRow {
+  id: string;
+  media_type: string;
+  bucket: string;
+  /** مسار داخل الدلو — **ليس رابطًا**. الرابط يُوقَّع عند الطلب وينتهي. */
+  path: string;
+  caption: string | null;
+  sort_order: number;
+  added_by: string | null;
+  created_at: string;
+}
+
+export const opsPermitsList = (filters: Record<string, unknown> = {}) =>
+  prpc<unknown>("prodops_permits_list", { p_filters: filters })
+    .then((r) => toState<{ ok: boolean; rows: OpsPermitRow[]; can_manage: boolean }>(r));
+
+export const opsPermitUpsert = (payload: Record<string, unknown>) =>
+  prpc<string>("prodops_permit_upsert", { p_payload: payload }).then((r) => toState<string>(r));
+
+export const opsPermitDelete = (id: string, reason: string) =>
+  prpc<boolean>("prodops_permit_delete", { p_id: id, p_reason: reason }).then((r) => toState<boolean>(r));
+
+export const opsMediaList = (ownerKind: "location" | "permit", ownerId: string) =>
+  prpc<unknown>("prodops_media_list", { p_owner_kind: ownerKind, p_owner_id: ownerId })
+    .then((r) => toState<{ ok: boolean; rows: OpsMediaRow[]; can_manage: boolean }>(r));
+
+export const opsMediaDelete = (id: string, reason: string) =>
+  prpc<boolean>("prodops_media_delete", { p_id: id, p_reason: reason }).then((r) => toState<boolean>(r));
+
+/** مفردات عربية — مطابقة لقيود القاعدة حرفيًّا، ولا تُخترع.
+    (حالات التصريح تُقرأ من `PERMIT_STATUS_AR` أعلاه — لا خريطة ثانية.) */
+export const PERMIT_TYPE_AR: Record<string, string> = {
+  municipality: "بلدية", police: "شرطة", property_owner: "مالك العقار",
+  airspace_drone: "طيران/درون", client_site: "موقع العميل", venue: "قاعة", other: "أخرى",
+};
+export const PERMIT_SCOPE_AR: Record<string, string> = {
+  company: "الشركة", project: "مشروع", asset: "أصل", activity: "نشاط",
+};
+
+/**
+ * لون تحذير الانتهاء. العتبات **نفس عتبات محرّك التنبيهات** (٣٠ و٧) — واجهة
+ * تُلوّن بعتبة والتنبيه يُطلق بأخرى تُنتج تناقضًا يراه المستخدم.
+ */
+export function permitExpiryTone(daysLeft: number | null): "neutral" | "warn" | "bad" {
+  if (daysLeft === null) return "neutral";
+  if (daysLeft < 0 || daysLeft <= 7) return "bad";
+  if (daysLeft <= 30) return "warn";
+  return "neutral";
 }
