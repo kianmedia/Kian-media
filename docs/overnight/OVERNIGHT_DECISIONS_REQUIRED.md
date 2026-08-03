@@ -1,5 +1,16 @@
 # OVERNIGHT_DECISIONS_REQUIRED — قرارات تنتظر خالد
 
+> ### قرارات Wave 3
+> | # | القرار | التصنيف |
+> |---|---|---|
+> | **W3-1** | مصير الصفوف القائمة في `project_call_sheets` و`project_locations` بعد اعتماد `ops_*` مصدرًا. الاستعلام في `wave3_production_ops_PREFLIGHT.sql` §5 (قراءة فقط). ⛔ لا حذف قبل قرارك | **PENDING ROW COUNT + OWNER DECISION** |
+> | **W3-2** | تطبيق `wave3_calendar_tokens_RUNME.sql` — 🔴 **تمنح `anon` تنفيذ `prodops_calendar_feed`**. اقرأ §3 من `docs/release/RELEASE_SQL_MANIFEST.md` قبل التطبيق، وتحقّق من POSTCHECK «anon يملك prodops_calendar_feed فقط» | **MANUAL PRODUCTION VERIFICATION** |
+> | W3-3 | إحداثيات المواقع في `ops_locations` — بلا `lat/lng` لا ساعة ذهبية ولا طقس. ليست قرارًا بل إدخال بيانات | **NON-BLOCKING CONTENT DECISION** |
+>
+> ⛔ **لا شيء من Wave 3 يُنشر بالخطأ:** العلمان مطفآن، والمساران يُرجعان 404.
+
+---
+
 > ✅ **Wave 2: DEVELOPMENT COMPLETE / RELEASE VERIFICATION PENDING** (وسم
 > `overnight-wave-2-complete`). التفصيل في
 > [`WAVE_2_REPORT.md`](../wave-reports/WAVE_2_REPORT.md).
