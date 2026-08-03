@@ -28,7 +28,7 @@ const LINKS = [
 
 export default function NotFound() {
   return (
-    <main
+    <main id="main"
       style={{
         minHeight: "80vh", background: "#050505", color: "#fff",
         display: "flex", alignItems: "center", justifyContent: "center",

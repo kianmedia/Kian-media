@@ -31,7 +31,7 @@ function Inner() {
     <>
       <WaFloat />
       <Navbar />
-      <main style={{ background: "#050505", minHeight: "100vh" }}>
+      <main id="main" style={{ background: "#050505", minHeight: "100vh" }}>
         <section className="relative overflow-hidden" style={{ paddingTop: "140px", paddingBottom: "110px" }}>
           <div className="absolute top-0 left-0 pointer-events-none" style={{ width: "60vw", height: "55vh", background: "radial-gradient(ellipse at 20% 0%, rgba(227,30,36,0.10), transparent 65%)" }} />
           <div className="relative z-10 max-w-5xl mx-auto px-5 sm:px-6">

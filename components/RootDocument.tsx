@@ -79,22 +79,12 @@ const businessSchema = {
   ],
 };
 
-// Featured showreel as a VideoObject (helps Google show video rich results)
-const videoSchema = {
-  "@context": "https://schema.org",
-  "@type": "VideoObject",
-  name: "Kian Media — Official Showreel",
-  description: "A cinematic glimpse of Kian Media's production work across Saudi Arabia.",
-  thumbnailUrl: "https://img.youtube.com/vi/JN5MRQuEP4M/maxresdefault.jpg",
-  uploadDate: "2026-01-01",
-  contentUrl: "https://www.youtube.com/watch?v=JN5MRQuEP4M",
-  embedUrl: "https://www.youtube.com/embed/JN5MRQuEP4M",
-  publisher: {
-    "@type": "Organization",
-    name: "Kian Media Production",
-    logo: { "@type": "ImageObject", url: `${SITE}/logo.png` },
-  },
-};
+// ⛔ REMOVED — the showreel VideoObject carried `uploadDate: "2026-01-01"`, a
+// date invented so the schema would validate. Google requires uploadDate for a
+// VideoObject, the repository does not record one for any video, and asserting
+// a false publication date to a search engine is not a formatting shortcut.
+// lib/structuredData.ts now gates VideoObject on real facts and returns null
+// without them; the showreel is reported as ineligible in the Wave 1 report.
 
 export default function RootDocument({
   lang,
@@ -145,12 +135,14 @@ export default function RootDocument({
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(businessSchema) }}
         />
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(videoSchema) }}
-        />
       </head>
       <body style={{ background: "#050505", color: "#fff" }}>
+        {/* V2-1.10-A — skip link. First focusable element in the document, so a
+            keyboard or screen-reader user can jump past the navigation instead
+            of tabbing through it on every page. Visually hidden until focused,
+            which is why it uses a real <a> and real focus styles rather than
+            display:none (a display:none link is not focusable at all). */}
+        <a href="#main" className="skip-link">تخطَّ إلى المحتوى · Skip to content</a>
         {/* Google Analytics 4 — gtag.js (App Router via next/script) */}
         <Script
           src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}

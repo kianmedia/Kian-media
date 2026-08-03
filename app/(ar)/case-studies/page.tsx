@@ -86,7 +86,7 @@ export default async function CaseStudiesPage() {
     <I18nProvider>
       <WaFloat />
       <Navbar />
-      <main style={{ background: "#050505", minHeight: "100vh" }}>
+      <main id="main" style={{ background: "#050505", minHeight: "100vh" }}>
         {live ? (
           <CaseStudiesIndexClient
             items={data.items}

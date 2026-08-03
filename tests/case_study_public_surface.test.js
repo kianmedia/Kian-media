@@ -84,7 +84,14 @@ test("the public API route is read-only, rate limited and fails to 'hidden'", ()
 
 test("the sitemap adds only published slugs and degrades to the static list", () => {
   assert.ok(/publicCaseStudySlugs/.test(SITEMAP));
-  assert.ok(/if \(studies\.length === 0\) return base;/.test(SITEMAP), "nothing published ⇒ the original list");
+  // Wave 1 (V2-1.11) added flag-gated SEO landing pages to the sitemap, so the
+  // early return now carries them too. The GUARANTEE is unchanged and is what
+  // is asserted here: with nothing published, the function returns early and no
+  // case-study URL can reach the sitemap. `seo` is [] whenever SHOW_SEO_PAGES
+  // is off, and it never contains a case-study URL either way.
+  const early = /if \(studies\.length === 0\) return \[?\.{0,3}\s*base[^;]*;/.exec(SITEMAP);
+  assert.ok(early, "nothing published ⇒ the function must still return early");
+  assert.ok(!/case-studies/.test(early[0]), "the early return must not add a case-study URL");
   assert.ok(/Number\.isNaN\(d\.getTime\(\)\)/.test(SITEMAP), "a malformed date cannot throw during generation");
   const slugFn = RUNME.slice(RUNME.indexOf("create or replace function public.cs_public_slugs("));
   assert.ok(/cs_is_public\(/.test(slugFn.slice(0, 1200)), "the RPC only emits publicly visible studies");

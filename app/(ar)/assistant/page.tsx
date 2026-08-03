@@ -161,7 +161,7 @@ export default function PublicAssistantPage() {
   const dim = { color: "rgba(255,255,255,0.55)", fontSize: "11.5px", lineHeight: 2 };
 
   return (
-    <main dir="rtl" style={{ maxWidth: "820px", margin: "0 auto", padding: "40px 20px", color: "#f2f2f2" }}>
+    <main id="main" dir="rtl" style={{ maxWidth: "820px", margin: "0 auto", padding: "40px 20px", color: "#f2f2f2" }}>
       <h1 style={{ fontSize: "clamp(20px,4vw,28px)", lineHeight: 1.4, marginBottom: "10px" }}>مساعد كيان</h1>
 
       {/* الحقيقة أوّلًا، قبل أيّ حقل إدخال. */}

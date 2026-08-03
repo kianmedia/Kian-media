@@ -512,3 +512,60 @@ html, body {
 @media (display-mode: standalone) {
   body { overscroll-behavior-y: none; }
 }
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Wave 1 · V2-1.10-A — accessibility
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* Skip link: off-screen until focused, then pinned top-start. Never
+   display:none — that would remove it from the tab order entirely, which
+   defeats the only purpose it has. */
+.skip-link {
+  position: absolute;
+  inset-inline-start: -9999px;
+  top: 0;
+  z-index: 10000;
+  background: #E31E24;
+  color: #fff;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: 0 0 3px 0;
+}
+.skip-link:focus {
+  inset-inline-start: 0;
+  outline: 3px solid #fff;
+  outline-offset: -3px;
+}
+
+/* A visible focus ring on every interactive element.
+   :focus-visible only paints for keyboard/AT focus, so a mouse click does not
+   leave a ring — which is why the ring can be strong enough to actually see
+   against this dark palette. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid #E31E24;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* prefers-reduced-motion — honour it globally, not just in the components that
+   remembered to. Animations become instant rather than disappearing, so nothing
+   that only appears at the end of a transition is left permanently invisible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
