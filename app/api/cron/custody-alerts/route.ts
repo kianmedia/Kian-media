@@ -49,9 +49,15 @@ async function run(req: Request) {
   if (!adminConfigured()) return NextResponse.json({ ok: false, error: "server_not_configured" }, { status: 500 });
 
   const alerts = await rpcAsService<Record<string, number>>("custody_run_alerts", {});
+  // Wave 3 · V2-3.2-C — تنبيهات انتهاء التصاريح (٣٠ و٧ أيام).
+  // ⛔ لا مجدول رابع (G8): تُطوى داخل هذا الكرون القائم. ولا خدمة إشعارات ثانية:
+  //    الدالّة نفسها تستعمل civ_alert_once/civ_notify_managers القائمتين.
+  //    فشلها معزول — لا يُسقط تنبيهات العهدة، والدالّة غير المطبَّقة تُسجَّل ولا تُرمى.
+  const permits = await rpcAsService<Record<string, unknown>>("prodops_permit_alerts_run", {});
   const retention = await rpcAsService<number>("custody_gps_apply_retention", {});
   const rental = await rentalReminders();
   log("CUSTODY_CRON_RUN", {
+    permits_ok: permits.ok, permits: permits.ok ? permits.data : permits.error,
     alerts_ok: alerts.ok, alerts: alerts.ok ? alerts.data : alerts.error,
     retention_ok: retention.ok, retention_deleted: retention.ok ? retention.data : null,
     rental_overdue: rental.marked, rental_reminded: rental.reminded, rental_emailed: rental.emailed,

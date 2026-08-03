@@ -6,7 +6,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { read, SQL, CHILD_KINDS, PUBLIC_FNS } = require("./ops_helpers.js");
+const { read, SQL, OPS_PACKAGE, CHILD_KINDS, PUBLIC_FNS } = require("./ops_helpers.js");
 
 const TS = read("lib/portal/opsCenter.ts");
 const ATOMS = read("components/portal/operations/OpsAtoms.tsx");
@@ -48,9 +48,14 @@ test("العقد مع القاعدة: كلّ دالّة تستدعيها الو�
   const called = [...TS.matchAll(/prpc<[^>]*>\("(\w+)"/g)].map((m) => m[1]);
   assert.ok(called.length >= 20, `عدد الاستدعاءات ${called.length} أقلّ من المتوقّع`);
   for (const fn of called) {
-    assert.match(SQL, new RegExp(`create or replace function public\\.${fn}\\s*\\(`, "i"),
+    // ⚠️ على الحزمة كاملة: Wave 3 عرّفت دوالّ `prodops_` في ملفّات شقيقة على
+    //    النطاق نفسه، فحصرُ الفحص في الملفّ الأصل كان سيرفض كلّ امتداد صحيح.
+    assert.match(OPS_PACKAGE, new RegExp(`create or replace function public\\.${fn}\\s*\\(`, "i"),
       `الواجهة تستدعي ${fn} وهي غير معرَّفة في الحزمة`);
-    assert.match(SQL, new RegExp(`'public\\.${fn}\\(`), `${fn} غير ممنوحة لـauthenticated`);
+    // أسلوبا المنح كلاهما مقبول: قائمة داخل حلقة format('…%s…')، أو منح مباشر.
+    const grantedInLoop = new RegExp(`'public\\.${fn}\\(`).test(OPS_PACKAGE);
+    const grantedDirect = new RegExp(`grant execute on function public\\.${fn}\\s*\\([^)]*\\)\\s+to[^;]*authenticated`, "i").test(OPS_PACKAGE);
+    assert.ok(grantedInLoop || grantedDirect, `${fn} غير ممنوحة لـauthenticated`);
   }
   for (const fn of PUBLIC_FNS) {
     assert.ok(called.includes(fn), `${fn} معرَّفة وممنوحة لكنّها غير مستعملة — سطح بلا مستهلك`);
