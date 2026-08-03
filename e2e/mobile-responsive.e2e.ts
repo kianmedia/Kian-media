@@ -198,15 +198,39 @@ test("safe-area مدعومة لأجهزة النتوء", async ({ page }, testIn
   await page.goto("/");
   // ⚠️ الفحص على الأنماط المُنزَّلة: `env(safe-area-inset-*)` يجب أن تُذكر
   //    في مكان ما — وإلّا فالمحتوى يمرّ تحت النتوء أو شريط الإيماءة.
-  const used = await page.evaluate(async () => {
+  const state = await page.evaluate(() => {
+    let anywhere = false;
     for (const sheet of Array.from(document.styleSheets)) {
       try {
         for (const rule of Array.from(sheet.cssRules)) {
-          if (rule.cssText.includes("safe-area-inset")) return true;
+          if (rule.cssText.includes("safe-area-inset")) anywhere = true;
         }
       } catch { /* ورقة من أصل آخر — تُتجاوز */ }
     }
-    return false;
+    const header = document.querySelector("header");
+    const wa = document.querySelector<HTMLElement>('a[aria-label="WhatsApp"]');
+    return {
+      anywhere,
+      // 🔴 الشرط المسبق: بلا viewport-fit=cover تعود كلّ env() بصفر، فيبدو
+      //    الدعم قائمًا وهو معطَّل تمامًا.
+      viewportFit: document.querySelector('meta[name="viewport"]')?.getAttribute("content") ?? "",
+      headerHasSafeX: !!header?.classList.contains("safe-x"),
+      headerPadTop: header?.getAttribute("style")?.includes("safe-area-inset-top") ?? false,
+      waBottom: wa?.getAttribute("style")?.includes("safe-area-inset-bottom") ?? false,
+    };
   });
-  expect(used, "لا استعمال لـsafe-area-inset — المحتوى قد يمرّ تحت النتوء").toBeTruthy();
+
+  expect(state.anywhere, "لا استعمال لـsafe-area-inset — المحتوى قد يمرّ تحت النتوء").toBeTruthy();
+  // ⚠️ هذا هو الفحص الذي يمنع «دعمًا» معطَّلًا بصمت.
+  expect(state.viewportFit, "viewport-fit=cover غائبة ⇒ كلّ env(safe-area-*) تساوي صفرًا")
+    .toContain("viewport-fit=cover");
+  // ولا يكفي وجود القاعدة: يجب أن تصل العناصر **المثبَّتة** فعلًا.
+  expect(state.headerPadTop, "الشريط العلويّ المثبَّت لا يحجز ارتفاع النتوء").toBeTruthy();
+  expect(state.headerHasSafeX, "الشريط العلويّ لا يحجز النتوء الجانبيّ (الوضع الأفقيّ)").toBeTruthy();
+  expect(state.waBottom, "الزرّ العائم السفليّ لا يحجز شريط الإيماءة").toBeTruthy();
 });
+
+// ⚠️ لا يُقاس هنا **أثر** المنطقة الآمنة: محاكاة Playwright تُبلّغ أصفارًا لكلّ
+//    env(safe-area-*)، فلا جهاز بنتوء في الحزمة. المُتحقَّق منه هو أنّ الآلية
+//    موصولة وشرطها المسبق قائم. ⛔ **SAFE-AREA VISUAL VERIFICATION PENDING** —
+//    ولا يُدَّعى أنّها اختُبرت على جهاز حقيقيّ.

@@ -33,7 +33,11 @@ export default function WaFloat() {
       aria-label="WhatsApp"
       style={{
         position: "fixed",
-        bottom: "24px",
+        // Wave 8 · شريط الإيماءة أسفل شاشات iPhone الحديثة يعلو المحتوى المثبَّت.
+        // ⛔ ولا يُمسّ المحور الأفقيّ هنا: `insetInlineEnd` منطقيّة و`inset-right`
+        //    فيزيائية، وخلطهما يزيح الزرّ إلى الجانب الخطأ في RTL. والإزاحة
+        //    الأفقية 24px تكفي، فالنتوء الجانبيّ لا يظهر إلّا في الوضع الأفقيّ.
+        bottom: "calc(24px + env(safe-area-inset-bottom, 0px))",
         insetInlineEnd: "24px",
         zIndex: 90,
         width: "56px",

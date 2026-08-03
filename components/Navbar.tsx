@@ -62,9 +62,13 @@ export default function Navbar() {
 
   return (
     <header
-      className="fixed inset-x-0 top-0 z-50 transition-all duration-400"
+      className="fixed inset-x-0 top-0 z-50 transition-all duration-400 safe-x"
       style={{
-        paddingTop: scrolled ? "12px" : "20px",
+        // Wave 8 · النتوء: الشريط مثبَّت أعلى الشاشة، و`black-translucent`
+        // المعلَنة في appleWebApp تجعل المحتوى يمرّ **تحت** شريط الحالة.
+        // فيُضاف ارتفاع المنطقة الآمنة إلى الحشو العلويّ — ولا شيء يتغيّر على
+        // جهاز بلا نتوء، إذ تعود env() بصفر.
+        paddingTop: `calc(${scrolled ? "12px" : "20px"} + env(safe-area-inset-top, 0px))`,
         paddingBottom: scrolled ? "12px" : "20px",
         background: scrolled ? "rgba(5,5,5,0.85)" : "transparent",
         backdropFilter: scrolled ? "blur(14px)" : "none",

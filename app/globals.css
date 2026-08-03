@@ -569,3 +569,28 @@ summary:focus-visible,
     scroll-behavior: auto !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Wave 8 — المنطقة الآمنة (النتوء وشريط الإيماءة).
+
+   الشرط المسبق `viewport-fit=cover` مضبوط سلفًا في components/RootDocument.tsx،
+   وبدونه تعود كلّ دوالّ env() بصفر — فالقواعد هنا فعّالة لا زخرفية.
+
+   🔴 والمحور الأفقيّ يحتاج انتباهًا: `safe-area-inset-left/right` **فيزيائيّة**،
+   و`padding-inline-start` **منطقيّة**. فالموقع عربيّ RTL: البداية المنطقية هي
+   اليمين الفيزيائيّ. وربطُ inline-start بـinset-left — وهو الخطأ الشائع — يضع
+   حشو الجانب الخطأ تمامًا في RTL. لذا يُقلَب الربط صراحةً أدناه.
+
+   ⛔ ولا قاعدة عامّة على body: الحشو يُطبَّق على العناصر المثبَّتة وحدها، فهي
+      وحدها التي تمرّ تحت النتوء.
+   ⚠️ UNVERIFIED ON A REAL DEVICE — قيست على محاكاة Playwright فقط.
+   ══════════════════════════════════════════════════════════════════════════ */
+.safe-x {
+  padding-inline-start: env(safe-area-inset-left, 0px);
+  padding-inline-end: env(safe-area-inset-right, 0px);
+}
+[dir="rtl"] .safe-x {
+  /* البداية المنطقية = اليمين الفيزيائيّ، فتأخذ الحشو الأيمن. */
+  padding-inline-start: env(safe-area-inset-right, 0px);
+  padding-inline-end: env(safe-area-inset-left, 0px);
+}
