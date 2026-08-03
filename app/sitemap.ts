@@ -21,6 +21,7 @@ import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/site";
 import { publicCaseStudySlugs } from "@/lib/server/publicCaseStudies";
 import { BILINGUAL_ROUTES, localePath } from "@/lib/seo";
+import { SEO_PAGES, seoPagePath, seoPagesEnabled } from "@/content/seo-pages";
 
 /** Public routes only. changeFrequency/priority are hints, not guarantees. */
 const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[number]["changeFrequency"]; priority: number }[] = [
@@ -68,12 +69,32 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ];
   });
 
+  // ── V2-1.11 — SEO landing pages, ONLY while the flag is on ────────────────
+  // With SHOW_SEO_PAGES off the routes 404, so listing them would advertise
+  // dead URLs to crawlers. The flag is checked here, not just in the route, so
+  // the sitemap can never disagree with what the site actually serves.
+  const seo: MetadataRoute.Sitemap = seoPagesEnabled()
+    ? SEO_PAGES.flatMap((p) => {
+        const alternates = {
+          languages: {
+            ar: `${SITE_URL}${seoPagePath(p, "ar")}`,
+            en: `${SITE_URL}${seoPagePath(p, "en")}`,
+          },
+        };
+        return [
+          { url: `${SITE_URL}${seoPagePath(p, "ar")}`, lastModified, changeFrequency: "monthly" as const, priority: 0.6, alternates },
+          { url: `${SITE_URL}${seoPagePath(p, "en")}`, lastModified, changeFrequency: "monthly" as const, priority: 0.5, alternates },
+        ];
+      })
+    : [];
+
   // Never throws: publicCaseStudySlugs() swallows every failure and returns [].
   const studies = await publicCaseStudySlugs();
-  if (studies.length === 0) return base;   // feature off / unapplied / nothing published
+  if (studies.length === 0) return [...base, ...seo];   // feature off / unapplied / nothing published
 
   return [
     ...base,
+    ...seo,
     { url: `${SITE_URL}/case-studies`, lastModified, changeFrequency: "weekly", priority: 0.8,
       alternates: { languages: { ar: `${SITE_URL}/case-studies`, en: `${SITE_URL}/en/case-studies` } } },
     { url: `${SITE_URL}/en/case-studies`, lastModified, changeFrequency: "weekly", priority: 0.7,

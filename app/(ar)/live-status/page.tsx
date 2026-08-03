@@ -230,7 +230,7 @@ export default function LiveStatusPage() {
   }, [state, token, data, load]);
 
   return (
-    <main dir="rtl" style={{
+    <main id="main" dir="rtl" style={{
       minHeight: "100vh", background: C.bg, color: C.text,
       padding: "28px 16px 56px", fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
     }}>

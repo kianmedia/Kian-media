@@ -183,7 +183,7 @@ export default function SecureDocumentPage() {
   );
 
   return (
-    <main
+    <main id="main"
       dir="rtl"
       style={{
         minHeight: "100vh", background: C.bg, color: C.text,

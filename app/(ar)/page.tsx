@@ -31,7 +31,7 @@ export default function Home() {
       <WaFloat />
       <OpportunityPromo />
       <Navbar />
-      <main>
+      <main id="main">
         <Hero />
         <Showreel />
         <Marquee />

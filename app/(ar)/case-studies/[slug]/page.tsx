@@ -109,7 +109,7 @@ export default async function CaseStudyPage({ params }: Params) {
     <I18nProvider>
       <WaFloat />
       <Navbar />
-      <main style={{ background: "#050505", minHeight: "100vh" }}>
+      <main id="main" style={{ background: "#050505", minHeight: "100vh" }}>
         <CaseStudyDetailClient study={study} related={related} />
       </main>
       <script

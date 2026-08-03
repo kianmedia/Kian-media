@@ -11,7 +11,7 @@ const PRIVACY_EMAIL = "contact@kianmedia.com";
 function Body() {
   const { t, isAr } = useI18n();
   return (
-    <main style={{ background: "#050505", minHeight: "100vh" }}>
+    <main id="main" style={{ background: "#050505", minHeight: "100vh" }}>
       <section className="relative overflow-hidden" style={{ paddingTop: "150px", paddingBottom: "100px" }}>
         <div className="absolute top-0 left-0 pointer-events-none" style={{ width: "50vw", height: "50vh", background: "radial-gradient(ellipse at 20% 0%, rgba(227,30,36,0.08), transparent 65%)" }} />
         <div className="max-w-3xl mx-auto px-5 sm:px-6 relative z-10">
