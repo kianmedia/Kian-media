@@ -22,8 +22,9 @@
 // moves and every surface follows. Logged in OVERNIGHT_DECISIONS_REQUIRED.md.
 //
 // ⛔ Nothing here is a secret: every value below is already published on the
-// live site. The commercial registration and VAT numbers come from
-// MASTER_BRIEF_v2.1.md §4 WAVE 2, where Khaled listed them for the trust page.
+// live site. The commercial-registration and VAT numbers are NOT here — this
+// module reaches the browser bundle, and they are unverified. See
+// content/registration.ts.
 // ════════════════════════════════════════════════════════════════════════════
 
 export const NAP = {
@@ -75,12 +76,15 @@ export const NAP = {
     closes: "23:45",
   },
 
-  /** Registration identifiers, from MASTER_BRIEF_v2.1.md §4 WAVE 2. */
-  registration: {
-    commercialRegistration: "1009179096",
-    vat: "311047382900003",
-  },
 } as const;
+
+/**
+ * ⛔ The commercial-registration and VAT numbers are deliberately NOT here.
+ * This module is imported by components/Footer.tsx and components/Contact.tsx,
+ * both `"use client"` — anything in it ships to the browser. The identifiers
+ * are unverified, so they live in content/registration.ts, which only a Server
+ * Component imports. See that file's header for the leak this fixed.
+ */
 
 /** The primary number, for the one-tap call and WhatsApp links. */
 export const primaryPhone = NAP.phones.find((p) => p.primary) ?? NAP.phones[0];

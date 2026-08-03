@@ -33,6 +33,22 @@
  */
 export type ClaimStatus = "live" | "pending";
 
+/**
+ * Is the trust page published at all?
+ *
+ * 🔴 DEFAULT OFF. The page is a set of technical and legal representations that
+ * no human has reviewed yet, and unlike the SEO landing pages it is NOT
+ * otherwise gated — published, it indexes immediately. So the whole route is
+ * held behind this flag until Khaled has read the copy and confirmed the legal
+ * identifiers.
+ *
+ * With the flag off the routes call notFound(), nothing is prerendered, the
+ * sitemap omits them, and no text or number from the page can reach public HTML.
+ */
+export function trustPageEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_SHOW_TRUST_PAGE === "true";
+}
+
 export interface TrustClaim {
   id: string;
   status: ClaimStatus;

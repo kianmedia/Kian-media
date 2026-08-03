@@ -82,12 +82,21 @@ test("★ D-3: no English page is served tagged Arabic", (t) => {
     .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
   const pages = walk(enDir).filter((f) => f.endsWith(".html"));
   assert.ok(pages.length > 0, "no prerendered /en pages found");
+  let served = 0;
   for (const f of pages) {
-    const m = /<html[^>]*>/.exec(fs.readFileSync(f, "utf8"));
+    const src = fs.readFileSync(f, "utf8");
+    // A route behind a closed feature flag prerenders as Next's error document
+    // (<html id="__next_error__">), which carries no lang/dir because it is a
+    // 404, not a page. Judging it would assert a locale on something nobody is
+    // served. The gate is tested where it belongs — wave2_trust_release_gate.
+    if (/<html[^>]*id="__next_error__"/.test(src)) continue;
+    served++;
+    const m = /<html[^>]*>/.exec(src);
     assert.ok(m, `${f}: no <html> tag`);
     assert.equal(attr(m[0], "lang"), "en", `🔴 ${path.relative(BUILD_DIR, f)} served as Arabic`);
     assert.equal(attr(m[0], "dir"), "ltr");
   }
+  assert.ok(served > 0, "every /en page prerendered as an error document");
 });
 
 // ═══ LAYER 2 — the source contract, always enforced ════════════════════════
