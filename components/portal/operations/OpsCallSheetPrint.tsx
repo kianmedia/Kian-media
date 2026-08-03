@@ -18,6 +18,7 @@ import {
   type OpsCallSheetData, type OpsJobType, type OpsReadiness,
 } from "@/lib/portal/opsCenter";
 import { btnGhost, btnPrimary, StateView, useOpsLoad } from "./OpsAtoms";
+import OpsSunWeather, { opsSunWeatherEnabled } from "./OpsSunWeather";
 
 const S = (v: unknown): string => (v === null || v === undefined || v === "" ? "—" : String(v));
 
@@ -60,7 +61,7 @@ export default function OpsCallSheetPrint({
           تُطبَع كصفحة HTML عبر المتصفّح — لا يُنشئ النظام ملفّ PDF.
         </span>
       </div>
-      <StateView st={st} onRetry={reload}>{(d) => <Sheet d={d} readiness={readiness} />}</StateView>
+      <StateView st={st} onRetry={reload}>{(d) => <Sheet d={d} readiness={readiness} jobId={jobId} />}</StateView>
     </div>
   );
 }
@@ -74,7 +75,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Sheet({ d, readiness }: { d: OpsCallSheetData; readiness: OpsReadiness | null }) {
+function Sheet({ d, readiness, jobId }: { d: OpsCallSheetData; readiness: OpsReadiness | null; jobId: string }) {
   const cs = d.sheet;
   const job = d.job;
   const loc = d.location as Record<string, unknown> | null;
@@ -209,16 +210,26 @@ function Sheet({ d, readiness }: { d: OpsCallSheetData; readiness: OpsReadiness 
       </section>
 
       <section className="border-t border-stone-700 pt-3 space-y-1">
-        <h2 className="text-sm text-stone-100">الطقس</h2>
-        {w ? (
-          <Row
-            label={opsDate(String(w.for_date ?? ""))}
-            value={`${S(w.condition)} · ${S(w.temp_c)}°م · رياح ${S(w.wind_kph)} كم/س · احتمال مطر ${S(w.precip_pct)}%`}
-          />
+        {/* ⛔ العلم مطفأ ⇒ هذا القسم كما كان بالضبط، حرفًا بحرف. Wave 3 لا تغيّر
+            ورقة نداء قائمة إلّا بقرار صريح بتفعيل العلم. */}
+        {!opsSunWeatherEnabled() ? (
+          <>
+            <h2 className="text-sm text-stone-100">الطقس</h2>
+            {w ? (
+              <Row
+                label={opsDate(String(w.for_date ?? ""))}
+                value={`${S(w.condition)} · ${S(w.temp_c)}°م · رياح ${S(w.wind_kph)} كم/س · احتمال مطر ${S(w.precip_pct)}%`}
+              />
+            ) : (
+              <p className="text-xs text-stone-500">لا إدخال طقس.</p>
+            )}
+            {/* الطقس هنا إدخال بشريّ داخل النظام — ولا يُدَّعى مصدر آليّ. */}
+          </>
         ) : (
-          <p className="text-xs text-stone-500">لا إدخال طقس.</p>
+          /* 🔴 عرض فقط في الطباعة: canManage=false ⇒ لا زرّ تحديث على ورقة تُطبع.
+             والساعة الذهبية محسوبة محليًّا فتظهر ولو انقطعت الشبكة في الموقع. */
+          <OpsSunWeather data={d} jobId={jobId} canManage={false} />
         )}
-        {/* لا يُدَّعى مصدر آليّ: الطقس إدخال بشريّ داخل النظام. */}
         <p className="text-[11px] text-stone-500">{S(d.weather_note)}</p>
         {cs && S(cs.notes) !== "—" && (
           <p className="text-sm text-stone-200 leading-6 pt-2">{S(cs.notes)}</p>
