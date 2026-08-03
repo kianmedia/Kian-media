@@ -28,6 +28,8 @@ const REG: Record<string, TabDef> = {
   employee:      { href: "/client-portal/employee",      ar: "بوابة الموظف",  en: "Employee Portal", adminAr: "الموارد البشرية", adminEn: "Human Resources" },
   // مركز التشغيل والإنتاج (Phase 2) — داخليّ بحت: غائب عن مجموعتَي client/lead، والقاعدة
   // ترفض العميل حتى برابط مباشر (prodops_can_view = is_staff). الطاقم يرى إسناداته هو فقط.
+  // V2-4.2-C — تُضاف إلى القائمة **فقط** والعلم مرفوع (انظر buildTabs أدناه).
+  testimonials:  { href: "/client-portal/testimonials", ar: "آراء العملاء", en: "Testimonials", adminAr: "اعتماد آراء العملاء", adminEn: "Testimonials" },
   operations:    { href: "/client-portal/operations",    ar: "مركز التشغيل", en: "Operations", adminAr: "التشغيل والإنتاج", adminEn: "Production Operations", staffAr: "مهامّي الميدانية", staffEn: "My Field Work" },
   // العمليات المباشرة (المرحلة أ) — داخليّة بحتة: غائبة عن مجموعتَي client/lead،
   // والقاعدة ترفض العميل حتى برابط مباشر (liveops_can_view = موظّف فقط، وهي
@@ -89,15 +91,15 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:       ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "testimonials", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  super_admin: ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "testimonials", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "quotes", "quoting", "messages", "files", "testimonials", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   sales:       ["employee", "crm", "ai_assistant", "quotes", "quoting", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   editor:      ["employee", "operations", "live_ops", "ai_assistant", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
@@ -127,7 +129,11 @@ export function tabsForViewer(p: Pick<Profile, "account_type" | "staff_role">): 
   const c = caps(p);
   const useAdminLabels = c.isAdminArea;
   const useStaffLabels = !useAdminLabels && c.isStaff;
-  const keys = SETS[c.view] ?? SETS.client;
+  // V2-4.2-C — العلم مطفأ ⇒ التبويب **يُحذف من القائمة**، لا يُعرض ثمّ يُمنع.
+  // تبويب يقود إلى ميزة معطّلة هو واجهة فارغة، وقاعدة الأعلام تمنعها.
+  const keys = (SETS[c.view] ?? SETS.client).filter(
+    (k) => k !== "testimonials" || process.env.NEXT_PUBLIC_SHOW_TESTIMONIALS === "true",
+  );
   return keys.map((k) => {
     const r = REG[k];
     return {

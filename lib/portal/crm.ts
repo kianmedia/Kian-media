@@ -722,3 +722,81 @@ export function crmImportKey(fileName: string, rowCount: number, firstCell: stri
   for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) >>> 0;
   return `imp_${h.toString(36)}_${rowCount}_${fileName.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`.slice(0, 60);
 }
+
+// ─── Wave 4 · توسيع CRM القائم (V2-4.1-A/C · V2-4.4-A/C · V2-4.5-A) ─────────
+//
+// ⛔ لا طبقة CRM ثانية: نفس `prpc` ونفس `toState` ونفس البادئة `crm_`.
+// العلم مطفأ ⇒ لا يُستدعى أيّ ممّا يلي.
+
+/** هل تُعرض إضافات Wave 4 في واجهة CRM؟ الافتراض **مطفأ**. */
+export const crmWave4Enabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_CRM_WAVE4 === "true";
+
+/** المناقصة — حقول لا تنتمي لفرصة عادية. الجهة والقيمة تبقيان على الفرصة. */
+export interface CrmTender {
+  opportunity_id: string;
+  tender_reference: string | null;
+  portal_reference: string | null;
+  portal_name: string | null;
+  announced_at: string | null;
+  questions_due: string | null;
+  submission_due: string | null;
+  opening_at: string | null;
+  award_expected: string | null;
+  bid_bond_required: boolean;
+  bid_bond_amount: number | null;
+  submission_status: string;
+  submitted_at: string | null;
+  note: string | null;
+}
+
+/** صحّة العميل — **مشتقّة عند القراءة**. لا حقل مخزَّن هنا يمكن أن يتقادم. */
+export interface CrmClientHealth {
+  company_id: string;
+  company_name: string;
+  last_activity_at: string | null;
+  open_opportunities: number;
+  won_opportunities: number;
+  lost_opportunities: number;
+  days_silent: number | null;
+}
+
+export interface CrmWinRate {
+  ok: boolean; from: string; to: string;
+  total: number; won: number; lost: number; open: number;
+  win_rate_pct: number | null;
+  won_value: number; total_value: number;
+  /** 🔴 الهامش محجوب ما لم يُخوَّل — ويُعلَن أنّه محجوب لا أنّه صفر. */
+  margin_visible: boolean;
+  avg_margin_pct: number | null;
+}
+
+export const crmTenderUpsert = (opportunityId: string, payload: Record<string, unknown>) =>
+  prpc<string>("crm_tender_upsert", { p_opportunity: opportunityId, p_payload: payload })
+    .then((r) => toState<string>(r));
+
+export const crmWinRateReport = (filters: Record<string, unknown> = {}) =>
+  prpc<unknown>("crm_win_rate_report", { p_filters: filters }).then((r) => toState<CrmWinRate>(r));
+
+export const crmSeasonalityReport = (years = 3) =>
+  prpc<unknown>("crm_seasonality_report", { p_years: years })
+    .then((r) => toState<{ ok: boolean; unavailable?: boolean; reason?: string; years: number; rows: { year: number; month: number; shoot_days: number }[] }>(r));
+
+/** 🔒 اقتراح متابعة فقط — `auto_sent` دائمًا false، ولا شيء يُرسَل. */
+export const crmSilentClients = (days = 180) =>
+  prpc<unknown>("crm_silent_clients", { p_days: days })
+    .then((r) => toState<{ ok: boolean; threshold_days: number; suggested: CrmClientHealth[]; auto_sent: boolean }>(r));
+
+export const crmTestimonialInviteIssue = (projectId: string, days = 30) =>
+  prpc<unknown>("crm_testimonial_invite_issue", { p_project: projectId, p_days: days })
+    .then((r) => toState<{ ok: boolean; id?: string; token?: string; hint?: string; reason?: string; closed?: boolean; settled?: boolean; auto_sent: boolean }>(r));
+
+export const crmTestimonialInviteRevoke = (id: string, reason: string) =>
+  prpc<unknown>("crm_testimonial_invite_revoke", { p_id: id, p_reason: reason })
+    .then((r) => toState<{ ok: boolean }>(r));
+
+/** مفردات حالة المناقصة — مطابقة لقيد القاعدة حرفيًّا. */
+export const TENDER_STATUS_AR: Record<string, string> = {
+  not_submitted: "لم يُقدَّم", preparing: "قيد الإعداد", submitted: "مُقدَّم",
+  shortlisted: "مؤهَّل", awarded: "تُرسِي علينا", not_awarded: "لم تُرسَ", withdrawn: "منسحب",
+};
