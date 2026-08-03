@@ -1,13 +1,11 @@
-# WAVE 8 — تقرير · **PARTIAL**
+# WAVE 8 — تقرير · **DEVELOPMENT COMPLETE · RELEASE VERIFICATION PENDING**
 
-> 🔴 **الحالة الصادقة:** اكتملت جاهزية العرض على الهاتف واللوح، وشُغِّلت مشاريع
-> Playwright الثلاثة فعلًا **وكلّها خضراء الآن** بعد الوصول إلى السبب الجذريّ
-> لفشل WebKit (§٤-أ-٢ — ورقة أنماط ساقطة، لا خلل تخطيط).
-> و**سبعة** من بنود الـBrief (§١-ب) **لم تُنفَّذ** بعد: MOBILE_API · RPCs الناقصة ·
-> `push_tokens` · Expo Push · روابط عميقة · أمان الجوال · العمل دون اتصال.
-> ويبقى `safe-area-inset` (§٤-ج) غير مُنفَّذ.
+> ✅ **Wave 8: DEVELOPMENT COMPLETE — RELEASE VERIFICATION PENDING.**
+> اكتملت البنود السبعة (§١-ب) وبنود أمر التشغيل الستّة، والمشاريع الثلاثة خضراء.
 >
-> الوسم `overnight-wave-8-partial`. ⛔ **لا تُدمج.**
+> 🔴 **و«مكتملة تطويريًّا» ≠ «جاهزة للإصدار»:** لم يُشغَّل SQL، ولم يُختبر جهاز
+> حقيقيّ، ولم يُشغَّل Lighthouse، وWave 5 ما تزال محجوبة.
+> ⛔ لا Push · لا Deploy · لا SQL · ولا دمج في `main`.
 
 الفرع `feat/wave-8-mobile-readiness` · ⛔ لا Push · لا SQL · لا Deploy · لا رفع.
 
@@ -18,13 +16,13 @@
 | ID | المتطلب | الحالة |
 |---|---|---|
 | V2-8.1-A | PWA — مبنية سلفًا؛ يبقى اختبار حيّ على جهاز | 🟡 **PENDING DEVICE VERIFICATION** |
-| **V2-8.2-A** | `docs/MOBILE_API.md` — facade فوق المنطق القائم | 🔴 **NOT IMPLEMENTED** |
-| **V2-8.2-B** | RPCs ناقصة خلف أعلام | 🔴 **NOT IMPLEMENTED** (تابع لـA) |
-| **V2-8.3-A** | `push_tokens` | 🔴 **NOT IMPLEMENTED** |
-| **V2-8.3-B** | مسار Expo Push كقناة في الخدمة القائمة | 🔴 **NOT IMPLEMENTED** |
-| **V2-8.4-A** | روابط عميقة + Universal/App Links | 🔴 **NOT IMPLEMENTED** |
-| **V2-8.5-A** | أساسيات أمان الجوال | 🔴 **NOT IMPLEMENTED** |
-| **V2-8.6-A** | العمل دون اتصال + طابور مزامنة | 🔴 **NOT IMPLEMENTED** — ⚠️ والوضع الحاليّ **قراءة فقط عمدًا**، وتغييره **قرار معماريّ لا إصلاح** |
+| **V2-8.2-A** | `docs/MOBILE_API.md` — facade فوق المنطق القائم | ✅ **DONE** |
+| **V2-8.2-B** | RPCs ناقصة خلف أعلام | ✅ **DONE** — لا نقص مُثبَت ⇒ لم تُضف دالّة |
+| **V2-8.3-A** | `push_tokens` | ✅ **DONE** — حزمة رباعية + ٢٠ عقدًا ساكنًا. ⛔ SQL غير مطبَّقة |
+| **V2-8.3-B** | مسار Expo Push كقناة في الخدمة القائمة | ✅ **DONE** — علم مطفأ، نقل وهميّ، ٢٠ اختبارًا |
+| **V2-8.4-A** | روابط عميقة + Universal/App Links | 🟡 **PARTIAL BY DESIGN** — قائمة السماح ✅ · ⛔ Universal/App Links تحتاج ملفَّي ارتباط ومُعرِّف تطبيق |
+| **V2-8.5-A** | أساسيات أمان الجوال | ✅ **DONE** — `MOBILE_SECURITY.md` بأربعة تصنيفات |
+| **V2-8.6-A** | العمل دون اتصال + طابور مزامنة | ✅ **CONTRACT DONE · ENGINE DEFERRED** — `MOBILE OFFLINE MUTATIONS DEFERRED TO WAVE 9` |
 
 ### ١-ب. مطابقة العدد — «ستّة» كانت خطأً، والصحيح **سبعة**
 
@@ -164,9 +162,9 @@ iPhone. 🔴 **لم تُصلَح بعد** — البند التالي.
 | المحور | الحالة |
 |---|---|
 | **Responsive readiness** | 🟢 **VERIFIED (emulated)** — المشاريع الثلاثة خضراء؛ فيض WebKit أُزيل من سببه الجذريّ. ⛔ محاكاة لا جهاز حقيقيّ |
-| **PWA readiness** | 🟡 **PENDING DEVICE VERIFICATION** — البنية مبنية سلفًا ولم تُدقَّق في هذه الجلسة |
-| **Offline behaviour** | 🔴 **NOT IMPLEMENTED** — والوضع الحاليّ قراءة فقط **عمدًا** |
-| **API readiness** | 🔴 **NOT IMPLEMENTED** — `MOBILE_API.md` لم يُكتب |
+| **PWA readiness** | 🔵 **PENDING DEVICE VERIFICATION** — البنية مبنية سلفًا. ⛔ ولا يُدَّعى اختبار جهاز |
+| **Offline behaviour** | 🟡 **CONTRACT ONLY** — `MOBILE OFFLINE MUTATIONS DEFERRED TO WAVE 9`؛ والوضع الحاليّ قراءة فقط **عمدًا** |
+| **API readiness** | 🟢 **DOCUMENTED** — `MOBILE_API.md`: ٧٤٧ دالّة و٨٣ كيانًا، والفاساد قائم سلفًا |
 | **Native app readiness** | 🔴 **NOT STARTED** — Wave 9، ولا يُبدأ |
 | **App Store / Play readiness** | 🔴 **NOT ASSESSED** — ⛔ ولا يُدَّعى شيء عنه |
 
@@ -178,7 +176,7 @@ iPhone. 🔴 **لم تُصلَح بعد** — البند التالي.
 
 | الفحص | النتيجة |
 |---|---|
-| `npm test` | **3991/3991** ✅ (+4: عقد CSP) |
+| `npm test` | **4069/4069** ✅ |
 | `npm run typecheck` | exit 0 ✅ |
 | `npm run build` | exit 0 ✅ |
 | `npm run lint` | **42 / 0** ✅ مطابق لخطّ الأساس |
@@ -194,18 +192,40 @@ iPhone. 🔴 **لم تُصلَح بعد** — البند التالي.
 
 ---
 
-## ٧. البند التالي بالضبط
+## ٧. بنود أمر التشغيل الليليّ الستّة
 
-**آخر معيار مكتمل:** §٤-أ-٢ (السبب الجذريّ لـWebKit) + §٤-ب (أهداف لمس اللوح)
-— مثبَّتة في `96a63c2`، والمشاريع الثلاثة خضراء.
+| # | المخرَج | الحالة | الدليل |
+|---|---|---|---|
+| ١ | Push Tokens | ✅ | `wave8_push_tokens_{PREFLIGHT,RUNME,POSTCHECK,ROLLBACK}.sql` + ٢٠ عقدًا · ٣ طفرات مرصودة |
+| ٢ | Expo Push Adapter | ✅ | `lib/notifications/expoPush.ts` + ٢٠ اختبارًا · علم مطفأ · نقل وهميّ |
+| ٣ | Deep Links Readiness | ✅ | `lib/mobile/deepLinks.ts` + ١٦ اختبارًا · ⛔ لا ادّعاء Universal/App Links |
+| ٤ | Mobile Security Documentation | ✅ | `docs/mobile/MOBILE_SECURITY.md` |
+| ٥ | Offline Queue Contract | ✅ | `lib/mobile/offlineQueue.ts` + ١٧ اختبارًا · محرّك مؤجَّل صراحةً |
+| ٦ | Built Bundle Leak Regression | ✅ | `tests/wave8_bundle_leak.test.js` · **طفرة حقيقية مُثبَتة** (§٨) |
 
-**الخطوة التالية بالضبط:** §٤-ج — دعم `safe-area-inset` موجَّهًا (الشريط العلويّ
-والعناصر المثبَّتة أسفل الشاشة)، ⛔ لا قاعدة عامّة على `body`.
+## ٨. طفرة تسريب الحزمة — نُفِّذت فعلًا
 
-ثمّ بنود الـBrief السبعة غير المُنفَّذة **بترتيبها في §١-ب**:
-`MOBILE_API.md` (V2-8.2-A) → **RPCs الناقصة (V2-8.2-B)** → `push_tokens`
-(V2-8.3-A) → Expo Push (V2-8.3-B) → الروابط العميقة (V2-8.4-A) → أمان الجوال
-(V2-8.5-A) → العمل دون اتصال (V2-8.6-A).
+١. حُقن سرّ اصطناعيّ في مكوّن عميل حقيقيّ (`WaFloat.tsx`).
+٢. **المحاولة الأولى لم تُفشل الحارس** — لأنّ الفتيلة استُعملت في `.length` فطواها
+   المُصغِّر ولم تصل الحزمة قطّ. ⚠️ **فتيلة ضعيفة لا حارس ضعيف.**
+٣. أُعيدت الصياغة لتصل سمةً مرسومة ⇒ ظهرت في حزمتين ⇒ **فشل الحارس**.
+٤. مخرَج الفشل حمل النمط والمسار وبصمة ١٢ محرفًا — **صفر ظهور للسرّ**.
+٥. أُعيد الملفّ، وأُعيد البناء، ورجع الحارس أخضر، ⛔ ولا فتيلة في Git.
 
-⛔ **ولا تُدمج Wave 8** قبل اكتمالها، ولا تُسمّى مرشَّح إصدار نهائيًّا
-و**Wave 5 ما تزال محجوبة**.
+## ٩. الفحوصات المُنفَّذة بعد الإكمال
+
+| الفحص | النتيجة |
+|---|---|
+| `npm test` | **4069 / 4069** ✅ |
+| `npx tsc --noEmit` | exit 0 ✅ |
+| `npm run lint` | **42 تحذيرًا / 0 خطأ** ✅ مطابق لخطّ الأساس |
+| `npm run build` | exit 0 ✅ |
+| Playwright desktop | **24 ناجحًا · 0 فشل** ✅ |
+| Playwright phone | **27 ناجحًا · 0 فشل** ✅ |
+| Playwright tablet (**WebKit**) | **27 ناجحًا · 0 فشل** ✅ |
+
+**ولم يُنفَّذ — ولا يُدَّعى:** Lighthouse · جهاز حقيقيّ · Firefox · تطبيق SQL.
+
+## ١٠. الخطوة التالية
+
+⛔ **لا Wave 9.** التالي مراجعة خالد: تطبيق SQL ثمّ Push ثمّ حسم W5-2.
