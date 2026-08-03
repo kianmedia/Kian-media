@@ -314,3 +314,61 @@ test("(G-3) ★★★ لا ادّعاء امتثال ولا سياسة مختر�
       `🔴 ${name}: يزرع بيانات — والجداول تُنشأ فارغة`);
   }
 });
+
+// ═══ البذور والواجهة ════════════════════════════════════════════════════════
+
+test("(S-1) ★★★ بذور الإجراءات محروسة · مسوّدة · وليست سياسة رسمية ★★★", () => {
+  const f = "docs/wave6_sop_seeds_DEV_ONLY.sql";
+  assert.ok(has(f), "ملفّ البذور مفقود");
+  const s = read(f);
+  // 🔴 حارس تشغيل صريح — كنمط بذور Wave 3.
+  assert.match(s, /current_setting\('kian\.allow_seed', true\)/, "🔴 بلا حارس تشغيل");
+  assert.match(s, /raise exception/, "الحارس لا يوقف التشغيل");
+  assert.match(s, /DEV_ONLY|DEVELOPMENT/i, "لا إعلان أنّها للتطوير");
+  // 🔴 الأهمّ: مسوّدة لا معتمَدة — فلا تُرفَق بمهمّة ولا تُقرأ سياسةً رسمية.
+  assert.match(s, /'draft'/, "🔴 بذرة معتمَدة — تُقرأ كسياسة سلامة رسمية");
+  assert.doesNotMatch(s, /'approved'\s*,\s*'internal'/, "🔴 بذرة تُزرع معتمَدة");
+  assert.ok((s.match(/\[SEED\]/g) || []).length >= 6, "الصفوف غير موسومة");
+  assert.match(s, /ليست سياسة سلامة معتمدة/, "🔴 لا تنفي أنّها سياسة رسمية");
+  // ⛔ ولا جدول: تُدرَج في قاعدة المعرفة القائمة.
+  assert.doesNotMatch(codeOnly(s), /create\s+table/i, "🔴 البذور تُنشئ جدولًا");
+  assert.match(s, /public\.ai_knowledge_sources/, "🔴 لا تستعمل قاعدة المعرفة القائمة");
+  // وطريقة الحذف موثَّقة.
+  assert.match(s, /delete from public\.ai_knowledge_sources where title_ar like '\[SEED\]%'/,
+    "طريقة الحذف غير موثَّقة");
+  // ⛔ ولا تُستدعى من أيّ RUNME.
+  for (const p2 of ["docs/wave6_assets_archive_RUNME.sql", "docs/wave6_compliance_knowledge_RUNME.sql"]) {
+    assert.doesNotMatch(read(p2), /wave6_sop_seeds/, `🔴 ${p2} يستدعي البذور`);
+  }
+  // البذور الثلاث المطلوبة بالاسم.
+  for (const t of ["إقلاع الدرون", "البثّ المباشر", "استوديو البودكاست"]) {
+    assert.ok(s.includes(t), `بذرة مفقودة: ${t}`);
+  }
+});
+
+test("(U-1) ★★★ العلم مطفأ ⇒ لا تبويب ولا صفحة ولا RPC ★★★", () => {
+  const nav = read("components/portal/nav.ts");
+  assert.match(nav, /k !== "registers"\s*\|\|\s*process\.env\.NEXT_PUBLIC_SHOW_WAVE6_REGISTERS === "true"/,
+    "🔴 تبويب يقود إلى ميزة معطّلة");
+  const page = read("app/(portal)/client-portal/registers/page.tsx");
+  assert.match(page, /if \(!wave6Enabled\(\)\)/, "الصفحة بلا حارس علم");
+  const lib = read("lib/portal/custodyInventory.ts");
+  assert.match(lib, /NEXT_PUBLIC_SHOW_WAVE6_REGISTERS === "true"/, "العلم ليس مقارنة صارمة");
+});
+
+test("(U-2) ★★★ الواجهة: لا اسم شخص · والمسوّدة والمنتهي والمفقود معلَنة ★★★", () => {
+  const ui = read("components/portal/registers/Wave6Registers.tsx");
+  // ⛔ ملخّص يُطبع ويُشارَك — لا اسم شخص فيه.
+  for (const pii of ["person_name", "contact_ref"]) {
+    assert.ok(!ui.includes(pii), `🔴 بيان شخصيّ في ملخّص قابل للطباعة: ${pii}`);
+  }
+  assert.match(ui, /لا أسماء في ملخّص قابل للطباعة/, "🔴 لا تُعلن أنّها أعداد فقط");
+  // 🔴 مسوّدة تُعلَن مسوّدة، ومنتهٍ يُعلَن منتهيًا.
+  assert.match(ui, /s\.status !== "approved"/, "🔴 المسوّدة تُعرض كالمعتمَدة");
+  assert.match(ui, /s\.expired/, "🔴 الإجراء المنتهي يُقرأ ساريًا");
+  assert.match(ui, /لا يُرفَق بمهمّة حتى يُعتمَد/, "لا تفسير لمنع الإرفاق");
+  // 🔴 الفقد لا يُخفى.
+  assert.match(ui, /a\.link_status === "missing"/, "🔴 وسيط أرشيف مفقود يُعرض كسليم");
+  // ولا تطلب المعتمَدة وحدها — المسوّدة يجب أن تُرى لتُراجَع.
+  assert.match(ui, /sopList\(null\)/, "🔴 المسوّدات غير مرئية فلا تُعتمَد أبدًا");
+});

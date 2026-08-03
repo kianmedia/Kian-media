@@ -473,3 +473,80 @@ export function civSelfEvidencePath(uid: string, token: string, stage: string, f
   const uniq = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   return `${uid}/self/${token}/${stage}/${uniq}_${safeName(fileName)}`;
 }
+
+// ─── Wave 6 · الأرشيف الفيزيائيّ · الحقوق · HSE · الإجراءات ─────────────────
+//
+// ⛔ لا طبقة أصول ثانية: نفس `prpc` ونفس النمط. العلم مطفأ ⇒ لا استدعاء.
+
+/** هل تُعرض إضافات Wave 6؟ الافتراض **مطفأ**. */
+export const wave6Enabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_WAVE6_REGISTERS === "true";
+
+export interface HseRow {
+  source: string;
+  source_id: string;
+  job_id: string | null;
+  asset_id: string | null;
+  title: string | null;
+  state: string | null;
+  severity: string | null;
+  occurred_at: string | null;
+  is_required: boolean;
+}
+
+export interface SopRow {
+  id: string;
+  title_ar: string;
+  title_en: string | null;
+  status: string;
+  version: number;
+  sensitivity: string;
+  expires_at: string | null;
+  /** مشتقّ في القاعدة — إجراء منتهٍ يُعلن منتهيًا ولو بقيت حالته approved. */
+  expired: boolean;
+  item_count: number;
+}
+
+export interface SopItemRow {
+  id: string;
+  sort_order: number;
+  label_ar: string;
+  label_en: string | null;
+  is_required: boolean;
+  hint: string | null;
+}
+
+export interface ProjectRightsSummary {
+  ok: boolean;
+  project_id: string;
+  music: { track_title: string; artist: string | null; license_type: string; license_id: string | null; expires_at: string | null; expired: boolean; has_proof: boolean; usage_note: string | null }[];
+  /** ⛔ أعداد وحالات فقط — لا اسم شخص في ملخّص قابل للطباعة (PDPL). */
+  model_releases: { total: number; withdrawn: number; expired: number; missing_document: number };
+  archive: { media_label: string; media_kind: string; health_status: string; link_status: string; physical_location: string | null }[];
+}
+
+export const hseRegisterList = (filters: Record<string, unknown> = {}) =>
+  prpc<{ ok: boolean; rows: HseRow[] }>("hse_register_list", { p_filters: filters });
+
+export const sopList = (status: string | null = "approved") =>
+  prpc<{ ok: boolean; rows: SopRow[] }>("sop_list", { p_status: status });
+
+export const sopItemsList = (sourceId: string) =>
+  prpc<{ ok: boolean; rows: SopItemRow[] }>("sop_items_list", { p_source: sourceId });
+
+/** ⛔ لا يُرفَق إجراء غير معتمَد — الخادم يرفض بـ`sop_not_approved`. */
+export const sopAttachToTask = (sourceId: string, taskId: string) =>
+  prpc<{ ok: boolean; items_added?: number; reason?: string }>(
+    "sop_attach_to_task", { p_source: sourceId, p_task: taskId });
+
+export const projectRightsSummary = (projectId: string) =>
+  prpc<ProjectRightsSummary>("project_rights_summary", { p_project: projectId });
+
+/** مفردات عربية — مطابقة لقيود القاعدة، ولا تُخترع. */
+export const HSE_SOURCE_AR: Record<string, string> = {
+  ops_hse: "فحص سلامة", ops_incident: "حادث تشغيل", custody_incident: "حادث عهدة",
+};
+export const MEDIA_HEALTH_AR: Record<string, string> = {
+  unknown: "غير معروف", good: "سليم", degraded: "متدهور",
+  failing: "يوشك على العطل", failed: "معطوب", retired: "خارج الخدمة",
+};
