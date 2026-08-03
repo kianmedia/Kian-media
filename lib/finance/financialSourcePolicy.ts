@@ -189,7 +189,7 @@ export function resolveAmount(rows: readonly AmountRow[], opts: ResolveOptions):
       // ⛔ لا جدول أسعار صرف في القاعدة — فالتحويل **غير ممكن**، ولا يُختلق سعر.
       return unavailable("currency_mismatch", "no_fx_table_available");
     }
-    return unavailable("currency_mismatch", [...currencies].sort().join(","));
+    return unavailable("currency_mismatch", Array.from(currencies).sort().join(","));
   }
 
   const inconsistent = rows.filter((r) => !rowIsConsistent(r));
@@ -224,7 +224,7 @@ export function resolveAmount(rows: readonly AmountRow[], opts: ResolveOptions):
 
   return {
     available: true, value: Number(total.toFixed(2)),
-    currency: [...currencies][0], source: rows[0].source, basis, asOf, stale,
+    currency: Array.from(currencies)[0], source: rows[0].source, basis, asOf, stale,
   };
 }
 
@@ -271,7 +271,7 @@ export function assertSingleCostSource(
   const v = validatePolicy(policy);
   if (!v.ok) return unavailable("source_unselected");
   const sources = new Set(rows.map((r) => r.source));
-  const financial = [...sources].filter((s) => s === "fin_costs" || s === "project_expenses");
+  const financial = Array.from(sources).filter((s) => s === "fin_costs" || s === "project_expenses");
   if (financial.length > 1) {
     return unavailable("duplicate_cost_candidate", financial.sort().join("+"));
   }
