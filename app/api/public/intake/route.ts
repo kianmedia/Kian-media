@@ -41,6 +41,8 @@ export async function POST(req: Request) {
     reference?: unknown; services?: unknown; details?: unknown; preferred_date?: unknown;
     preferred_contact?: unknown; source?: unknown; files?: unknown;
     consent_given?: unknown; consent_at?: unknown; consent_version?: unknown;
+    utm_source?: unknown; utm_medium?: unknown; utm_campaign?: unknown;
+    utm_term?: unknown; utm_content?: unknown; referrer?: unknown; landing_path?: unknown;
   };
   // Reject an oversized body BEFORE parsing it — an unbounded req.json() on a public
   // endpoint is free memory pressure for anyone who wants it.
@@ -102,6 +104,36 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "capture_failed" }, { status: 200 });
   }
 
+  // ─── Wave 1 · V2-1.6-C — record attribution, additively ────────────────────
+  // Same shape and same reasoning as the consent leg below: a SEPARATE RPC, run
+  // AFTER the row is committed, never new parameters on capture_public_intake.
+  // The columns do not exist yet, so this is expected to no-op until
+  // docs/lead_attribution_utm_EXTENSION_RUNME.sql is applied — and the miss is
+  // logged rather than swallowed, so "we have attribution" is never assumed.
+  let attributionRecorded = false;
+  const attribution = {
+    p_utm_source: cap(asStr(b.utm_source), CAP.short),
+    p_utm_medium: cap(asStr(b.utm_medium), CAP.short),
+    p_utm_campaign: cap(asStr(b.utm_campaign), CAP.short),
+    p_utm_term: cap(asStr(b.utm_term), CAP.short),
+    p_utm_content: cap(asStr(b.utm_content), CAP.short),
+    p_referrer: cap(asStr(b.referrer), CAP.short),
+    p_landing_path: cap(asStr(b.landing_path), CAP.short),
+  };
+  if (r.data && Object.values(attribution).some((v) => v !== "")) {
+    const a = await rpcAsService<boolean>("public_intake_set_attribution", {
+      p_intake_id: r.data, ...attribution,
+    });
+    attributionRecorded = a.ok;
+    if (!a.ok) {
+      console.log(JSON.stringify({
+        tag: "PUBLIC_INTAKE_ATTRIBUTION_NOT_RECORDED",
+        hint: "run docs/lead_attribution_utm_EXTENSION_RUNME.sql",
+        error: String(a.error).slice(0, 200),
+      }));
+    }
+  }
+
   // ─── Wave 0 · V2-0.1-F — record consent, additively ────────────────────────
   // DELIBERATELY A SECOND CALL, NOT NEW PARAMETERS ON capture_public_intake.
   // PostgREST resolves RPCs by argument NAME: adding p_consent_* to the call above
@@ -129,5 +161,5 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, id: r.data, consent_recorded: consentRecorded }, { status: 200 });
+  return NextResponse.json({ ok: true, id: r.data, consent_recorded: consentRecorded, attribution_recorded: attributionRecorded }, { status: 200 });
 }

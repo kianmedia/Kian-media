@@ -66,6 +66,17 @@ export interface IntakeInput {
   consent_at?: string;
   /** Which wording was agreed to. Bumped whenever CONSENT_LABEL changes. */
   consent_version?: string;
+  // ─── Wave 1 · V2-1.6-C — attribution (lib/attribution.ts) ────────────────
+  // Campaign labels and an origin. No personal data. The matching columns are
+  // added by docs/lead_attribution_utm_EXTENSION_RUNME.sql, which is UNAPPLIED,
+  // so the API drops these today and the enquiry still lands.
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_term?: string;
+  utm_content?: string;
+  referrer?: string;
+  landing_path?: string;
 }
 /** Outcome of the durable mirror. This used to be Promise<void>, so callers had no way
  *  to know whether anything had actually been recorded — and every public form showed a

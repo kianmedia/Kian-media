@@ -3,7 +3,9 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import ConsentField from "@/components/forms/ConsentField";
-import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentEnabled } from "@/lib/consent";
+import { CONSENT_REQUIRED_MESSAGE, consentBlocksSubmit, consentEnabled, consentPayload } from "@/lib/consent";
+import { captureIntake } from "@/lib/submitForm";
+import { captureAttribution } from "@/lib/attribution";
 
 const PROJECT_TYPES_AR = ["فيلم مؤسّسي", "إعلان تجاري", "تصوير جوي بالدرون", "بثّ مباشر", "تغطية فعالية", "تصوير عقاري", "فيلم وثائقي", "أعراس", "محتوى سوشيال", "غير ذلك"];
 const PROJECT_TYPES_EN = ["Corporate Film", "Commercial / Ad", "Drone Cinematography", "Live Streaming", "Event Coverage", "Real Estate", "Documentary", "Wedding", "Social Reels", "Other"];
@@ -23,7 +25,9 @@ export default function Contact() {
 
   const [agreed, setAgreed] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const [sending, setSending] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     // V2-0.1-A. With the flag off consentBlocksSubmit() is always false, so this
     // guard is inert and the form behaves exactly as it did before Wave 0.
@@ -37,6 +41,34 @@ export default function Contact() {
       `📞 Phone: ${form.phone}\n✉️  Email: ${form.email}\n` +
       `🎬 Project: ${form.project || projectTypes[0]}\n💰 Budget: ${form.budget || budgetRanges[1]}\n\n` +
       `📝 Message:\n${form.message}`;
+    // ── V2-1.6-A — SAVE FIRST, THEN HAND OFF ────────────────────────────────
+    // This form used to do nothing but open WhatsApp. If the visitor never sent
+    // the pre-filled message — closed the tab, no WhatsApp installed, changed
+    // their mind — the enquiry was gone with no trace anywhere on our side.
+    //
+    // v2.0 §1.6 said to POST to the Apps Script webhook first. v2.1 reverses
+    // that deliberately: Apps Script is NOT the lead database. Supabase is
+    // written first, so a failure of any downstream leg cannot lose the enquiry.
+    //
+    // Awaited, but it can never block the hand-off: captureIntake swallows every
+    // failure and resolves to { ok: false }. Worst case the visitor still
+    // reaches WhatsApp, exactly as before this change.
+    setSending(true);
+    await captureIntake({
+      type: "contact",
+      email: form.email,
+      phone: form.phone,
+      name: form.name,
+      company: form.company,
+      details: form.message,
+      services: form.project ? [form.project] : [],
+      preferred_contact: form.budget || undefined,
+      source: "website-contact",
+      ...captureAttribution(),
+      ...(consentPayload(agreed) ?? {}),
+    });
+    setSending(false);
+
     window.open(`https://wa.me/966503422999?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
@@ -237,7 +269,7 @@ export default function Contact() {
             <ConsentField id="contact-privacy-consent" checked={agreed} onChange={setAgreed} isAr={isAr} />
 
             <div className="mt-8 flex flex-wrap gap-3 items-center">
-              <button type="submit" className="btn-red">
+              <button type="submit" className="btn-red" disabled={sending} style={{ opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
                 <span>{t({ ar: "إرسال عبر واتساب", en: "Send via WhatsApp" })}</span>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isAr ? "scaleX(-1)" : "none" }}><path d="M5 12h14M12 5l7 7-7 7" /></svg>
               </button>
