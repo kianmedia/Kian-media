@@ -27,6 +27,23 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+      # Wave 7 · V2-7.8-A — أُضيفت **بعد** نجاحها محلّيًّا (15/15 على desktop).
+      # ⛔ chromium وحده: ثلاثة متصفّحات تُضاعف زمن CI بلا مقابل هنا.
+      # ⛔ ولا أسرار: الإعداد يمنع الشبكة الخارجية ولا يستعمل اعتمادًا.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: E2E (desktop)
+        run: npx playwright test --project=desktop
+      - name: Upload E2E artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
         env:
           NEXT_TELEMETRY_DISABLED: "1"
 

@@ -402,3 +402,57 @@ export function visibilityAr(row: Pick<CsListRow, "status" | "is_public_now" | "
   if (row.status === "archived") return "مؤرشفة";
   return "غير منشورة";
 }
+
+// ─── Wave 6 · V2-6.8 · مولّد المسوّدات وطابورها ─────────────────────────────
+//
+// ⛔ لا منصّة ثانية: نفس `call` ونفس دورة الحالات القائمة. العلم مطفأ ⇒ لا استدعاء.
+
+/** هل تُعرض إضافات V2-6.8؟ الافتراض **مطفأ**. */
+export const caseStudyDraftsEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_CASE_STUDY_DRAFTS === "true";
+
+export interface CsDraftRow {
+  id: string;
+  slug: string;
+  internal_title: string;
+  status: string;
+  generation_method: string | null;
+  generated_at: string | null;
+  /** مفاتيح المصدر فقط — ⛔ لا قيم ولا أسماء أشخاص. */
+  source_provenance: Record<string, unknown>;
+  has_unapproved_changes: boolean;
+  exported_at: string | null;
+  /** مشتقّ: **معتمَدة ≠ منشورة**، والتصدير يشترط الاعتماد. */
+  exportable: boolean;
+  is_published: boolean;
+}
+
+/**
+ * يُنشئ **مسوّدة** بقالب. ⛔ لا نشر تلقائيّ ولا نصّ مخترَع: كلّ حقل عامّ يبقى
+ * فارغًا ليكتبه إنسان (PENDING KHALED CONTENT REVIEW).
+ */
+export const csGenerateDraft = (projectId: string | null, internalTitle: string, slug?: string) =>
+  call<{ ok: boolean; id?: string; slug?: string; reason?: string; auto_published: boolean }>(
+    "cs_generate_draft", { p_project: projectId, p_internal_title: internalTitle, p_slug: slug ?? null });
+
+export const csDraftQueue = (status: string | null = null) =>
+  call<{ ok: boolean; rows: CsDraftRow[] }>("cs_draft_queue", { p_status: status });
+
+/** يسجّل أنّ التصدير حدث. ⛔ القاعدة **تسجّل** ولا تُصدّر — التصدير سكربت. */
+export const csMarkExported = (id: string, target: string) =>
+  call<{ ok: boolean; reason?: string; status?: string }>(
+    "cs_mark_exported", { p_id: id, p_target: target });
+
+/** مفردات الحالات — من دورة المنصّة القائمة، لا مفردة جديدة. */
+export const CS_STATUS_AR: Record<string, string> = {
+  draft: "مسوّدة",
+  internal_review: "مراجعة داخلية",
+  legal_review: "مراجعة قانونية",
+  client_permission_required: "بانتظار إذن العميل",
+  client_permission_received: "وصل إذن العميل",
+  approved: "معتمَدة",
+  scheduled: "مجدولة",
+  published: "منشورة",
+  unpublished: "مسحوبة",
+  archived: "مؤرشَفة",
+};

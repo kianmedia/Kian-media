@@ -32,6 +32,8 @@ const REG: Record<string, TabDef> = {
   testimonials:  { href: "/client-portal/testimonials", ar: "آراء العملاء", en: "Testimonials", adminAr: "اعتماد آراء العملاء", adminEn: "Testimonials" },
   // Wave 5 · V2-5.2/5.3 — مسار مستقلّ عن منصّة المشاريع المجمَّدة.
   delivery_rights: { href: "/client-portal/delivery-rights", ar: "التسليم والحقوق", en: "Delivery & Rights" },
+  // Wave 6 — سجلّات السلامة والإجراءات والحقوق. مسار مستقلّ عن المنصّة المجمَّدة.
+  registers:     { href: "/client-portal/registers", ar: "السجلّات", en: "Registers" },
   operations:    { href: "/client-portal/operations",    ar: "مركز التشغيل", en: "Operations", adminAr: "التشغيل والإنتاج", adminEn: "Production Operations", staffAr: "مهامّي الميدانية", staffEn: "My Field Work" },
   // العمليات المباشرة (المرحلة أ) — داخليّة بحتة: غائبة عن مجموعتَي client/lead،
   // والقاعدة ترفض العميل حتى برابط مباشر (liveops_can_view = موظّف فقط، وهي
@@ -93,15 +95,15 @@ const REG: Record<string, TabDef> = {
 
 // Tab keys per viewer role. staff_role=null → client/lead/admin (unchanged).
 const SETS: Record<ViewRole, string[]> = {
-  admin:       ["overview", "projects", "project_core", "delivery_rights", "quotes", "quoting", "messages", "files", "testimonials", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
-  super_admin: ["overview", "projects", "project_core", "delivery_rights", "quotes", "quoting", "messages", "files", "testimonials", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  admin:      ["overview", "projects", "project_core", "delivery_rights", "quotes", "quoting", "messages", "files", "testimonials", "accounts", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile", "registers"],
+  super_admin:["overview", "projects", "project_core", "delivery_rights", "quotes", "quoting", "messages", "files", "testimonials", "staff", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile", "registers"],
   // org_admin — DAY ONE IS DELIBERATELY MINIMAL. The tier exists as an identity, not as
   // a bundle of powers: its capabilities are granted one at a time through the
   // permission engine after a trial account is tested. Giving it manager-like tabs here
   // would hand it broad reach the moment anyone is assigned the role, which is exactly
   // what the owner ruled out. Widen this list only with explicit approval.
   org_admin:   ["employee", "notifications", "profile"],
-  manager:     ["overview", "projects", "project_core", "delivery_rights", "quotes", "quoting", "messages", "files", "testimonials", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile"],
+  manager:     ["overview", "projects", "project_core", "delivery_rights", "quotes", "quoting", "messages", "files", "testimonials", "employee", "operations", "live_ops", "ai_assistant", "crm", "finance_ops", "executive", "case_studies", "compliance", "communications", "whatsapp", "opportunities", "equipment", "asset_custody", "rentals", "invoices", "notifications", "profile", "registers"],
   support:     ["employee", "messages", "files", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   sales:       ["employee", "crm", "ai_assistant", "quotes", "quoting", "whatsapp", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
   editor:      ["employee", "operations", "live_ops", "ai_assistant", "projects", "project_core", "equipment", "asset_custody", "finance_ops", "notifications", "profile"],
@@ -136,7 +138,8 @@ export function tabsForViewer(p: Pick<Profile, "account_type" | "staff_role">): 
   const keys = (SETS[c.view] ?? SETS.client).filter(
     (k) =>
       (k !== "testimonials"    || process.env.NEXT_PUBLIC_SHOW_TESTIMONIALS === "true") &&
-      (k !== "delivery_rights" || process.env.NEXT_PUBLIC_SHOW_DELIVERY_RIGHTS === "true"),
+      (k !== "delivery_rights" || process.env.NEXT_PUBLIC_SHOW_DELIVERY_RIGHTS === "true") &&
+      (k !== "registers"       || process.env.NEXT_PUBLIC_SHOW_WAVE6_REGISTERS === "true"),
   );
   return keys.map((k) => {
     const r = REG[k];

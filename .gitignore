@@ -49,3 +49,8 @@ tests/fixtures/*_real.json
 docs/*_import_ready.csv
 docs/*_import_payload.json
 docs/*.local.md
+
+# Playwright (Wave 7 · V2-7.8-A) — نواتج تشغيل محلّيّة لا تدخل المستودع.
+/test-results/
+/playwright-report/
+/blob-report/
