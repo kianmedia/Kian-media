@@ -5,7 +5,7 @@
 > ✅ **Wave 8: DEVELOPMENT COMPLETE — RELEASE VERIFICATION PENDING.**
 
 **التاريخ:** ٤ أغسطس ٢٠٢٦ · **الفرع النهائيّ:** `integration/v2-1-overnight`
-@ `8027c40` · **آخر وسم:** `overnight-wave-8-complete`
+@ `929626a` · **آخر وسم:** `overnight-wave-8-complete`
 ⛔ **كل شيء محلّيّ:** لا Push · لا Deploy · لا SQL · ولا دمج في `main`.
 
 ---
@@ -41,6 +41,8 @@
 | **ح-٥** | **Lighthouse لم يُشغَّل** | 🟡 تحقّق | جلسة تالية |
 | **ح-٦** | **موافقات محتوى وحقوق شعارات** | 🟠 قرار | خالد |
 | **ح-٧** | **سياسة الاحتفاظ بالبيانات** | 🟠 قرار قانونيّ | خالد + مراجعة قانونية |
+| **ح-٨** | **`RESTORE DRILL REQUIRED — NOT EXECUTED`** | 🔴 تنفيذ يدويّ | خالد |
+| **ح-٩** | **٢٤٣ ملفّ SQL لم تُقرأ بعد** — `NEEDS MANUAL REVIEW` | 🟡 مراجعة | جلسة تالية |
 
 ---
 
@@ -48,18 +50,24 @@
 
 | الفحص | النتيجة |
 |---|---|
-| `npm test` | **4069 / 4069** ✅ |
+| `npm test` | **4081 / 4081** ✅ |
 | `npx tsc --noEmit` | **exit 0** ✅ |
 | `npm run lint` | **42 تحذيرًا / 0 خطأ** ✅ مطابق لخطّ الأساس |
 | `npm run build` | **exit 0** ✅ |
 | Playwright **desktop** (Chromium) | **24 · 0 فشل** ✅ |
 | Playwright **phone** (Chromium) | **27 · 0 فشل** ✅ |
 | Playwright **tablet** (**WebKit**) | **27 · 0 فشل** ✅ |
+| `npm run release:doctor` | **PASS 17 · WARN 0 · BLOCK 0** ✅ |
+
+**تدقيق SQL:** ٥٦ ملفًّا **مقروءًا يدويًّا** · ٢٤٣ **لم تُقرأ** ·
+**٩ RUNME REQUIRED** · **٠ DO NOT RUN** (⛔ ولا واحد بلا دليل) ·
+**٢٤٣ NEEDS MANUAL REVIEW**. التفاصيل في `SQL_MANUAL_AUDIT_PROGRESS.md`.
 
 **لم يُنفَّذ — ولا يُدَّعى:**
 `LIGHTHOUSE VERIFICATION PENDING` · `DEVICE VERIFICATION PENDING` ·
 `SAFE-AREA VISUAL VERIFICATION PENDING` · Firefox لم يُشغَّل ·
-**صفر حزم SQL مطبَّقة**.
+**صفر حزم SQL مطبَّقة** · **`RESTORE DRILL REQUIRED — NOT EXECUTED`** ·
+⛔ **ولا استعلام إنتاج واحد.**
 
 ---
 

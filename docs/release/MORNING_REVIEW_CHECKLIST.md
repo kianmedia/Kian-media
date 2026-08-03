@@ -18,8 +18,16 @@
 cd ~/Documents/GitHub/Kian-media && git status --short --branch && git log --oneline -3
 ```
 
-**المتوقَّع:** `integration/v2-1-overnight` · `8027c40` على الرأس · **بلا ملفّات
+**المتوقَّع:** `integration/v2-1-overnight` · `929626a` على الرأس · **بلا ملفّات
 معلَّقة**. لو اختلف، فشيء تغيّر خارج هذه الجلسة — ⛔ توقّف واسأل.
+
+**أو بأمر واحد يفحص كل ما سبق:**
+
+```bash
+cd ~/Documents/GitHub/Kian-media && npm run release:doctor
+```
+
+**المتوقَّع:** `VERDICT: PASS` · ⛔ وأيّ `BLOCK` يعني **لا دفع ولا SQL**.
 
 ### ٤. اقرأ تقرير الحجب
 
@@ -50,7 +58,7 @@ cd ~/Documents/GitHub/Kian-media && git status --short --branch && git log --one
 cd ~/Documents/GitHub/Kian-media && npm test 2>&1 | tail -4
 ```
 
-**المتوقَّع:** `# pass 4069` · `# fail 0`.
+**المتوقَّع:** `# pass 4081` · `# fail 0`.
 
 ### ٨. وتحقّق من WebKit تحديدًا (اختياريّ)
 
@@ -86,7 +94,10 @@ cd ~/Documents/GitHub/Kian-media && CI=1 npx playwright test --project=tablet 2>
 
 ### ١٣. النسخ الاحتياطي — 🔴 قبل أيّ SQL
 
-نسخة كاملة **وتمرين استرجاع مُثبَت**. ⛔ ونسخةٌ لم تُختبر استعادتها ليست نسخة.
+اتبع `docs/release/PRODUCTION_BACKUP_RESTORE_RUNBOOK.md` حرفيًّا.
+**الحالة اليوم: `RESTORE DRILL REQUIRED — NOT EXECUTED`.**
+⛔ ونسخةٌ لم تُختبر استعادتها ليست نسخة. ⛔ **ولا يكون هدف التمرين
+`kian-media-preview`** — تلك بيئة عاملة.
 
 ### ١٤. الترتيب لو قرّرت المضيّ
 
