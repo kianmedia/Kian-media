@@ -275,6 +275,10 @@ export default function Portfolio() {
                 className="f-sans inline-flex items-center gap-2 transition-all duration-300"
                 style={{
                   fontSize: "10.5px", letterSpacing: "1.8px", padding: "9px 16px", fontWeight: 600,
+                  // 🔴 Wave 8 — هدف لمس ٤٤px (إرشاد Apple/WCAG 2.5.5 AA). كان
+                  //    ٣٦px، وهو أصغر من الإصبع فيُخطئه المستخدم على الهاتف.
+                  //    الحشو وحده لا يكفي لأنّ حجم الخطّ صغير — فيُفرض حدّ أدنى.
+                  minHeight: "44px",
                   border: "1px solid " + (on ? "#E31E24" : "rgba(255,255,255,0.1)"),
                   background: on ? "rgba(227,30,36,0.12)" : "transparent",
                   color: on ? "#fff" : "rgba(255,255,255,0.5)",

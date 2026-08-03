@@ -55,9 +55,18 @@ test("🔴 ملصق الشوريل مرئيّ — الصورة المكتملة 
 
 test("تمرير الشبكة لا يكسر الصفحة", async ({ page }) => {
   await page.goto("/");
-  await page.mouse.wheel(0, 3000);
+  // ⚠️ `mouse.wheel` غير مدعوم في WebKit المحمول («Mouse wheel is not supported
+  //    in mobile WebKit») — وهو قيدُ أداة، لا عيبٌ في الصفحة. والتمرير البرمجيّ
+  //    يُطلق أحداث scroll نفسها التي تعتمد عليها حركات الكشف، فيبقى ما يُقاس
+  //    هو ما يُقصد: هل ينكسر التخطيط بعد تمرير طويل؟
+  // ⛔ ولا يُستثنى اللوح من هذا الفحص: الاستثناء يُخفي انكسارًا حقيقيًّا.
+  await page.evaluate(() => window.scrollTo(0, 3000));
   await page.waitForTimeout(400);
   await expect(page.locator("body")).toBeVisible();
+  // وبعد التمرير أيضًا: لا فيض أفقيّ — كشفُ العناصر يُغيّر التخطيط فعليًّا.
+  const diff = await page.evaluate(() =>
+    document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(diff, `فيض أفقيّ بعد التمرير: ${diff}px`).toBeLessThanOrEqual(1);
 });
 
 test("fallback الصورة يعمل عند فشل maxresdefault", async ({ page }) => {

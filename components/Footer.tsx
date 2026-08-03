@@ -98,7 +98,8 @@ export default function Footer() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="f-sans flex items-center justify-center text-white/40 transition-all"
-                  style={{ width: "34px", height: "34px", border: "1px solid rgba(255,255,255,0.15)", fontSize: "9px", fontWeight: 700, textDecoration: "none" }}
+                  style={{ width: "34px", height: "34px", minWidth: "44px", minHeight: "44px",
+                           border: "1px solid rgba(255,255,255,0.15)", fontSize: "9px", fontWeight: 700, textDecoration: "none" }}
                   onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "#E31E24"; (e.currentTarget as HTMLAnchorElement).style.color = "#E31E24"; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.15)"; (e.currentTarget as HTMLAnchorElement).style.color = "rgba(255,255,255,0.4)"; }}
                   aria-label={s.label}
@@ -131,7 +132,11 @@ export default function Footer() {
                           e.preventDefault(); window.location.href = "/" + l.h;
                         }
                       }
-                    }} className={"text-white/45 transition-colors hover:text-white" + ((l as { ltr?: boolean }).ltr ? " phone-ltr" : "")} style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5 }}>
+                    }} className={"text-white/45 transition-colors hover:text-white" + ((l as { ltr?: boolean }).ltr ? " phone-ltr" : "")} style={{ textDecoration: "none", fontSize: "13px", lineHeight: 1.5,
+                             // 🔴 Wave 8 — روابط التذييل كانت ١٣px ارتفاعًا. حجم النصّ
+                             //    يبقى كما هو، والمنطقة القابلة للضغط وحدها تكبر إلى
+                             //    ٤٤px — فلا يتغيّر الشكل ويصير الرابط قابلًا للمس.
+                             display: "inline-flex", alignItems: "center", minHeight: "44px" }}>
                       {l.t}
                     </a>
                   </li>
@@ -146,11 +151,11 @@ export default function Footer() {
             © {new Date().getFullYear()} Kian Al Ebtikar Art Production. {t({ ar: "جميع الحقوق محفوظة.", en: "All rights reserved." })}
           </p>
           <div className="flex items-center gap-3">
-            <a href="/privacy-policy" className="text-white/40 transition-colors hover:text-white" style={{ fontSize: "11px", textDecoration: "none" }}>
+            <a href="/privacy-policy" className="text-white/40 transition-colors hover:text-white" style={{ fontSize: "11px", textDecoration: "none", display: "inline-flex", alignItems: "center", minHeight: "44px" }}>
               {t({ ar: "سياسة الخصوصية", en: "Privacy Policy" })}
             </a>
             <span style={{ color: "rgba(255,255,255,0.2)" }}>·</span>
-            <a href="/terms" className="text-white/40 transition-colors hover:text-white" style={{ fontSize: "11px", textDecoration: "none" }}>
+            <a href="/terms" className="text-white/40 transition-colors hover:text-white" style={{ fontSize: "11px", textDecoration: "none", display: "inline-flex", alignItems: "center", minHeight: "44px" }}>
               {t({ ar: "شروط الاستخدام", en: "Terms" })}
             </a>
           </div>

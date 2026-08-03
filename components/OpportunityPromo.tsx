@@ -37,7 +37,10 @@ export default function OpportunityPromo() {
     <div
       role="dialog" aria-label={isAr ? "مركز الفرص" : "Opportunities Center"}
       style={{
-        position: "fixed", zIndex: 91, bottom: "96px", insetInlineEnd: "20px",
+        // Wave 8 · يقف فوق زرّ واتساب (96px)، فيتبع الإزاحة نفسها كي لا ينزلق
+        // الاثنان فوق شريط الإيماءة على أجهزة النتوء.
+        position: "fixed", zIndex: 91,
+        bottom: "calc(96px + env(safe-area-inset-bottom, 0px))", insetInlineEnd: "20px",
         width: "calc(100vw - 40px)", maxWidth: "340px",
         background: "#0c0c0c", border: "1px solid rgba(227,30,36,0.4)", borderRadius: "10px",
         boxShadow: "0 18px 50px rgba(0,0,0,0.6), 0 0 0 1px rgba(227,30,36,0.12)",

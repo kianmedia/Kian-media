@@ -340,9 +340,17 @@ test("JWT4: the endpoint no longer hands PostgREST internals to anonymous caller
 test("UX1: the promo card no longer covers the WhatsApp button", () => {
   const promo = R("components/OpportunityPromo.tsx");
   const wa = R("components/WaFloat.tsx");
-  assert.ok(/bottom: "96px"/.test(promo), "lifted above the FAB (56px button + 24px offset + gap)");
+  // ⚠️ Wave 8 أضاف إزاحة المنطقة الآمنة، فصار المقدار `calc(96px + env(...))`.
+  //    والمقصود لم يتغيّر: الأساس 96px يرفع البطاقة فوق الزرّ (56px + 24px + فجوة).
+  //    فتُثبَّت الأرقام كما هي، ويُضاف شرط الإزاحة — تشديدٌ لا تخفيف.
+  assert.ok(/bottom: "calc\(96px \+ env\(safe-area-inset-bottom/.test(promo),
+    "lifted above the FAB (56px button + 24px offset + gap)");
   assert.ok(/zIndex: 91/.test(promo), "explicit stacking rather than DOM-order luck");
-  assert.ok(/bottom: "24px"/.test(wa), "the FAB itself is unchanged");
+  assert.ok(/bottom: "calc\(24px \+ env\(safe-area-inset-bottom/.test(wa),
+    "the FAB keeps its 24px base offset");
+  // 🔴 والاثنان يتحرّكان معًا: لو حجز أحدهما شريط الإيماءة دون الآخر لتراكبا.
+  assert.ok(/env\(safe-area-inset-bottom/.test(promo) && /env\(safe-area-inset-bottom/.test(wa),
+    "both the promo and the FAB clear the home indicator, or they would overlap on a notched device");
 });
 
 test("UX2: form selects are no longer blank boxes", () => {

@@ -1,3 +1,24 @@
+// ════════════════════════════════════════════════════════════════════════════
+// Wave 8 · سبب فشل WebKit الجذريّ — موثَّق حيث يُقرأ، لا في تقرير منفصل.
+//
+// `upgrade-insecure-requests` يرقّي كلّ طلب فرعيّ إلى https. في الإنتاج بلا أثر،
+// فالموقع على https أصلًا. لكن حزمة Playwright تُقدّم بناء الإنتاج على **http**
+// على العنوان المحلّي، و:
+//   • Chromium يستثني أصول loopback من الترقية (potentially trustworthy)،
+//   • WebKit **لا يستثنيها** — فيطلب /_next/static/css/*.css على https://127.0.0.1
+//     حيث لا يستمع أحد ⇒ تسقط الورقة ⇒ لا وجود لقاعدتَي `.absolute`/`.inset-0`
+//     ⇒ ترتدّ الصورة إلى static/inline/fill بعرضها الأصليّ ⇒ «تجاوز أفقيّ» وهميّ.
+// أي أنّ العَرَض عَرَضُ حزمة اختبار، لا خللٌ في التخطيط. أُثبت بتجربة A/B مع
+// **إعادة بناء** (الترويسات تُخبَز في .next/routes-manifest.json وقت البناء،
+// فتعديل next.config.js بلا بناء لا يغيّر الاستجابة إطلاقًا).
+//
+// 🔴 الافتراض هو **الإصدار**. الحذف يقع فقط عند راية صريحة تضبطها حزمة الاختبار
+//    وحدها، فلا يمكن أن يسقط التوجيه من الإنتاج سهوًا؛ وأيّ قيمة أخرى — أو غياب
+//    المتغيّر — تُبقيه. اختبار ثابت يحرس هذا السلوك في الاتّجاهين.
+// ⛔ ولا يُلمس HSTS: التجربة J أبقته ونجحت، وRFC 6797 لا يؤهّل عناوين IP أصلًا.
+// ════════════════════════════════════════════════════════════════════════════
+const E2E_PLAINTEXT_HTTP = process.env.E2E_PLAINTEXT_HTTP === "1";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Phase 2: the build used to IGNORE TypeScript and ESLint errors, so a real type error
@@ -76,7 +97,9 @@ const nextConfig = {
               "base-uri 'self'",
               "form-action 'self' https://script.google.com",
               "object-src 'none'",
-              "upgrade-insecure-requests",
+              // 🔴 يُحذف **فقط** تحت راية حزمة الاختبار الصريحة — انظر الرأس أعلاه.
+              //    الغياب هنا يعني «نختبر على http محلّيًّا»، لا «خفّفنا الإنتاج».
+              ...(E2E_PLAINTEXT_HTTP ? [] : ["upgrade-insecure-requests"]),
             ].join("; "),
           },
 
