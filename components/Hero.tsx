@@ -1,6 +1,6 @@
 "use client";
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import Counter from "@/components/Counter";
 
@@ -10,6 +10,61 @@ const f = (d = 0) => ({
   hidden: { opacity: 0, y: 24 },
   show: { opacity: 1, y: 0, transition: { duration: 0.95, ease: [0.16, 1, 0.3, 1], delay: d } },
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// V2-1.9-A — the hero video, loaded only when it is actually wanted.
+//
+// public/hero.mp4 is 10 MB and used to autoplay on EVERY visit, including a
+// phone on mobile data. It is decorative: the poster underneath carries the same
+// frame, and every headline sits on top of it either way. So the video was
+// costing the largest download on the site to change nothing a visitor needs.
+//
+// Three gates, all of which keep the poster visible so the layout never shifts:
+//   • prefers-reduced-motion — a looping background is exactly what that setting
+//     is for (V2-1.10-B).
+//   • Save-Data / 2g / slow-2g — never spend 10 MB of someone's metered data on
+//     decoration.
+//   • mounted — the <source> is attached only AFTER hydration, so the video can
+//     never compete with the poster for LCP.
+//
+// ⚠️ This does NOT change the design: same frame, same opacity, same overlays.
+// Producing compressed renditions (webm/smaller mp4) needs an encoder and a
+// binary asset change, so it is logged as remaining work rather than faked.
+// ════════════════════════════════════════════════════════════════════════════
+function HeroVideo() {
+  const [play, setPlay] = useState(false);
+
+  useEffect(() => {
+    const m = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (m?.matches) return;
+
+    // navigator.connection is not in every browser's lib.dom — read defensively
+    // rather than widening the global type for one optional hint.
+    const conn = (navigator as unknown as { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+    if (conn?.saveData) return;
+    if (conn?.effectiveType && /^(slow-)?2g$/.test(conn.effectiveType)) return;
+
+    setPlay(true);
+  }, []);
+
+  return (
+    <video
+      autoPlay
+      muted
+      loop
+      playsInline
+      // "none" until we decide: without it the browser starts fetching 10 MB
+      // during initial page load regardless of the gates above.
+      preload="none"
+      poster="/hero-poster.jpg"
+      aria-hidden="true"
+      className="absolute inset-0 w-full h-full"
+      style={{ objectFit: "cover", opacity: 0.5 }}
+    >
+      {play && <source src="/hero.mp4" type="video/mp4" />}
+    </video>
+  );
+}
 
 export default function Hero() {
   const { t, isAr } = useI18n();
@@ -25,17 +80,7 @@ export default function Hero() {
     <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden" style={{ background: "#050505" }}>
       {/* ─── Background video (muted, autoplay, loop) ─── */}
       <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          poster="/hero-poster.jpg"
-          className="absolute inset-0 w-full h-full"
-          style={{ objectFit: "cover", opacity: 0.5 }}
-        >
-          <source src="/hero.mp4" type="video/mp4" />
-        </video>
+        <HeroVideo />
         {/* Dark overlays to keep text readable over the video */}
         <div className="absolute inset-0" style={{ background: "linear-gradient(170deg, rgba(5,5,5,0.82) 0%, rgba(10,6,6,0.7) 50%, rgba(5,5,5,0.88) 100%)" }} />
         <div className="absolute top-0 left-0 w-[55vw] h-[60vh]" style={{ background: "radial-gradient(ellipse at 20% 20%, rgba(227,30,36,0.10) 0%, transparent 65%)" }} />

@@ -24,11 +24,14 @@ export const metadata: Metadata = {
     url: SITE,
     locale: "ar_SA",
     siteName: "Kian Media",
+    // V2-1.3-B — branded 1200x630 card. The old 800x800 logo was square, so
+    // every platform cropped or letterboxed it. Absolute URL: most scrapers do
+    // not resolve a relative OG image.
     images: [
       {
-        url: "/logo.png",
-        width: 800,
-        height: 800,
+        url: `${SITE}/og-default.svg`,
+        width: 1200,
+        height: 630,
         alt: "Kian Media Production",
       },
     ],
@@ -38,10 +41,15 @@ export const metadata: Metadata = {
     site: "@kianalebtikar",
     title: "Kian Media Production",
     description: "Cinematic video production in Saudi Arabia.",
-    images: ["/logo.png"],
+    images: [`${SITE}/og-default.svg`],
   },
   robots: { index: true, follow: true },
-  alternates: { canonical: SITE },
+  // V2-1.1-B — hreflang for the homepage pair. Arabic is x-default: it serves
+  // anyone whose language we do not explicitly target.
+  alternates: {
+    canonical: SITE,
+    languages: { ar: SITE, en: `${SITE}/en`, "x-default": SITE },
+  },
   formatDetection: { telephone: true },
 
   // ─── PWA installation metadata ──────────────────────────────────────────

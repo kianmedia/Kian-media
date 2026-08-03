@@ -2,8 +2,29 @@
 import { motion } from "framer-motion";
 import { useI18n } from "@/lib/i18n";
 
+/**
+ * V2-1.5-A — the section is gated by NEXT_PUBLIC_SHOW_TESTIMONIALS, default OFF.
+ *
+ * ★ WHY OFF IS THE RIGHT DEFAULT ★
+ * The external audit flagged this section as a visible EMPTY testimonials block
+ * on production. An empty "what clients say" panel is worse than no panel: it
+ * advertises that nobody has said anything. With the flag off the section is not
+ * rendered at all, so that specific defect is gone today — without waiting for
+ * the approval pipeline that will eventually fill it.
+ *
+ * ⚠️ NO DATA SOURCE IS WIRED. The approved design (v2.1 §4 W1 V2-1.5-B) is that
+ * approved entries come from the Wave-4 table via the unmerged Testimonials
+ * module — which carries its own UNAPPLIED SQL. Wiring a temporary static array
+ * here would recreate exactly the hardcoded-testimonials defect §M forbids, so
+ * it is deliberately absent. Turning the flag on today shows the same honest
+ * empty state; the database binding is RELEASE VERIFICATION PENDING.
+ */
+export const testimonialsEnabled = (): boolean =>
+  process.env.NEXT_PUBLIC_SHOW_TESTIMONIALS === "true";
+
 export default function Reviews() {
   const { t } = useI18n();
+  if (!testimonialsEnabled()) return null;
   const wa = "https://wa.me/966503422999?text=" + encodeURIComponent(
     t({ ar: "أود مشاركة تجربتي مع كيان ميديا", en: "I'd like to share my experience with Kian Media" })
   );

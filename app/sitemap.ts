@@ -20,6 +20,7 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/site";
 import { publicCaseStudySlugs } from "@/lib/server/publicCaseStudies";
+import { BILINGUAL_ROUTES, localePath } from "@/lib/seo";
 
 /** Public routes only. changeFrequency/priority are hints, not guarantees. */
 const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[number]["changeFrequency"]; priority: number }[] = [
@@ -34,12 +35,38 @@ const PUBLIC_ROUTES: { path: string; changeFrequency: MetadataRoute.Sitemap[numb
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const lastModified = new Date();
-  const base: MetadataRoute.Sitemap = PUBLIC_ROUTES.map((r) => ({
-    url: `${SITE_URL}${r.path}`,
-    lastModified,
-    changeFrequency: r.changeFrequency,
-    priority: r.priority,
-  }));
+  // V2-1.1 — each route is listed once per locale it actually has, with the
+  // alternates declared inline. A sitemap that lists only Arabic tells a crawler
+  // the /en mirror does not exist; one that lists /en for a route WITHOUT an
+  // English page is worse, because the alternate 404s. BILINGUAL_ROUTES is the
+  // single list both this file and lib/seo.ts read, so the two cannot disagree.
+  const bilingual = new Set(BILINGUAL_ROUTES);
+  const base: MetadataRoute.Sitemap = PUBLIC_ROUTES.flatMap((r) => {
+    const ar = {
+      url: `${SITE_URL}${r.path}`,
+      lastModified,
+      changeFrequency: r.changeFrequency,
+      priority: r.priority,
+    };
+    if (!bilingual.has(r.path)) return [ar];
+    const alternates = {
+      languages: {
+        ar: `${SITE_URL}${r.path}`,
+        en: `${SITE_URL}${localePath(r.path, "en")}`,
+      },
+    };
+    return [
+      { ...ar, alternates },
+      {
+        url: `${SITE_URL}${localePath(r.path, "en")}`,
+        lastModified,
+        changeFrequency: r.changeFrequency,
+        // Slightly lower: Arabic is the primary market and the default locale.
+        priority: Math.max(0.1, Number((r.priority - 0.1).toFixed(1))),
+        alternates,
+      },
+    ];
+  });
 
   // Never throws: publicCaseStudySlugs() swallows every failure and returns [].
   const studies = await publicCaseStudySlugs();
@@ -47,7 +74,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   return [
     ...base,
-    { url: `${SITE_URL}/case-studies`, lastModified, changeFrequency: "weekly", priority: 0.8 },
+    { url: `${SITE_URL}/case-studies`, lastModified, changeFrequency: "weekly", priority: 0.8,
+      alternates: { languages: { ar: `${SITE_URL}/case-studies`, en: `${SITE_URL}/en/case-studies` } } },
+    { url: `${SITE_URL}/en/case-studies`, lastModified, changeFrequency: "weekly", priority: 0.7,
+      alternates: { languages: { ar: `${SITE_URL}/case-studies`, en: `${SITE_URL}/en/case-studies` } } },
     ...studies.map((s) => {
       // A malformed date must not throw during sitemap generation — fall back.
       const d = s.updated_at ? new Date(s.updated_at) : null;
