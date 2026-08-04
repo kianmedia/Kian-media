@@ -2,7 +2,9 @@
 
 > 🔴 **غير جاهز للإصدار.**
 > ⛔ **ولا يُسمّى «مرشَّح إصدار نهائيّ»** — Wave 5 جزئية وغير مدمجة.
-> ✅ **Wave 8: DEVELOPMENT COMPLETE — RELEASE VERIFICATION PENDING.**
+> ✅ **Waves 0–8: DEVELOPMENT COMPLETE** — التفصيل في
+> `FINAL_DEVELOPMENT_COMPLETION_REPORT.md`.
+> ✅ **W5-2 معتمَد من المالك** (٥ أغسطس ٢٠٢٦) · 🔵 **وبيانات الإنتاج لم تُتحقَّق.**
 
 **التاريخ:** ٤ أغسطس ٢٠٢٦ · **الفرع النهائيّ:** `integration/v2-1-overnight`
 @ `929626a` · **آخر وسم:** `overnight-wave-8-complete`
@@ -19,7 +21,7 @@
 | 2 | ✅ COMPLETE | نعم | `overnight-wave-2-complete` |
 | 3 | ✅ COMPLETE | نعم | `overnight-wave-3-complete` |
 | 4 | ✅ COMPLETE | نعم | `overnight-wave-4-complete` |
-| **5** | 🔴 **PARTIAL** | ⛔ **لا — ولا تُدمج** | `overnight-wave-5-partial` |
+| **5** | ✅ **DEVELOPMENT COMPLETE** · 🔵 بيانات الإنتاج معلَّقة | **نعم** | `overnight-wave-5-complete` |
 | 6 | ✅ COMPLETE | نعم | `overnight-wave-6-complete` |
 | 7 | ✅ COMPLETE | نعم | `overnight-wave-7-complete` |
 | **8** | ✅ **DEVELOPMENT COMPLETE** | **نعم** (محلّيًّا) | `overnight-wave-8-complete` |
@@ -34,7 +36,7 @@
 
 | # | الحاجب | الطبيعة | مَن يفكّه |
 |---|---|---|---|
-| **ح-١** | **W5-2 غير محسوم** — لا مصدر ماليّ واحد | 🔴 قرار مالك | خالد |
+| ~~ح-١~~ | ~~W5-2 غير محسوم~~ ⇒ ✅ **معتمَد**؛ ويبقى **تشغيل حزمة التحقّق القرائية** | 🔵 تحقّق بيانات | خالد |
 | **ح-٢** | **٩ حزم SQL مطلوبة لم تُطبَّق** | 🔴 تنفيذ يدويّ | خالد |
 | **ح-٣** | **لا Push ولا Merge ولا Deploy** | 🔴 إجرائيّ | خالد |
 | **ح-٤** | **لا اختبار جهاز حقيقيّ** | 🟡 تحقّق | خالد |
@@ -50,7 +52,7 @@
 
 | الفحص | النتيجة |
 |---|---|
-| `npm test` | **4081 / 4081** ✅ |
+| `npm test` | **4108 / 4108** ✅ |
 | `npx tsc --noEmit` | **exit 0** ✅ |
 | `npm run lint` | **42 تحذيرًا / 0 خطأ** ✅ مطابق لخطّ الأساس |
 | `npm run build` | **exit 0** ✅ |
@@ -58,6 +60,9 @@
 | Playwright **phone** (Chromium) | **27 · 0 فشل** ✅ |
 | Playwright **tablet** (**WebKit**) | **27 · 0 فشل** ✅ |
 | `npm run release:doctor` | **PASS 17 · WARN 0 · BLOCK 0** ✅ |
+
+**حاجب مفتوح:** `docs/incidents/WORKING_TREE_UNKNOWN_FILES.md` — ٨٦ ملفًّا غير
+متعقَّب تكسر البناء في الشجرة الرئيسية. ⛔ لم تُمسّ.
 
 **تدقيق SQL:** ٥٦ ملفًّا **مقروءًا يدويًّا** · ٢٤٣ **لم تُقرأ** ·
 **٩ RUNME REQUIRED** · **٠ DO NOT RUN** (⛔ ولا واحد بلا دليل) ·

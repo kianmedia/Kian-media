@@ -58,7 +58,7 @@ cd ~/Documents/GitHub/Kian-media && npm run release:doctor
 cd ~/Documents/GitHub/Kian-media && npm test 2>&1 | tail -4
 ```
 
-**المتوقَّع:** `# pass 4081` · `# fail 0`.
+**المتوقَّع:** `# pass 4108` · `# fail 0`.
 
 ### ٨. وتحقّق من WebKit تحديدًا (اختياريّ)
 
@@ -70,12 +70,17 @@ cd ~/Documents/GitHub/Kian-media && CI=1 npx playwright test --project=tablet 2>
 
 ---
 
-### ٩. القرار الأوّل — W5-2 (ماليّ)
+### ٩. 🔴 أوّل ما تفعله: الملفّات المجهولة في شجرة العمل
 
-⛔ **لم أحسمه ولن أحسمه بالتخمين.** شغّل
-`docs/release/WAVE_5_PRODUCTION_READONLY_VERIFICATION.md` — كلّه `SELECT`.
-سبعة قرارات تنتظر: مصدر التكلفة · الفاتورة · `gross` · العملات · الإيراد ·
-الهامش · أسبقية Zoho.
+`docs/incidents/WORKING_TREE_UNKNOWN_FILES.md` — **٨٦ ملفًّا غير متعقَّب**،
+**٢٤ منها بلا نسخة على أيّ فرع**، وهي **تكسر `npm run build`** عندك.
+⛔ **لم أحذفها ولم أُزِحها.** ⛔ **ولا تُشغّل `git clean` قبل فحصها.**
+
+### ٩-ب. W5-2 — ✅ اعتمدتَه، ويبقى التحقّق من البيانات
+
+القرارات السبعة مسجَّلة في الشيفرة (`OWNER_APPROVED_POLICY`) وفي الوثائق.
+🔵 **والمتبقّي:** تشغيل `WAVE_5_PRODUCTION_READONLY_VERIFICATION.md` — كلّه
+`SELECT`، وكل خانة نتيجة فارغة. ⛔ ولا تُرفع أعلام المالية قبله.
 
 ### ١٠. القرار الثاني — سياسة الاحتفاظ بالبيانات
 
