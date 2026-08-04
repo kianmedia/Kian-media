@@ -316,17 +316,19 @@ lint واحد + ثبات تخطيط**، والخسارة المحتملة هي *
 **التفصيل الكامل مع الخيارات والأثر:** `docs/release/WAVE_5_FINANCIAL_DECISION_PACK.md`
 **الأدلّة تُجمع من:** `docs/release/WAVE_5_PRODUCTION_READONLY_VERIFICATION.md`
 
-| # | القرار | الموصى به (محافظ) | اختيار خالد |
-|---|---|---|---|
-| ١ | Revenue Source of Truth | `fin_revenue` | ⬜ |
-| ٢ | **Cost Source of Truth** 🔴 الأخطر | `fin_costs` | ⬜ |
-| ٣ | Invoice Source of Truth | `zoho` (مرجعًا) | ⬜ |
-| ٤ | VAT Source of Truth | `stored` + قيد لاحق | ⬜ |
-| ٥ | Currency Conversion Policy | `reject_mixed` | ⬜ |
-| ٦ | Margin Calculation Policy | `net_of_vat` | ⬜ |
-| ٧ | Zoho Precedence | `flag_conflict` | ⬜ |
+✅ **الحالة: `OWNER APPROVED — PRODUCTION VERIFICATION PENDING`** (٥ أغسطس ٢٠٢٦)
 
-⚠️ **والتوصيات مشروطة بأدلّة لم تُجمع بعد** — ⛔ ولا يُنفَّذ منها شيء.
+| # | القرار | ✅ المعتمَد |
+|---|---|---|
+| ١ | Revenue Source of Truth | `fin_revenue` |
+| ٢ | **Cost Source of Truth** | `fin_costs` |
+| ٣ | Invoice Source of Truth | **Zoho Books** |
+| ٤ | VAT Source of Truth | `stored` |
+| ٥ | Currency Conversion Policy | `reject_mixed` |
+| ٦ | Margin Calculation Policy | `net_of_vat` |
+| ٧ | Zoho Precedence | `flag_conflict` |
+
+🔴 **ويبقى معلَّقًا:** التحقّق من بيانات الإنتاج (استعلامات قراءة فقط لم تُشغَّل).
 
 ### قرارات أخرى
 
