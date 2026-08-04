@@ -1,10 +1,13 @@
-# WAVE 5 — تقرير · **PARTIAL (محجوبة خارجيًّا)**
+# WAVE 5 — تقرير · **DEVELOPMENT COMPLETE · PRODUCTION FINANCIAL VERIFICATION PENDING**
 
-> 🔴 **الحالة الصادقة:** كلّ بند **غير ماليّ** ممكن محليًّا **مُنجَز**. والبنود
-> المالية **محجوبة بإثبات Production خارجيّ (W5-2)** لا بنقص عمل.
+> ✅ **W5-2 محسوم:** اعتمد المالك القرارات المالية السبعة في ٥ أغسطس ٢٠٢٦
+> (`OWNER APPROVED`)، فبُنيت البنود الأربعة الباقية عليها.
 >
-> الوسم: `overnight-wave-5-partial`. ⛔ **لا تُدمج بوصفها Complete** — هذا ما
-> يوجبه §9 من أمر التشغيل حين يكون الحجب خارجيًّا.
+> 🔴 **والاعتماد يخصّ الشيفرة لا البيانات:**
+> **`PRODUCTION FINANCIAL VERIFICATION PENDING`** — ⛔ ولم يُشغَّل استعلام إنتاج.
+>
+> ⛔ ولا يُدَّعى: خلوّ التكاليف من تكرار · صحّة كل `gross/net/vat` · اكتمال ربط
+> Zoho · تطابق العملات · صحّة الأرقام التاريخية.
 
 الفرع `feat/wave-5-delivery-rights-finance` · ⛔ لا Push · لا SQL شُغِّل · لا Deploy
 · لا اتصال بـProduction · لا إرسال · لا نقل بيانات.
@@ -25,7 +28,10 @@
 | V2-5.4-A…C | الموافقة الحكمية | `deliverable_versions` · `activity_log` | **البنية فقط** · OFF · لكلّ مشروع · بعقد موقَّع | ✅ **PASS (بنية)** | `wave5_deemed_approval` | `SHOW_DEEMED_APPROVAL` | D-1…D-4 |
 | V2-5.5-A | `project_costs` | `fin_costs` · `project_expenses` | ❌ **ملغى** — قائم | ✅ **N/A** | — | — | G-3 |
 | V2-5.5-C | `payment_milestones` | `fin_payment_milestones` | ❌ **ملغى** — ليست غائبة | ✅ **N/A** | — | — | G-3 |
-| V2-5.5-B/D/E/F | الهامش · التدفّق النقديّ · التأخّر · الإشعار | `pc_project_financials` · `fin_*` | 🔴 **لم يُبنَ** | 🔴 **PENDING** — **FINANCIAL PHASE B VERIFICATION REQUIRED** | — | — | G-3 يمنع لمسها |
+| V2-5.5-B | بطاقة الهامش | `fin_revenue` · `fin_costs` | صافٍ من الضريبة · حارس ازدواج قبل الجمع | ✅ **PASS** | — | `SHOW_FINANCIAL_REPORTING` | 25 اختبارًا · 5 طفرات |
+| V2-5.5-D | تقويم التدفّق النقديّ | جدول `invoices` (مرآة Zoho القائمة) | أربعة دلاء · ⛔ لا تكامل ثانٍ | ✅ **PASS** | — | نفسه | نفسها |
+| V2-5.5-E | عدّاد التأخّر | نفسه | الرسميّ = المربوطة ذات تاريخ حقيقيّ · منطقة زمنية صريحة | ✅ **PASS** | — | نفسه | نفسها |
+| V2-5.5-F | مسوّدة إشعار التعليق | نفسه | مسوّدة فقط · اعتماد بشريّ · فشل مغلق | ✅ **PASS** | — | `SHOW_SUSPENSION_NOTICE` | نفسها |
 | V2-5.6-A | `client_viewer` / `client_approver` | `project_member_roles` | ❌ لا أدوار جديدة — قدرتان تُفرضان في القاعدة | ✅ **PASS** | `wave5_delivery_rights` | — | C-1 |
 
 ---
@@ -145,3 +151,32 @@
 | **W5-4** | رفع تجميد منصّة المشاريع لتوحيد شاشات الإصدارات؟ أم إبقاء المسار المستقلّ؟ | **BLOCKING ONE FEATURE ONLY** |
 
 ⚠️ **لم تُنفَّذ تحقّقات متصفّح ولا E2E ولا axe** — ولا يُدّعى ذلك.
+
+
+---
+
+## ٥. القرارات المالية المعتمَدة (٥ أغسطس ٢٠٢٦)
+
+**الحالة:** `OWNER APPROVED — PRODUCTION VERIFICATION PENDING`
+
+| # | القرار | المعتمَد |
+|---|---|---|
+| ١ | Revenue Source of Truth | `fin_revenue` |
+| ٢ | Cost Source of Truth | `fin_costs` — و`project_expenses` ⇒ **LEGACY / RECONCILIATION SOURCE** |
+| ٣ | Invoice Source of Truth | **Zoho Books** |
+| ٤ | VAT Source | `stored` — ⛔ لا إعادة احتساب · التناقض ⇒ `VAT_CONFLICT` |
+| ٥ | Currency Policy | `reject_mixed` — ⛔ لا تحويل ولا سعر صرف على معاملات تاريخية |
+| ٦ | Margin | `net_of_vat` |
+| ٧ | Zoho Conflict | `flag_conflict` — ⛔ لا استبدال تلقائيّ ولا مصالحة آلية |
+
+🔴 **ومسجَّلة في الشيفرة كثابت مُسمّى لا كافتراض:** `OWNER_APPROVED_POLICY`.
+لا دالّة تقرؤه تلقائيًّا، والغياب يُنتج `source_unselected` — واختبار يُثبت ذلك.
+
+## ٦. ما بقي معلَّقًا
+
+| البند | الحالة |
+|---|---|
+| التحقّق من البيانات على الإنتاج | 🔵 **PRODUCTION READ-ONLY VERIFICATION PENDING** |
+| `project_expenses` | 🟡 **LEGACY / RECONCILIATION SOURCE** — ⛔ لا حذف ولا نقل |
+| تركيب الواجهات | ⛔ **غير مركَّبة** — الأعلام OFF والوحدات غير مستوردة في أيّ شاشة |
+| حزم SQL | ⛔ **غير مطبَّقة** |
