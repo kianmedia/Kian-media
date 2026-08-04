@@ -44,6 +44,10 @@
 | — | `wave3_seeds_DEV_ONLY.sql` | 3 | ⛔ **ليست خطوة إصدار** — بذور تطوير محروسة |
 | 4 | `kian_testimonials_v1_RUNME.sql` | 4 | ✅ نعم |
 | 5 | `wave4_crm_business_*` | 4 | 🔴 **لا** — تعتمد `kian_testimonials` (٤ قبلها) |
+| 6 | `wave5_delivery_rights_*` | 5 | ✅ نعم |
+| 7 | `wave5_deemed_approval_*` | 5 | ✅ نعم |
+| — | `docs/sql/wave5_financial_phase_ab_AUDIT_READONLY.sql` | 5 | ⛔ **تدقيق قرائيّ** — يُشغَّل أوّلًا، ولا يكتب |
+| — | `docs/sql/wave5_deliverable_versions_AUDIT_READONLY.sql` | 5 | ⛔ **تدقيق قرائيّ** — يُشغَّل قبل أيّ قرار ترحيل (W5-1) |
 | — | `consent_capture_EXTENSION_*` | 0 | ✅ نعم — **سابقة، ولم تُطبَّق بعد** |
 
 ⚠️ الحزمتان تفترضان أنّ `operations_center_RUNME.sql` **مطبَّق مسبقًا** على
@@ -215,6 +219,42 @@ Production. كلتاهما تتحقّق من ذلك في §0 وترفع استث
 
 ---
 
+## ٣·٣. حزم Wave 5
+
+### التدقيقان القرائيّان — **يُشغَّلان أوّلًا وهما آمنان**
+
+`SELECT` وفحص كتالوج فقط. ⛔ لا DDL ولا DML. تشغيلهما على Production **آمن**،
+وهما مدخل القرارين W5-1 وW5-2.
+
+🔴 **ولا يُكتب رقم أو حالة في أيّ تقرير قبل تشغيلهما.** حالة Phase B اليوم:
+**UNVERIFIED / MANUAL PRODUCTION VERIFICATION REQUIRED**.
+
+### `wave5_delivery_rights_*` (٦)
+
+| البند | القيمة |
+|---|---|
+| **الغرض** | حقوق العرض التسويقيّ · عرض التصفية · روابط التسليم · قدرات اعتماد العميل · **حراس توحيد الإصدارات** |
+| **الاعتماديات** | `deliverables` · `deliverable_versions` · `project_member_roles` · `can_manage_projects()` · `pgcrypto` · 🟡 `pc_release_window_ok` |
+| **العلم** | `NEXT_PUBLIC_SHOW_DELIVERY_RIGHTS` (OFF) |
+| **مستقلّة؟** | ✅ نعم |
+| **نسخة احتياطية؟** | 🟡 **مستحسنة** — تُركِّب مُشغِّلَين على جدولين حيّين |
+
+🔴 **أخطر ما فيها ليس جدولًا بل مُشغِّلًا:** `trg_dv_block_legacy_writes` يمنع
+الكتابة في `project_deliverable_versions` **فورًا**. أيّ مسار قائم ما يزال يكتب
+هناك سيبدأ بالفشل بـ`42501`. ولذلك:
+- ⚠️ **شرط توقّف:** PREFLIGHT `PRE_EXISTING_CONFLICT` يجب أن يعود فارغًا، وإلّا
+  فشل الفهرس الفريد.
+- ⚠️ وتحقّق أنّ لا مسار إنتاجيّ يكتب في الجدول القديم قبل التطبيق.
+
+### `wave5_deemed_approval_*` (٧)
+
+| البند | القيمة |
+|---|---|
+| **الغرض** | بنية الموافقة الحكمية — **لا تعتمد شيئًا** |
+| **العلم** | `NEXT_PUBLIC_SHOW_DEEMED_APPROVAL` (OFF) · ⛔ ويبقى OFF حتى W5-3 |
+| **مستقلّة؟** | ✅ نعم |
+| **نسخة احتياطية؟** | 🟢 لا — جدولان جديدان |
+| **الخطر** | 🟢 منخفض: لا صفّ مُفعَّل يمكن أن يوجد بلا بند موقَّع (قيد `deemed_requires_contract`)، والمقيِّم `stable` فلا يكتب |
 ## ٣·٤. حزم Wave 6
 
 ### `wave6_assets_archive_*` (٨)

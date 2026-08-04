@@ -1,5 +1,14 @@
 # OVERNIGHT_DECISIONS_REQUIRED — قرارات تنتظر خالد
 
+> ### قرارات Wave 5 (شرطا الدخول — الموجة لم تُبنَ بعد)
+> | # | القرار | التصنيف |
+> |---|---|---|
+> | **W5-1** | مصير صفوف `project_deliverable_versions` بعد اعتماد `deliverable_versions` مصدرًا. ⛔ لا حذف: قد تكون إصدارات سُلِّمت لعميل | **PENDING ROW COUNT + OWNER DECISION** |
+> | **W5-2** | 🔴 **هل Phase A/B المالية مطبَّقة على Production؟** (سؤال GATE A رقم ٦، بلا جواب). **بدونه لا يُلمس أيّ بند ماليّ** — V2-5.5-B/D/E/F محجوبة | **MANUAL PRODUCTION VERIFICATION** |
+> | **W5-3** | الموافقة الحكمية: نسخة العقد الموقّعة **ونصّ البند الحرفيّ لكلّ مشروع على حدة**. ⛔ لا يُفترض ثبوت الأساس التعاقديّ | **BLOCKING ONE FEATURE ONLY** |
+> | **W5-4** | 🔴 **رفع تجميد منصّة المشاريع؟** واجهة Wave 5 وُضعت في مسار مستقلّ `/client-portal/delivery-rights` احترامًا للتجميد. توحيد شاشات الإصدارات داخل المنصّة يحتاج رفعًا صريحًا — أم يبقى المسار المستقلّ؟ | **BLOCKING ONE FEATURE ONLY** |
+>
+> التفصيل في [`WAVE_5_ENTRY_CONDITIONS.md`](../wave-reports/WAVE_5_ENTRY_CONDITIONS.md).
 > ### قرارات Wave 7
 > | # | القرار | التصنيف |
 > |---|---|---|
