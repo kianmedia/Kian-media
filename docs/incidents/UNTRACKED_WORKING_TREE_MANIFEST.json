@@ -1,0 +1,604 @@
+[
+ {
+  "f": "app/assistant/layout.tsx",
+  "sha": "699a9c025c965437",
+  "bytes": 471,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/book-meeting/layout.tsx",
+  "sha": "0bb1e618beaf5461",
+  "bytes": 474,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/book-meeting/layout.tsx",
+  "sha": "cd01e76cab15b85c",
+  "bytes": 329,
+  "mtime": "2026-08-03T04:14",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/book-meeting/page.tsx",
+  "sha": "e35889a96d27ec18",
+  "bytes": 196,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/case-studies/page.tsx",
+  "sha": "69dc9fce1a761066",
+  "bytes": 196,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/layout.tsx",
+  "sha": "8450b0400dc078bb",
+  "bytes": 1606,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/opportunities/layout.tsx",
+  "sha": "42f448fddb2c24b2",
+  "bytes": 331,
+  "mtime": "2026-08-03T04:14",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/opportunities/page.tsx",
+  "sha": "43cf134be82f51c1",
+  "bytes": 198,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/page.tsx",
+  "sha": "e03b1af05ea015e0",
+  "bytes": 172,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/privacy-policy/layout.tsx",
+  "sha": "7891292119fa6bf7",
+  "bytes": 333,
+  "mtime": "2026-08-03T04:14",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/privacy-policy/page.tsx",
+  "sha": "2182f417ba35a98f",
+  "bytes": 200,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/quote-request/layout.tsx",
+  "sha": "b20231c77422d14c",
+  "bytes": 331,
+  "mtime": "2026-08-03T04:14",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/quote-request/page.tsx",
+  "sha": "fba612bef1347102",
+  "bytes": 198,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/terms/layout.tsx",
+  "sha": "522944c07771a266",
+  "bytes": 315,
+  "mtime": "2026-08-03T04:14",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/terms/page.tsx",
+  "sha": "45129953db655201",
+  "bytes": 182,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/upload-files/layout.tsx",
+  "sha": "1a3d64a355b6fa31",
+  "bytes": 329,
+  "mtime": "2026-08-03T04:14",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/en/upload-files/page.tsx",
+  "sha": "83d8f8a264d70bef",
+  "bytes": 196,
+  "mtime": "2026-08-03T04:13",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/live-status/layout.tsx",
+  "sha": "c5b33c590876bf2b",
+  "bytes": 473,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/opportunities/layout.tsx",
+  "sha": "cea1e19eb1c73687",
+  "bytes": 475,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/privacy-policy/layout.tsx",
+  "sha": "be99033934819878",
+  "bytes": 476,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/quick-access/layout.tsx",
+  "sha": "2fe90c9dd47fb437",
+  "bytes": 474,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/quote-request/layout.tsx",
+  "sha": "1eb691644bd77c81",
+  "bytes": 475,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/terms/layout.tsx",
+  "sha": "c20824dcfa276033",
+  "bytes": 467,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/upload-files/layout.tsx",
+  "sha": "d9686ee27b20f2fb",
+  "bytes": 474,
+  "mtime": "2026-08-02T22:31",
+  "copy": "NONE"
+ },
+ {
+  "f": "app/admin/layout.tsx",
+  "sha": "41d45be5e2ea7f7f",
+  "bytes": 941,
+  "mtime": "2026-06-19T22:58",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/admin/whatsapp/page.tsx",
+  "sha": "7917445b993358bd",
+  "bytes": 456,
+  "mtime": "2026-06-19T22:58",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/assistant/page.tsx",
+  "sha": "9cb498063fff6e49",
+  "bytes": 15278,
+  "mtime": "2026-07-30T22:46",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/book-meeting/page.tsx",
+  "sha": "c61e859693accef6",
+  "bytes": 10829,
+  "mtime": "2026-08-02T20:23",
+  "copy": "feat/wave-0-safety-regression-environment"
+ },
+ {
+  "f": "app/case-studies/[slug]/page.tsx",
+  "sha": "95e59a32b7ab8b58",
+  "bytes": 6070,
+  "mtime": "2026-07-30T18:39",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/case-studies/page.tsx",
+  "sha": "b5952728f8bde5e3",
+  "bytes": 5560,
+  "mtime": "2026-07-30T18:37",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/accounts/page.tsx",
+  "sha": "f582a765de98e592",
+  "bytes": 806,
+  "mtime": "2026-06-15T02:41",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/admin/page.tsx",
+  "sha": "81748cdaada4cd46",
+  "bytes": 844,
+  "mtime": "2026-06-12T22:34",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/admin/whatsapp/page.tsx",
+  "sha": "8fcf59a118ecc6e9",
+  "bytes": 628,
+  "mtime": "2026-06-19T22:58",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/asset-custody/page.tsx",
+  "sha": "5fe09e78ac70e754",
+  "bytes": 3161,
+  "mtime": "2026-07-19T10:19",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/assistant/page.tsx",
+  "sha": "971aafd8d687b68d",
+  "bytes": 2908,
+  "mtime": "2026-07-30T22:44",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/case-studies/page.tsx",
+  "sha": "6f188649408aed13",
+  "bytes": 2249,
+  "mtime": "2026-07-30T18:53",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/communications/page.tsx",
+  "sha": "f39bef42b22290eb",
+  "bytes": 2444,
+  "mtime": "2026-07-29T22:54",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/compliance/page.tsx",
+  "sha": "e774bfeeb3726a80",
+  "bytes": 5449,
+  "mtime": "2026-07-30T18:53",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/crm/error.tsx",
+  "sha": "f6b40a974dd032ba",
+  "bytes": 2419,
+  "mtime": "2026-07-30T00:14",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/crm/page.tsx",
+  "sha": "f27cb5e3fbe5d6d7",
+  "bytes": 2063,
+  "mtime": "2026-07-30T00:14",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/employee/error.tsx",
+  "sha": "082f98da21999ad8",
+  "bytes": 2393,
+  "mtime": "2026-07-07T20:40",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/employee/page.tsx",
+  "sha": "9add43082c782efa",
+  "bytes": 4842,
+  "mtime": "2026-07-28T22:06",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/equipment/error.tsx",
+  "sha": "c6358527fde8aed3",
+  "bytes": 2486,
+  "mtime": "2026-07-03T21:18",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/equipment/page.tsx",
+  "sha": "3f8522c8bdd315c5",
+  "bytes": 3601,
+  "mtime": "2026-07-10T21:57",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/executive/error.tsx",
+  "sha": "d237cd38990a530f",
+  "bytes": 2661,
+  "mtime": "2026-07-30T01:22",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/executive/page.tsx",
+  "sha": "5cbd568f3c09a3ac",
+  "bytes": 2366,
+  "mtime": "2026-07-30T01:22",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/files/page.tsx",
+  "sha": "81b3026b94a5d648",
+  "bytes": 729,
+  "mtime": "2026-06-16T12:07",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/finance/error.tsx",
+  "sha": "e600de274c99e51e",
+  "bytes": 2558,
+  "mtime": "2026-07-30T00:25",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/finance/page.tsx",
+  "sha": "8d5cc934ecd6d4e1",
+  "bytes": 2127,
+  "mtime": "2026-07-30T06:05",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/invoices/page.tsx",
+  "sha": "d0bb38623b4924a9",
+  "bytes": 10409,
+  "mtime": "2026-07-03T14:37",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/layout.tsx",
+  "sha": "3a79f9c5fd89a21b",
+  "bytes": 1966,
+  "mtime": "2026-07-16T12:31",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/live-operations/page.tsx",
+  "sha": "2a6a7978255a96c9",
+  "bytes": 2703,
+  "mtime": "2026-07-30T22:27",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/messages/page.tsx",
+  "sha": "d624f5a2e1f41068",
+  "bytes": 1177,
+  "mtime": "2026-06-16T12:07",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/my-opportunities/page.tsx",
+  "sha": "59d8ce90ca0f3433",
+  "bytes": 1073,
+  "mtime": "2026-06-16T21:54",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/notifications/page.tsx",
+  "sha": "1747363af34539f1",
+  "bytes": 165,
+  "mtime": "2026-06-14T07:08",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/offers/page.tsx",
+  "sha": "e81a0183f14df616",
+  "bytes": 3053,
+  "mtime": "2026-06-13T09:50",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/operations/error.tsx",
+  "sha": "51c0bfe78ee823b4",
+  "bytes": 2443,
+  "mtime": "2026-07-29T23:04",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/operations/page.tsx",
+  "sha": "c1040381cd6ce26d",
+  "bytes": 2004,
+  "mtime": "2026-07-29T23:03",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/opportunities/page.tsx",
+  "sha": "189d52a03f28b1b3",
+  "bytes": 888,
+  "mtime": "2026-06-16T18:42",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/page.tsx",
+  "sha": "4d2ecefd949ec530",
+  "bytes": 11188,
+  "mtime": "2026-06-16T20:45",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/production-credits/page.tsx",
+  "sha": "738e026184340681",
+  "bytes": 2358,
+  "mtime": "2026-07-30T08:33",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/profile/page.tsx",
+  "sha": "9809faef006e2231",
+  "bytes": 153,
+  "mtime": "2026-06-14T07:11",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/project-core/[projectId]/closure-report/page.tsx",
+  "sha": "dacd00b71569c006",
+  "bytes": 8306,
+  "mtime": "2026-07-22T22:33",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/project-core/[projectId]/page.tsx",
+  "sha": "3132131726c067c5",
+  "bytes": 6255,
+  "mtime": "2026-07-20T21:40",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/project-core/page.tsx",
+  "sha": "997705faabfc87eb",
+  "bytes": 1455,
+  "mtime": "2026-07-15T22:03",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/projects/[id]/page.tsx",
+  "sha": "d47fabee65839c51",
+  "bytes": 17306,
+  "mtime": "2026-07-25T21:52",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/projects/page.tsx",
+  "sha": "c8ce1159dab4e114",
+  "bytes": 5663,
+  "mtime": "2026-07-15T17:35",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/quotes/error.tsx",
+  "sha": "1c49a20a6b6825e8",
+  "bytes": 2633,
+  "mtime": "2026-07-03T10:17",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/quotes/page.tsx",
+  "sha": "6cef9be6b0b0a4d7",
+  "bytes": 1108,
+  "mtime": "2026-07-03T10:48",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/quoting/page.tsx",
+  "sha": "b0c8d6b71ad1e7b6",
+  "bytes": 2618,
+  "mtime": "2026-07-30T09:45",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/rentals/page.tsx",
+  "sha": "98798dc373be34ff",
+  "bytes": 1886,
+  "mtime": "2026-07-15T17:35",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/reset-password/page.tsx",
+  "sha": "c741d4c597f2583e",
+  "bytes": 7260,
+  "mtime": "2026-06-15T18:52",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/client-portal/staff/page.tsx",
+  "sha": "58b43887296507bb",
+  "bytes": 769,
+  "mtime": "2026-06-16T12:01",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/error.tsx",
+  "sha": "4a5455f7b5544b37",
+  "bytes": 996,
+  "mtime": "2026-05-30T04:17",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/layout.tsx",
+  "sha": "ea988fd2ab06b154",
+  "bytes": 7760,
+  "mtime": "2026-07-30T22:19",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/live-status/page.tsx",
+  "sha": "f366eca2226ba711",
+  "bytes": 25115,
+  "mtime": "2026-07-30T22:22",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/offline/page.tsx",
+  "sha": "7c3dbd89e6daf374",
+  "bytes": 1203,
+  "mtime": "2026-07-30T22:02",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/opportunities/page.tsx",
+  "sha": "9e2ee0cf75e3e05a",
+  "bytes": 5477,
+  "mtime": "2026-06-16T18:39",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/page.tsx",
+  "sha": "5d40548fdae0c5e4",
+  "bytes": 1841,
+  "mtime": "2026-07-30T18:40",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/privacy-policy/page.tsx",
+  "sha": "c6f954b5c1cac7d1",
+  "bytes": 8201,
+  "mtime": "2026-06-14T11:05",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/quick-access/page.tsx",
+  "sha": "c96b9b26a1935a55",
+  "bytes": 3877,
+  "mtime": "2026-06-07T19:17",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/quote-request/page.tsx",
+  "sha": "58a08913872e31a1",
+  "bytes": 18029,
+  "mtime": "2026-08-02T20:23",
+  "copy": "feat/wave-0-safety-regression-environment"
+ },
+ {
+  "f": "app/secure-document/page.tsx",
+  "sha": "bdd9849e1c2fcfb7",
+  "bytes": 14607,
+  "mtime": "2026-07-30T18:46",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/terms/page.tsx",
+  "sha": "7bdc31751a5d188b",
+  "bytes": 6925,
+  "mtime": "2026-06-14T11:06",
+  "copy": "docs/v2_1-audit"
+ },
+ {
+  "f": "app/upload-files/page.tsx",
+  "sha": "3bb3dac2a5b3723a",
+  "bytes": 7744,
+  "mtime": "2026-08-02T20:23",
+  "copy": "feat/wave-0-safety-regression-environment"
+ },
+ {
+  "f": "components/Testimonials.tsx",
+  "sha": "149f684f9d3b51d6",
+  "bytes": 3656,
+  "mtime": "2026-07-24T04:46",
+  "copy": "docs/v2_1-audit"
+ }
+]
