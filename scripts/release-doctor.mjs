@@ -46,24 +46,47 @@ export function checkTree() {
   else PASS("branch", branch || "(unknown)");
 }
 
+/**
+ * 🔴 هل سجّل المالك السياسة المالية في الشيفرة؟
+ *
+ * الحارسان أدناه كانا يمنعان **أيّ** ادّعاء اكتمال لـWave 5، لأنّ W5-2 كان
+ * معلَّقًا. وبعد اعتماد المالك صار المنع المطلق كذبًا في الاتّجاه الآخر.
+ * ⛔ ولم يُحذف الحارس: رُبِط **بالدليل** بدل التاريخ — فادّعاء الاكتمال يبقى
+ *    ممنوعًا ما لم تكن السياسة المعتمَدة مسجَّلة فعلًا بمعتمِد وتاريخ.
+ */
+export function ownerPolicyRecorded(srcText) {
+  const rel = "lib/finance/financialSourcePolicy.ts";
+  const t = srcText ?? (has(rel) ? read(rel) : "");
+  if (!t) return false;
+  if (!/OWNER_APPROVED_POLICY/.test(t)) return false;
+  const m = t.match(/approvedBy:\s*"([^"]*)"/);
+  return Boolean(m && m[1].trim());
+}
+
 // ─── ٢ · الأوسمة ────────────────────────────────────────────────────────────
 export function checkTags(tagsRaw) {
   const tags = (tagsRaw ?? git(["tag", "--list"])).split("\n").filter(Boolean);
   if (tags.includes("overnight-wave-8-complete")) PASS("tag wave-8", "موجود");
   else WARN("tag wave-8", "overnight-wave-8-complete مفقود");
 
-  // 🔴 الادّعاء الأخطر: وسم يقول إنّ Wave 5 اكتملت وهي محجوبة على W5-2.
+  // 🔴 وسم اكتمال Wave 5 مشروع **فقط** مع سياسة مالية معتمَدة مسجَّلة.
   const w5 = tags.filter((t) => /wave-5.*complete/i.test(t));
-  if (w5.length) BLOCK("wave-5 tag", `ادّعاء اكتمال: ${w5.join(", ")}`);
-  else PASS("wave-5 tag", "لا وسم اكتمال — مطابق للحقيقة");
+  if (w5.length && !ownerPolicyRecorded()) {
+    BLOCK("wave-5 tag", `ادّعاء اكتمال بلا سياسة معتمَدة: ${w5.join(", ")}`);
+  } else if (w5.length) {
+    PASS("wave-5 tag", "اكتمال بسياسة معتمَدة — ⚠️ وبيانات الإنتاج لم تُتحقَّق");
+  } else PASS("wave-5 tag", "لا وسم اكتمال");
 }
 
 // ─── ٣ · Wave 5 تبقى خارج integration ──────────────────────────────────────
 export function checkWave5Unmerged() {
   const merged = git(["branch", "--merged", "integration/v2-1-overnight"]);
   if (!merged) { WARN("wave-5 merge", "تعذّر فحص الدمج"); return; }
-  if (/feat\/wave-5-delivery-rights-finance/.test(merged)) {
-    BLOCK("wave-5 merge", "Wave 5 مدمجة في integration وهي محجوبة");
+  const isMerged = /feat\/wave-5-delivery-rights-finance/.test(merged);
+  if (isMerged && !ownerPolicyRecorded()) {
+    BLOCK("wave-5 merge", "Wave 5 مدمجة بلا سياسة مالية معتمَدة");
+  } else if (isMerged) {
+    PASS("wave-5 merge", "مدمجة بسياسة معتمَدة — ⚠️ التحقّق من البيانات معلَّق");
   } else PASS("wave-5 merge", "غير مدمجة");
 }
 

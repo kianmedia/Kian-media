@@ -198,3 +198,20 @@ test("الحالة السليمة في الصندوق ⇒ لا BLOCK من الف
     }
   } finally { cleanup(dir); }
 });
+
+// ─── حارسا Wave 5 مربوطان بالدليل لا بالتاريخ ──────────────────────────────
+test("🔴 وسم اكتمال Wave 5 بلا سياسة معتمَدة ⇒ BLOCK", () => {
+  assert.equal(D.ownerPolicyRecorded("// لا شيء"), false, "قُبل غياب السياسة");
+  assert.equal(D.ownerPolicyRecorded('const OWNER_APPROVED_POLICY = { approvedBy: "" };'),
+    false, "قُبلت سياسة بلا معتمِد");
+  assert.equal(D.ownerPolicyRecorded('const OWNER_APPROVED_POLICY = { approvedBy: "khaled (owner)" };'),
+    true, "رُفضت سياسة معتمَدة صحيحة");
+});
+
+test("🔴 الحارس ما يزال له أنياب — طفرة: إفراغ المعتمِد", () => {
+  const src = fs.readFileSync(path.join(ROOT, "lib/finance/financialSourcePolicy.ts"), "utf8");
+  assert.equal(D.ownerPolicyRecorded(src), true, "السياسة المعتمَدة غير مسجَّلة فعلًا");
+  const mutated = src.replace(/approvedBy:\s*"[^"]*"/, 'approvedBy: ""');
+  assert.equal(D.ownerPolicyRecorded(mutated), false,
+    "إفراغ المعتمِد لم يُسقط الحارس — فالربط بالدليل صوريّ");
+});
