@@ -150,6 +150,8 @@ test("⛔ الوثائق والمصدر خارج نطاق الفحص", () => {
 test("⛔ المخرَج عند الفشل لا يحتوي السرّ نفسه", () => {
   const secret = "sb_secret_ABCDEFGHIJKLMNOP";
   const tmp = path.join(ROOT, ".next", "__leak_probe.js");
+  // ⚠️ لو أنشأنا `.next` هنا وتركناه، بدا للتشغيل التالي أنّ بناءً موجود
+  //    بينما هو مجلّد فارغ — فيفشل فحص الآثار بلا سبب ظاهر. يُزال إن أنشأناه.
   const hadNext = fs.existsSync(path.join(ROOT, ".next"));
   if (!hadNext) fs.mkdirSync(path.join(ROOT, ".next"), { recursive: true });
   fs.writeFileSync(tmp, `const k=${JSON.stringify(secret)};`);
@@ -164,6 +166,7 @@ test("⛔ المخرَج عند الفشل لا يحتوي السرّ نفسه",
     assert.equal(hits[0].redacted_fingerprint.length, 12);
   } finally {
     fs.unlinkSync(tmp);
+    if (!hadNext) fs.rmSync(path.join(ROOT, ".next"), { recursive: true, force: true });
   }
 });
 
@@ -175,7 +178,8 @@ test("🔴 يميّز service_role عن anon — والمفتاح العامّ �
     return `${b64({ alg: "HS256" })}.${b64({ role, iss: "supabase" })}.${"s".repeat(30)}`;
   };
   const dir = path.join(ROOT, ".next");
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const hadNext = fs.existsSync(dir);
+  if (!hadNext) fs.mkdirSync(dir, { recursive: true });
 
   const anonFile = path.join(dir, "__anon_probe.js");
   fs.writeFileSync(anonFile, `const k="${mk("anon")}";`);
@@ -189,5 +193,6 @@ test("🔴 يميّز service_role عن anon — والمفتاح العامّ �
     assert.equal(svc[0].pattern, "supabase_service_role_jwt");
   } finally {
     fs.unlinkSync(anonFile); fs.unlinkSync(svcFile);
+    if (!hadNext) fs.rmSync(dir, { recursive: true, force: true });
   }
 });
