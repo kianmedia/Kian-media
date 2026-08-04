@@ -51,8 +51,33 @@ export const POLICY_KEYS = [
 ] as const;
 export type PolicyKey = (typeof POLICY_KEYS)[number];
 
-// 🔴 **لا ثابت افتراضيّ هنا.** ولا `DEFAULT_POLICY` ولا `FALLBACK_SOURCE`.
-//    وجودُ واحد يجعل نسيان التمرير خيارًا صامتًا بدل خطأ صريح.
+// ════════════════════════════════════════════════════════════════════════════
+// 🔴 السياسة المعتمَدة من المالك — **بيانات لا افتراض**
+//
+//   OWNER APPROVED — PRODUCTION VERIFICATION PENDING (٥ أغسطس ٢٠٢٦)
+//
+// ⚠️ **وليست قيمة افتراضية.** لا دالّة واحدة أدناه تقرؤها تلقائيًّا: السياسة
+//    تُمرَّر صراحةً في كلّ نداء. ولو غابت فالنتيجة `source_unselected` كما كانت
+//    تمامًا — واختبار يُثبت ذلك.
+// 🔴 ولماذا هذا الفصل مهمّ: لو صارت افتراضًا، لأنتج **نسيانُ التمرير** رقمًا
+//    يبدو معتمَدًا. أمّا كثابت مُسمّى فالمستدعي يذكرها بالاسم ويتحمّل ذكرها.
+// ⛔ والاعتماد يخصّ **الشيفرة**: التحقّق من البيانات الفعلية ما يزال
+//    `PRODUCTION READ-ONLY VERIFICATION PENDING`.
+// ════════════════════════════════════════════════════════════════════════════
+export const OWNER_APPROVED_POLICY: FinancialSourcePolicy = {
+  revenueSource: "fin_revenue",
+  costSource: "fin_costs",
+  invoiceSource: "zoho",
+  vatSource: "stored",
+  currencyPolicy: "reject_mixed",
+  marginPolicy: "net_of_vat",
+  zohoPrecedence: "flag_conflict",
+  approvedBy: "khaled (owner)",
+  approvedAt: "2026-08-05T00:00:00Z",
+};
+
+// ⛔ ولا `DEFAULT_POLICY` ولا `FALLBACK_SOURCE`: وجودُ أحدهما يجعل نسيان
+//    التمرير خيارًا صامتًا بدل خطأ صريح.
 
 // ─── حالات النتيجة ──────────────────────────────────────────────────────────
 
