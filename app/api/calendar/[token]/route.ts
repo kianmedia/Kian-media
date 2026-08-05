@@ -3,9 +3,15 @@
 //
 // Wave 3 · V2-3.6-A/B
 //
-// ★ الرمز الخامّ لا يصل القاعدة أبدًا ★
-// يُهشَّم هنا (sha256) وتُرسَل **البصمة** إلى prodops_calendar_feed. تسريب سجلّ
-// قاعدة أو نسخة احتياطية لا يمنح أحدًا رابطًا صالحًا.
+// ★★ 🔴 الرمز الخامّ يُمرَّر كما هو — والتهشيم يقع **داخل القاعدة** ★★
+// كان هذا المسار يحسب sha256 ويُرسل **البصمة** إلى الدالّة. وبما أنّ الدالّة
+// كانت تطابق البصمة المُرسَلة على العمود المخزَّن مباشرةً، صارت **البصمة
+// المخزَّنة نفسها بيان اعتماد صالحًا**: من يقرأ العمود يستدعي الدالّة بها فيمرّ.
+// أي أنّ التهشيم لم يكن يحمي شيئًا.
+//
+// الآن تستقبل `prodops_calendar_feed(p_token)` الرمز الخامّ وتحسب البصمة داخلها
+// وتقارنها. ⛔ ولا يحسب هذا الملفّ بصمةً ولا يرسلها إطلاقًا.
+// ⚠️ والرمز يظلّ لا يُسجَّل ولا يُخبَّأ ولا يُفهرَس (الترويسات أدناه).
 //
 // ★ لماذا مفتاح anon هنا تحديدًا ★
 // عملاء التقويم (Google · Apple · Outlook) يجلبون بلا جلسة ولا كوكيز. فالرمز
@@ -17,7 +23,6 @@
 // رمز غير صالح · ملغى · منتهٍ · مستنفد ⇒ **404 واحد بنفس النصّ**. تمييزها يمنح
 // من يجرّب الرموز مقياسًا يعرف به أنّه اقترب.
 // ════════════════════════════════════════════════════════════════════════════
-import { createHash } from "node:crypto";
 import { buildIcs, type IcsEvent } from "@/lib/production/ics";
 
 export const runtime = "nodejs";
@@ -46,14 +51,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
   // الشكل يُفحص قبل أيّ عمل: ٦٤ محرفًا ست عشريًّا، لا غير.
   if (!/^[0-9a-f]{64}$/.test(raw)) return gone();
 
-  const hash = createHash("sha256").update(raw).digest("hex");
-
   let payload: { ok?: boolean; reason?: string; events?: IcsEvent[] };
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/prodops_calendar_feed`, {
       method: "POST",
       headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ p_token_hash: hash }),
+      // 🔴 الرمز الخامّ. ⛔ لا بصمة تُحسب هنا ولا تُرسَل.
+      body: JSON.stringify({ p_token: raw }),
       cache: "no-store",
     });
     if (!res.ok) return gone();

@@ -47,15 +47,15 @@ const catches = (label, mutate, check) => {
 
 test("(X-1) ★★★ REVOKE قبل GRANT — والترتيب نفسه مُختبَر ★★★", () => {
   const s = SQL();
-  const iRevoke = s.indexOf("revoke all on function public.prodops_calendar_feed(text) from public;");
+  const iRevoke = s.indexOf("revoke all on function public.prodops_calendar_feed(text) from public, authenticated;");
   const iGrant = s.indexOf("grant execute on function public.prodops_calendar_feed(text) to anon");
   assert.ok(iRevoke > -1, "لا REVOKE على التغذية");
   assert.ok(iGrant > -1, "لا GRANT للتغذية");
   // 🔴 الترتيب: منحٌ قبل سحب يترك صلاحية موروثة قائمة.
   assert.ok(iRevoke < iGrant, "🔴 GRANT قبل REVOKE — صلاحية موروثة قد تبقى");
 
-  catches("حذف REVOKE", (m) => m.replace("revoke all on function public.prodops_calendar_feed(text) from public;", ""),
-    (m) => assert.ok(m.includes("revoke all on function public.prodops_calendar_feed(text) from public;")));
+  catches("حذف REVOKE", (m) => m.replace("revoke all on function public.prodops_calendar_feed(text) from public, authenticated;", ""),
+    (m) => assert.ok(m.includes("revoke all on function public.prodops_calendar_feed(text) from public, authenticated;")));
 });
 
 test("(X-2) ★★★ anon يملك التغذية وحدها — لا دالّة أخرى ولا جدول ★★★", () => {
@@ -89,8 +89,8 @@ test("(X-3) ★★★ SECURITY DEFINER محصَّن: search_path مثبَّت ع
   assert.equal(defs, paths, `🔴 ${defs - paths} دالّة بلا search_path مثبَّت — قابلة للاختطاف بمخطّط وهميّ`);
 
   catches("إسقاط search_path من التغذية",
-    (m) => m.replace("create or replace function public.prodops_calendar_feed(p_token_hash text)\nreturns jsonb\nlanguage plpgsql volatile security definer set search_path = public as $$",
-                     "create or replace function public.prodops_calendar_feed(p_token_hash text)\nreturns jsonb\nlanguage plpgsql volatile security definer as $$"),
+    (m) => m.replace("create or replace function public.prodops_calendar_feed(p_token text)\nreturns jsonb\nlanguage plpgsql volatile security definer set search_path = public, extensions as $$",
+                     "create or replace function public.prodops_calendar_feed(p_token text)\nreturns jsonb\nlanguage plpgsql volatile security definer as $$"),
     (m) => {
       const c = noComments(m);
       assert.equal((c.match(/security\s+definer/gi) || []).length,
@@ -102,20 +102,20 @@ test("(X-3) ★★★ SECURITY DEFINER محصَّن: search_path مثبَّت ع
 
 test("(X-4) ★★★ NULL و الطول و الشكل — كلّها قبل أيّ SELECT ★★★", () => {
   const g = preSelect();
-  assert.match(g, /p_token_hash is null/, "🔴 لا رفض صريح لـNULL");
-  assert.match(g, /length\(p_token_hash\) <> 64/, "🔴 لا فحص طول");
+  assert.match(g, /p_token is null/, "🔴 لا رفض صريح لـNULL");
+  assert.match(g, /length\(p_token\) <> 64/, "🔴 لا فحص طول");
   assert.match(g, /\^\[0-9a-f\]\{64\}\$/, "🔴 لا فحص شكل");
 
   // 🔴 هذه الطفرة بالذات هي حادثة التسريب السابقة بحرفها.
   catches("حذف فحص NULL",
-    (m) => m.replace("  if p_token_hash is null\n     or length(p_token_hash) <> 64",
-                     "  if length(p_token_hash) <> 64"),
-    (m) => assert.match(preSelect(m), /p_token_hash is null/));
+    (m) => m.replace("  if p_token is null\n     or length(p_token) <> 64",
+                     "  if length(p_token) <> 64"),
+    (m) => assert.match(preSelect(m), /p_token is null/));
 
   catches("تحويل المطابقة إلى LIKE",
-    (m) => m.replace("where token_hash = p_token_hash", "where token_hash like p_token_hash"),
+    (m) => m.replace("where token_hash = v_hash", "where token_hash like v_hash"),
     (m) => {
-      assert.match(feedFn(m), /where token_hash = p_token_hash/);
+      assert.match(feedFn(m), /where token_hash = v_hash/);
       assert.doesNotMatch(feedFn(m), /token_hash\s+like/i);
     });
 });
@@ -177,10 +177,13 @@ test("(X-7) ★★★ الرمز الخامّ لا يُخزَّن ولا يصل 
   assert.match(s, /digest\(v_raw, 'sha256'\)/, "الرمز لا يُهشَّم");
   // ⛔ ولا عمود يحمل الرمز الخامّ.
   assert.doesNotMatch(s, /\btoken_raw\b|\braw_token\b|\btoken_plain\b/, "🔴 عمود للرمز الخامّ");
-  // والمسار يُهشّم قبل الإرسال.
+  // 🔴 والتهشيم يقع **داخل القاعدة**: المسار يمرّر الخامّ ولا يهشّم.
+  //    (كان يهشّم ويرسل البصمة، فصارت البصمة المخزَّنة بيان اعتماد صالحًا.)
+  assert.match(s, /digest\s*\(\s*p_token\s*,\s*'sha256'\s*\)/,
+    "الدالّة لا تحسب البصمة من الرمز الخامّ");
   const r = ROUTE();
-  assert.match(r, /createHash\("sha256"\)\.update\(raw\)\.digest\("hex"\)/, "المسار لا يهشّم");
-  assert.match(r, /p_token_hash: hash/, "المسار يُرسل غير البصمة");
+  assert.doesNotMatch(r, /createHash|node:crypto/, "🔴 عاد التهشيم إلى المسار");
+  assert.match(r, /p_token:\s*raw/, "🔴 المسار لا يُرسل الرمز الخامّ");
 
   catches("تخزين الرمز الخامّ",
     (m) => m.replace("  token_hash      text not null unique", "  token_raw       text,\n  token_hash      text not null unique"),

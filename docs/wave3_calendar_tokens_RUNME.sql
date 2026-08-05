@@ -144,21 +144,47 @@ begin
 end $$;
 
 -- ─── §4 · 🔴 القراءة العامّة — الدالّة الوحيدة الممنوحة لـanon ──────────────
-create or replace function public.prodops_calendar_feed(p_token_hash text)
+-- ★★ 🔴 إسقاط صريح قبل الإنشاء — وليس ترفًا ★★
+-- التوقيع القديم كان `(p_token_hash text)` والجديد `(p_token text)`، وكلاهما
+-- `(text)`. و`create or replace` **يفشل** بتغيير اسم وسيط (42P13)، فلولا هذا
+-- الإسقاط لبقيت الدالّة القديمة الثغرة قائمة ولفشل التطبيق بلا سبب واضح.
+drop function if exists public.prodops_calendar_feed(text);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 لماذا تستقبل الدالّة الرمز **الخامّ** لا بصمته
+--
+-- كانت تستقبل `p_token_hash` وتطابقه مباشرةً على العمود المخزَّن. ومعنى ذلك أنّ
+-- **البصمة المخزَّنة نفسها صارت بيان اعتماد صالحًا**: من يقرأ العمود — نسخة
+-- احتياطية، نسخة قراءة، سطر سجلّ، أو أيّ مسار قراءة مستقبليّ — يستدعي الدالّة
+-- بالبصمة كما هي فيحصل على التغذية. أي أنّ التهشيم لم يكن يحمي شيئًا: الغرض من
+-- تخزين البصمة أن تكون **قيمة تحقّق لا تُعاد استعمالها**، لا مفتاحًا مكافئًا.
+--
+-- الآن: الرمز الخامّ يدخل، والبصمة تُحسب **داخل** الدالّة وتُقارن. ومن يملك
+-- البصمة المخزَّنة لا يملك أصلها — وإرسالها كرمز خامّ يُنتج `sha256(البصمة)`
+-- وهي لا تطابق شيئًا.
+-- ⛔ ولا يُقبل `token_hash` وسيطًا بأيّ شكل.
+--
+-- ⚠️ `search_path` هنا `public, extensions` صراحةً: `digest` من pgcrypto قد
+--    تُثبَّت في أيٍّ منهما. و⛔ بلا `pg_temp` — فجدول مؤقّت لا يستطيع تظليل اسم.
+-- ════════════════════════════════════════════════════════════════════════════
+create or replace function public.prodops_calendar_feed(p_token text)
 returns jsonb
-language plpgsql volatile security definer set search_path = public as $$
-declare r record; v_rows jsonb; v_now timestamptz := now();
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare r record; v_rows jsonb; v_now timestamptz := now(); v_hash text;
 begin
   -- 🔴 الحارس قبل أيّ قراءة. NULL أو فراغ أو شكل مخالف ⇒ رفض فوريّ.
   -- (هذا بالضبط ما انهار سابقًا: NULL مرّ فصار الشرط null وقُرئ الصفّ.)
-  if p_token_hash is null
-     or length(p_token_hash) <> 64
-     or p_token_hash !~ '^[0-9a-f]{64}$' then
+  if p_token is null
+     or length(p_token) <> 64
+     or p_token !~ '^[0-9a-f]{64}$' then
     return jsonb_build_object('ok', false, 'reason', 'invalid_token');
   end if;
 
+  -- 🔴 البصمة تُحسب هنا. ⛔ ولا تصل من المستدعي أبدًا.
+  v_hash := encode(digest(p_token, 'sha256'), 'hex');
+
   select * into r from public.ops_calendar_tokens
-   where token_hash = p_token_hash            -- مطابقة تامّة، لا LIKE ولا lower()
+   where token_hash = v_hash                  -- مطابقة تامّة، لا LIKE ولا lower()
    for update;
 
   if r.id is null then
@@ -218,8 +244,12 @@ revoke all on function public.prodops_calendar_token_revoke(uuid,text) from publ
 grant execute on function public.prodops_calendar_token_revoke(uuid,text) to authenticated;
 
 -- 🔴 الوحيدة الممنوحة لـanon. الحارس داخلها (§4) هو خطّ الدفاع كلّه.
-revoke all on function public.prodops_calendar_feed(text) from public;
+-- ⚠️ التوقيع `(text)` هو الآن **الرمز الخامّ** لا البصمة — انظر §4.
+revoke all on function public.prodops_calendar_feed(text) from public, authenticated;
 grant execute on function public.prodops_calendar_feed(text) to anon, authenticated;
+
+-- ⛔ ولا وصول مباشر للجدول لأيّ دور عميل: الرموز تُقرأ عبر الدوالّ وحدها.
+revoke all on public.ops_calendar_tokens from public, anon, authenticated;
 
 -- ⛔ ولا صلاحية جدول لـanon بأيّ حال.
 revoke all on public.ops_calendar_tokens from anon, public;

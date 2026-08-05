@@ -155,11 +155,14 @@ test("(I-8) ★★★ لا حقل حسّاس يخرج في التغذية ★★
 
 const ROUTE = () => read("app/api/calendar/[token]/route.ts");
 
-test("(R-1) ★★★ الرمز الخامّ لا يصل القاعدة — تُرسَل بصمته ★★★", () => {
+// 🔴 عُكس هذا الاختبار بعد إصلاح أمنيّ — وكان يفرض العكس تمامًا.
+// إرسال **البصمة** جعل البصمة المخزَّنة بيان اعتماد صالحًا: من يقرأ العمود
+// يستدعي الدالّة بها فيمرّ. التهشيم الآن **داخل القاعدة**، والمسار يمرّر الخامّ.
+test("(R-1) ★★★ المسار يمرّر الرمز الخامّ ولا يهشّم — التهشيم داخل القاعدة ★★★", () => {
   const r = ROUTE();
-  assert.match(r, /createHash\("sha256"\)/, "لا تهشيم للرمز");
-  assert.match(r, /p_token_hash: hash/, "🔴 يُرسَل شيء غير البصمة");
-  assert.doesNotMatch(r, /p_token_hash:\s*raw|p_token:\s*raw/, "🔴 الرمز الخامّ يُرسَل للقاعدة");
+  assert.doesNotMatch(r, /createHash|node:crypto/, "🔴 عاد التهشيم إلى المسار");
+  assert.match(r, /p_token:\s*raw/, "لا يُرسَل الرمز الخامّ");
+  assert.doesNotMatch(r, /p_token_hash/, "🔴 عادت البصمة وسيطًا — الثغرة نفسها");
   assert.match(r, /\/\^\[0-9a-f\]\{64\}\$\/\.test\(raw\)/, "لا فحص شكل قبل العمل");
 });
 
@@ -190,7 +193,7 @@ const SQL = () => read("docs/wave3_calendar_tokens_RUNME.sql");
 test("(R-4) ★★★ عقد SQL: anon يملك التغذية وحدها، والحارس قبل أي قراءة ★★★", () => {
   const s = SQL();
   // 🔴 الدرس المستفاد من حادثة تسريب سابقة: REVOKE ثمّ GRANT محدَّد.
-  assert.match(s, /revoke all on function public\.prodops_calendar_feed\(text\) from public;/,
+  assert.match(s, /revoke all on function public\.prodops_calendar_feed\(text\) from public, authenticated;/,
     "لا REVOKE قبل المنح");
   assert.match(s, /grant execute on function public\.prodops_calendar_feed\(text\) to anon, authenticated;/,
     "التغذية غير ممنوحة لـanon");
@@ -206,11 +209,14 @@ test("(R-4) ★★★ عقد SQL: anon يملك التغذية وحدها، وا
   // 🔴 NULL-collapse: الحارس يرفض NULL صراحةً قبل أيّ SELECT.
   const feed = s.slice(s.indexOf("function public.prodops_calendar_feed"));
   const guard = feed.slice(0, feed.indexOf("select * into r"));
-  assert.match(guard, /p_token_hash is null/, "🔴 لا رفض صريح لـNULL — هذا هو الانهيار السابق بعينه");
-  assert.match(guard, /length\(p_token_hash\) <> 64/, "لا فحص طول");
+  assert.match(guard, /p_token is null/, "🔴 لا رفض صريح لـNULL — هذا هو الانهيار السابق بعينه");
+  assert.match(guard, /length\(p_token\) <> 64/, "لا فحص طول");
   assert.match(guard, /\^\[0-9a-f\]\{64\}\$/, "لا فحص شكل");
   // مطابقة تامّة لا LIKE.
-  assert.match(feed, /where token_hash = p_token_hash/, "المطابقة ليست تامّة");
+  assert.match(feed, /where token_hash = v_hash/, "المطابقة ليست تامّة");
+  // 🔴 والبصمة المُقارَنة تُحسب داخل الدالّة لا تصل من المستدعي.
+  assert.match(feed, /digest\s*\(\s*p_token\s*,\s*'sha256'\s*\)/,
+    "🔴 البصمة لا تُحسب داخليًّا — البصمة المخزَّنة تصير بيان اعتماد");
   assert.doesNotMatch(feed, /token_hash\s+like/i, "🔴 مطابقة LIKE على بصمة");
 });
 
