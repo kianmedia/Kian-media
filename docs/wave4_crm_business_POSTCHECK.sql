@@ -20,10 +20,15 @@ where n.nspname='public' and p.proname in
 
 -- 🔴 anon يملك التحقّق من الرمز **وحده**.
 select 'anon يملك crm_testimonial_invite_check فقط' as check,
-       case when array_agg(routine_name order by routine_name) = array['crm_testimonial_invite_check']
-            then '✅' else '🔴 '||array_to_string(array_agg(routine_name order by routine_name),', ') end as result
+       -- 🔴 `routine_name` نوعه `information_schema.sql_identifier` لا `text`،
+       --    ومقارنة `sql_identifier[]` بـ`text[]` بلا مُعامل ⇒ يفشل الاستعلام
+       --    **وقت التشغيل** داخل POSTCHECK، أي بعد التطبيق على قاعدة حيّة.
+       case when array_agg(routine_name::text order by routine_name::text)
+                 = array['crm_testimonial_invite_check']::text[]
+            then '✅' else '🔴 '||array_to_string(
+                 array_agg(routine_name::text order by routine_name::text), ', ') end as result
 from information_schema.role_routine_grants
-where routine_schema='public' and grantee='anon' and routine_name like 'crm_%';
+where routine_schema='public' and grantee::text='anon' and routine_name like 'crm_%';
 
 select 'لا صلاحية جدول لـanon' as check,
        case when count(*)=0 then '✅' else '🔴 مسرَّبة' end as result

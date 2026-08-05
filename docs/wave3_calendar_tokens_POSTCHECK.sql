@@ -17,10 +17,16 @@ where n.nspname = 'public'
 
 -- 🔴 الفحص الأمنيّ الحاسم: anon يملك التغذية **وحدها**.
 select 'anon يملك prodops_calendar_feed فقط' as check,
-       case when array_agg(routine_name order by routine_name) = array['prodops_calendar_feed']
-            then '✅' else '🔴 ' || array_to_string(array_agg(routine_name order by routine_name), ', ') end as result
+       -- 🔴 `routine_name` نوعه `information_schema.sql_identifier`، ومقارنته
+       --    بـ`text[]` تفشل بخطأ `sql_identifier[] = text[]`. التحويل صريح على
+       --    العنصر وعلى المصفوفة معًا.
+       case when array_agg(routine_name::text order by routine_name::text)
+                 = array['prodops_calendar_feed']::text[]
+            then '✅' else '🔴 ' || array_to_string(
+                 array_agg(routine_name::text order by routine_name::text), ', ') end as result
 from information_schema.role_routine_grants
-where routine_schema = 'public' and grantee = 'anon' and routine_name like 'prodops_calendar%';
+where routine_schema = 'public' and grantee::text = 'anon'
+  and routine_name like 'prodops_calendar%';
 
 select 'لا صلاحية جدول لـanon' as check,
        case when count(*) = 0 then '✅' else '🔴 صلاحية مسرَّبة' end as result
@@ -69,9 +75,12 @@ where table_schema = 'public' and table_name = 'ops_calendar_tokens'
 -- المتوقَّع: **صفر صفوف**. أيّ صفّ ⇒ 🔴 توقّف.
 
 -- ٥ · anon ينفّذ التغذية وحدها
-select 'ANON_EXECUTE' as kind, routine_name as name, privilege_type as status
+select 'ANON_EXECUTE' as kind, routine_name::text as name, privilege_type::text as status
 from information_schema.role_routine_grants
-where routine_schema = 'public' and grantee = 'anon' and routine_name like 'prodops%';
+where routine_schema = 'public' and grantee::text = 'anon'
+  and routine_name like 'prodops%'
+  -- ⚠️ دالّة مُشغِّل لا RPC — انظر wave3_permits_media_POSTCHECK.sql
+  and routine_name::text <> 'prodops_touch';
 -- المتوقَّع: صفّ واحد `prodops_calendar_feed`.
 
 -- ٦ · الإصدار والإلغاء يفرضان الهويّة والصلاحية — يُفحص المصدر

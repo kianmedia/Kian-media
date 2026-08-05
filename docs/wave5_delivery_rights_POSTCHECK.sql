@@ -49,8 +49,13 @@ where n.nspname='public' and p.proname in
 
 -- 🔴 anon يملك التحقّق من الرمز وحده.
 select 'anon يملك delivery_link_check فقط' as check,
-       case when array_agg(routine_name order by routine_name) = array['delivery_link_check']
-            then '✅' else '🔴 '||array_to_string(array_agg(routine_name order by routine_name),', ') end as result
+       -- 🔴 `routine_name` نوعه `information_schema.sql_identifier` لا `text`،
+       --    ومقارنة `sql_identifier[]` بـ`text[]` بلا مُعامل ⇒ يفشل الاستعلام
+       --    **وقت التشغيل** داخل POSTCHECK، أي بعد التطبيق على قاعدة حيّة.
+       case when array_agg(routine_name::text order by routine_name::text)
+                 = array['delivery_link_check']::text[]
+            then '✅' else '🔴 '||array_to_string(
+                 array_agg(routine_name::text order by routine_name::text), ', ') end as result
 from information_schema.role_routine_grants
-where routine_schema='public' and grantee='anon'
+where routine_schema='public' and grantee::text='anon'
   and routine_name in ('delivery_link_issue','delivery_link_revoke','delivery_link_check','deliverable_rights_set');
