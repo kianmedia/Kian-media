@@ -137,15 +137,23 @@ test("🔴 فحص has_function_privilege يثبت anon=false و authenticated=fa
 });
 
 // ─── ٦ · استبعاد دالّة المُشغِّل — بالاسم الصريح وحده ─────────────────────
-test("🔴 prodops_touch مستبعَدة بالاسم، ⛔ ولا بنمط يبتلع غيرها", () => {
-  for (const f of ["wave3_permits_media_POSTCHECK.sql", "wave3_calendar_tokens_POSTCHECK.sql"]) {
-    const t = code(fs.readFileSync(path.join(DOCS, f), "utf8"));
-    assert.match(t, /routine_name::text\s*<>\s*'prodops_touch'/,
-      `${f}: prodops_touch غير مستبعَدة بالاسم`);
-    // ⛔ ولا استبعاد جماعيّ يُخفي دوالّ حقيقية.
-    assert.ok(!/routine_name\s+not\s+like\s+'prodops_%'/i.test(t),
-      `${f}: استبعاد جماعيّ يُبطل الفحص`);
-  }
+test("🔴 prodops_touch خارج الفحص — بالنطاق في permits وبالاسم في calendar", () => {
+  // permits_media: الفحص صار **محصورًا بقائمة صريحة**، فدالّة المُشغِّل لا
+  // يمكن أن تدخله أصلًا — وهذا أقوى من استثنائها بالاسم.
+  const permits = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  assert.ok(!/routine_name\s+like\s+'prodops_%'/i.test(permits),
+    "permits: عاد المسح على مساحة الاسم — يعود العيب التابع للترتيب");
+  assert.match(permits, /with pkg\s*\(\s*fname\s*,\s*fargs/,
+    "permits: لا قائمة حزمة صريحة");
+  assert.ok(!/prodops_touch/.test(permits),
+    "permits: لا حاجة لذكر prodops_touch بعد الحصر — وذكره يوحي بأنّ النطاق ما يزال واسعًا");
+
+  // calendar: ما يزال يسرد `prodops%` لغرض إعلاميّ، فيبقى الاستثناء بالاسم لازمًا.
+  const cal = code(fs.readFileSync(path.join(DOCS, "wave3_calendar_tokens_POSTCHECK.sql"), "utf8"));
+  assert.match(cal, /routine_name::text\s*<>\s*'prodops_touch'/,
+    "calendar: prodops_touch غير مستبعَدة بالاسم");
+  assert.ok(!/routine_name\s+not\s+like\s+'prodops_%'/i.test(cal),
+    "calendar: استبعاد جماعيّ يُبطل الفحص");
 });
 
 test("prodops_touch دالّة مُشغِّل فعلًا — الاستبعاد مبرَّر لا تعسّفيّ", () => {
@@ -173,4 +181,166 @@ test("عقد التقويم الأمنيّ باقٍ كما هو", () => {
                         "ops_calendar_tokens", "revoked", "expired", "exhausted"]) {
     assert.ok(t.includes(needle), `فُقد فحص: ${needle}`);
   }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ٩ · 🔴 انحدار النطاق — فحص permits_media لا يتأثّر بحزم أخرى
+//
+// العيب: كان يمسح `prodops_%`، فلمّا طُبِّقت حزمة calendar_tokens ظهرت
+// `prodops_calendar_feed` — الممنوحة لـ`anon` **عن قصد** — فأحمرّ الفحص.
+// أي أنّه صار تابعًا لترتيب التطبيق وغير صالح لإعادة التشغيل.
+//
+// ⚠️ هذا الاختبار **ينفّذ منطق الفحص** لا يقرؤه: يستخرج قائمة الحزمة من الـSQL
+//    نفسه، ويبني فهرسًا وهميًّا فيه دالّة التقويم بصلاحية anon، ثمّ يطبّق قاعدة
+//    الحصر (الاسم + التوقيع) ويتأكّد أنّ النتيجة تبقى خضراء.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** يستخرج (fname, fargs, expect_authenticated) من كتلة `with pkg(...) as (values …)`. */
+function packageScope() {
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  const block = t.slice(t.indexOf("with pkg("), t.indexOf("resolved as ("));
+  const rows = [...block.matchAll(/\(\s*'([a-z0-9_]+)'\s*,\s*'([^']*)'\s*,\s*(true|false)\s*\)/gi)]
+    .map((m) => ({ fname: m[1], fargs: m[2], expectAuth: m[3] === "true" }));
+  return rows;
+}
+
+/** قاعدة الحصر كما في SQL: مطابقة الاسم **والتوقيع** معًا. */
+const inScope = (scope, fn) =>
+  scope.some((s) => s.fname === fn.proname && s.fargs === fn.identityArgs);
+
+test("🔴 قائمة الحزمة تطابق ما يُنشئه RUNME بالضبط", () => {
+  const scope = packageScope();
+  const runme = fs.readFileSync(path.join(DOCS, "wave3_permits_media_RUNME.sql"), "utf8");
+  const created = [...runme.matchAll(/^create or replace function public\.([a-z0-9_]+)/gim)]
+    .map((m) => m[1]);
+  assert.deepEqual([...scope.map((s) => s.fname)].sort(), [...new Set(created)].sort(),
+    "قائمة النطاق لا تطابق دوالّ RUNME — إمّا فحص ناقص أو نطاق متضخّم");
+});
+
+test("🔴 وجود prodops_calendar_feed بصلاحية anon لا يُحمِّر فحص permits_media", () => {
+  const scope = packageScope();
+  // فهرس وهميّ: دوالّ الحزمة سليمة + دالّة التقويم من حزمة أخرى بصلاحية anon.
+  const catalog = [
+    ...scope.map((s) => ({
+      proname: s.fname, identityArgs: s.fargs,
+      anon: false, pub: false,
+      authenticated: s.expectAuth, service_role: !s.expectAuth,
+    })),
+    // 🔴 الدخيل: ممنوحة لـanon عن قصد، وخارج الحزمة تمامًا.
+    { proname: "prodops_calendar_feed", identityArgs: "text",
+      anon: true, pub: false, authenticated: true, service_role: true },
+    // ودالّة مُشغِّل بصلاحية PUBLIC افتراضية — خارج النطاق أيضًا.
+    { proname: "prodops_touch", identityArgs: "",
+      anon: true, pub: true, authenticated: true, service_role: true },
+  ];
+
+  const scoped = catalog.filter((fn) => inScope(scope, fn));
+  assert.equal(scoped.length, scope.length, "الحصر أسقط أو أضاف دالّة");
+  assert.ok(!scoped.some((f) => f.proname === "prodops_calendar_feed"),
+    "🔴 دالّة التقويم دخلت نطاق permits_media");
+  assert.ok(!scoped.some((f) => f.proname === "prodops_touch"),
+    "🔴 دالّة المُشغِّل دخلت النطاق");
+
+  // نتائج الفحوص الثلاثة كما يحسبها SQL:
+  assert.deepEqual(scoped.filter((f) => f.anon).map((f) => f.proname), [],
+    "🔴 فحص anon أحمر رغم أنّ المخالف خارج الحزمة");
+  assert.deepEqual(scoped.filter((f) => f.pub).map((f) => f.proname), [],
+    "🔴 فحص PUBLIC أحمر بسبب دالّة خارج الحزمة");
+  const authDeviation = scoped.filter(
+    (f) => f.authenticated !== scope.find((s) => s.fname === f.proname).expectAuth);
+  assert.deepEqual(authDeviation.map((f) => f.proname), [], "انحراف في صلاحية authenticated");
+});
+
+test("🔴 ولا يتساهل النطاق: مخالفة داخل الحزمة تُرصد", () => {
+  const scope = packageScope();
+  const catalog = scope.map((s) => ({
+    proname: s.fname, identityArgs: s.fargs,
+    // الطفرة: تسريب anon على دالّة **من الحزمة** نفسها.
+    anon: s.fname === "prodops_permits_list",
+    pub: false, authenticated: s.expectAuth,
+  }));
+  const scoped = catalog.filter((fn) => inScope(scope, fn));
+  assert.deepEqual(scoped.filter((f) => f.anon).map((f) => f.proname), ["prodops_permits_list"],
+    "🔴 الحصر أخفى تسريبًا حقيقيًّا داخل الحزمة");
+});
+
+test("🔴 التوقيع جزء من الحصر — اسم مطابق بتوقيع مختلف لا يُقبل", () => {
+  const scope = packageScope();
+  const impostor = { proname: "prodops_permits_list", identityArgs: "text, text", anon: true };
+  assert.ok(!inScope(scope, impostor),
+    "🔴 قُبلت دالّة بنفس الاسم وتوقيع مختلف — قد تُخفي غياب دالّة الحزمة");
+});
+
+test("⛔ الحصر لا يعتمد على استثناء بالاسم", () => {
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  assert.ok(!/prodops_calendar_feed/.test(t),
+    "🔴 استُثنيت دالّة التقويم بالاسم — حلّ مؤقّت يكسر مع أوّل حزمة قادمة");
+});
+
+test("عبارة واحدة: WITH يرتبط ببيان واحد فقط", () => {
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  const block = t.slice(t.indexOf("with pkg("), t.indexOf("from flags;") + "from flags;".length);
+  assert.equal((block.match(/;/g) ?? []).length, 1,
+    "🔴 أكثر من فاصلة منقوطة داخل كتلة WITH ⇒ `relation \"resolved\" does not exist`");
+  assert.ok(/union all/i.test(block), "الفحوص ليست موحَّدة في بيان واحد");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ١٠ · 🔴 توقّعات **مستقلّة** عن الملفّ المفحوص
+//
+// الاختبارات أعلاه تستخرج قائمة الحزمة من POSTCHECK نفسه، فهي تتحقّق من
+// **اتّساقه الداخليّ** لا من صحّته. وقد أثبتت طفرتان أنّ ذلك لا يكفي:
+//   • حذف شرط التوقيع من الـJOIN مرّ دون رصد.
+//   • قلب توقّع `authenticated` لمحرّك التنبيهات مرّ دون رصد.
+// فالتوقّع هنا يُشتقّ من **RUNME** — مصدر الحقيقة — لا من POSTCHECK.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** يقرأ المِنَح الفعلية من RUNME: أيّ دالّة مُنحت لـauthenticated. */
+function runmeGrants() {
+  const t = fs.readFileSync(path.join(DOCS, "wave3_permits_media_RUNME.sql"), "utf8");
+  const granted = new Set();
+  for (const m of t.matchAll(/grant\s+execute\s+on\s+function\s+public\.([a-z0-9_]+)\s*\([^)]*\)\s*to\s+([a-z_ ,]+);/gi)) {
+    if (/\bauthenticated\b/i.test(m[2])) granted.add(m[1]);
+  }
+  return granted;
+}
+
+test("🔴 توقّع authenticated في POSTCHECK يطابق مِنَح RUNME — لا يُشتقّ من نفسه", () => {
+  const scope = packageScope();
+  const granted = runmeGrants();
+  assert.ok(granted.size > 0, "لم تُقرأ أيّ مِنحة من RUNME — المُحلِّل معطوب");
+  for (const s of scope) {
+    const expected = granted.has(s.fname);
+    assert.equal(s.expectAuth, expected,
+      `🔴 ${s.fname}: POSTCHECK يتوقّع authenticated=${s.expectAuth} ` +
+      `بينما RUNME ${expected ? "يمنحها" : "لا يمنحها"}`);
+  }
+});
+
+test("🔴 محرّك التنبيهات محجوب عن authenticated في RUNME وPOSTCHECK معًا", () => {
+  const granted = runmeGrants();
+  assert.ok(!granted.has("prodops_permit_alerts_run"),
+    "RUNME يمنح محرّك التنبيهات لـauthenticated — تخفيف للأمن");
+  const scope = packageScope();
+  const row = scope.find((s) => s.fname === "prodops_permit_alerts_run");
+  assert.ok(row, "محرّك التنبيهات خارج نطاق الفحص");
+  assert.equal(row.expectAuth, false,
+    "🔴 POSTCHECK يتوقّع أنّ authenticated يشغّل محرّك التنبيهات");
+});
+
+test("🔴 الـJOIN يطابق التوقيع لا الاسم وحده", () => {
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  const join = t.slice(t.indexOf("left join pg_proc"), t.indexOf("flags as ("));
+  assert.match(join, /pg_get_function_identity_arguments\s*\(\s*p\.oid\s*\)\s*=\s*k\.fargs/,
+    "🔴 الربط بالاسم وحده — دالّة بنفس الاسم من حزمة أخرى تدخل النطاق");
+  assert.match(join, /p\.proname\s*=\s*k\.fname/, "لا ربط بالاسم");
+  assert.match(join, /pronamespace\s*=\s*'public'::regnamespace/, "لا حصر بمخطّط public");
+});
+
+test("🔴 ACL الفارغ يُعامَل تسريبًا لا حالة سليمة", () => {
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  assert.match(t, /proacl is null\s*\n?\s*or\s+exists/i,
+    "🔴 `proacl is null` لا يُحتسب — ودالّة بلا REVOKE صريح يملكها PUBLIC ضمنًا");
+  assert.match(t, /aclexplode\s*\([^)]*\)[\s\S]{0,120}?grantee\s*=\s*0/,
+    "لا فحص لمِنحة PUBLIC عبر aclexplode (grantee=0)");
 });
