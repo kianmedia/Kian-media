@@ -71,6 +71,69 @@ select 'EXPECTED_ABSENT' as kind, v.n as name,
        'wave4_crm_business_RUNME.sql' as created_by
 from (values ('crm_opportunity_tender'),('crm_testimonial_invites')) v(n);
 
+-- ─── §5-ب · 🔴 أعمدة الإسناد التي تعتمد عليها `crm_client_health_v` ────────
+-- سقطت الحزمة كلّها على Preview لأنّ الـview افترضت `crm_activities.company_id`
+-- وهو **غير موجود**. الإسناد الحقيقيّ عبر lead/opportunity/contact ثمّ
+-- `company_id` على كلٍّ منها. هذه الأعمدة تُفحص بالاسم قبل التشغيل.
+select 'REQUIRED_COLUMN' as kind, v.t || '.' || v.c as name,
+       case when exists (select 1 from information_schema.columns
+                          where table_schema = 'public'
+                            and table_name::text = v.t
+                            and column_name::text = v.c)
+            then '✅ موجود' else '🔴 مفقود' end as status,
+       'crm_sales_FOUNDATION_RUNME.sql' as created_by
+from (values
+  ('crm_activities','lead_id'), ('crm_activities','opportunity_id'),
+  ('crm_activities','contact_id'), ('crm_activities','occurred_at'),
+  ('crm_opportunities','company_id'), ('crm_leads','company_id'),
+  ('crm_contacts','company_id')
+) v(t, c);
+
+-- ⚠️ ولا يُفترض وجود `crm_activities.company_id`: وجودُه لا يضرّ، لكنّ الـview
+--    **لا تستعمله** — الإسناد يمرّ بالآباء دائمًا.
+select 'MUST_NOT_BE_ASSUMED' as kind, 'crm_activities.company_id' as name,
+       case when exists (select 1 from information_schema.columns
+                          where table_schema='public' and table_name::text='crm_activities'
+                            and column_name::text='company_id')
+            then '🟡 موجود — والـview لا تستعمله (الإسناد عبر الآباء)'
+            else '✅ غير موجود كما هو متوقَّع' end as status,
+       '—' as created_by;
+
+-- ─── §5-ج · علاقات المفاتيح الأجنبية أو مسار مكافئ معتمَد ──────────────────
+-- ⚠️ يُقبل بديلان: قيد FK حقيقيّ، أو عمود موجود بنوع uuid يشير إلى نفس الجدول
+--    منطقيًّا. الـview لا تشترط القيد — تشترط **العمود**. والقيد يُبلَّغ إعلاميًّا.
+select 'FK_RELATION' as kind,
+       v.child || '.' || v.col || ' → ' || v.parent as name,
+       case when exists (
+              select 1
+              from information_schema.table_constraints tc
+              join information_schema.key_column_usage kcu
+                on kcu.constraint_name = tc.constraint_name
+               and kcu.constraint_schema = tc.constraint_schema
+              join information_schema.constraint_column_usage ccu
+                on ccu.constraint_name = tc.constraint_name
+               and ccu.constraint_schema = tc.constraint_schema
+              where tc.constraint_type = 'FOREIGN KEY'
+                and tc.table_schema = 'public'
+                and tc.table_name::text = v.child
+                and kcu.column_name::text = v.col
+                and ccu.table_name::text = v.parent)
+            then '✅ قيد FK موجود'
+            when exists (select 1 from information_schema.columns
+                          where table_schema='public' and table_name::text=v.child
+                            and column_name::text=v.col)
+            then '🟡 العمود موجود بلا قيد FK — الـview تعمل، والسلامة المرجعية أضعف'
+            else '🔴 لا عمود ولا قيد' end as status,
+       'crm_sales_FOUNDATION_RUNME.sql' as created_by
+from (values
+  ('crm_activities','lead_id','crm_leads'),
+  ('crm_activities','opportunity_id','crm_opportunities'),
+  ('crm_activities','contact_id','crm_contacts'),
+  ('crm_opportunities','company_id','crm_companies'),
+  ('crm_leads','company_id','crm_companies'),
+  ('crm_contacts','company_id','crm_companies')
+) v(child, col, parent);
+
 -- ─── §6 · امتداد مطلوب ─────────────────────────────────────────────────────
 select 'REQUIRED_EXTENSION' as kind, 'pgcrypto' as name,
        case when count(*)=0 then '🔴 مفقود — إصدار الدعوات سيفشل' else '✅ موجود' end as status,
@@ -121,6 +184,26 @@ begin
       v_missing := v_missing || ('GATE ' || v_sig);
     end if;
   end loop;
+
+  -- 🔴 أعمدة الإسناد: غيابها يُفشل `crm_client_health_v` ⇒ تراجع الحزمة كلّها.
+  declare
+    v_pair text;
+  begin
+    foreach v_pair in array array['crm_activities.lead_id','crm_activities.opportunity_id',
+                                  'crm_activities.contact_id','crm_activities.occurred_at',
+                                  'crm_opportunities.company_id','crm_leads.company_id',
+                                  'crm_contacts.company_id']
+    loop
+      if not exists (
+        select 1 from information_schema.columns
+         where table_schema = 'public'
+           and table_name::text  = split_part(v_pair, '.', 1)
+           and column_name::text = split_part(v_pair, '.', 2)
+      ) then
+        v_missing := v_missing || ('COLUMN ' || v_pair);
+      end if;
+    end loop;
+  end;
 
   if not exists (select 1 from pg_extension where extname = 'pgcrypto') then
     v_missing := v_missing || 'EXTENSION pgcrypto';

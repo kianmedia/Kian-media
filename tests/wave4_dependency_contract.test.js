@@ -296,3 +296,163 @@ test("FOUNDATION له رفاقه الثلاثة", () => {
       `crm_sales_FOUNDATION_${k}.sql مفقود — prerequisite بلا رفيق`);
   }
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// ٨ · 🔴 `crm_client_health_v` — الإسناد عبر الآباء لا عبر عمود غير موجود
+//
+// العيب: افترضت الـview `crm_activities.company_id`، وهو **غير موجود** في
+// المخطّط. الجدول يربط بـ`lead_id`/`opportunity_id`/`contact_id`، وكلٌّ منها
+// يحمل `company_id`. وفشل الـview أسقط الحزمة كلّها (معاملة واحدة).
+// ════════════════════════════════════════════════════════════════════════════
+
+/** جسم الـview وحده. */
+function healthView() {
+  const t = C(RUNME);
+  const i = t.indexOf("create or replace view public.crm_client_health_v");
+  assert.ok(i > -1, "الـview غير موجودة");
+  const j = t.indexOf(";", t.indexOf("from public.crm_companies", i));
+  return t.slice(i, j + 1);
+}
+
+/** يجرّد التعليقات **والسلاسل**: اسمٌ داخل رسالة فحص ليس استعمالًا للعمود. */
+function codeNoStrings(sql) {
+  let out = "", i = 0, q = false;
+  while (i < sql.length) {
+    const c = sql[i];
+    if (q) { if (c === "'") q = false; out += " "; i++; continue; }
+    if (c === "'") { q = true; out += " "; i++; continue; }
+    if (sql.startsWith("--", i)) { while (i < sql.length && sql[i] !== "\n") { out += " "; i++; } continue; }
+    out += c; i++;
+  }
+  return out;
+}
+
+test("🔴 لا استعمال لـcrm_activities.company_id في المستودع كلّه", () => {
+  const bad = [];
+  for (const f of fs.readdirSync(DOCS).filter((x) => x.endsWith(".sql"))) {
+    // ⚠️ السلاسل مجرّدة: POSTCHECK يذكر الاسم في **رسالة حارس** تمنع عودته،
+    //    وذكرُه هناك عكس الاستعمال تمامًا.
+    const t = codeNoStrings(R(f));
+    if (!/crm_activities/.test(t)) continue;
+    // `a.company_id` حيث `a` هو ألياس crm_activities، أو الصيغة الصريحة.
+    for (const m of t.match(/\bcrm_activities\s+a\b[\s\S]{0,400}?\ba\.company_id\b/gi) ?? []) {
+      bad.push(`${f}: ${m.slice(-40)}`);
+    }
+    for (const m of t.match(/crm_activities\.company_id/gi) ?? []) bad.push(`${f}: ${m}`);
+  }
+  assert.deepEqual(bad, [], "🔴 عمود غير موجود — يُفشل الـview ويُسقط الحزمة:\n" + bad.join("\n"));
+});
+
+test("🔴 الإسناد يمرّ بالمسارات الثلاثة كلّها", () => {
+  const v = healthView();
+  for (const [col, tbl] of [["opportunity_id", "crm_opportunities"],
+                            ["lead_id", "crm_leads"],
+                            ["contact_id", "crm_contacts"]]) {
+    assert.ok(v.includes(col), `🔴 مسار ${col} مفقود — نشاط مرتبط به وحده لن يُنسَب`);
+    assert.ok(v.includes(tbl), `🔴 لا ربط بـ${tbl}`);
+  }
+  assert.match(v, /o\.company_id/, "لا مرشّح من الفرصة");
+  assert.match(v, /l\.company_id/, "لا مرشّح من العميل المحتمل");
+  assert.match(v, /ct\.company_id/, "لا مرشّح من جهة الاتصال");
+});
+
+test("🔴 التمييز يمنع مضاعفة النشاط الواحد", () => {
+  const v = healthView();
+  assert.match(v, /array_agg\s*\(\s*distinct\s+cand\.company_id\s*\)/i,
+    "🔴 بلا distinct: روابط متعدّدة لنفس الشركة تُحتسب مرّات");
+});
+
+test("🔴 الالتباس fail-closed — مرشّح واحد فقط يُنسَب", () => {
+  const v = healthView();
+  assert.match(v, /array_length\s*\(\s*companies\s*,\s*1\s*\)\s*=\s*1/i,
+    "🔴 لا شرط «مرشّح واحد» ⇒ نشاط بروابط لشركات مختلفة يُنسَب اعتباطيًا");
+});
+
+test("⛔ لا COALESCE ذو أولوية عشوائية بين مصادر الشركة", () => {
+  const v = healthView();
+  // coalesce بين مرشّحات الشركة = اختيار صامت لأحدها عند التعارض.
+  assert.ok(!/coalesce\s*\(\s*o\.company_id/i.test(v), "🔴 coalesce يبدأ بالفرصة — أولوية مخترَعة");
+  assert.ok(!/coalesce\s*\(\s*l\.company_id/i.test(v), "🔴 coalesce يبدأ بالعميل المحتمل");
+  assert.ok(!/coalesce\s*\(\s*ct\.company_id/i.test(v), "🔴 coalesce يبدأ بجهة الاتصال");
+  // وcoalesce المسموح: is_deleted و days_silent فقط.
+  for (const m of v.match(/coalesce\s*\([^)]*\)/gi) ?? []) {
+    assert.ok(/is_deleted/i.test(m), `🔴 coalesce غير مبرَّر: ${m.slice(0, 60)}`);
+  }
+});
+
+test("🔴 المرشّح الفارغ يُستبعد — نشاط بلا رابط لا يُنسَب", () => {
+  const v = healthView();
+  assert.match(v, /cand\.company_id is not null/i,
+    "🔴 المرشّحات الفارغة تدخل التجميع ⇒ نشاط بلا شركة يُنسَب");
+});
+
+test("الآباء المحذوفون لا يُعطون مرشّحًا", () => {
+  const v = healthView();
+  for (const alias of ["o", "l", "ct"]) {
+    assert.ok(new RegExp(`coalesce\\(${alias}\\.is_deleted, false\\) = false`).test(v),
+      `الأب ${alias} المحذوف ما يزال يُعطي مرشّحًا`);
+  }
+  assert.match(v, /coalesce\(a\.is_deleted, false\) = false/, "النشاط المحذوف يُحتسب");
+});
+
+test("🔴 days_silent = NULL بلا نشاط، ⛔ لا صفر", () => {
+  const v = healthView();
+  assert.match(v, /case when la\.last_activity_at is null then null/i,
+    "🔴 الصمت رقم بلا نشاط — يجعل الخاملة تبدو الأنشط");
+});
+
+test("⛔ لا min(uuid) — غير متاح قبل PostgreSQL 14", () => {
+  const v = healthView();
+  assert.ok(!/\bmin\s*\(\s*cand\.company_id/i.test(v), "min على uuid غير مدعوم في كل الإصدارات");
+  assert.match(v, /\(companies\)\[1\]/, "لا استخراج للمرشّح الوحيد من المصفوفة");
+});
+
+test("⛔ لا إضافة company_id إلى crm_activities ولا بنية موازية", () => {
+  const t = C(RUNME);
+  assert.ok(!/alter table[^;]*crm_activities[^;]*add column[^;]*company_id/i.test(t),
+    "🔴 أُضيف company_id إلى crm_activities");
+  assert.ok(!/create table[^;]*crm_activity_compan/i.test(t), "🔴 جدول إسناد موازٍ");
+});
+
+// ─── الحزمة معاملة واحدة ───────────────────────────────────────────────────
+test("🔴 RUNME معاملة واحدة — الفشل يتراجع كاملًا", () => {
+  const t = C(RUNME);
+  assert.equal((t.match(/^begin;/gim) ?? []).length, 1, "أكثر من begin أو لا شيء");
+  assert.equal((t.match(/^commit;/gim) ?? []).length, 1, "أكثر من commit أو لا شيء");
+  assert.ok(t.indexOf("begin;") < t.indexOf("commit;"), "commit قبل begin");
+  // ⛔ ولا commit وسيط يجعل نصف الحزمة يثبت.
+  assert.ok(!/^commit;[\s\S]*^begin;/m.test(t), "🔴 معاملات متعدّدة — تطبيق جزئيّ ممكن");
+});
+
+// ─── PREFLIGHT/POSTCHECK للـview ───────────────────────────────────────────
+test("🔴 PREFLIGHT يتحقّق من أعمدة الإسناد ويفشل بغيابها", () => {
+  const t = C(PRE);
+  // ⚠️ يُقرأ **بلوك REQUIRED_COLUMN وحده**: الأسماء تتكرّر في بلوك FK_RELATION،
+  //    ففحصُ الملفّ كلّه كان يمرّر حذفَ عمود من قائمة الاعتمادات (طفرة M7).
+  const block = t.slice(t.indexOf("REQUIRED_COLUMN"), t.indexOf("MUST_NOT_BE_ASSUMED"));
+  const pairs = [...block.matchAll(/\(\s*'([a-z_]+)'\s*,\s*'([a-z_]+)'\s*\)/g)]
+    .map((m) => `${m[1]}.${m[2]}`).sort();
+  assert.deepEqual(pairs, [
+    "crm_activities.contact_id", "crm_activities.lead_id",
+    "crm_activities.occurred_at", "crm_activities.opportunity_id",
+    "crm_contacts.company_id", "crm_leads.company_id", "crm_opportunities.company_id",
+  ], "🔴 تغيّرت قائمة أعمدة الإسناد المطلوبة");
+
+  // والحسم يفحص **القائمة نفسها** لا مجرّد وجود صيغة.
+  const decide = t.slice(t.indexOf("do $$"));
+  assert.match(decide, /COLUMN ' \|\| v_pair/, "🔴 الأعمدة خارج بلوك الحسم — الغياب لن يُفشل");
+  for (const pair of pairs) {
+    assert.ok(decide.includes(`'${pair}'`), `🔴 ${pair} مفحوص إعلاميًّا وخارج الحسم`);
+  }
+});
+
+test("🔴 POSTCHECK يثبت الـview ويُنفّذ SELECT فعليًّا", () => {
+  const t = C(POST);
+  assert.match(t, /to_regclass\('public\.crm_client_health_v'\)/, "لا فحص وجود للـview");
+  assert.match(t, /select count\(\*\)[\s\S]{0,60}from public\.crm_client_health_v/i,
+    "🔴 لا تنفيذ فعليّ — تعريف سليم لا يعني استعلامًا ناجحًا");
+  assert.match(t, /pg_get_viewdef/, "لا فحص لتعريف الـview");
+  assert.match(t, /a\\\.company_id/, "لا حارس ضدّ عودة الافتراض الخاطئ");
+  const decide = t.slice(t.indexOf("do $$"));
+  assert.ok(decide.includes("crm_client_health_v"), "الـview خارج بلوك الحسم");
+});

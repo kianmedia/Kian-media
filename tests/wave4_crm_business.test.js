@@ -114,7 +114,16 @@ test("(H-1) ★★★ صحّة العميل عرض مشتقّ — ولا جدو�
   const body = v.slice(0, v.indexOf(";"));
   assert.match(body, /from public\.crm_activities/, "آخر نشاط ليس من crm_activities");
   assert.match(body, /from public\.crm_opportunities/, "الفرص ليست من crm_opportunities");
-  assert.match(body, /current_date - max\(a\.occurred_at\)::date/, "الصمت ليس مشتقًّا");
+  // ⚠️ حُدِّثت الصيغة بعد إصلاح الإسناد: `crm_activities` لا يحوي `company_id`،
+  //    فصار آخر نشاط يُحسب في CTE عبر lead/opportunity/contact. والمقصود لم
+  //    يتغيّر — الصمت **مشتقّ** لا مخزَّن.
+  assert.match(body, /max\(occurred_at\)\s+as\s+last_activity_at/i, "آخر نشاط ليس مشتقًّا");
+  assert.match(body, /current_date - la\.last_activity_at::date/, "الصمت ليس مشتقًّا");
+  // 🔴 وNULL بلا نشاط لا صفر — الصفر يجعل الخاملة تبدو الأنشط.
+  assert.match(body, /case when la\.last_activity_at is null then null/i,
+    "🔴 الصمت رقم بلا نشاط");
+  // ⛔ ولا عمود صمت مخزَّن على أيّ جدول.
+  assert.doesNotMatch(c, /add column[^;]*days_silent/i, "🔴 عمود صمت مخزَّن");
 
   catches("تحويل الصحّة إلى جدول",
     (m) => m.replace("create or replace view public.crm_client_health_v as",

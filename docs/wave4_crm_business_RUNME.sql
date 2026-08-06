@@ -157,23 +157,77 @@ revoke all on public.crm_testimonial_invites from anon, public;
 -- 🔴 كلّ عمود هنا يُحسب عند القراءة. ولا مؤشّر ماليّ: الربحية تحتاج تكلفة
 -- مؤكّدة، وحسابها من بيانات ناقصة يُنتج رقمًا يُبنى عليه تسعير.
 -- (مسجَّل قرارًا: W4-1 · FINANCIAL SOURCE-OF-TRUTH DECISION.)
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 `crm_activities` **لا يحوي `company_id`** — والنسخة السابقة افترضته
+--
+-- المخطّط الفعليّ يربط النشاط بأبيه لا بالشركة:
+--     lead_id → crm_leads · opportunity_id → crm_opportunities
+--     contact_id → crm_contacts
+-- وكلٌّ من هذه الثلاثة يحمل `company_id`. فافتراضُ عمود غير موجود جعل الـview
+-- تفشل بـ42703، ولأنّ الملفّ كلّه معاملة واحدة (`begin` … `commit`) تراجعت
+-- الحزمة بأكملها — وهو ما شوهد على Preview.
+--
+-- ★★ مسار الإسناد (resolution) — صريح، ⛔ بلا COALESCE ذي أولوية عشوائية ★★
+--   ١. تُجمع **مرشّحات** `company_id` من الروابط الثلاثة (والمحذوف من الآباء
+--      لا يُعطي مرشّحًا: أبٌ محذوف ليس إشارة).
+--   ٢. تُزال التكرارات: روابط متعدّدة تشير لنفس الشركة ⇒ مرشّح **واحد**،
+--      فلا يُحتسب النشاط مرّتين.
+--   ٣. يُنسَب النشاط **فقط** إذا نتج `company_id` واحد مميَّز.
+--   ٤. 🔴 روابط تشير إلى **شركات مختلفة** ⇒ علاقة ملتبسة ⇒ **لا يُنسَب لأيّها**
+--      (fail-closed). نسبتُه لأحدها بترتيب ثابت اختراعُ إشارةٍ من تعارض.
+--   ٥. نشاط بلا أيّ مرشّح (كل الروابط فارغة أو آباؤها محذوفون) ⇒ لا يُنسَب.
+--
+-- ⚠️ ويُستعمل `array_agg(distinct …)` لا `min()`: لا مُجمِّع `min` لنوع `uuid`
+--    قبل PostgreSQL 14، والمصفوفة تعمل في كل الإصدارات وتُعطي العدّ والقيمة معًا.
+-- ⛔ ولا يُضاف `company_id` إلى `crm_activities`، ولا تُبنى بنية موازية.
+-- ════════════════════════════════════════════════════════════════════════════
 create or replace view public.crm_client_health_v as
+with activity_company_candidates as (
+  select a.id           as activity_id,
+         a.occurred_at  as occurred_at,
+         -- 🔴 التمييز هنا هو ما يمنع مضاعفة النشاط الواحد.
+         array_agg(distinct cand.company_id) as companies
+  from public.crm_activities a
+  left join public.crm_opportunities o
+         on o.id = a.opportunity_id and coalesce(o.is_deleted, false) = false
+  left join public.crm_leads l
+         on l.id = a.lead_id        and coalesce(l.is_deleted, false) = false
+  left join public.crm_contacts ct
+         on ct.id = a.contact_id    and coalesce(ct.is_deleted, false) = false
+  cross join lateral (values (o.company_id), (l.company_id), (ct.company_id))
+             as cand(company_id)
+  where coalesce(a.is_deleted, false) = false
+    -- المرشّح الفارغ لا يدخل: نشاط بلا مرشّح واحد يسقط من التجميع كلّه.
+    and cand.company_id is not null
+  group by a.id, a.occurred_at
+),
+attributed_activity as (
+  -- ⛔ مرشّحان فأكثر ⇒ التباس ⇒ لا إسناد. والواحد وحده يُنسَب.
+  select (companies)[1] as company_id, occurred_at
+  from activity_company_candidates
+  where array_length(companies, 1) = 1
+),
+company_last_activity as (
+  select company_id, max(occurred_at) as last_activity_at
+  from attributed_activity
+  group by company_id
+)
 select
   c.id                                as company_id,
   c.name                              as company_name,
-  -- آخر نشاط مسجَّل — من `crm_activities` القائم، لا عدّاد مخزَّن.
-  (select max(a.occurred_at) from public.crm_activities a where a.company_id = c.id)
-                                      as last_activity_at,
+  la.last_activity_at                 as last_activity_at,
   (select count(*) from public.crm_opportunities o
     where o.company_id = c.id and o.status = 'open')      as open_opportunities,
   (select count(*) from public.crm_opportunities o
     where o.company_id = c.id and o.status = 'won')       as won_opportunities,
   (select count(*) from public.crm_opportunities o
     where o.company_id = c.id and o.status = 'lost')      as lost_opportunities,
-  -- 🔴 الصمت بالأيام — مشتقّ، فلا يتقادم أبدًا.
-  (select (current_date - max(a.occurred_at)::date)
-     from public.crm_activities a where a.company_id = c.id) as days_silent
+  -- 🔴 الصمت مشتقّ لا مخزَّن. و**NULL تعني «لا نشاط منسوب»** لا «صمت صفر يوم»:
+  -- إعادة 0 هنا كانت ستجعل شركة بلا نشاط تبدو الأنشط.
+  case when la.last_activity_at is null then null
+       else (current_date - la.last_activity_at::date) end as days_silent
 from public.crm_companies c
+left join company_last_activity la on la.company_id = c.id
 where coalesce(c.is_deleted, false) = false;
 
 comment on view public.crm_client_health_v is

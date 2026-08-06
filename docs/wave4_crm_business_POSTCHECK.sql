@@ -96,6 +96,64 @@ select 'قيد الشهادات متّسق مع وجود جدولها' as check,
            then '✅ الشهادات مطبَّقة والقيد مضاف — متّسق'
          else '🔴 غير متّسق — أعد تشغيل RUNME (idempotent)' end as result;
 
+-- ─── `crm_client_health_v` — الإسناد عبر الآباء لا عبر عمود غير موجود ──────
+select 'الـview أُنشئت' as check,
+       case when to_regclass('public.crm_client_health_v') is null
+            then '🔴 مفقودة — تحقّق من تراجع المعاملة'
+            else '✅ موجودة' end as result;
+
+-- 🔴 لا مرجع لـ`crm_activities.company_id` في تعريف الـview.
+select 'الـview لا تشير إلى crm_activities.company_id' as check,
+       case when pg_get_viewdef('public.crm_client_health_v'::regclass, true)
+                 ~* '\ma\.company_id\M'
+            then '🔴 عاد الافتراض الخاطئ'
+            else '✅ الإسناد عبر lead/opportunity/contact' end as result
+where to_regclass('public.crm_client_health_v') is not null;
+
+-- المسارات الثلاثة كلّها مذكورة في التعريف.
+select 'مسارات الإسناد الثلاثة' as check,
+       case when v.def ~* 'opportunity_id' and v.def ~* 'lead_id' and v.def ~* 'contact_id'
+            then '✅ opportunity + lead + contact'
+            else '🔴 مسار إسناد مفقود' end as result
+from (select pg_get_viewdef('public.crm_client_health_v'::regclass, true) as def) v
+where to_regclass('public.crm_client_health_v') is not null;
+
+-- ⚠️ التمييز يمنع مضاعفة النشاط الواحد، والالتباس يُستبعد بطول المصفوفة.
+select 'منع التكرار ورفض الالتباس' as check,
+       case when v.def ~* 'array_agg\s*\(\s*distinct' and v.def ~* 'array_length'
+            then '✅ تمييز + شرط مرشّح واحد'
+            else '🔴 قد يُضاعَف النشاط أو يُنسَب الملتبس' end as result
+from (select pg_get_viewdef('public.crm_client_health_v'::regclass, true) as def) v
+where to_regclass('public.crm_client_health_v') is not null;
+
+-- 🔴 والاختبار الحاسم: **تنفيذ** SELECT فعليًّا. تعريفٌ سليم لا يعني استعلامًا
+--    ناجحًا (عمود مفقود يظهر وقت التنفيذ لا وقت الإنشاء في بعض الحالات).
+do $$
+declare v_n bigint;
+begin
+  if to_regclass('public.crm_client_health_v') is null then
+    raise exception '🔴 crm_client_health_v غير موجودة';
+  end if;
+  select count(*) into v_n from public.crm_client_health_v;
+  raise notice '✅ SELECT من الـview نجح — % صفًّا.', v_n;
+  -- ⚠️ صفر صفوف حالة صحيحة (لا شركات بعد)، والفشل يقع لو رمى الاستعلام.
+end $$;
+
+-- عدد الصفوف = عدد الشركات غير المحذوفة، ⛔ لا مضاعفة.
+select 'صفّ واحد لكل شركة — لا مضاعفة' as check,
+       case when (select count(*) from public.crm_client_health_v)
+                 = (select count(*) from public.crm_companies where coalesce(is_deleted,false)=false)
+            then '✅ مطابق'
+            else '🔴 عدد الصفوف ≠ عدد الشركات — النشاط يُضاعف الصفوف' end as result
+where to_regclass('public.crm_client_health_v') is not null;
+
+-- ⚠️ `days_silent` تكون NULL حين لا نشاط منسوب — ⛔ لا صفرًا.
+select 'الصمت NULL بلا نشاط لا صفر' as check,
+       case when (select count(*) from public.crm_client_health_v
+                   where last_activity_at is null and days_silent is not null) = 0
+            then '✅' else '🔴 صمت رقميّ بلا نشاط — يجعل الخاملة تبدو نشطة' end as result
+where to_regclass('public.crm_client_health_v') is not null;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- 🔴 الحسم — يفشل فعليًّا لا طباعةً
 --
@@ -158,6 +216,25 @@ begin
                  where conrelid='public.crm_testimonial_invites'::regclass
                    and conname='crm_ti_testimonial_fk') then
     v_fail := v_fail || 'قيد الشهادات غير متّسق مع وجود جدولها';
+  end if;
+
+  -- ٦ · الـview: موجودة · قابلة للتنفيذ · بلا افتراض crm_activities.company_id
+  if to_regclass('public.crm_client_health_v') is null then
+    v_fail := v_fail || 'crm_client_health_v مفقودة';
+  else
+    if pg_get_viewdef('public.crm_client_health_v'::regclass, true) ~* '\ma\.company_id\M' then
+      v_fail := v_fail || 'الـview تشير إلى crm_activities.company_id (عمود غير موجود)';
+    end if;
+    declare v_probe bigint;
+    begin
+      select count(*) into v_probe from public.crm_client_health_v;
+    exception when others then
+      v_fail := v_fail || ('SELECT من crm_client_health_v فشل: ' || sqlerrm);
+    end;
+    if (select count(*) from public.crm_client_health_v)
+       <> (select count(*) from public.crm_companies where coalesce(is_deleted,false)=false) then
+      v_fail := v_fail || 'عدد صفوف الـview ≠ عدد الشركات — مضاعفة نشاط';
+    end if;
   end if;
 
   if array_length(v_fail,1) > 0 then
