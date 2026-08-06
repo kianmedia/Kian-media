@@ -304,3 +304,169 @@ test("العلم يبقى OFF ولا بيانات مخترعة", () => {
   assert.ok(!/insert into public\.(archive_media|music_licenses|model_releases|asset_insurance_coverage)/i.test(topLevel),
     "🔴 بذر صفوف على المستوى الأعلى — بيانات مخترعة");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// ٦ · 🔴 عقد تفرّد تراخيص الموسيقى — الخطأ النحويّ الذي أسقط الحزمة
+//
+//   `unique (track_title, coalesce(license_id, ''))` داخل `create table`
+//   خطأ نحويّ: قيد `unique` على مستوى الجدول لا يقبل إلّا **أسماء أعمدة**.
+//   ⇒ `syntax error at or near "("`، وبما أنّ الحزمة معاملة واحدة سقطت
+//   الجداول الستّة كلّها.
+//
+//   العقد يُفرض الآن بفهرس فريد **تعبيريّ جزئيّ**.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** يجرّد التعليقات **والسلاسل** — لفحص البنية لا الشرح. */
+function bare(sql) {
+  let out = "", i = 0, q = false;
+  while (i < sql.length) {
+    const c = sql[i];
+    if (q) { if (c === "'") q = false; out += " "; i++; continue; }
+    if (c === "'") { q = true; out += " "; i++; continue; }
+    if (sql.startsWith("--", i)) { while (i < sql.length && sql[i] !== "\n") { out += " "; i++; } continue; }
+    out += c; i++;
+  }
+  return out;
+}
+const EXPR_FN = /\b(coalesce|lower|upper|trim|btrim|md5|left|right|substr|date_trunc|nullif)\s*\(/i;
+
+test("🔴 لا تعبير داخل UNIQUE/PRIMARY KEY في أيّ تعريف جدول بالمستودع", () => {
+  const bad = [];
+  for (const f of fs.readdirSync(DOCS).filter((x) => x.endsWith(".sql"))) {
+    const t = bare(R(f));
+    for (const m of t.matchAll(/create table[^;]*?\(([\s\S]*?)\n\);/g)) {
+      for (const u of m[1].matchAll(/\b(unique|primary key)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)/gi)) {
+        if (EXPR_FN.test(u[2])) bad.push(`${f}: ${u[0].replace(/\s+/g, " ").slice(0, 80)}`);
+      }
+    }
+  }
+  assert.deepEqual(bad, [],
+    "🔴 قيد UNIQUE بتعبير ⇒ خطأ نحويّ يُسقط الحزمة كلّها:\n" + bad.join("\n"));
+});
+
+/** تعريف الفهرس الفريد للتراخيص كما هو في RUNME. */
+function mlIndex() {
+  const t = C(AA_RUN);
+  const i = t.indexOf("create unique index if not exists ml_title_license_uniq");
+  assert.ok(i > -1, "🔴 فهرس تفرّد التراخيص مفقود");
+  return t.slice(i, t.indexOf(";", i) + 1);
+}
+
+test("🔴 الفهرس فريد · تعبيريّ · وعلى العمودين", () => {
+  const ix = mlIndex();
+  assert.match(ix, /create unique index/i, "الفهرس غير فريد");
+  assert.match(ix, /on public\.music_licenses/i, "على جدول آخر");
+  assert.match(ix, /track_title/, "لا يشمل track_title");
+  assert.match(ix, /coalesce\s*\(\s*license_id\s*,\s*''\s*\)/,
+    "🔴 بلا coalesce — فهرس فريد عاديّ يعدّ كل NULL مميّزًا فيسمح بصفوف مكرّرة");
+});
+
+test("🔴 دلالة NULL/'' — الكتابة توحّدهما، والفهرس يعتمد ذلك", () => {
+  const t = C(AA_RUN);
+  const fn = t.slice(t.indexOf("function public.music_license_upsert"));
+  const body = fn.slice(0, fn.indexOf("$$;"));
+  // ⛔ `''` لا يُخزَّن إطلاقًا: الكتابة تحوّله NULL في الإدراج والتحديث معًا.
+  assert.match(body, /license_id[\s\S]{0,80}nullif\(p_payload->>'license_id',''\)/,
+    "🔴 الإدراج لا يحوّل '' إلى NULL");
+  const upd = body.slice(body.indexOf("update public.music_licenses"));
+  assert.match(upd, /license_id\s*=\s*case[\s\S]{0,120}nullif\(p_payload->>'license_id',''\)/,
+    "🔴 التحديث لا يحوّل '' إلى NULL — فتظهر قيمتان لغياب واحد");
+  // والفهرس يستعمل '' بديلًا لـNULL — وهو آمن لأنّ '' غير قابل للتخزين.
+  assert.match(mlIndex(), /coalesce\(license_id, ''\)/);
+});
+
+test("🔴 الفهرس جزئيّ على is_deleted=false — عقد الحذف الناعم", () => {
+  const ix = mlIndex();
+  assert.match(ix, /where\s+is_deleted\s*=\s*false/i,
+    "🔴 فهرس كلّيّ ⇒ الصفّ المحذوف ناعمًا يمنع إعادة الإنشاء، والتحديث يرفضه " +
+    "⇒ سجلّ يتعذّر استرجاعه");
+  // والدليل على العقد: القراءة تستبعد المحذوف، والتحديث يرفضه.
+  const t = C(AA_RUN);
+  assert.match(t, /coalesce\(m\.is_deleted,false\) = false/, "القراءة لا تستبعد المحذوف");
+  assert.match(t, /where id = v_id and is_deleted = false/, "التحديث لا يرفض المحذوف");
+});
+
+test("🔴 نوع license_id نصّ — coalesce متوافق", () => {
+  const t = C(AA_RUN);
+  const ddl = t.slice(t.indexOf("create table if not exists public.music_licenses"));
+  const body = ddl.slice(0, ddl.indexOf("\n);"));
+  assert.match(body, /^\s*license_id\s+text\s*,/m,
+    "🔴 نوع license_id تغيّر — coalesce(license_id,'') لم يعد متوافق النوع");
+  // ⚠️ ولا يُخلط بـmusic_license_project_links.license_id وهو uuid.
+  const links = t.slice(t.indexOf("create table if not exists public.music_license_project_links"));
+  assert.match(links.slice(0, links.indexOf("\n);")), /license_id\s+uuid\s+not null/,
+    "بنية الروابط تغيّرت — راجع الخلط بين العمودين");
+});
+
+test("🔴 لا ON CONFLICT على قيد لم يعد موجودًا", () => {
+  const t = C(AA_RUN);
+  assert.ok(!/on conflict\s+on constraint/i.test(t),
+    "🔴 ON CONFLICT ON CONSTRAINT — والقيد صار فهرسًا");
+  // ولو استُعمل ON CONFLICT فيجب أن يطابق تعبير الفهرس بالضبط.
+  for (const m of t.match(/on conflict\s*\([^)]*\)/gi) ?? []) {
+    assert.match(m, /coalesce\(license_id, ''\)/,
+      `🔴 ON CONFLICT لا يطابق تعبير الفهرس: ${m}`);
+  }
+});
+
+test("🔴 تعارض التفرّد يُلتقط برسالة محايدة — ولا سباق", () => {
+  const t = C(AA_RUN);
+  const fn = t.slice(t.indexOf("function public.music_license_upsert"));
+  const body = fn.slice(0, fn.indexOf("$$;"));
+  assert.equal((body.match(/exception when unique_violation/g) ?? []).length, 2,
+    "🔴 مسارا الإدراج والتحديث ليسا محميّين معًا");
+  assert.match(body, /raise exception 'duplicate_track_license'/,
+    "لا رسالة تعارض واضحة");
+  // ⛔ ولا تكشف الرسالة بيانات.
+  for (const m of body.match(/raise exception '[^']*'/g) ?? []) {
+    assert.ok(!/\|\||p_payload|track_title\s*\)/.test(m), `🔴 رسالة تكشف بيانات: ${m}`);
+  }
+  // ⛔ ولا فحص مسبق ثمّ إدراج (نافذة سباق).
+  assert.ok(!/select\s+1\s+from public\.music_licenses[\s\S]{0,200}insert into public\.music_licenses/i.test(body),
+    "🔴 فحص مسبق ثمّ إدراج — نافذة سباق");
+});
+
+test("⛔ المعالج لم يتسرّب إلى دوالّ الرفع الأخرى", () => {
+  const t = C(AA_RUN);
+  const lines = t.split("\n");
+  const starts = [];
+  lines.forEach((l, i) => {
+    const m = l.match(/^create or replace function public\.([a-z_]+)/);
+    if (m) starts.push({ name: m[1], line: i });
+  });
+  starts.push({ name: "(EOF)", line: lines.length });
+  for (let i = 0; i < starts.length - 1; i++) {
+    const seg = lines.slice(starts[i].line, starts[i + 1].line).join("\n");
+    const n = (seg.match(/duplicate_track_license/g) ?? []).length;
+    if (starts[i].name === "music_license_upsert") {
+      assert.equal(n, 2, "معالجا التعارض ليسا داخل دالّة التراخيص");
+    } else {
+      assert.equal(n, 0,
+        `🔴 رسالة تعارض التراخيص تسرّبت إلى ${starts[i].name} — استبدال شامل بلا نطاق`);
+    }
+  }
+});
+
+test("🔴 ROLLBACK يُسقط الفهرس صراحةً", () => {
+  const t = C("wave6_assets_archive_ROLLBACK.sql");
+  assert.match(t, /drop index if exists public\.ml_title_license_uniq/i,
+    "🔴 الفهرس مستقلّ عن الجدول ولا يسقط ضمنًا — يجب إسقاطه بالاسم");
+});
+
+test("🔴 PREFLIGHT يكشف فهرسًا أو قيدًا متعارضًا سابقًا", () => {
+  const t = C(AA_PRE);
+  assert.match(t, /pg_indexes[\s\S]{0,300}music_licenses/i, "لا فحص لفهارس الجدول");
+  assert.match(t, /contype\s*=\s*'u'/, "لا فحص لقيود التفرّد");
+  assert.match(t, /CONFLICTING_UNIQUE|CONFLICTING_CONSTRAINT/, "لا تصنيف للتعارض");
+});
+
+test("🔴 POSTCHECK يثبت الاسم والتعريف والتفرّد والجزئية — ويفشل فعليًّا", () => {
+  const t = C(AA_POST);
+  assert.match(t, /ml_title_license_uniq/, "لا فحص لاسم الفهرس");
+  assert.match(t, /indexdef/, "🔴 يفحص الاسم دون التعريف — فهرس مختلف بالاسم نفسه يمرّ");
+  const decide = t.slice(t.indexOf("do $$"));
+  for (const needle of ["ml_title_license_uniq", "coalesce", "is_deleted", "unique"]) {
+    assert.ok(decide.includes(needle), `🔴 ${needle} خارج بلوك الحسم — لن يُفشل`);
+  }
+  assert.match(decide, /contype='u'/, "لا فحص لقيد منافس في الحسم");
+});

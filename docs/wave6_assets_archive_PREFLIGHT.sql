@@ -65,6 +65,28 @@ select 'EXPECTED_ABSENT' as kind, v.n as name,
 from (values ('asset_insurance_coverage'),('archive_media'),('archive_project_links'),
              ('music_licenses'),('music_license_project_links'),('model_releases')) v(n);
 
+-- ─── §3-ب · تعارض سابق على عقد تفرّد التراخيص ─────────────────────────────
+-- ⚠️ الحزمة تُنشئ `ml_title_license_uniq` بـ`if not exists`. لكنّ **فهرسًا
+--    باسم آخر** أو **قيدًا** على نفس العمودين يمرّ من ذلك الحارس ثمّ يتعارض
+--    دلاليًّا — أو يمنع إدراجًا مشروعًا بصمت.
+select 'CONFLICTING_UNIQUE' as kind, i.indexname as name,
+       case when i.indexname = 'ml_title_license_uniq' then '✅ فهرس الحزمة نفسه'
+            else '🔴 فهرس فريد آخر على نفس الجدول — احسمه قبل التشغيل' end as status,
+       '—' as created_by, i.indexdef as used_for
+from pg_indexes i
+where i.schemaname = 'public' and i.tablename = 'music_licenses'
+  and i.indexdef ilike '%unique%'
+  and i.indexdef !~* 'music_licenses_pkey';
+
+select 'CONFLICTING_CONSTRAINT' as kind, con.conname as name,
+       '🔴 قيد تفرّد على الجدول — قد يتعارض مع الفهرس التعبيريّ' as status,
+       '—' as created_by, pg_get_constraintdef(con.oid) as used_for
+from pg_constraint con
+join pg_class r on r.oid = con.conrelid
+join pg_namespace n on n.oid = r.relnamespace
+where n.nspname='public' and r.relname='music_licenses' and con.contype = 'u';
+-- المتوقَّع: **صفر صفوف** — العقد يُفرض بفهرس تعبيريّ لا بقيد.
+
 -- ─── §4 · ⛔ لا نظام موازٍ ──────────────────────────────────────────────────
 -- ⚠️ حُصرت في ما يخصّ الأصول والأرشيف. وأصناف الامتثال والمعرفة
 --    (`sops` · `knowledge_articles` · `hse_incidents` · `compliance_registry`)

@@ -125,6 +125,33 @@ where p.pronamespace = 'public'::regnamespace
                     'model_release_upsert','model_release_withdraw')
   and p.prosrc ~* 'prodops_can_view';
 
+-- ─── عقد تفرّد تراخيص الموسيقى — الفهرس التعبيريّ الجزئيّ ─────────────────
+-- 🔴 يُفحص **التعريف** لا الاسم: فهرس بالاسم الصحيح وتعريف مختلف يُمرّر
+--    ازدواجًا كان العقد يمنعه.
+select 'فهرس تفرّد التراخيص' as check,
+       case when i.indexdef is null then '🔴 ml_title_license_uniq مفقود'
+            when i.indexdef !~* 'unique' then '🔴 موجود لكنّه غير فريد'
+            when i.indexdef !~* 'coalesce\s*\(\s*license_id' then '🔴 بلا coalesce — كل NULL يصير مميّزًا'
+            when i.indexdef !~* 'track_title' then '🔴 لا يشمل track_title'
+            when i.indexdef !~* 'where\s+\(?is_deleted\s*=\s*false' then '🔴 غير جزئيّ — الحذف الناعم يصير طريقًا مسدودًا'
+            else '✅ فريد · تعبيريّ · جزئيّ على is_deleted=false' end as result
+from (select indexdef from pg_indexes
+       where schemaname='public' and tablename='music_licenses'
+         and indexname='ml_title_license_uniq') i
+right join (select 1) x on true;
+
+-- ⚠️ التعريف الفعليّ — يُقرأ عند احمرار الفحص أعلاه.
+select 'تشخيص تعريف الفهرس' as check, coalesce(indexdef, '(غير موجود)') as result
+from pg_indexes
+where schemaname='public' and tablename='music_licenses' and indexname='ml_title_license_uniq';
+
+-- ⛔ ولا قيد تفرّد على الجدول: العقد يُفرض بالفهرس وحده.
+select 'لا قيد تفرّد منافس' as check,
+       case when count(*)=0 then '✅' else '🔴 '||string_agg(conname::text, ', ') end as result
+from pg_constraint con join pg_class r on r.oid=con.conrelid
+join pg_namespace n on n.oid=r.relnamespace
+where n.nspname='public' and r.relname='music_licenses' and con.contype='u';
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- 🔴 الحسم — يفشل فعليًّا لا طباعةً
 -- نطاقه **هذه الحزمة وحدها**: لا يفحص كيانات حزم أخرى فلا يحمرّ بسببها.
@@ -173,7 +200,34 @@ begin
     v_fail := v_fail || 'الحجز القانونيّ لا يمنع الإخفاء';
   end if;
 
-  -- ٥ · ⛔ لا اعتماد عرضيّ على حزمة الامتثال
+  -- ٥ · 🔴 عقد تفرّد التراخيص: فهرس فريد تعبيريّ جزئيّ بالتعريف الصحيح
+  declare v_def text;
+  begin
+    select indexdef into v_def from pg_indexes
+     where schemaname='public' and tablename='music_licenses'
+       and indexname='ml_title_license_uniq';
+    if v_def is null then
+      v_fail := v_fail || 'ml_title_license_uniq مفقود';
+    else
+      if v_def !~* 'unique' then v_fail := v_fail || 'فهرس التراخيص غير فريد'; end if;
+      if v_def !~* 'coalesce\s*\(\s*license_id' then
+        v_fail := v_fail || 'فهرس التراخيص بلا coalesce — كل NULL مميّز';
+      end if;
+      if v_def !~* 'track_title' then
+        v_fail := v_fail || 'فهرس التراخيص لا يشمل track_title';
+      end if;
+      if v_def !~* 'where\s+\(?is_deleted\s*=\s*false' then
+        v_fail := v_fail || 'فهرس التراخيص غير جزئيّ — الحذف الناعم يسدّ الاسترجاع';
+      end if;
+    end if;
+  end;
+  if exists (select 1 from pg_constraint con join pg_class r on r.oid=con.conrelid
+              join pg_namespace n on n.oid=r.relnamespace
+              where n.nspname='public' and r.relname='music_licenses' and con.contype='u') then
+    v_fail := v_fail || 'قيد تفرّد منافس على music_licenses';
+  end if;
+
+  -- ٦ · ⛔ لا اعتماد عرضيّ على حزمة الامتثال
   if exists (select 1 from pg_proc p
               where p.pronamespace='public'::regnamespace
                 and p.proname in ('project_rights_summary','archive_media_upsert','music_license_upsert',

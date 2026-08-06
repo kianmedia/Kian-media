@@ -164,9 +164,43 @@ create table if not exists public.music_licenses (
     (proof_bucket is null and proof_path is null)
     or (length(btrim(coalesce(proof_bucket,''))) > 0
         and length(btrim(coalesce(proof_path,''))) > 0
-        and proof_path !~* '^https?://')),
-  unique (track_title, coalesce(license_id, ''))
+        and proof_path !~* '^https?://'))
+  -- 🔴 عقد التفرّد **ليس هنا**: قيد `unique` على مستوى الجدول لا يقبل إلّا
+  -- **أسماء أعمدة**، و`unique (track_title, coalesce(license_id,''))` خطأ نحويّ
+  -- (`syntax error at or near "("`). وبما أنّ الحزمة معاملة واحدة، أسقط الخطأ
+  -- الجداول الستّة كلّها. التعبير يحتاج **فهرسًا فريدًا مستقلًّا** — أدناه.
 );
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 عقد التفرّد لتراخيص الموسيقى — فهرس تعبيريّ فريد **جزئيّ**
+--
+-- ★ لماذا فهرس لا قيد ★
+--   `coalesce(license_id,'')` **تعبير**، و`unique` في تعريف الجدول لا يقبل
+--   إلّا أعمدة. والتعبير لا يُفرض إلّا بفهرس فريد.
+--
+-- ★ لماذا `coalesce` — ولماذا NULL و'' شيء واحد ★
+--   `music_license_upsert` يكتب `nullif(p_payload->>'license_id','')` في
+--   الإدراج والتحديث معًا ⇒ **`''` لا يُخزَّن إطلاقًا**، وغياب رقم الترخيص
+--   يُمثَّل بـNULL دائمًا. وفهرس فريد عاديّ يعدّ كل NULL **مميّزًا**، فيسمح
+--   بعشرات الصفوف لنفس العنوان بلا رقم ترخيص — وهو عكس المقصود.
+--   ⇒ `coalesce` يجعل كل «بلا رقم» قيمة واحدة: صفّ واحد لكل عنوان بلا ترخيص.
+--
+-- ★ ولماذا `where is_deleted = false` — بالأدلّة لا بالتفضيل ★
+--   القراءات تستبعد المحذوف (`coalesce(m.is_deleted,false)=false`)، والتحديث
+--   يرفض الصفّ المحذوف (`where id = v_id and is_deleted = false` ⇒ `not_found`)،
+--   ولا توجد دالّة استرجاع. فلو كان الفهرس **كلّيًّا** لصار الحذف الناعم طريقًا
+--   مسدودًا: لا إنشاء من جديد (تعارض تفرّد) ولا تعديل للقديم (يرفضه التحديث)
+--   ⇒ سجلّ يتعذّر استرجاعه إلى الأبد. فالجزئية شرط وجود مسار استرجاع.
+--
+-- ⚠️ `license_id` هنا **نصّ** (رقم الترخيص الخارجيّ)، ولا يُخلط بـ
+--    `music_license_project_links.license_id` وهو **uuid** يشير إلى `id`.
+--    فـ`coalesce(license_id, '')` متوافق النوع (نصّ مع نصّ).
+-- ⚠️ والمطابقة **حسّاسة لحالة الأحرف** كما هي اليوم — ⛔ ولا يُضاف `lower()`:
+--    ذلك تغيير دلاليّ لا إصلاح خطأ نحويّ.
+-- ════════════════════════════════════════════════════════════════════════════
+create unique index if not exists ml_title_license_uniq
+  on public.music_licenses (track_title, coalesce(license_id, ''))
+  where is_deleted = false;
 
 create table if not exists public.music_license_project_links (
   id          uuid primary key default gen_random_uuid(),
@@ -373,6 +407,9 @@ begin
   if length(btrim(coalesce(p_payload->>'track_title',''))) < 1 then raise exception 'track_title_required'; end if;
 
   if v_id is null then
+    -- 🔴 لا فحص مسبق ثمّ إدراج: بين الفحص والإدراج نافذة سباق. الفهرس الفريد
+    -- هو الحكم، ويُلتقط تعارضه هنا برسالة **محايدة**.
+    begin
     insert into public.music_licenses
       (track_title, artist, source, license_type, license_id, purchased_at, expires_at,
        scope_note, proof_bucket, proof_path, created_by)
@@ -384,7 +421,13 @@ begin
        -- ⛔ دلو ومسار فقط — القيد يرفض رابطًا كاملًا (W6-3).
        nullif(p_payload->>'proof_bucket',''), nullif(p_payload->>'proof_path',''), auth.uid())
     returning id into v_id;
+    exception when unique_violation then
+      -- ⛔ لا يُعاد العنوان ولا رقم الترخيص ولا مُعرّف الصفّ القائم: الرسالة
+      --    تقول «موجود» ولا تكشف ما هو موجود لمن لا يملك قراءته.
+      raise exception 'duplicate_track_license' using errcode = '23505';
+    end;
   else
+    begin
     update public.music_licenses set
       track_title = coalesce(nullif(btrim(p_payload->>'track_title'),''), track_title),
       artist = case when p_payload ? 'artist' then nullif(p_payload->>'artist','') else artist end,
@@ -394,6 +437,9 @@ begin
       scope_note = case when p_payload ? 'scope_note' then nullif(p_payload->>'scope_note','') else scope_note end,
       updated_at = now()
     where id = v_id and is_deleted = false;
+    exception when unique_violation then
+      raise exception 'duplicate_track_license' using errcode = '23505';
+    end;
     if not found then raise exception 'not_found'; end if;
   end if;
   return v_id;
