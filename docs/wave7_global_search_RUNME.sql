@@ -16,10 +16,35 @@
 -- ════════════════════════════════════════════════════════════════════════════
 begin;
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- §0 · حارس اعتمادات صلب — **داخل** المعاملة
+--
+-- ★ ما أفشل التطبيق على Preview ★
+--     ERROR: column "name" does not exist
+--   الحزمة كانت تقرأ اسم المشروع من `projects.name`، ⛔ **ولا وجود له**:
+--   العمود اسمه `project_name`. والدليل ليس رسالة الخطأ وحدها — **٤٤ موضعًا**
+--   في `docs/*.sql` تقرأ `p.project_name`، ⛔ **ولا ملفّ واحد** غير هذا يذكر
+--   `projects.name`. فالحزمة اخترعت اسم عمود، والقاعدة كانت على حقّ.
+--
+-- ⚠️ والحارس القديم فحص **وجود الجدول** ولم يفحص العمود، فمرّ التطبيق حتّى
+--    اصطدم بـ§2. فحصُ الجدول بلا فحص عموده يُؤخّر الفشل ولا يمنعه.
+-- ════════════════════════════════════════════════════════════════════════════
 do $$
+declare v_missing text[] := '{}';
 begin
   if to_regclass('public.projects') is null then
-    raise exception '🔴 projects مفقود';
+    v_missing := array_append(v_missing, 'TABLE public.projects');
+  elsif not exists (select 1 from information_schema.columns
+                     where table_schema='public' and table_name::text='projects'
+                       and column_name::text='project_name') then
+    v_missing := array_append(v_missing, 'COLUMN projects.project_name');
+  end if;
+  -- 🔴 البوّابة **إلزامية**: لم يعد في الدالّة مسار يمرّ عند غيابها.
+  if to_regprocedure('public.can_access_project(uuid)') is null then
+    v_missing := array_append(v_missing, 'GATE public.can_access_project(uuid)');
+  end if;
+  if array_length(v_missing,1) > 0 then
+    raise exception E'🔴 WAVE 7 GLOBAL SEARCH: اعتمادات مفقودة:\n  %', array_to_string(v_missing, E'\n  ');
   end if;
 end $$;
 
@@ -55,8 +80,10 @@ returns tsquery language sql immutable strict set search_path = public as $$
 $$;
 
 -- ─── §2 · الفهارس التعبيرية — بلا تغيير شكل أيّ جدول ───────────────────────
+-- 🔴 `project_name` لا `name`. وهذا السطر بعينه هو ما رمى
+--    `ERROR: column "name" does not exist` وأجهض المعاملة كلّها.
 create index if not exists projects_fts_idx
-  on public.projects using gin (public.search_vector(coalesce(name,'')));
+  on public.projects using gin (public.search_vector(coalesce(project_name,'')));
 
 do $$
 begin
@@ -94,15 +121,22 @@ begin
   v_lim := least(greatest(coalesce(p_limit, 20), 1), 50);
 
   -- ★ المشاريع — بوّابة الرؤية القائمة، داخل WHERE.
+  --
+  -- 🔴 اسم العمود `project_name` (العنوان والترتيب والشرط — ثلاثتها).
+  --
+  -- 🔴 والبوّابة **fail-closed**: حُذف `to_regprocedure(…) is null or`.
+  --    ذلك الطرف يجعل الشرط صحيحًا **دائمًا** عند غياب البوّابة، فيُعيد البحث
+  --    كلّ مشروع في القاعدة لأيّ مستخدم مُصادَق — تسريبٌ كامل بحجّة التدرّج
+  --    اللطيف. و§0 يشترط وجود البوّابة، فالمسار البديل لم يكن يحمي من شيء:
+  --    غيابها الآن يوقف **التطبيق**، لا يفتح **البيانات**.
   select coalesce(jsonb_agg(x), '[]'::jsonb) into v_part from (
     select jsonb_build_object(
-             'kind','project','id',p.id,'title',p.name,
+             'kind','project','id',p.id,'title',p.project_name,
              'href','/client-portal/project-core/'||p.id::text,
-             'rank', ts_rank(public.search_vector(coalesce(p.name,'')), v_q)) as x
+             'rank', ts_rank(public.search_vector(coalesce(p.project_name,'')), v_q)) as x
       from public.projects p
-     where public.search_vector(coalesce(p.name,'')) @@ v_q
-       and (to_regprocedure('public.can_access_project(uuid)') is null
-            or public.can_access_project(p.id))
+     where public.search_vector(coalesce(p.project_name,'')) @@ v_q
+       and public.can_access_project(p.id)
      order by 1 limit v_lim) s;
   v_rows := v_rows || v_part;
 
@@ -114,9 +148,9 @@ begin
                'href','/client-portal/project-core/'||d.project_id::text||'?tab=deliverables',
                'rank', ts_rank(public.search_vector(coalesce(d.title,'')), v_q)) as x
         from public.deliverables d
+       -- ⚠️ نفس البوّابة ونفس العلاج: ⛔ ولا مسار يمرّ عند غيابها.
        where public.search_vector(coalesce(d.title,'')) @@ v_q
-         and (to_regprocedure('public.can_access_project(uuid)') is null
-              or public.can_access_project(d.project_id))
+         and public.can_access_project(d.project_id)
        order by 1 limit v_lim) s;
     v_rows := v_rows || v_part;
   end if;

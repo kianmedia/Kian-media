@@ -59,15 +59,24 @@ test("🔴 كل فحص توقيع يستعمل to_regprocedure", () => {
 });
 
 // ⚠️ الحارس الأهمّ: fail-open في البحث الشامل كان ناتجًا مباشرًا للعيب.
-test("🔴 بوّابة can_access_project لا تُتخطّى في البحث الشامل", () => {
+//
+// 🔴 والعقد **ارتقى** بعد تصحيح عمود `project_name`: لم يعد يكفي أن يكون
+//    الفحص `to_regprocedure` بدل `to_regproc`. حتّى مع الفحص الصحيح، بنية
+//    `(<البوّابة غائبة> or can_access_project(...))` تعني أنّ غياب البوّابة
+//    **يُظهر كلّ مشاريع القاعدة** لأيّ مستخدم مُصادَق. وPREFLIGHT صار يشترط
+//    وجود البوّابة، فالمسار البديل لم يكن يحمي من شيء ⇒ حُذف.
+//    ⇒ غيابها الآن يوقف **التطبيق**، ⛔ ولا يفتح **البيانات**.
+test("🔴 بوّابة can_access_project بلا مسار بديل في البحث الشامل", () => {
   const t = C("wave7_global_search_RUNME.sql");
-  const guards = [...t.matchAll(/\(\s*to_regproc(edure)?\s*\(\s*'public\.can_access_project\(uuid\)'\s*\)\s*is null\s*or/gi)];
-  assert.ok(guards.length > 0, "لم يُعثر على حارس الوصول — هل غُيّر شكله؟");
-  for (const g of guards) {
-    assert.equal(g[1], "edure",
-      "🔴 `to_regproc(...) is null` صحيحة دائمًا ⇒ يُتخطّى can_access_project ⇒ " +
-      "البحث يُعيد كل مشروع ومخرَج لأيّ مستدعٍ");
-  }
+  // ⛔ ولا `to_regproc` ولا `to_regprocedure` مع `is null … or` حول البوّابة.
+  //    ⚠️ والمدى `[^;]` لا `[^)]`: الأخيرة تتوقّف عند القوس في `(uuid)` فلا
+  //    تبلغ `is null` أبدًا — نمطٌ يبدو حارسًا ولا يُطابق شيئًا.
+  const failOpen = /to_regproc(?:edure)?\s*\([^;]{0,80}can_access_project[^;]{0,80}is\s+null\s*(?:\r?\n)?\s*or/i;
+  assert.ok(!failOpen.test(t),
+    "🔴 مسار يمرّ عند غياب البوّابة ⇒ البحث يُعيد كلّ مشروع ومخرَج لأيّ مستدعٍ");
+  // والبوّابة نفسها قائمة في الاستعلامين.
+  assert.match(t, /and public\.can_access_project\(p\.id\)/, "بوّابة المشاريع غائبة");
+  assert.match(t, /and public\.can_access_project\(d\.project_id\)/, "بوّابة المخرَجات غائبة");
 });
 
 test("🔴 بوّابة نافذة السداد تُنفَّذ فعلًا في رابط التسليم", () => {

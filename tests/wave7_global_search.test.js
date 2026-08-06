@@ -96,10 +96,20 @@ test("(S-4) ★★★ التصفية داخل الاستعلام — لا جمع
   }
 
   catches("إسقاط بوّابة المشاريع",
-    // ⚠️ حُدِّث النصّ بعد تصحيح `to_regproc` ← `to_regprocedure`: الطفرة بالنصّ
-    //    القديم صارت بلا أثر، فرصدها الاختبار بحقّ («الطفرة لم تغيّر شيئًا»).
-    (m) => m.replace("       and (to_regprocedure('public.can_access_project(uuid)') is null\n            or public.can_access_project(p.id))\n", ""),
+    // ⚠️ حُدِّث النصّ مرّتين: بعد `to_regproc` ← `to_regprocedure`، ثمّ بعد حذف
+    //    مسار `is null or` كلّه. والطفرة بنصٍّ قديم لا تغيّر شيئًا فيُرصد ذلك
+    //    بحقّ («الطفرة لم تغيّر شيئًا») — وهو ما يجعل هذه الطفرات ذات قيمة.
+    (m) => m.replace("       and public.can_access_project(p.id)\n", ""),
     (m) => assert.match(bodyOf(m, "global_search"), /can_access_project\(p\.id\)/));
+
+  // 🔴 وطفرة الاتّجاه المعاكس: إعادة المسار البديل تُعيد fail-open.
+  catches("إعادة مسار fail-open حول البوّابة",
+    (m) => m.replace("       and public.can_access_project(p.id)",
+      "       and (to_regprocedure('public.can_access_project(uuid)') is null\n            or public.can_access_project(p.id))"),
+    (m) => assert.ok(
+      !/to_regproc(?:edure)?\s*\([^;]{0,80}can_access_project[^;]{0,80}is\s+null\s*(?:\r?\n)?\s*or/i
+        .test(bodyOf(m, "global_search")),
+      "غياب البوّابة يُظهر كلّ المشاريع"));
 });
 
 test("(S-5) ★★ استعلام قصير أو بلا كلمات لا يُرجع كلّ شيء ★★", () => {

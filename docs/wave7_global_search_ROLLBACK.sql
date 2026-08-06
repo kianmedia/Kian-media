@@ -1,4 +1,8 @@
 -- WAVE 7 · V2-7.1 · ROLLBACK. لا فقد بيانات — لا شيء هنا يخزّن شيئًا.
+--
+-- ⚠️ أسماء الفهارس **مستقلّة عن أسماء الأعمدة**: `projects_fts_idx` لا يذكر
+--    العمود، فتصحيح `name` ⇐ `project_name` في RUNME **لا يغيّر شيئًا هنا**.
+--    (فُحص عمدًا: فهرسٌ يُنشأ باسم ويُسقَط بآخر يترك بقايا صامتة.)
 begin;
 drop function if exists public.global_search(text,int);
 drop index if exists public.projects_fts_idx;
