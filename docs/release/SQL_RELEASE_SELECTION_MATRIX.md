@@ -91,6 +91,14 @@
 - **العلم:** `NEXT_PUBLIC_SHOW_CRM_WAVE` · **المخاطرة:** 🟡.
 
 ### ٢-٥ · `wave6_assets_archive_RUNME.sql`
+- 🔴 **تصحيح (مراجعة يدوية ٦ أغسطس):** ليس مستقلًّا. يستدعي
+  `civ_can_view_assets()` و`civ_can_manage_assets()` **بلا حارس وجود**،
+  وتُنشئهما `asset_intelligence_RUNME.sql`. ⇒ **prerequisite حقيقيّ**.
+- ⚠️ **والشرط مستوفى على Preview** (الدالّتان موجودتان)، فلا يُضاف ملفّ جديد
+  إلى ترتيب التشغيل — يُضاف الشرط إلى الوصف فقط.
+- ⚠️ وPREFLIGHT كان يطلب `custody_incidents` و`prodops_can_view()` وغيرهما من
+  حزمة Compliance Knowledge — ⛔ ولا يستعملها RUNME. أُزيلت، وصار الفحص
+  محصورًا بالحزمة.
 - **الغرض:** ربط تغطية التأمين بسجلّ الأصول + الأرشفة.
 - **🔴 قرار مُعلَّق:** `RETENTION POLICY DECISION PENDING` — والحذف التلقائيّ
   **معطَّل** (`AUTO-DELETION DISABLED`)، والحجز القانونيّ يمنع الحذف.
@@ -132,7 +140,7 @@
 3. wave3_calendar_tokens_RUNME.sql       ← مقترن بـ1 · 🔴 عالي المخاطرة · العلم يبقى OFF
 4. crm_sales_FOUNDATION_RUNME.sql        ← 🆕 **prerequisite رسميّ لـ5** (بوّابات CRM)
 5. wave4_crm_business_RUNME.sql          ← يشترط 4
-6. wave6_assets_archive_RUNME.sql        ← مستقلّ
+6. wave6_assets_archive_RUNME.sql        ← يشترط asset_intelligence_RUNME مطبَّقًا (بوّابات الأصول)
 7. wave6_compliance_knowledge_RUNME.sql  ← مستقلّ
 8. wave6_case_study_generator_RUNME.sql  ← يشترط case_studies_platform_RUNME
 9. wave7_global_search_RUNME.sql         ← مستقلّ · ⚠️ فهارس GIN

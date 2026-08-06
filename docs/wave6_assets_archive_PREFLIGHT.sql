@@ -1,24 +1,134 @@
+-- ════════════════════════════════════════════════════════════════════════════
 -- WAVE 6 · assets_archive · PREFLIGHT — يقرأ ولا يكتب. آمن على Production.
-select 'TABLE' as kind, v.n as name,
-       case when to_regclass('public.'||v.n) is null then '🔴 مفقود' else '✅ موجود' end as status
-from (values ('custody_inventory_assets'),('asset_insurance_policies'),('projects'),
-             ('ai_knowledge_sources'),('ai_source_revisions'),('project_task_checklists'),
-             ('ops_job_hse'),('ops_incidents'),('custody_incidents'),('project_archives')) v(n);
+--
+-- ★★ 🔴 ثلاثة عيوب أُصلحت هنا ★★
+--
+--  ١. **`to_regproc` لا تقبل توقيعًا.** كان `to_regproc(v.sig)` و`v.sig` يحمل
+--     `public.civ_can_view_assets()` بأقواس. و`to_regproc` تأخذ **اسمًا
+--     مجرَّدًا**، فتُعيد NULL دائمًا ⇒ بوّابات موجودة تُبلَّغ «مفقودة».
+--     وPreview أثبت وجود الثلاث بـ`to_regprocedure`. الصحيح `to_regprocedure`.
+--
+--  ٢. **الفحص كان قائمة مشتركة بين حزمتين.** هذا الملفّ كان **نسخة طبق الأصل**
+--     من `wave6_compliance_knowledge_PREFLIGHT.sql`: اتّحاد اعتمادات الحزمتين
+--     في قائمة واحدة. فكان يطلب `custody_incidents` و`ai_knowledge_sources`
+--     و`prodops_can_view()` — ⛔ **ولا يستعمل RUNME هذه الحزمة أيًّا منها**.
+--     ⇒ `custody_incidents` الغائب كان يُحمِّر حزمةً لا تحتاجه إطلاقًا.
+--
+--  ٣. **الفشل كان طباعةً فقط.** 🔴 ثمّ خروج بحالة 0، فيمضي التشغيل الآليّ فوق
+--     اعتماد مفقود. صار البلوك الأخير يرمي استثناءً (§٦).
+--
+-- ★ النطاق: اعتمادات **هذه الحزمة وحدها** — مستخرَجة من RUNME بالأدلّة ★
+--   `grep public.<obj>` على `wave6_assets_archive_RUNME.sql` يعطي بالضبط:
+--   `can_manage_projects` ×٧ · `projects` ×٣ · `civ_can_view_assets` ×٣ ·
+--   `custody_inventory_assets` ×٢ · `asset_insurance_policies` ×٢ ·
+--   `civ_can_manage_assets` ×١ (السطر ٣٢٣) — ولا شيء غيرها.
+--
+-- ⛔ لا كتابة · لا مِنَح · لا إنشاء.
+-- ════════════════════════════════════════════════════════════════════════════
 
-select 'GATE' as kind, v.n as name,
-       case when to_regproc(v.sig) is null then '🔴 مفقود' else '✅ موجود' end as status
-from (values ('civ_can_view_assets','public.civ_can_view_assets()'),
-             ('can_manage_projects','public.can_manage_projects()'),
-             ('prodops_can_view','public.prodops_can_view()')) v(n,sig);
+-- ─── §1 · جداول **مطلوبة** لهذه الحزمة ─────────────────────────────────────
+select 'REQUIRED_DEPENDENCY' as kind, v.n as name,
+       case when to_regclass('public.'||v.n) is null then '🔴 مفقود' else '✅ موجود' end as status,
+       v.src as created_by, v.why as used_for
+from (values
+  ('custody_inventory_assets', 'asset_intelligence_RUNME.sql / custody inventory',
+   'مفتاح أجنبيّ في asset_insurance_coverage'),
+  ('asset_insurance_policies', 'baseline (asset insurance)',
+   'مفتاح أجنبيّ في asset_insurance_coverage'),
+  ('projects',                 'baseline',
+   'ربط الأرشيف والتراخيص والإفراجات بالمشروع')
+) v(n, src, why);
 
--- 🔴 نوع الإجراء التشغيليّ يجب أن يكون مقبولًا في القيد القائم — وإلّا فُشل الإدراج.
-select 'SOP_TYPE_ALLOWED' as kind, 'operations_procedure' as name,
-       case when pg_get_constraintdef(oid) like '%operations_procedure%'
-            then '✅ مقبول — لا توسعة قيد' else '🔴 غير مقبول — راجع القيد' end as status
-from pg_constraint where conname = 'ai_sources_type_known';
+-- ─── §2 · بوّابات **مطلوبة** — تُستدعى داخل دوالّ الحزمة ───────────────────
+-- 🔴 تُفحص بـ`to_regprocedure`: التوقيع بأقواس، و`to_regproc` تُعيد NULL دائمًا.
+select 'REQUIRED_GATE' as kind, v.sig as name,
+       case when to_regprocedure(v.sig) is null then '🔴 مفقود' else '✅ موجود' end as status,
+       v.src as created_by, v.why as used_for
+from (values
+  ('public.civ_can_view_assets()',   'asset_intelligence_RUNME.sql',
+   'سياسات القراءة على تغطية التأمين والأرشيف'),
+  ('public.civ_can_manage_assets()', 'asset_intelligence_RUNME.sql',
+   'حارس archive_media_upsert (السطر ٣٢٣)'),
+  ('public.can_manage_projects()',   'baseline (project platform authz)',
+   'حارس التراخيص والإفراجات وملخّص الحقوق')
+) v(sig, src, why);
+-- ⚠️ `civ_can_manage_assets()` **لم تكن** في القائمة الرسمية، وRUNME يستدعيها
+--    بلا حارس وجود. أُضيفت بالدليل لا بالافتراض.
 
--- ⛔ لا نظام موازٍ. وجود أيّ منها يعني ازدواجًا يجب حسمه قبل التطبيق.
+-- ─── §3 · ما تُنشئه هذه الحزمة — غيابه **متوقَّع** ─────────────────────────
+select 'EXPECTED_ABSENT' as kind, v.n as name,
+       case when to_regclass('public.'||v.n) is null
+            then '✅ غائب كما هو متوقَّع (ستُنشئه RUNME)'
+            else '🟡 موجود — إعادة تشغيل (الحزمة idempotent)' end as status,
+       'wave6_assets_archive_RUNME.sql' as created_by,
+       'من جداول الحزمة الستّة' as used_for
+from (values ('asset_insurance_coverage'),('archive_media'),('archive_project_links'),
+             ('music_licenses'),('music_license_project_links'),('model_releases')) v(n);
+
+-- ─── §4 · ⛔ لا نظام موازٍ ──────────────────────────────────────────────────
+-- ⚠️ حُصرت في ما يخصّ الأصول والأرشيف. وأصناف الامتثال والمعرفة
+--    (`sops` · `knowledge_articles` · `hse_incidents` · `compliance_registry`)
+--    نُقلت إلى فحص حزمة Compliance Knowledge — فهي ليست من نطاق هذه الحزمة.
 select 'PARALLEL_CHECK' as kind, v.n as name,
-       case when to_regclass('public.'||v.n) is null then '✅ غير موجود' else '🔴 نظام موازٍ — توقّف' end as status
-from (values ('sops'),('knowledge_articles'),('hse_incidents'),('equipment_usage_log'),
-             ('maintenance_schedule'),('compliance_registry'),('assets')) v(n);
+       case when to_regclass('public.'||v.n) is null then '✅ غير موجود'
+            else '🔴 نظام موازٍ — توقّف' end as status,
+       '—' as created_by, 'ازدواج محتمل' as used_for
+from (values ('assets'),('equipment_usage_log'),('maintenance_schedule'),
+             ('media_archive'),('music_rights'),('model_consents')) v(n);
+
+-- ─── §5 · خطّ أساس صلاحيات anon ────────────────────────────────────────────
+select 'ANON_GRANTS' as kind, routine_name::text as name,
+       privilege_type::text as status, '—' as created_by, '—' as used_for
+from information_schema.role_routine_grants
+where routine_schema='public' and grantee::text='anon'
+  and routine_name::text in ('project_rights_summary','archive_media_upsert',
+                             'music_license_upsert','model_release_upsert',
+                             'model_release_withdraw');
+-- المتوقَّع: **صفر صفوف** — ولا دالّة من هذه الحزمة تُمنح لـanon.
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- §6 · 🔴 الحسم — يفشل فعليًّا لا طباعةً
+--
+-- ⛔ ولا يُحتسب هنا: EXPECTED_ABSENT (من إنتاج الحزمة)، ولا أيّ اعتماد يخصّ
+--    حزمة Compliance Knowledge — إدراجه كان يحجب هذه الحزمة بلا سبب.
+-- ⚠️ شغّل بـ`psql -v ON_ERROR_STOP=1` ليعود رمز الخروج غير صفريّ.
+-- ════════════════════════════════════════════════════════════════════════════
+do $$
+declare
+  v_missing text[] := '{}';
+  v_t text;
+  v_sig text;
+begin
+  foreach v_t in array array['custody_inventory_assets','asset_insurance_policies','projects']
+  loop
+    if to_regclass('public.'||v_t) is null then
+      v_missing := v_missing || ('TABLE ' || v_t);
+    end if;
+  end loop;
+
+  foreach v_sig in array array['public.civ_can_view_assets()',
+                               'public.civ_can_manage_assets()',
+                               'public.can_manage_projects()']
+  loop
+    if to_regprocedure(v_sig) is null then
+      v_missing := v_missing || ('GATE ' || v_sig);
+    end if;
+  end loop;
+
+  foreach v_t in array array['assets','equipment_usage_log','maintenance_schedule',
+                             'media_archive','music_rights','model_consents']
+  loop
+    if to_regclass('public.'||v_t) is not null then
+      v_missing := v_missing || ('PARALLEL ' || v_t);
+    end if;
+  end loop;
+
+  if array_length(v_missing, 1) > 0 then
+    raise exception E'🔴 WAVE 6 ASSETS ARCHIVE PREFLIGHT FAILED — اعتمادات مفقودة:\n  %\n'
+      '⛔ لا تُشغّل wave6_assets_archive_RUNME.sql. '
+      'وبوّابات الأصول تُنشئها asset_intelligence_RUNME.sql.',
+      array_to_string(v_missing, E'\n  ');
+  end if;
+
+  raise notice '✅ WAVE 6 ASSETS ARCHIVE PREFLIGHT PASSED.';
+end $$;

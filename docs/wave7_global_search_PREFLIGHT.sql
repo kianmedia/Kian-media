@@ -4,7 +4,7 @@ select 'TABLE' as kind, v.n as name,
 from (values ('projects'),('clients'),('deliverables'),('custody_inventory_assets')) v(n);
 
 select 'GATE' as kind, v.n as name,
-       case when to_regproc(v.sig) is null then '🟡 غائب — المصدر يُتخطّى' else '✅ موجود' end as status
+       case when to_regprocedure(v.sig) is null then '🟡 غائب — المصدر يُتخطّى' else '✅ موجود' end as status
 from (values ('can_access_project','public.can_access_project(uuid)'),
              ('civ_can_view_assets','public.civ_can_view_assets()'),
              ('can_manage_projects','public.can_manage_projects()')) v(n,sig);

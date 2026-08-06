@@ -5,7 +5,7 @@ from (values ('deliverables'),('deliverable_versions'),('project_deliverable_ver
              ('project_member_roles'),('projects'),('project_delivery_release')) v(n);
 
 select 'GATE' as kind, v.n as name,
-       case when to_regproc(v.sig) is null then '🔴 مفقود' else '✅ موجود' end as status
+       case when to_regprocedure(v.sig) is null then '🔴 مفقود' else '✅ موجود' end as status
 from (values ('can_manage_projects','public.can_manage_projects()')) v(n,sig);
 
 -- 🔴 قبل تركيب حارس النهائيّ الواحد: هل توجد مخالفات قائمة تمنع الفهرس الفريد؟

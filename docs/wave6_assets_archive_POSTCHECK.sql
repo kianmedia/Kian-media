@@ -7,10 +7,13 @@ where n.nspname='public' and c.relname in
    'music_licenses','music_license_project_links','model_releases');
 
 select 'لا صلاحية لـanon' as check,
-       case when count(*)=0 then '✅' else '🔴 مسرَّبة: '||string_agg(distinct table_name,', ') end as result
+       -- ⚠️ `table_name` نوعه `sql_identifier` لا `text`: تمريره إلى
+       --    `string_agg` بلا `::text` يُفشل الاستعلام وقت التشغيل.
+       case when count(*)=0 then '✅'
+            else '🔴 مسرَّبة: '||string_agg(distinct table_name::text, ', ') end as result
 from information_schema.role_table_grants
-where table_schema='public' and grantee in ('anon','PUBLIC')
-  and table_name in ('asset_insurance_coverage','archive_media','archive_project_links',
+where table_schema='public' and grantee::text in ('anon','PUBLIC')
+  and table_name::text in ('asset_insurance_coverage','archive_media','archive_project_links',
                      'music_licenses','music_license_project_links','model_releases');
 
 -- 🔴 لا رابط تخزين مخزَّن في أيّ من الجدولين الحسّاسين.
@@ -63,3 +66,128 @@ select '⛔ لا مُشغِّل حذف على الأرشيف' as check,
        case when count(*)=0 then '✅' else '🔴 '||string_agg(tgname,', ') end as result
 from pg_trigger t join pg_class c on c.oid=t.tgrelid
 where c.relname in ('archive_media','archive_project_links') and not t.tgisinternal;
+
+-- ─── تواقيع دوالّ الحزمة — الاسم + قائمة الأنواع ───────────────────────────
+-- ⚠️ `oidvectortypes` لا `pg_get_function_identity_arguments`: الثانية تُعيد
+--    أسماء الوسائط مع أنواعها فلا تطابق قائمة أنواع أبدًا.
+with pkg(fname, fargs) as (
+  values ('project_rights_summary','uuid'), ('archive_media_upsert','jsonb'),
+         ('music_license_upsert','jsonb'),  ('model_release_upsert','jsonb'),
+         ('model_release_withdraw','uuid, text')
+)
+select 'دوالّ الحزمة الخمس بتواقيعها' as check,
+       case when count(*) filter (where p.oid is not null) = 5 then '✅ 5/5'
+            else '🔴 مفقودة: ' || coalesce(string_agg(k.fname||'('||k.fargs||')', ', ')
+                                            filter (where p.oid is null), '') end as result
+from pkg k
+left join pg_proc p on p.proname = k.fname
+      and p.pronamespace = 'public'::regnamespace
+      and pg_catalog.oidvectortypes(p.proargtypes) = k.fargs;
+
+-- ⛔ لا تنفيذ لـanon/PUBLIC على أيّ دالّة من الحزمة.
+select 'لا EXECUTE لـanon/PUBLIC على دوالّ الحزمة' as check,
+       case when count(*)=0 then '✅'
+            else '🔴 '||string_agg(distinct routine_name::text, ', ') end as result
+from information_schema.role_routine_grants
+where routine_schema='public' and grantee::text in ('anon','PUBLIC')
+  and routine_name::text in ('project_rights_summary','archive_media_upsert',
+                             'music_license_upsert','model_release_upsert',
+                             'model_release_withdraw');
+
+-- 🔴 والمصرَّح لهم: authenticated وحده — ⛔ ولا service_role على دوالّ المستخدم.
+select 'authenticated يملك الدوالّ الخمس' as check,
+       case when count(*)=5 then '✅ 5/5'
+            else '🔴 '||count(*)::text||'/5' end as result
+from information_schema.role_routine_grants
+where routine_schema='public' and grantee::text='authenticated'
+  and routine_name::text in ('project_rights_summary','archive_media_upsert',
+                             'music_license_upsert','model_release_upsert',
+                             'model_release_withdraw');
+
+-- ─── 🔴 استقلال الحزمة: لا اعتماد عرضيّ على Compliance Knowledge ───────────
+-- ⚠️ فحصٌ على **تعريفات** دوالّ الحزمة وحدها: أيّ إشارة إلى كيانات حزمة
+--    الامتثال تعني تشابكًا يجعل ترتيب التطبيق حرجًا بلا داعٍ.
+select 'لا اعتماد على Compliance Knowledge' as check,
+       case when count(*)=0 then '✅ مستقلّة'
+            else '🔴 '||string_agg(distinct p.proname, ', ') end as result
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace
+  and p.proname in ('project_rights_summary','archive_media_upsert','music_license_upsert',
+                    'model_release_upsert','model_release_withdraw')
+  and p.prosrc ~* '(custody_incidents|ai_knowledge_sources|ai_source_revisions|ops_job_hse|ops_incidents|sop_items|hse_register)';
+
+-- ⚠️ وبوّابة `prodops_can_view` ليست من عقد هذه الحزمة.
+select 'لا استعمال لـprodops_can_view' as check,
+       case when count(*)=0 then '✅' else '🔴 '||string_agg(distinct p.proname, ', ') end as result
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace
+  and p.proname in ('project_rights_summary','archive_media_upsert','music_license_upsert',
+                    'model_release_upsert','model_release_withdraw')
+  and p.prosrc ~* 'prodops_can_view';
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 الحسم — يفشل فعليًّا لا طباعةً
+-- نطاقه **هذه الحزمة وحدها**: لا يفحص كيانات حزم أخرى فلا يحمرّ بسببها.
+-- ⚠️ شغّل بـ`psql -v ON_ERROR_STOP=1`.
+-- ════════════════════════════════════════════════════════════════════════════
+do $$
+declare v_fail text[] := '{}'; v_n int;
+begin
+  -- ١ · الجداول الستّة موجودة وRLS مفعَّلة
+  select count(*) into v_n from pg_class c join pg_namespace n on n.oid=c.relnamespace
+   where n.nspname='public' and c.relrowsecurity
+     and c.relname in ('asset_insurance_coverage','archive_media','archive_project_links',
+                       'music_licenses','music_license_project_links','model_releases');
+  if v_n <> 6 then v_fail := v_fail || (v_n::text || '/6 جدول بـRLS'); end if;
+
+  -- ٢ · الدوالّ الخمس بتواقيعها
+  select count(*) into v_n
+  from (values ('project_rights_summary','uuid'),('archive_media_upsert','jsonb'),
+               ('music_license_upsert','jsonb'),('model_release_upsert','jsonb'),
+               ('model_release_withdraw','uuid, text')) k(fname,fargs)
+  where not exists (select 1 from pg_proc p
+                     where p.proname=k.fname and p.pronamespace='public'::regnamespace
+                       and pg_catalog.oidvectortypes(p.proargtypes)=k.fargs);
+  if v_n > 0 then v_fail := v_fail || (v_n::text || ' دالّة مفقودة أو بتوقيع مختلف'); end if;
+
+  -- ٣ · ⛔ لا صلاحية لـanon/PUBLIC (جداول أو دوالّ)
+  if (select count(*) from information_schema.role_table_grants
+       where table_schema='public' and grantee::text in ('anon','PUBLIC')
+         and table_name::text in ('asset_insurance_coverage','archive_media','archive_project_links',
+                                  'music_licenses','music_license_project_links','model_releases')) > 0
+     or (select count(*) from information_schema.role_routine_grants
+          where routine_schema='public' and grantee::text in ('anon','PUBLIC')
+            and routine_name::text in ('project_rights_summary','archive_media_upsert',
+                                       'music_license_upsert','model_release_upsert',
+                                       'model_release_withdraw')) > 0 then
+    v_fail := v_fail || 'صلاحية مسرَّبة لـanon/PUBLIC';
+  end if;
+
+  -- ٤ · 🔴 الحذف التلقائيّ مستحيل بنيويًّا · والحجز القانونيّ يمنع الإخفاء
+  if not exists (select 1 from pg_constraint con join pg_class r on r.oid=con.conrelid
+                  where r.relname='archive_media'
+                    and pg_get_constraintdef(con.oid) like '%auto_delete_enabled = false%') then
+    v_fail := v_fail || 'AUTO-DELETION غير مقيَّد بـfalse';
+  end if;
+  if not exists (select 1 from pg_constraint where conname='archive_media_hold_blocks_delete') then
+    v_fail := v_fail || 'الحجز القانونيّ لا يمنع الإخفاء';
+  end if;
+
+  -- ٥ · ⛔ لا اعتماد عرضيّ على حزمة الامتثال
+  if exists (select 1 from pg_proc p
+              where p.pronamespace='public'::regnamespace
+                and p.proname in ('project_rights_summary','archive_media_upsert','music_license_upsert',
+                                  'model_release_upsert','model_release_withdraw')
+                and p.prosrc ~* '(custody_incidents|ai_knowledge_sources|ops_job_hse|ops_incidents|sop_items|hse_register|prodops_can_view)') then
+    v_fail := v_fail || 'اعتماد عرضيّ على Compliance Knowledge';
+  end if;
+
+  if array_length(v_fail,1) > 0 then
+    raise exception E'🔴 WAVE 6 ASSETS ARCHIVE POSTCHECK FAILED:\n  %',
+      array_to_string(v_fail, E'\n  ');
+  end if;
+  raise notice '✅ WAVE 6 ASSETS ARCHIVE POSTCHECK PASSED — والعلم يبقى OFF.';
+end $$;
+
+-- ⚠️ **العلم يبقى OFF**: هذه الحزمة تُطبَّق مخطّطًا فقط. ولا يُرفع أيّ علم
+--    واجهة قبل تحقّق الإنتاج — انظر FEATURE_FLAGS_RELEASE_MATRIX.md.

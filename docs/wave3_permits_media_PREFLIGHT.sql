@@ -11,7 +11,7 @@ where n.nspname='public' and p.proname in ('prodops_can_view','prodops_can_manag
 
 -- 🔴 مساعدات الإشعار القائمة. غيابها ⇒ §7 ترجع disabled (ولا تخترع مسارًا ثانيًا).
 select 'NOTIFY_HELPER' as kind, v.n as name,
-       case when to_regproc(v.sig) is null then '⚠️ مفقود — التنبيهات ستُعلن disabled' else '✅ موجود' end as status
+       case when to_regprocedure(v.sig) is null then '⚠️ مفقود — التنبيهات ستُعلن disabled' else '✅ موجود' end as status
 from (values ('civ_alert_once','public.civ_alert_once(text,text,text,uuid)'),
              ('civ_notify_managers','public.civ_notify_managers(text,uuid,text,uuid)')) v(n,sig);
 
