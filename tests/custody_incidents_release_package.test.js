@@ -152,3 +152,87 @@ test("🔵 `when others then return false` مُبقًى **موثَّقًا** ك�
   assert.match(raw, /when others then return false[\s\S]{0,400}?قرار مفتوح|قرار مفتوح[\s\S]{0,400}?when others/,
     "التغيير مؤجَّل لكنّه غير موثَّق كقرار مفتوح");
 });
+
+// ─── ٩ · عقد الصلاحيات النهائيّ — دورًا دورًا ──────────────────────────────
+// 🔴 مصدر التوقّع هنا هو **الحالة المرصودة على Preview**، لا ملفّ من الحزمة:
+//    anon = Dxtm · authenticated = rDxtm بعد RUNME ناجح، ⛔ وبلا منحة واحدة
+//    لـanon في الملفّ. أيّ حرف من Dxtm يجب أن يكون مسحوبًا ومفحوصًا.
+const DXTM = { D: "TRUNCATE", x: "REFERENCES", t: "TRIGGER", m: "MAINTAIN" };
+
+test("🔴 كل حرف من Dxtm مسحوب في RUNME ومفحوص في POSTCHECK", () => {
+  const run = H.stripComments(R(H.RUNME));
+  const post = H.stripComments(R(H.POST));
+  // السحب شامل (`revoke all`) لا تعدادًا يدويًّا قد ينسى حرفًا.
+  assert.match(run, /revoke\s+all\s+privileges\s+on\s+table/i, "لا سحب شامل");
+  for (const [ch, priv] of Object.entries(DXTM)) {
+    assert.ok(post.includes(priv), `POSTCHECK لا يفحص ${priv} (${ch} في Dxtm)`);
+  }
+});
+
+test("🔴 authenticated: SELECT فقط — العقد صراحةً في POSTCHECK", () => {
+  const post = H.stripComments(R(H.POST));
+  assert.match(post, /authenticated[\s\S]{0,200}SELECT/i, "لا شرط SELECT لـauthenticated");
+  assert.match(post, /has_table_privilege\('authenticated'/, "لا قياس فعليّ لـauthenticated");
+  assert.match(post, /قراءة فقط|SELECT فقط/, "العقد غير مذكور نصًّا");
+});
+
+test("⛔ لا منحة واحدة لـanon على أيّ كائن من الحزمة", () => {
+  const run = H.stripComments(R(H.RUNME));
+  for (const m of run.matchAll(/grant\s[\s\S]*?to\s+([a-z_, ]+);/gi)) {
+    const roles = m[1].split(",").map((r) => r.trim().toLowerCase());
+    assert.ok(!roles.includes("anon") && !roles.includes("public"),
+      `منحة لـ${roles.join(",")}: ${m[0].slice(0, 80)}`);
+  }
+});
+
+test("service_role: القراءة مشترطة · وتضييق الباقي قرار موثَّق لا سكوت", () => {
+  const post = H.stripComments(R(H.POST));
+  assert.match(post, /has_table_privilege\('service_role'[^)]*'SELECT'\)/,
+    "POSTCHECK لا يشترط قراءة service_role");
+  assert.match(R(H.RUNME), /service_role[\s\S]{0,200}لا يُمسّان|لا يُمسّان[\s\S]{0,200}service_role/,
+    "قرار إبقاء صلاحيات service_role غير موثَّق في RUNME");
+});
+
+// ─── ١٠ · Cron: الحارس يجب أن يسبق التحليل لا أن يتلوه ────────────────────
+test("🔴 لا استعلام ثابت على cron.* في أيّ ملفّ من الحزمة", () => {
+  for (const f of H.PKG_FILES) {
+    const t = H.stripComments(R(f));
+    for (const m of t.matchAll(/(?:from|join)\s+cron\.\w+/gi)) {
+      const ctx = t.slice(Math.max(0, m.index - 300), m.index);
+      assert.match(ctx, /execute\s/i,
+        `${f}: «${m[0]}» خارج SQL ديناميكيّ — PostgreSQL يُحلّل الجملة كاملةً قبل تنفيذها`);
+    }
+  }
+});
+
+test("⛔ غياب pg_cron ليس فشلًا", () => {
+  const post = H.stripComments(R(H.POST));
+  const i = post.search(/to_regclass\(\s*'cron\.job'\s*\)/i);
+  assert.notEqual(i, -1, "لا حارس وجود على cron.job");
+  const branch = post.slice(i, i + 400);
+  assert.ok(!/is\s+null\s+then[\s\S]{0,120}raise\s+exception/i.test(branch),
+    "الفرع «الامتداد غير مثبَّت» يرفع استثناءً — والامتداد الغائب يُثبت العقد لا يخالفه");
+});
+
+// ─── ١١ · إعادة التطبيق فوق Preview المطبَّقة ──────────────────────────────
+test("🔴 إعادة تشغيل RUNME لا تُسقط ولا تمحو", () => {
+  const run = H.stripComments(R(H.RUNME));
+  const top = H.stripBodies(run);
+  assert.ok(!/drop\s+table/i.test(run), "RUNME يُسقط جدولًا");
+  assert.ok(!/truncate/i.test(top), "RUNME يُفرّغ جدولًا");
+  assert.ok(!/delete\s+from/i.test(top), "RUNME يحذف صفوفًا");
+  // ⚠️ والإنشاء كلّه idempotent.
+  const creates = [...run.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?public\.\w+/gi)];
+  for (const c of creates) {
+    assert.match(c[0], /if\s+not\s+exists/i, `إنشاء غير idempotent: ${c[0]}`);
+  }
+});
+
+test("PREFLIGHT يصنّف الحالتين ويوقف عند الهجينة", () => {
+  const pre = H.stripComments(R(H.PRE));
+  for (const token of ["FRESH_APPLY", "MATCHING_REAPPLY", "PARTIAL", "MISMATCH"]) {
+    assert.ok(pre.includes(token), `PREFLIGHT بلا تصنيف ${token}`);
+  }
+  // 🔴 والتصنيف يُحتسب في الحسم لا يُعرض فقط.
+  assert.match(pre, /if v_present not in \(0, ?3\) then/, "PARTIAL معروض ولا يُحتسب");
+});

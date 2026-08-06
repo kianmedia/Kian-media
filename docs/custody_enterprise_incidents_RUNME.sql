@@ -298,8 +298,85 @@ create policy civ_alert_deliv_read on public.custody_alert_deliveries for select
 -- ⛔ ولا صلاحيات هنا: كلّها في §5 موضعًا **واحدًا**. وتكرارها في موضعين يجعل
 --    حذف أحدهما بلا أثر ظاهر، فيمرّ إسقاطُ حارسٍ صامتًا.
 
--- ─── §5 · الصلاحيات — REVOKE أوّلًا ثمّ منح محدَّد ─────────────────────────
-grant select on public.custody_incidents, public.custody_incident_actions, public.custody_alert_deliveries to authenticated;
+-- ════════════════════════════════════════════════════════════════════════════
+-- §5 · الصلاحيات — REVOKE ALL أوّلًا ثمّ منح محدَّد
+--
+-- ★★ 🔴 لماذا `revoke all` ولا يكفي `grant select` ★★
+--   Preview بعد تشغيل ناجح لهذا الملفّ: الجداول الثلاثة وُلدت وعليها
+--     anon           = Dxtm   (TRUNCATE · REFERENCES · TRIGGER · MAINTAIN)
+--     authenticated  = rDxtm  (تلك الأربع + SELECT الذي منحناه)
+--   ⛔ **ولا سطر واحد في هذا الملفّ يمنح anon شيئًا.** فالمصدر ليس الحزمة:
+--   مشاريع Supabase تُنشأ بـ`alter default privileges … grant all on tables`،
+--   فكل جدول جديد يولد ومعه ACL افتراضيّ. والمنح **تراكميّة**: `grant select`
+--   فوق ذلك يضيف ولا يسحب. ⇒ السحب الصريح هو الإصلاح الوحيد.
+--
+--   ⚠️ وثلاثة ملفّات في هذا المستودع تقول عكس ذلك نصًّا («لا default privileges
+--   في هذا المشروع»: whatsapp_inbox_grants_FIX · whatsapp_inbox_RUNME ·
+--   portal_hr_employee_portal_v3_PATCH_RUNME). ملاحظةُ Preview **تكذّبها**،
+--   وPREFLIGHT صار يطبع `pg_default_acl` ليُحسم الأمر بدليل لا باعتقاد.
+--
+-- ⛔ ولا يُلمس هنا ACL المشروع كلّه: النطاق جداول هذه الحزمة الثلاثة وحدها.
+--    توسيعه قرارٌ عابر للحزم يحتاج جردًا لكل جدول ومستهلك.
+-- ════════════════════════════════════════════════════════════════════════════
+revoke all privileges on table
+  public.custody_incidents,
+  public.custody_incident_actions,
+  public.custody_alert_deliveries
+  from public, anon, authenticated;
+
+-- ⚠️ ACL على مستوى **الأعمدة** لا يمسّه السحب على مستوى الجدول، ولا يظهر في
+--    أيّ فحص جدوليّ. يُنظَّف من `pg_attribute.attacl` نفسه، ⛔ ولا يصدر أمر
+--    واحد إن لم يكن هناك ما يُسحب.
+do $$
+declare r record;
+begin
+  for r in
+    select c.relname as tbl, a.attname as col
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')
+       and a.attnum > 0 and not a.attisdropped and a.attacl is not null
+  loop
+    execute format('revoke all privileges (%I) on table public.%I from public, anon, authenticated',
+                   r.col, r.tbl);
+  end loop;
+end $$;
+
+-- ⚠️ المفاتيح `uuid … default gen_random_uuid()` ⇒ **لا تسلسلات** لهذه الجداول.
+--    والحلقة تُثبت ذلك بدل أن تفترضه: إن ظهرت تسلسلة مملوكة لأحدها لاحقًا
+--    (عمود identity أو serial أُضيف) سُحبت صلاحياتها بدل أن تُمنح صامتة.
+do $$
+declare r record;
+begin
+  for r in
+    select s.relname as seq
+      from pg_class s
+      join pg_namespace sn on sn.oid = s.relnamespace
+      join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass and d.deptype in ('a','i')
+      join pg_class t on t.oid = d.refobjid
+      join pg_namespace tn on tn.oid = t.relnamespace
+     where s.relkind = 'S' and sn.nspname = 'public' and tn.nspname = 'public'
+       and t.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')
+  loop
+    execute format('revoke all privileges on sequence public.%I from public, anon, authenticated', r.seq);
+    raise notice '⚠️ تسلسلة غير متوقَّعة سُحبت صلاحياتها: %', r.seq;
+  end loop;
+end $$;
+
+-- 🔴 المنح الوحيد على الجداول: قراءة للمُصادَق. والكتابة والإدارة تبقى حصرًا
+--    عبر دوالّ SECURITY DEFINER — فلا INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/
+--    TRIGGER/MAINTAIN لأيّ دور من أدوار العميل.
+grant select on table
+  public.custody_incidents,
+  public.custody_incident_actions,
+  public.custody_alert_deliveries
+  to authenticated;
+
+-- ⚠️ `service_role` والمالك: **لا يُمسّان هنا**. صلاحياتهما من إعداد المشروع،
+--    وتضييقهما يمسّ مسارات خادمية خارج هذه الحزمة (النسخ الاحتياطيّ والترحيل).
+--    مسجَّل في العقد لا مسكوتًا عنه.
 
 revoke execute on function public.custody_inv_employee_report_incident(jsonb) from public, anon;
 revoke execute on function public.custody_inv_admin_incident_action(uuid,text,text,boolean) from public, anon;

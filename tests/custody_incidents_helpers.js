@@ -187,6 +187,36 @@ function auditPackage(dir) {
     }
   }
 
+  // ── ٨-ب · ACL الجداول: سحبٌ شامل أوّلًا ثمّ قراءة وحدها ──────────────────
+  // 🔴 Preview أثبت أنّ الجداول تولد ومعها Dxtm لـanon **بلا منحة من الحزمة**.
+  //    فالمنح تراكميّ: `grant select` وحده لا يُصلح شيئًا.
+  const revokeAll = runTop.match(/revoke\s+all\s+privileges\s+on\s+table([\s\S]*?)from\s+([a-z_, ]+);/i);
+  if (!revokeAll) fail("no_revoke_all", "RUNME لا يسحب ACL الافتراضيّ عن جداول الحزمة");
+  else {
+    const roles = revokeAll[2].split(",").map((r) => r.trim().toLowerCase());
+    for (const need of ["public", "anon", "authenticated"]) {
+      if (!roles.includes(need)) fail("revoke_all_partial", `revoke all لا يشمل ${need}`);
+    }
+    for (const t of tables) {
+      if (!revokeAll[1].includes(t)) fail("revoke_all_table", `revoke all لا يشمل ${t}`);
+    }
+    // ⚠️ والسحب قبل المنح: العكس يمحو المنحة المقصودة.
+    const iRevoke = runTop.search(/revoke\s+all\s+privileges\s+on\s+table/i);
+    const iGrant = runTop.search(/grant\s+select\s+on\s+table/i);
+    if (iGrant !== -1 && iGrant < iRevoke) fail("grant_before_revoke", "المنح قبل السحب — يُلغى فورًا");
+  }
+  const tblGrants = [...runTop.matchAll(/grant\s+([a-z ,]+?)\s+on\s+table([\s\S]*?)to\s+([a-z_, ]+);/gi)];
+  for (const g of tblGrants) {
+    const privs = g[1].split(",").map((p) => p.trim().toLowerCase());
+    const roles = g[3].split(",").map((r) => r.trim().toLowerCase());
+    if (roles.includes("authenticated") && privs.some((p) => p !== "select")) {
+      fail("authenticated_write", `authenticated يُمنح أكثر من SELECT: ${privs.join(",")}`);
+    }
+  }
+  if (!/grant\s+select\s+on\s+table[\s\S]*?to\s+authenticated\s*;/i.test(runTop)) {
+    fail("no_select_grant", "authenticated بلا SELECT — الواجهة تُحجب عند طبقة الصلاحيات قبل RLS");
+  }
+
   // ── ٩ · PREFLIGHT — توقّعاته مشتقّة من **RUNME** ─────────────────────────
   const pre = stripComments(F[PRE]);
   if (!/raise\s+exception/i.test(pre)) fail("pre_no_hardstop", "PREFLIGHT لا يرفع استثناء — يطبع 🔴 ويخرج بحالة 0");
@@ -197,8 +227,21 @@ function auditPackage(dir) {
     if (!pre.includes(`'${sig}'`)) fail("pre_missing_gate", `PREFLIGHT لا يفحص البوّابة ${sig}`);
   }
   for (const t of tables) {
-    if (!new RegExp(`'${t}'`).test(pre)) fail("pre_missing_absent", `PREFLIGHT لا يُصنّف ${t} كـEXPECTED_ABSENT`);
+    if (!new RegExp(`'${t}'`).test(pre)) fail("pre_missing_absent", `PREFLIGHT لا يُصنّف ${t} ضمن APPLY_STATE`);
   }
+  // 🔴 الحزمة مطبَّقة فعلًا على Preview: اشتراط الغياب يحوّل أيّ إصلاح لاحق
+  //    إلى إسقاط جداول. فالمطلوب تصنيف حالة لا شرط غياب.
+  if (!/APPLY_STATE/.test(pre)) fail("pre_no_apply_state", "PREFLIGHT لا يُصنّف حالة التطبيق");
+  if (!/FRESH_APPLY/.test(pre)) fail("pre_no_fresh", "PREFLIGHT لا يعترف بحالة التطبيق الأوّل");
+  if (!/MATCHING_REAPPLY/.test(pre)) fail("pre_no_reapply", "PREFLIGHT يرفض حالة مطبَّقة مطابقة");
+  if (!/PARTIAL/.test(pre)) fail("pre_no_partial", "PREFLIGHT لا يوقف عند حالة جزئية");
+  if (!/DEFINITION_MATCH/.test(pre) || !/MISMATCH/.test(pre)) {
+    fail("pre_no_mismatch", "PREFLIGHT لا يوقف عند جدول يحمل الاسم بتعريف مخالف");
+  }
+  if (!/not in \(0, 3\)|not in \(0,3\)/.test(pre)) {
+    fail("pre_partial_not_enforced", "تصنيف PARTIAL معروض ولا يُحتسب في الحسم");
+  }
+  if (!/pg_default_acl/.test(pre)) fail("pre_no_defacl", "PREFLIGHT لا يقرأ مصدر المنح التلقائيّ");
   // حالة جزئية غير معروفة: عمود قائم بنوع مختلف · مُشغِّل قائم على جدول آخر.
   if (!/EXISTING_COLUMN_STATE/.test(pre)) fail("pre_no_column_state", "PREFLIGHT لا يفحص حالة الأعمدة القائمة");
   if (!/EXISTING_TRIGGER_STATE/.test(pre)) fail("pre_no_trigger_state", "PREFLIGHT لا يفحص حالة المُشغِّل القائم");
@@ -219,6 +262,52 @@ function auditPackage(dir) {
     fail("post_no_tgtype", "POSTCHECK لا يُثبت أنّ المُشغِّل على INSERT **و**UPDATE");
   }
   if (!/cron/i.test(post)) fail("post_no_cron", "POSTCHECK لا يُثبت غياب cron");
+
+  // ── ١٠-ب · ACL فعليّ لا معلَن ────────────────────────────────────────────
+  if (!/has_table_privilege/.test(post)) fail("post_acl_shallow", "POSTCHECK لا يقيس صلاحيات الجداول الفعليّة");
+  if (!/has_any_column_privilege/.test(post)) fail("post_no_column_acl", "POSTCHECK لا يفحص ACL الأعمدة");
+  if (!/aclexplode/.test(post)) fail("post_no_public_acl", "POSTCHECK لا يفحص PUBLIC من الكتالوج");
+  for (const p of ["TRUNCATE", "REFERENCES", "TRIGGER", "MAINTAIN"]) {
+    if (!post.includes(p)) fail("post_missing_priv", `POSTCHECK لا يفحص ${p} — وهو من Dxtm المرصود`);
+  }
+  // ⚠️ MAINTAIN غير موجودة قبل PostgreSQL 17: تمريرها لخادم أقدم خطأ لا نتيجة.
+  if (/MAINTAIN/.test(post) && !/server_version_num/.test(post)) {
+    fail("post_no_version_guard", "MAINTAIN تُفحص بلا حارس إصدار");
+  }
+  if (!/'SELECT'/.test(post)) fail("post_no_select_contract", "POSTCHECK لا يُثبت SELECT لـauthenticated");
+
+  // ── ١٠-ج · Cron: حارس to_regclass ثمّ SQL ديناميكيّ ──────────────────────
+  // 🔴 `case when to_regclass('cron.job') is null then … when (select … from
+  //    cron.job)` **لا يحرس شيئًا**: الجملة تُحلَّل كاملةً قبل التنفيذ.
+  const postCron = post.match(/(?:from|join)\s+cron\.\w+/gi) ?? [];
+  for (const m of postCron) {
+    // مسموح فقط داخل نصّ يُنفَّذ ديناميكيًّا (execute).
+    const at = post.indexOf(m);
+    const ctx = post.slice(Math.max(0, at - 300), at);
+    if (!/execute\s/i.test(ctx)) fail("post_cron_static", `استعلام ثابت على ${m.trim()} — يفشل بالتحليل إن غاب pg_cron`);
+  }
+  if (!/to_regclass\(\s*'cron\.job'\s*\)/i.test(post)) fail("post_cron_no_guard", "POSTCHECK بلا حارس to_regclass على cron.job");
+  // ⛔ وغياب الامتداد ليس فشلًا.
+  const cronBlock = post.slice(post.search(/to_regclass\(\s*'cron\.job'\s*\)/i));
+  const cronHead = cronBlock.slice(0, cronBlock.search(/end \$\$/i) + 1);
+  if (/is\s+null\s+then[\s\S]{0,120}raise\s+exception/i.test(cronHead)) {
+    fail("post_cron_absence_fails", "غياب pg_cron يُعامَل كفشل");
+  }
+  if (/create\s+(extension|schema)/i.test(post)) {
+    fail("post_creates", "POSTCHECK يُنشئ امتدادًا أو مخطّطًا — والفحص يقرأ ولا يكتب");
+  }
+
+  // ── ١٠-د · إصلاح الصلاحيات لا يمرّ عبر الإسقاط ──────────────────────────
+  // 🔴 الحزمة مطبَّقة على Preview وجداولها قد تحمل بلاغات حقيقية. فإصلاح ACL
+  //    بإسقاط الجدول أو حذف صفوفه ليس إصلاحًا بل خسارة.
+  for (const t of tables) {
+    if (new RegExp(`drop\\s+table\\s+(?:if\\s+exists\\s+)?public\\.${t}`, "i").test(run)) {
+      fail("runme_drops_table", `RUNME يُسقط ${t} — إعادة التطبيق تمحو البيانات`);
+    }
+    if (new RegExp(`(?:truncate|delete\\s+from)\\s+(?:table\\s+)?public\\.${t}`, "i").test(runTop)) {
+      fail("runme_truncates", `RUNME يمحو صفوف ${t}`);
+    }
+  }
 
   // ── ١١ · `to_regproc` بتوقيع = فحص كاذب دائمًا ──────────────────────────
   for (const f of PKG_FILES) {

@@ -139,8 +139,8 @@ test("طفرة: EXECUTE لـanon", () => {
 
 test("طفرة: SELECT للجداول لـpublic", () => {
   const bad = mutate((io) => io.edit(H.RUNME,
-    "grant select on public.custody_incidents, public.custody_incident_actions, public.custody_alert_deliveries to authenticated;",
-    "grant select on public.custody_incidents, public.custody_incident_actions, public.custody_alert_deliveries to public;"));
+    "  public.custody_alert_deliveries\n  to authenticated;",
+    "  public.custody_alert_deliveries\n  to public;"));
   caught(bad, "grant_anon", "سجلّ الحوادث مقروء للجميع");
 });
 
@@ -310,4 +310,147 @@ test("طفرة: ROLLBACK يُسقط جدول حزمة أخرى", () => {
   const bad = mutate((io) => io.edit(H.ROLL, "drop table if exists public.custody_incidents;",
     "drop table if exists public.custody_incidents;\ndrop table if exists public.custody_inventory_assets;"));
   caught(bad, "roll_foreign_table", "تراجعٌ يتجاوز نطاقه إلى جداول العهدة الأساسية");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// الجولة الثانية — طفرات عيبَي Preview: ACL موروث وفحص Cron يفشل بالتحليل
+//
+// الحالة المرصودة بعد RUNME ناجح على Preview:
+//   anon = Dxtm · authenticated = rDxtm   (D=TRUNCATE x=REFERENCES t=TRIGGER m=MAINTAIN)
+// ⛔ ولا سطر في RUNME يمنح anon شيئًا ⇒ المصدر ACL افتراضيّ في المشروع،
+//    والمنح تراكميّ ⇒ السحب الصريح هو الإصلاح الوحيد.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ─── ١٦ · بقاء Dxtm ──────────────────────────────────────────────────────
+test("طفرة: REVOKE ALL محذوف ⇒ يبقى Dxtm لدى anon", () => {
+  const bad = mutate((io) => io.write(H.RUNME, io.read(H.RUNME).replace(
+    /revoke all privileges on table[\s\S]*?from public, anon, authenticated;/, "")));
+  caught(bad, "no_revoke_all", "TRUNCATE/REFERENCES/TRIGGER/MAINTAIN تبقى لمجهول");
+});
+
+test("طفرة: REVOKE ALL ينسى anon", () => {
+  const bad = mutate((io) => io.edit(H.RUNME,
+    "  from public, anon, authenticated;", "  from public, authenticated;"));
+  caught(bad, "revoke_all_partial", "الدور الأخطر بالذات هو المستثنى");
+});
+
+test("طفرة: REVOKE ALL ينسى PUBLIC", () => {
+  const bad = mutate((io) => io.edit(H.RUNME,
+    "  from public, anon, authenticated;", "  from anon, authenticated;"));
+  caught(bad, "revoke_all_partial", "PUBLIC يورّث كل دور بما فيه anon");
+});
+
+test("طفرة: REVOKE ALL يُغفل جدولًا", () => {
+  const bad = mutate((io) => io.edit(H.RUNME,
+    "  public.custody_alert_deliveries\n  from public, anon, authenticated;",
+    "  public.custody_incident_actions\n  from public, anon, authenticated;"));
+  caught(bad, "revoke_all_table", "جدول واحد يبقى بـACL الافتراضيّ");
+});
+
+test("طفرة: authenticated يُمنح أكثر من SELECT", () => {
+  const bad = mutate((io) => io.edit(H.RUNME, "grant select on table", "grant select, insert, update on table"));
+  caught(bad, "authenticated_write", "كتابة مباشرة تلتفّ على دوالّ SECURITY DEFINER");
+});
+
+test("طفرة: SELECT قبل REVOKE ⇒ يُلغى فورًا", () => {
+  const bad = mutate((io) => {
+    let s = io.read(H.RUNME);
+    const g = s.match(/grant select on table[\s\S]*?to authenticated;/)[0];
+    s = s.replace(g, "");
+    s = s.replace(/revoke all privileges on table/, g + "\nrevoke all privileges on table");
+    io.write(H.RUNME, s);
+  });
+  caught(bad, "grant_before_revoke", "ترتيب معكوس ⇒ الواجهة تفقد القراءة");
+});
+
+test("طفرة: منح SELECT محذوف كليًّا", () => {
+  const bad = mutate((io) => io.write(H.RUNME,
+    io.read(H.RUNME).replace(/grant select on table[\s\S]*?to authenticated;/, "")));
+  caught(bad, "no_select_grant", "الحجب يقع عند طبقة الصلاحيات قبل أن تعمل RLS");
+});
+
+// ─── ١٧ · فحص سطحيّ لا يلتقط الصلاحية الفعليّة ───────────────────────────
+test("طفرة: POSTCHECK يعود إلى role_table_grants وحدها", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST).replace(/has_table_privilege/g, "role_table_grants_note")));
+  caught(bad, "post_acl_shallow", "المنح الصريح وحده يُرى · الموروث لا");
+});
+
+test("طفرة: POSTCHECK يُهمل ACL الأعمدة", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST).replace(/has_any_column_privilege/g, "col_note")));
+  caught(bad, "post_no_column_acl", "منحة عمود واحد غير مرئية لأيّ فحص جدوليّ");
+});
+
+test("طفرة: POSTCHECK ينسى PUBLIC", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST).replace(/aclexplode/g, "acl_note")));
+  caught(bad, "post_no_public_acl", "PUBLIC ليس دورًا فلا تقبله دوالّ الصلاحيات — يلزم الكتالوج");
+});
+
+test("طفرة: POSTCHECK يُسقط TRUNCATE من قائمة الفحص", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST).replace(/'TRUNCATE',/g, "").replace(/TRUNCATE/g, "TRUNC_X")));
+  caught(bad, "post_missing_priv", "أحد أحرف Dxtm يخرج من المراقبة");
+});
+
+test("طفرة: MAINTAIN تُفحص بلا حارس إصدار", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST).replace(/server_version_num/g, "9999")));
+  caught(bad, "post_no_version_guard", "PostgreSQL أقدم من 17 يرمي خطأ صلاحية غير معروفة");
+});
+
+// ─── ١٨ · فحص Cron ──────────────────────────────────────────────────────
+test("طفرة: استعلام ثابت على cron.job (العيب الذي أوقف Preview)", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "    execute $q$ select count(*) from cron.job where command ilike '%custody_run_alerts%' $q$ into v_n;",
+    "    select count(*) from cron.job where command ilike '%custody_run_alerts%' into v_n;"));
+  caught(bad, "post_cron_static", 'ERROR: relation "cron.job" does not exist — التحليل يسبق الحارس');
+});
+
+test("طفرة: حارس to_regclass محذوف", () => {
+  const bad = mutate((io) => io.write(H.POST,
+    io.read(H.POST).replace(/to_regclass\(\s*'cron\.job'\s*\)/g, "current_setting('x', true)")));
+  caught(bad, "post_cron_no_guard", "لا فحص وجود قبل لمس المخطّط");
+});
+
+test("طفرة: غياب pg_cron يُعامَل كفشل", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "    raise notice '✅ pg_cron غير مثبَّت ⇒ لا مهمّة Cron أنشأتها الحزمة.';",
+    "    raise exception '🔴 pg_cron غير مثبَّت';"));
+  caught(bad, "post_cron_absence_fails", "امتداد غير مثبَّت يُثبت العقد ولا يخالفه");
+});
+
+test("طفرة: POSTCHECK يُنشئ الامتداد بدل أن يفحصه", () => {
+  const bad = mutate((io) => io.edit(H.POST, "do $$\ndeclare v_n int;",
+    "create extension if not exists pg_cron;\ndo $$\ndeclare v_n int;"));
+  caught(bad, "post_creates", "فحصٌ يكتب لم يعد فحصًا");
+});
+
+// ─── ١٩ · إعادة التطبيق فوق حالة مطبَّقة ─────────────────────────────────
+test("طفرة: PREFLIGHT يرفض حالة مطبَّقة مطابقة", () => {
+  const bad = mutate((io) => io.write(H.PRE, io.read(H.PRE).replace(/MATCHING_REAPPLY/g, "REJECTED")));
+  caught(bad, "pre_no_reapply", "الإصلاح يصير مستحيلًا إلّا بإسقاط الجداول");
+});
+
+test("طفرة: PREFLIGHT يقبل حالة جزئية", () => {
+  const bad = mutate((io) => io.edit(H.PRE, "if v_present not in (0, 3) then", "if false then"));
+  caught(bad, "pre_partial_not_enforced", "جدولان من ثلاثة ⇒ مخطّط هجين");
+});
+
+test("طفرة: PREFLIGHT بلا مطابقة تعريف", () => {
+  const bad = mutate((io) => io.write(H.PRE, io.read(H.PRE).replace(/DEFINITION_MATCH/g, "DEF_NOTE").replace(/MISMATCH/g, "NOTE")));
+  caught(bad, "pre_no_mismatch", "جدول يحمل الاسم بتعريف آخر يمرّ بصمت");
+});
+
+test("طفرة: PREFLIGHT لا يقرأ مصدر المنح التلقائيّ", () => {
+  const bad = mutate((io) => io.write(H.PRE, io.read(H.PRE).replace(/pg_default_acl/g, "pg_class")));
+  caught(bad, "pre_no_defacl", "السبب الجذريّ للـDxtm يبقى مجهولًا");
+});
+
+// ─── ٢٠ · الإصلاح لا يمرّ عبر الإسقاط أو المحو ───────────────────────────
+test("طفرة: RUNME يُسقط الجدول ليُعيد إنشاءه", () => {
+  const bad = mutate((io) => io.edit(H.RUNME, "create table if not exists public.custody_incidents (",
+    "drop table if exists public.custody_incidents;\ncreate table if not exists public.custody_incidents ("));
+  caught(bad, "runme_drops_table", "إعادة تطبيق تمحو بلاغات حقيقية");
+});
+
+test("طفرة: RUNME يُفرّغ الجداول", () => {
+  const bad = mutate((io) => io.edit(H.RUNME, "commit;", "truncate table public.custody_incidents;\ncommit;"));
+  caught(bad, "runme_truncates", "«إصلاح» بمحو البيانات");
 });

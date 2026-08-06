@@ -126,11 +126,105 @@ select 'صلاحيات التنفيذ الفعليّة' as check,
               then '🔴 service_role لا ينفّذ المحرّك'
          else '✅ anon=لا · authenticated=البلاغ والإجراء · service_role=المحرّك' end as result;
 
-select 'لا صلاحية جدول لـanon/PUBLIC' as check,
-       case when count(*)=0 then '✅' else '🔴 '||string_agg(distinct table_name::text, ', ') end as result
-from information_schema.role_table_grants
-where table_schema='public' and grantee::text in ('anon','PUBLIC')
-  and table_name::text in ('custody_incidents','custody_incident_actions','custody_alert_deliveries');
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 صلاحيات الجداول — **فعليّة** لا معلَنة
+--
+-- ★ لماذا لا يكفي `information_schema.role_table_grants` ★
+--   ذلك العرض يسرد المنح **الصريحة** فقط. والصلاحية الفعليّة تشمل الموروث عن
+--   PUBLIC وعن عضوية الأدوار، وACL الأعمدة لا يظهر فيه أصلًا. والمقياس الصحيح
+--   `has_table_privilege` / `has_any_column_privilege` + كتالوج ACL لـPUBLIC
+--   (وPUBLIC ليس دورًا، فلا تقبله دوالّ الصلاحيات إطلاقًا).
+--
+-- ★ ما أثبته Preview ★
+--   anon = Dxtm · authenticated = rDxtm على جداول **لم يمنحها هذا الملفّ شيئًا**.
+--   D=TRUNCATE · x=REFERENCES · t=TRIGGER · m=MAINTAIN (PostgreSQL 17+).
+--   ⇒ RUNME صار يبدأ بـ`revoke all privileges`، وهذا القسم يُثبت أثره.
+-- ════════════════════════════════════════════════════════════════════════════
+do $$
+declare
+  v_tbl text; v_p text; v_privs text[];
+  v_bad text[] := '{}';
+begin
+  -- ⚠️ MAINTAIN لم توجد قبل PostgreSQL 17، وتمريرها لخادم أقدم **خطأ** لا
+  --    نتيجة سالبة. فتُضاف بالإصدار لا بالتمنّي.
+  v_privs := array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'];
+  if current_setting('server_version_num')::int >= 170000 then
+    v_privs := v_privs || 'MAINTAIN';
+  end if;
+
+  foreach v_tbl in array array['custody_incidents','custody_incident_actions','custody_alert_deliveries']
+  loop
+    if to_regclass('public.'||v_tbl) is null then
+      v_bad := v_bad || (v_tbl||': الجدول مفقود'); continue;
+    end if;
+
+    foreach v_p in array v_privs loop
+      -- anon: **لا شيء إطلاقًا**.
+      if to_regrole('anon') is not null and has_table_privilege('anon','public.'||v_tbl, v_p) then
+        v_bad := v_bad || format('anon يملك %s على %s', v_p, v_tbl);
+      end if;
+      -- authenticated: SELECT وحده.
+      if to_regrole('authenticated') is not null then
+        if v_p = 'SELECT' then
+          if not has_table_privilege('authenticated','public.'||v_tbl, v_p) then
+            v_bad := v_bad || format('authenticated لا يملك SELECT على %s', v_tbl);
+          end if;
+        elsif has_table_privilege('authenticated','public.'||v_tbl, v_p) then
+          v_bad := v_bad || format('authenticated يملك %s على %s — العقد: قراءة فقط', v_p, v_tbl);
+        end if;
+      end if;
+    end loop;
+
+    -- PUBLIC: من الكتالوج مباشرةً (grantee = 0 في aclexplode).
+    if exists (
+      select 1 from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace,
+        lateral aclexplode(coalesce(c.relacl, '{}'::aclitem[])) a
+       where n.nspname='public' and c.relname = v_tbl and a.grantee = 0)
+    then v_bad := v_bad || format('PUBLIC يملك صلاحية مباشرة على %s', v_tbl); end if;
+
+    -- ACL الأعمدة: غير مرئيّ لأيّ فحص جدوليّ — وهذا بالذات ما أفشل تدقيقًا سابقًا.
+    if to_regrole('anon') is not null
+       and has_any_column_privilege('anon','public.'||v_tbl,'SELECT,INSERT,UPDATE,REFERENCES') then
+      v_bad := v_bad || format('anon يملك صلاحية على عمود في %s', v_tbl);
+    end if;
+    if to_regrole('authenticated') is not null
+       and has_any_column_privilege('authenticated','public.'||v_tbl,'INSERT,UPDATE,REFERENCES') then
+      v_bad := v_bad || format('authenticated يملك صلاحية كتابة على عمود في %s', v_tbl);
+    end if;
+
+    -- service_role: العقد يشترط بقاء القراءة (مسارات الخادم).
+    if to_regrole('service_role') is not null
+       and not has_table_privilege('service_role','public.'||v_tbl,'SELECT') then
+      v_bad := v_bad || format('service_role لا يقرأ %s', v_tbl);
+    end if;
+  end loop;
+
+  -- ⚠️ التسلسلات: المفاتيح uuid ⇒ المتوقَّع صفر. وإن وُجدت فلا صلاحية لأحدهما.
+  if exists (
+    select 1 from pg_class s
+      join pg_namespace sn on sn.oid = s.relnamespace
+      join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass and d.deptype in ('a','i')
+      join pg_class t on t.oid = d.refobjid
+      join pg_namespace tn on tn.oid = t.relnamespace,
+      lateral aclexplode(coalesce(s.relacl,'{}'::aclitem[])) a
+     where s.relkind='S' and sn.nspname='public' and tn.nspname='public'
+       and t.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')
+       and (a.grantee = 0 or a.grantee in (to_regrole('anon')::oid, to_regrole('authenticated')::oid)))
+  then v_bad := v_bad || 'تسلسلة تابعة للحزمة ممنوحة لـanon/authenticated/PUBLIC'; end if;
+
+  if array_length(v_bad,1) > 0 then
+    raise exception E'🔴 ACL غير مطابق للعقد:\n  %', array_to_string(v_bad, E'\n  ');
+  end if;
+  raise notice '✅ ACL مطابق: anon=لا شيء · PUBLIC=لا شيء · authenticated=SELECT فقط.';
+end $$;
+
+-- عرضٌ قرائيّ للـACL كما هو — ليقرأه إنسان بجانب النتيجة أعلاه.
+select 'ACL كما هو' as check,
+       c.relname::text||': '||coalesce(array_to_string(c.relacl,' · '),'(بلا ACL صريح)') as result
+from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname='public'
+  and c.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries');
 
 -- السياسات: ثلاث سياسات قراءة، ⛔ ولا سياسة تسمح لكلّ authenticated بلا شرط.
 select 'سياسات القراءة الثلاث' as check,
@@ -146,16 +240,40 @@ where c.relname in ('custody_incidents','custody_incident_actions','custody_aler
   and pg_get_expr(pol.polqual, pol.polrelid) !~* '(civ_can_manage|auth\.uid)';
 
 -- ⛔ لا بيانات أُنشئت · ولا تنبيه · ولا cron.
-select 'الجداول تُنشأ فارغة' as check,
+-- ⚠️ فارغة = FRESH_APPLY. وصفوفٌ فيها = MATCHING_REAPPLY فوق بيانات حقيقية،
+--    وهي حالة **مشروعة** بعد أن صار الملفّ قابلًا لإعادة التشغيل. ⛔ ولذلك
+--    لا تدخل الحسم: إسقاطُ حزمة بسبب بيانات موجودة هو الخطأ الذي نتجنّبه.
+select 'حالة البيانات (خارج الحسم)' as check,
        case when (select count(*) from public.custody_incidents)=0
              and (select count(*) from public.custody_incident_actions)=0
              and (select count(*) from public.custody_alert_deliveries)=0
             then '✅ لا بيانات ولا تنبيهات' else '🟡 فيها صفوف — تحقّق من مصدرها' end as result;
 
-select 'لا cron لهذه الحزمة' as check,
-       case when to_regclass('cron.job') is null then '✅ الامتداد غير مثبَّت'
-            when (select count(*) from cron.job where command ilike '%custody_run_alerts%')=0 then '✅ لا مهمّة'
-            else '🔴 مهمّة cron أُنشئت — العقد يمنع الجدولة التلقائية' end as result;
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 فحص Cron — والعيب الذي أوقف التشغيل على Preview
+--
+-- الصيغة السابقة كانت `case when to_regclass('cron.job') is null then … when
+-- (select … from cron.job) …`. والحارس **لا يحرس شيئًا**: PostgreSQL يُحلّل
+-- الجملة كاملةً قبل تنفيذها، فيفشل عند `cron.job` غير الموجود:
+--     ERROR: relation "cron.job" does not exist
+-- ⇒ الحلّ SQL ديناميكيّ: النصّ لا يُحلَّل إلّا إن قرّر الحارس تنفيذه.
+--
+-- ⚠️ وغياب pg_cron **ليس فشلًا**: العقد يشترط ألّا تُنشئ الحزمة مهمّة، والامتداد
+--    غير المثبَّت يُثبت ذلك أقوى من أيّ استعلام. ⛔ ولا يُنشَأ امتداد ولا مخطّط هنا.
+-- ════════════════════════════════════════════════════════════════════════════
+do $$
+declare v_n int;
+begin
+  if to_regclass('cron.job') is null then
+    raise notice '✅ pg_cron غير مثبَّت ⇒ لا مهمّة Cron أنشأتها الحزمة.';
+  else
+    execute $q$ select count(*) from cron.job where command ilike '%custody_run_alerts%' $q$ into v_n;
+    if v_n > 0 then
+      raise exception '🔴 % مهمّة Cron تشغّل custody_run_alerts — العقد يمنع الجدولة التلقائية', v_n;
+    end if;
+    raise notice '✅ pg_cron مثبَّت ولا مهمّة لهذه الحزمة.';
+  end if;
+end $$;
 
 -- تنفيذ فعليّ آمن: SELECT من الجداول (⛔ ولا استدعاء للمحرّك).
 do $$
@@ -202,10 +320,16 @@ begin
     v_fail := v_fail || 'ربط الحادثة بالأصل ليس fail-closed';
   end if;
 
-  if (select count(*) from information_schema.role_table_grants
-       where table_schema='public' and grantee::text in ('anon','PUBLIC')
-         and table_name::text in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')) > 0 then
-    v_fail := v_fail || 'صلاحية جدول لـanon/PUBLIC';
+  -- ⚠️ ACL الجداول حُسم أعلاه بـ`has_table_privilege` وبكتالوج ACL، ويرفع
+  --    استثناءه بنفسه. ⛔ ولا يُعاد هنا بـ`role_table_grants`: فحصان بمعيارين
+  --    مختلفين لنفس الشرط يجعل الأضعف يبدو تأكيدًا للأقوى وهو ليس كذلك.
+  --    ويبقى هنا شرطٌ واحد لا يقيسه ذلك القسم: أن يكون المنح صريحًا لا موروثًا.
+  if to_regrole('authenticated') is not null
+     and not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace,
+                       lateral aclexplode(coalesce(c.relacl,'{}'::aclitem[])) a
+                      where n.nspname='public' and c.relname='custody_incidents'
+                        and a.grantee = to_regrole('authenticated')::oid and a.privilege_type='SELECT') then
+    v_fail := v_fail || 'منح SELECT لـauthenticated ليس صريحًا في ACL — لا تعتمد على الوراثة';
   end if;
 
   if to_regrole('anon') is not null then
