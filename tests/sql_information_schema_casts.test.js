@@ -328,11 +328,14 @@ test("🔴 محرّك التنبيهات محجوب عن authenticated في RUNM
     "🔴 POSTCHECK يتوقّع أنّ authenticated يشغّل محرّك التنبيهات");
 });
 
-test("🔴 الـJOIN يطابق التوقيع لا الاسم وحده", () => {
+test("🔴 الـJOIN يطابق **الأنواع** عبر oidvectortypes لا الاسم وحده", () => {
   const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
   const join = t.slice(t.indexOf("left join pg_proc"), t.indexOf("flags as ("));
-  assert.match(join, /pg_get_function_identity_arguments\s*\(\s*p\.oid\s*\)\s*=\s*k\.fargs/,
-    "🔴 الربط بالاسم وحده — دالّة بنفس الاسم من حزمة أخرى تدخل النطاق");
+  assert.match(join, /oidvectortypes\s*\(\s*p\.proargtypes\s*\)\s*=\s*k\.fargs/,
+    "🔴 المطابقة ليست على قائمة الأنواع");
+  // 🔴 الدالّة الخاطئة تُعيد **أسماء الوسائط مع الأنواع**، فلا تطابق أبدًا.
+  assert.ok(!/pg_get_function_identity_arguments/.test(join),
+    "🔴 عاد pg_get_function_identity_arguments — يُعيد `p_payload jsonb` فلا يطابق `jsonb`");
   assert.match(join, /p\.proname\s*=\s*k\.fname/, "لا ربط بالاسم");
   assert.match(join, /pronamespace\s*=\s*'public'::regnamespace/, "لا حصر بمخطّط public");
 });
@@ -343,4 +346,118 @@ test("🔴 ACL الفارغ يُعامَل تسريبًا لا حالة سليم
     "🔴 `proacl is null` لا يُحتسب — ودالّة بلا REVOKE صريح يملكها PUBLIC ضمنًا");
   assert.match(t, /aclexplode\s*\([^)]*\)[\s\S]{0,120}?grantee\s*=\s*0/,
     "لا فحص لمِنحة PUBLIC عبر aclexplode (grantee=0)");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ١١ · 🔴 المطابقة بالأنواع وحدها — العيب الذي صنّف السبع «مفقودة» وهي موجودة
+//
+// `pg_get_function_identity_arguments()` تُعيد **أسماء الوسائط مع أنواعها**:
+//     prodops_permit_upsert  →  "p_payload jsonb"
+//     prodops_permit_delete  →  "p_id uuid, p_reason text"
+// ومقارنتها بقائمة أنواع (`jsonb`) لا تتحقّق أبدًا.
+// أمّا `oidvectortypes(proargtypes)` فتُعيد الأنواع وحدها: `uuid, text`.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** ما تُعيده `pg_get_function_identity_arguments` فعلًا — أسماء + أنواع. */
+const IDENTITY_ARGS_REAL = {
+  prodops_permit_upsert:     "p_payload jsonb",
+  prodops_permit_delete:     "p_id uuid, p_reason text",
+  prodops_permits_list:      "p_filters jsonb",
+  prodops_media_attach:      "p_owner_kind text, p_owner_id uuid, p_bucket text, p_path text, p_media_type text, p_caption text, p_sort integer",
+  prodops_media_delete:      "p_id uuid, p_reason text",
+  prodops_media_list:        "p_owner_kind text, p_owner_id uuid",
+  prodops_permit_alerts_run: "",
+};
+/** ما تُعيده `oidvectortypes(proargtypes)` — أنواع فقط، وسلسلة فارغة بلا وسائط. */
+const TYPES_ONLY = {
+  prodops_permit_upsert:     "jsonb",
+  prodops_permit_delete:     "uuid, text",
+  prodops_permits_list:      "jsonb",
+  prodops_media_attach:      "text, uuid, text, text, text, text, integer",
+  prodops_media_delete:      "uuid, text",
+  prodops_media_list:        "text, uuid",
+  prodops_permit_alerts_run: "",
+};
+
+test("🔴 قائمة الحزمة أنواع فقط — لا اسم وسيط واحد", () => {
+  for (const { fname, fargs } of packageScope()) {
+    assert.equal(fargs, TYPES_ONLY[fname], `${fname}: قائمة أنواع غير متوقَّعة`);
+    // اسم وسيط داخل fargs يعني أنّ أحدًا نسخها من identity_arguments.
+    assert.ok(!/\bp_[a-z_]+\b/.test(fargs),
+      `🔴 ${fname}: fargs يحوي اسم وسيط — لن يطابق oidvectortypes`);
+  }
+});
+
+test("🔴 المطابقة تنجح مع الأنواع وتفشل مع أسماء+أنواع", () => {
+  const scope = packageScope();
+  // النموذج الصحيح: oidvectortypes
+  const okCatalog = scope.map((s) => ({ proname: s.fname, identityArgs: TYPES_ONLY[s.fname] }));
+  assert.equal(okCatalog.filter((f) => inScope(scope, f)).length, 7,
+    "🔴 المطابقة بالأنواع لم تُعطِ 7/7");
+
+  // 🔴 النموذج المعطوب الذي وقع فعلًا على Preview: أسماء + أنواع ⇒ صفر تطابق.
+  const brokenCatalog = scope.map((s) => ({ proname: s.fname, identityArgs: IDENTITY_ARGS_REAL[s.fname] }));
+  const matched = brokenCatalog.filter((f) => inScope(scope, f)).map((f) => f.proname);
+  // زوجٌ فقط قد يتصادف: الدالّة بلا وسائط سلسلتها فارغة في الحالتين.
+  assert.deepEqual(matched, ["prodops_permit_alerts_run"],
+    "🔴 المقارنة تقبل «أسماء+أنواع» — وهذا يخفي العيب الأصليّ بدل رصده");
+});
+
+test("🔴 صفر وسيط = سلسلة فارغة، ⛔ لا NULL ولا '()'", () => {
+  const row = packageScope().find((s) => s.fname === "prodops_permit_alerts_run");
+  assert.ok(row, "محرّك التنبيهات خارج القائمة");
+  assert.equal(row.fargs, "", "🔴 توقيع الصفر-وسيط ليس سلسلة فارغة");
+  assert.notEqual(row.fargs, null);
+  assert.ok(!/\(|\)|void|null/i.test(row.fargs), "🔴 صيغة غير صالحة للصفر-وسيط");
+  // وSQL يقارن بسلسلة فارغة صراحةً لا بـis null.
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  assert.match(t, /\('prodops_permit_alerts_run',\s*'',/,
+    "🔴 محرّك التنبيهات ليس بسلسلة فارغة في VALUES");
+});
+
+test("🔴 overload بنوع مختلف لا يُطابَق", () => {
+  const scope = packageScope();
+  const overloads = [
+    { proname: "prodops_permit_upsert",  identityArgs: "text" },
+    { proname: "prodops_permit_delete",  identityArgs: "uuid" },
+    { proname: "prodops_media_list",     identityArgs: "uuid, text" },
+    { proname: "prodops_permit_alerts_run", identityArgs: "integer" },
+    // ترتيب مقلوب — نوعان صحيحان بترتيب خاطئ.
+    { proname: "prodops_media_list",     identityArgs: "uuid, text" },
+  ];
+  for (const o of overloads) {
+    assert.ok(!inScope(scope, o),
+      `🔴 قُبل overload: ${o.proname}(${o.identityArgs})`);
+  }
+});
+
+test("🔴 غياب دالّة واحدة يُفشل الفحص — لا يمرّ بصمت", () => {
+  const scope = packageScope();
+  const catalog = scope
+    .filter((s) => s.fname !== "prodops_media_delete")
+    .map((s) => ({ proname: s.fname, identityArgs: s.fargs }));
+  const found = catalog.filter((f) => inScope(scope, f));
+  assert.equal(found.length, scope.length - 1, "عدّ غير متوقَّع");
+  const missing = scope.filter((s) => !catalog.some((f) => inScope([s], f)));
+  assert.deepEqual(missing.map((m) => m.fname), ["prodops_media_delete"],
+    "🔴 الغياب لم يُرصد");
+  // وSQL يبلّغ عن الغياب صراحةً.
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  assert.match(t, /count\(\*\)\s*filter\s*\(\s*where\s+oid\s+is\s+null\s*\)/i,
+    "لا فحص للدوالّ المفقودة");
+});
+
+test("🔴 المطابقة بالاسم وحده مرفوضة — نوع مختلف بنفس الاسم", () => {
+  const scope = packageScope();
+  const sameNameWrongType = { proname: "prodops_permits_list", identityArgs: "text" };
+  assert.ok(!inScope(scope, sameNameWrongType), "🔴 قُبلت بالاسم وحده");
+  // ولو قُبلت بالاسم لأخفت غياب الدالّة الحقيقية.
+  const byNameOnly = scope.some((s) => s.fname === sameNameWrongType.proname);
+  assert.ok(byNameOnly, "الاسم موجود في النطاق — فالفارق هو التوقيع وحده");
+});
+
+test("التشخيص يعرض التواقيع الفعلية عند الاختلاف", () => {
+  const t = code(fs.readFileSync(path.join(DOCS, "wave3_permits_media_POSTCHECK.sql"), "utf8"));
+  assert.match(t, /oidvectortypes\s*\(\s*p\.proargtypes\s*\)[\s\S]{0,80}as result/,
+    "لا صفّ تشخيصيّ يعرض التوقيع الفعليّ");
 });

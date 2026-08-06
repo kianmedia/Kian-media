@@ -33,6 +33,16 @@ where table_schema='public' and table_name='ops_job_permits' and column_name='re
 --
 -- ⚠️ ويُطابَق **التوقيع** لا الاسم: دالّة بنفس الاسم وتوقيع مختلف من حزمة أخرى
 --    لا تدخل النطاق، ولا تُخفي غياب دالّتنا.
+--
+-- ★★ 🔴 ولماذا `oidvectortypes` لا `pg_get_function_identity_arguments` ★★
+--   الثانية تُعيد **أسماء الوسائط مع أنواعها**: `p_payload jsonb` و
+--   `p_id uuid, p_reason text`. فمقارنتها بقائمة أنواع مثل `jsonb` لا تتحقّق
+--   أبدًا — وهذا ما جعل الفحص يُصنّف الدوالّ السبع **مفقودة** وهي موجودة كلّها
+--   على Preview. والأسوأ أنّ الفشل كان يبدو نقصًا في التطبيق لا عيبًا في الفحص.
+--   أمّا `oidvectortypes(proargtypes)` فتُعيد **الأنواع وحدها** بالترتيب
+--   (`uuid, text`)، ولا تتأثّر بإعادة تسمية وسيط ولا بقيمة افتراضية.
+-- ⚠️ ودالّة بلا وسائط تُعطي **سلسلة فارغة** `''` — لا NULL.
+--    (`proargtypes` يشمل وسائط الإدخال فقط، وهو المقصود بالهويّة.)
 -- ════════════════════════════════════════════════════════════════════════════
 -- ⚠️ الأربعة في **عبارة واحدة**: `WITH` يرتبط ببيان واحد فقط، فتكرار
 --    `select` بعده يفشل بـ«relation "resolved" does not exist».
@@ -53,7 +63,7 @@ resolved as (
   left join pg_proc p
          on p.proname = k.fname
         and p.pronamespace = 'public'::regnamespace
-        and pg_get_function_identity_arguments(p.oid) = k.fargs
+        and pg_catalog.oidvectortypes(p.proargtypes) = k.fargs
 ),
 flags as (
   select r.*,
@@ -97,6 +107,20 @@ select 'دوالّ الحزمة: صلاحية authenticated مطابقة للم�
                           || ' (المتوقَّع ' || expect_authenticated::text || ')', ', ')
                  filter (where oid is not null and auth_exec <> expect_authenticated) end
 from flags;
+
+-- ⚠️ تشخيص عند اختلاف التوقيع — يُعرض دائمًا، ويُقرأ عند احمرار الفحص أعلاه.
+--    غيابه هو ما جعل «الدوالّ السبع مفقودة» لغزًا: الفحص لم يُظهر قطّ ما تحويه
+--    القاعدة فعلًا، فبدا الخلل في التطبيق لا في المقارنة.
+select 'تشخيص التواقيع الفعلية' as check,
+       p.proname || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')' as result
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace
+  and p.proname in ('prodops_permit_upsert','prodops_permit_delete','prodops_permits_list',
+                    'prodops_media_attach','prodops_media_delete','prodops_media_list',
+                    'prodops_permit_alerts_run')
+order by p.proname;
+-- المتوقَّع: سبعة صفوف بالتواقيع المذكورة في `pkg` أعلاه حرفًا بحرف.
+-- ⚠️ صفر صفوف ⇒ الحزمة غير مطبَّقة. صفوف بتواقيع مختلفة ⇒ انحراف حقيقيّ.
 
 -- 🔴 عيبان صُحّحا هنا:
 --  ١. `grantee` نوعه `information_schema.sql_identifier` لا `text`، فمقارنة
