@@ -46,7 +46,7 @@ function bodies(sql) {
  * يُدقّق الحزمة في مجلَّد ما. يُعيد مصفوفة أعطاب (فارغة = سليمة).
  * كل عطب: `{ id, msg }`.
  */
-function auditPackage(dir) {
+function auditPackage(dir, repoRoot) {
   const F = {};
   for (const f of PKG_FILES) {
     const p = path.join(dir, f);
@@ -301,6 +301,67 @@ function auditPackage(dir) {
     else fail("priv_list_unparsable", `تعذّر تتبّع بناء v_privs: ${e.message}`);
   }
 
+  // ── ١٠-ب-٣ · عقد service_role — مشتقّ من **مسح المستهلكين** ─────────────
+  // 🔴 لا من POSTCHECK ولا من RUNME: كلاهما تحت الفحص. والمصدر كود التطبيق.
+  if (repoRoot) {
+    const consumers = serviceRoleTableConsumers(repoRoot);
+    const grantsSelect = /grant\s+select[\s\S]{0,200}?to\s+[a-z_, ]*service_role/i.test(runTop);
+    // ⚠️ «يشترط» = يُفشل عند الغياب، لا مجرّد ذكر الدور في استعلام.
+    const demandsSelect = /if\s+not\s+has_table_privilege\('service_role'[^)]*'SELECT'\)/.test(post)
+      || /not has_table_privilege\('service_role','public\.'\|\|v_tbl,'SELECT'\)/.test(post);
+
+    if (consumers.length === 0) {
+      if (grantsSelect) {
+        fail("service_role_grant_unjustified",
+          "RUNME يمنح service_role صلاحية جدول ⛔ ولا مستهلك خادميّ مباشر في المستودع");
+      }
+      if (demandsSelect) {
+        fail("service_role_select_imposed",
+          "POSTCHECK يشترط SELECT لـservice_role بلا مستهلك — والافتراضيّ لا يمنحه ⇒ فشل دائم");
+      }
+    } else {
+      const where = consumers.map((c) => `${c.file}:${c.line} (${c.table})`).join(" · ");
+      if (!grantsSelect) {
+        fail("service_role_grant_missing",
+          `مستهلك خادميّ مباشر موجود ⇒ RUNME يجب أن يمنح service_role SELECT: ${where}`);
+      }
+      if (!demandsSelect) {
+        fail("service_role_select_unchecked",
+          `مستهلك خادميّ مباشر موجود ⇒ POSTCHECK يجب أن يُثبت SELECT: ${where}`);
+      }
+    }
+
+    // ⛔ وفي الحالتين: لا كتابة ولا TRUNCATE لـservice_role من هذه الحزمة.
+    for (const g of runTop.matchAll(/grant\s+([a-z ,]+?)\s+on\s+table([\s\S]*?)to\s+([a-z_, ]+);/gi)) {
+      const privs = g[1].split(",").map((x) => x.trim().toLowerCase());
+      const roles = g[3].split(",").map((x) => x.trim().toLowerCase());
+      if (roles.includes("service_role") && privs.some((x) => x !== "select")) {
+        fail("service_role_write", `service_role يُمنح ${privs.join(",")} — العقد: قراءة عند الحاجة فقط`);
+      }
+    }
+  }
+
+  // ⚠️ `Dxtm` الموروثة: تُبلَّغ ولا تُفشل. فإفشالُ الحزمة بامتياز لم تمنحه
+  //    يجعل POSTCHECK أحمر أبدًا على قاعدة سليمة — وهو ما وقع فعلًا.
+  //    ⛔ والسكوت عنه أسوأ: TRUNCATE امتياز مدمّر يستحقّ سطرًا في المخرَج.
+  if (/array_append\(v_bad[^)]*TRUNCATE/.test(post)) {
+    fail("service_role_truncate_fails", "TRUNCATE الموروثة تُفشل الحزمة — وهي من ACL المشروع لا من صنعها");
+  }
+  if (!/raise notice[^;]*TRUNCATE/i.test(post)) {
+    fail("service_role_truncate_silent", "TRUNCATE لـservice_role غير مُبلَّغ عنه إطلاقًا");
+  }
+
+  // ── ١٠-ب-٤ · البديل عن SELECT: EXECUTE **و**مالك SECURITY DEFINER ───────
+  // ⚠️ الطرفان معًا: دالّة تفقد `security definer` تُنفَّذ بصلاحيات service_role
+  //    ⇒ 42501 رغم بقاء EXECUTE سليمًا. فأحدهما وحده ليس برهانًا.
+  if (!/has_function_privilege\('service_role','public\.custody_run_alerts\(\)','EXECUTE'\)/.test(post)) {
+    fail("post_no_service_execute", "POSTCHECK لا يُثبت EXECUTE لـservice_role على المحرّك");
+  }
+  if (!/prosecdef/.test(post)) fail("post_no_secdef_proof", "POSTCHECK لا يُثبت أنّ الدوالّ SECURITY DEFINER");
+  if (!/pg_get_userbyid\(p\.proowner\)/.test(post) || !/has_table_privilege\(v_owner/.test(post)) {
+    fail("post_no_owner_read", "POSTCHECK لا يُثبت أنّ **مالك** الدوالّ يقرأ الجداول");
+  }
+
   // ── ١٠-ج · Cron: حارس to_regclass ثمّ SQL ديناميكيّ ──────────────────────
   // 🔴 `case when to_regclass('cron.job') is null then … when (select … from
   //    cron.job)` **لا يحرس شيئًا**: الجملة تُحلَّل كاملةً قبل التنفيذ.
@@ -359,6 +420,53 @@ function auditPackage(dir) {
   }
 
   return bad;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// مسح مستهلكي service_role — **مصدر القرار**، لا ملفّ SQL
+//
+// 🔴 السؤال «هل يحتاج service_role SELECT على الجداول الثلاثة؟» لا يُجاب من
+//    POSTCHECK ولا من RUNME: كلاهما هو ما نفحصه. يُجاب من **كود التطبيق**.
+//    فإن ظهر مستهلك خادميّ مباشر غدًا، انقلب التوقّع تلقائيًّا وطالب بالمنحة.
+//
+// ⚠️ وEXECUTE على دالّة SECURITY DEFINER **ليس** قراءةً مباشرة: الدالّة تُنفَّذ
+//    بصلاحيات مالكها، فلا تحتاج ACL للمستدعي على الجدول.
+// ════════════════════════════════════════════════════════════════════════════
+const PKG_TABLES = ["custody_incidents", "custody_incident_actions", "custody_alert_deliveries"];
+const SRC_DIRS = ["app", "lib", "components", "scripts", "supabase", "pages"];
+/** علامات تدلّ على عميل بمفتاح الخدمة داخل الملفّ. */
+const SERVICE_MARKERS = /SERVICE_ROLE|selectAsService|patchAsService|insertAsService|supabaseAdmin|SUPABASE_SERVICE_ROLE_KEY/;
+
+function walk(dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (e.name !== "node_modules" && e.name !== ".next") walk(p, out); }
+    else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * كل موضع يقرأ أحد جداول الحزمة **بدور service_role**.
+ * @returns {{file:string, line:number, table:string, text:string}[]}
+ */
+function serviceRoleTableConsumers(root) {
+  const hits = [];
+  for (const dir of SRC_DIRS) {
+    for (const file of walk(path.join(root, dir))) {
+      const src = fs.readFileSync(file, "utf8");
+      if (!SERVICE_MARKERS.test(src)) continue;           // لا مفتاح خدمة ⇒ ليس مستهلكًا
+      src.split("\n").forEach((ln, i) => {
+        for (const t of PKG_TABLES) {
+          // مرجع جدول فعليّ: مسار PostgREST أو ‎.from('t')‎ — لا مجرّد ذكر الاسم.
+          const isRef = new RegExp(`(?:['"\`/]|rest/v1/)${t}[?'"\`]|from\\(\\s*['"\`]${t}['"\`]`).test(ln);
+          if (isRef) hits.push({ file: path.relative(root, file), line: i + 1, table: t, text: ln.trim() });
+        }
+      });
+    }
+  }
+  return hits;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -451,7 +559,7 @@ function requiredGates(runRaw) {
 
 module.exports = {
   RUNME, PRE, POST, ROLL, PKG_FILES,
-  auditPackage, stripComments, stripBodies,
+  auditPackage, stripComments, stripBodies, serviceRoleTableConsumers, PKG_TABLES,
   MalformedArrayLiteral, arrayLiteralAppends, simulatePrivList,
   createdFunctions, createdTables, requiredTables, requiredGates, fnBody,
 };

@@ -25,7 +25,7 @@ const R = (f) => fs.readFileSync(path.join(DOCS, f), "utf8");
 
 // ─── ١ · العقد كاملًا على الحزمة الحقيقية ──────────────────────────────────
 test("🔴 حزمة الحوادث تجتاز عقدها كاملًا", () => {
-  const bad = H.auditPackage(DOCS);
+  const bad = H.auditPackage(DOCS, ROOT);
   assert.deepEqual(bad, [], "أعطاب:\n" + bad.map((b) => `  [${b.id}] ${b.msg}`).join("\n"));
 });
 
@@ -185,12 +185,51 @@ test("⛔ لا منحة واحدة لـanon على أيّ كائن من الحز
   }
 });
 
-test("service_role: القراءة مشترطة · وتضييق الباقي قرار موثَّق لا سكوت", () => {
+// ════════════════════════════════════════════════════════════════════════════
+// ٩-ب · عقد service_role — القرار من **مسح المستهلكين** لا من ملفّ SQL
+//
+// ★ ما أوقف POSTCHECK على Preview ★ اشتراطُ `SELECT` لـservice_role. والـACL
+//   الافتراضيّ للمُنشئ postgres على public هو
+//   `anon=Dxtm · authenticated=Dxtm · service_role=Dxtm` — ⛔ ولا SELECT فيه.
+//   فالفحص كان يشترط امتيازًا لا يمنحه أحد ولا يحتاجه أحد.
+// ════════════════════════════════════════════════════════════════════════════
+test("🔴 مسح المستودع: هل يقرأ service_role الجداول الثلاثة مباشرةً؟", () => {
+  const consumers = H.serviceRoleTableConsumers(ROOT);
+  // ⚠️ إن سقط هذا يومًا، فالمطلوب **منح SELECT** لا تعطيل الاختبار.
+  assert.deepEqual(consumers, [],
+    "ظهر مستهلك خادميّ مباشر ⇒ أضِف `grant select … to service_role` في RUNME واشترطه في POSTCHECK:\n"
+    + consumers.map((c) => `  ${c.file}:${c.line} → ${c.table}`).join("\n"));
+});
+
+test("⛔ POSTCHECK لا يشترط SELECT لـservice_role (ولا RUNME يمنحه)", () => {
   const post = H.stripComments(R(H.POST));
-  assert.match(post, /has_table_privilege\('service_role'[^)]*'SELECT'\)/,
-    "POSTCHECK لا يشترط قراءة service_role");
-  assert.match(R(H.RUNME), /service_role[\s\S]{0,200}لا يُمسّان|لا يُمسّان[\s\S]{0,200}service_role/,
-    "قرار إبقاء صلاحيات service_role غير موثَّق في RUNME");
+  assert.ok(!/if\s+not\s+has_table_privilege\('service_role'[^)]*'SELECT'\)/.test(post),
+    "اشتراطُ SELECT بلا مستهلك يجعل POSTCHECK يفشل دائمًا على ACL افتراضيّ سليم");
+  const runTop = H.stripBodies(H.stripComments(R(H.RUNME)));
+  assert.ok(!/grant\s+select[\s\S]{0,200}?to\s+[a-z_, ]*service_role/i.test(runTop),
+    "RUNME يوسّع ACL بلا مستهلك");
+});
+
+test("🔴 البديل مُبرهَن: EXECUTE **و** مالك SECURITY DEFINER يقرأ", () => {
+  const post = H.stripComments(R(H.POST));
+  // ⛔ وEXECUTE على دالّة ليس SELECT على جدول: الطرفان معًا أو لا برهان.
+  assert.match(post, /has_function_privilege\('service_role','public\.custody_run_alerts\(\)','EXECUTE'\)/,
+    "لا إثبات لـEXECUTE على المحرّك");
+  assert.match(post, /prosecdef/, "لا إثبات لـSECURITY DEFINER");
+  assert.match(post, /pg_get_userbyid\(p\.proowner\)/, "لا استخراج لمالك الدوالّ");
+  assert.match(post, /has_table_privilege\(v_owner/, "لا إثبات لقراءة المالك للجداول");
+});
+
+test("service_role: Dxtm الموروثة تُبلَّغ ولا تُفشل · والكتابة تُفشل", () => {
+  const post = H.stripComments(R(H.POST));
+  // 🟡 موروث من ACL المشروع على كل جدول ⇒ تضييقه قرار عابر للحزم.
+  assert.match(post, /raise notice[^;]*TRUNCATE/i,
+    "TRUNCATE الموروثة غير مُبلَّغ عنها — سكوتٌ عن امتياز مدمّر");
+  assert.ok(!/array_append\(v_bad[^)]*TRUNCATE/.test(post),
+    "TRUNCATE الموروثة تُفشل الحزمة — وهي ليست من صنعها");
+  // 🔴 أمّا arwd فلا يمنحها الافتراضيّ ولا الحزمة ⇒ ظهورها منحٌ من خارج العقد.
+  assert.match(post, /foreach v_p in array array\['SELECT','INSERT','UPDATE','DELETE'\] loop/,
+    "لا رفض لصلاحيات الصفوف على service_role");
 });
 
 // ─── ١٠ · Cron: الحارس يجب أن يسبق التحليل لا أن يتلوه ────────────────────

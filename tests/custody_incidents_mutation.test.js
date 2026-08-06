@@ -16,7 +16,8 @@ const os = require("node:os");
 const path = require("node:path");
 const H = require("./custody_incidents_helpers.js");
 
-const DOCS = path.resolve(__dirname, "..", "docs");
+const ROOT = path.resolve(__dirname, "..");
+const DOCS = path.join(ROOT, "docs");
 
 /** ينسخ الحزمة إلى مجلَّد مؤقّت، يطبّق التشويه، يُدقّق، ثمّ ينظّف. */
 function mutate(apply) {
@@ -34,7 +35,7 @@ function mutate(apply) {
       },
     };
     apply(io);
-    return H.auditPackage(dir);
+    return H.auditPackage(dir, ROOT);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -515,4 +516,100 @@ test("طفرة: صلاحية من الأساس تُحذف من قائمة الف
     "array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']",
     "array['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER']"));
   caught(bad, "priv_list_incomplete", "TRUNCATE يخرج من القائمة التي تُبنى فعلًا");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// الجولة الرابعة — عقد service_role
+// 🔴 القرار مشتقّ من **مسح المستودع**: لا مستهلك خادميّ مباشر اليوم ⇒ لا SELECT.
+//    وطفراتٌ في الاتّجاهين: فرضُه بلا مستهلك، وإسقاطُه لو ظهر مستهلك.
+// ════════════════════════════════════════════════════════════════════════════
+
+test("طفرة: POSTCHECK يفرض SELECT على service_role بلا مستهلك", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "      foreach v_p in array array['SELECT','INSERT','UPDATE','DELETE'] loop",
+    "      if not has_table_privilege('service_role','public.'||v_tbl,'SELECT') then\n"
+    + "        v_bad := array_append(v_bad, 'service_role لا يقرأ '||v_tbl);\n      end if;\n"
+    + "      foreach v_p in array array['INSERT','UPDATE','DELETE'] loop"));
+  caught(bad, "service_role_select_imposed",
+    "الافتراضيّ service_role=Dxtm ⇒ الاشتراط يُفشل POSTCHECK دائمًا على قاعدة سليمة");
+});
+
+test("طفرة: RUNME يمنح service_role SELECT بلا مستهلك", () => {
+  const bad = mutate((io) => io.edit(H.RUNME,
+    "  to authenticated;\n", "  to authenticated;\n\ngrant select on table public.custody_incidents to service_role;\n"));
+  caught(bad, "service_role_grant_unjustified", "توسيع ACL بلا استخدام فعليّ");
+});
+
+test("طفرة: منح service_role كتابة", () => {
+  const bad = mutate((io) => io.edit(H.RUNME,
+    "  to authenticated;\n",
+    "  to authenticated;\n\ngrant select, insert, update on table public.custody_incidents to service_role;\n"));
+  caught(bad, "service_role_write", "مفتاح الخدمة يكتب مباشرةً متجاوزًا دوالّ العقد");
+});
+
+test("طفرة: حذف فحص EXECUTE على custody_run_alerts", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST)
+    .replace(/has_function_privilege\('service_role','public\.custody_run_alerts\(\)','EXECUTE'\)/g,
+             "true")));
+  caught(bad, "post_no_service_execute", "المسار الخادميّ الوحيد بلا إثبات");
+});
+
+test("طفرة: EXECUTE يُعامَل بديلًا كاملًا عن SECURITY DEFINER", () => {
+  // 🔴 دالّة تفقد `security definer` تُنفَّذ بصلاحيات service_role ⇒ 42501،
+  //    رغم بقاء EXECUTE سليمًا. فالاكتفاء بـEXECUTE برهانٌ ناقص.
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST).replace(/prosecdef/g, "provolatile")));
+  caught(bad, "post_no_secdef_proof", "EXECUTE وحده لا يُثبت أنّ الدالّة تقرأ الجداول");
+});
+
+test("طفرة: لا إثبات أنّ مالك الدوالّ يقرأ الجداول", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST)
+    .replace(/has_table_privilege\(v_owner/g, "coalesce(true")));
+  caught(bad, "post_no_owner_read", "SECURITY DEFINER بلا قدرة مالكها على القراءة = 42501");
+});
+
+test("طفرة: TRUNCATE الموروثة تُفشل الحزمة بدل أن تُبلَّغ", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "        raise notice '🟡 service_role يملك TRUNCATE على % — موروث من ACL المشروع، خارج نطاق هذه الحزمة.', v_tbl;",
+    "        v_bad := array_append(v_bad, 'service_role يملك TRUNCATE على '||v_tbl);"));
+  caught(bad, "service_role_truncate_fails", "أحمر أبديّ على قاعدة سليمة — وهو ما أوقف Preview أصلًا");
+});
+
+test("طفرة: السكوت التامّ عن TRUNCATE لـservice_role", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST)
+    .replace(/raise notice '🟡 service_role يملك TRUNCATE[^;]*;/, "")));
+  caught(bad, "service_role_truncate_silent", "امتياز مدمّر يمرّ بلا سطر في المخرَج");
+});
+
+// 🔴 عدم الدور — الاتّجاه المعاكس: مستهلك خادميّ حقيقيّ يقلب التوقّع.
+test("طفرة (عدم الدور): مستهلك service_role جديد ⇒ غياب المنحة يصير عطبًا", () => {
+  // ⚠️ الجذر **مؤقّت**: ⛔ ولا يُكتب ملفّ واحد داخل المستودع — اختبارات أخرى
+  //    تمسح lib/ بالتوازي، وسباقٌ كهذا سبق أن كسر البناء في هذا المستودع.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "civ-inc-root-"));
+  try {
+    fs.mkdirSync(path.join(root, "lib", "server"), { recursive: true });
+    fs.writeFileSync(path.join(root, "lib", "consumer.ts"),
+      "import { selectAsService } from '@/lib/server/supabaseAdmin';\n"
+      + "export const x = () => selectAsService(`custody_incidents?select=id`);\n");
+    const bad = H.auditPackage(DOCS, root);
+    assert.ok(bad.some((b) => b.id === "service_role_grant_missing"),
+      "القرار مشتقّ من ملفّات الحزمة لا من مسح المستودع — فمستهلك جديد لا يُغيّر شيئًا");
+    assert.ok(bad.some((b) => b.id === "service_role_select_unchecked"),
+      "POSTCHECK لا يُطالَب بإثبات SELECT رغم وجود مستهلك حقيقيّ");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("عدم الدور (الضدّ): جذر بلا مستهلك ⇒ العقد نظيف", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "civ-inc-root-"));
+  try {
+    fs.mkdirSync(path.join(root, "lib"), { recursive: true });
+    // ⚠️ ملفّ يذكر الجدول **بلا** مفتاح خدمة ⇒ ليس مستهلكًا (قراءة authenticated).
+    fs.writeFileSync(path.join(root, "lib", "portal.ts"),
+      "export const list = () => pget(`custody_incidents?select=id`);\n");
+    assert.deepEqual(H.auditPackage(DOCS, root), [],
+      "قراءة authenticated تُحسب خطأً استهلاكًا خادميًّا");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

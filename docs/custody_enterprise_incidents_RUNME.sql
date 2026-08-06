@@ -374,9 +374,33 @@ grant select on table
   public.custody_alert_deliveries
   to authenticated;
 
--- ⚠️ `service_role` والمالك: **لا يُمسّان هنا**. صلاحياتهما من إعداد المشروع،
---    وتضييقهما يمسّ مسارات خادمية خارج هذه الحزمة (النسخ الاحتياطيّ والترحيل).
---    مسجَّل في العقد لا مسكوتًا عنه.
+-- ════════════════════════════════════════════════════════════════════════════
+-- ⛔ ولا منحة واحدة لـ`service_role` على هذه الجداول — قرارٌ بالدليل لا بالثقة
+--
+-- ★ مسح المستودع (app/ · lib/ · components/ · scripts/ · supabase/) ★
+--   الإشارة الوحيدة لأيّ من الجداول الثلاثة في كود التطبيق:
+--     `lib/portal/custodyEnterprise.ts:75` — `custodyListIncidents`
+--   وتمرّ عبر `pget` ⇒ `lib/portal/client.ts:71`: `apikey: ANON` +
+--   `Bearer <access_token للمستخدم>` ⇒ الدور **authenticated** تحت RLS.
+--   وكرون العهدة `app/api/cron/custody-alerts/route.ts` يستدعي
+--   `rpcAsService('custody_run_alerts')` — **EXECUTE على دالّة** لا قراءةَ
+--   جدول؛ و`selectAsService` هناك يقرأ `profiles` وحدها. ⛔ ولا edge functions.
+--   ⇒ **صفر مستهلك خادميّ مباشر.** فمنح SELECT توسيعٌ للـACL بلا مستخدم.
+--
+-- ★ والمسار الخادميّ يعمل بلا ذلك ★ الدوالّ **SECURITY DEFINER**: تُنفَّذ
+--   بصلاحيات **مالكها**، فيكفي `service_role` أن يملك EXECUTE على المحرّك.
+--   ⚠️ ولذلك يُثبت POSTCHECK الطرفين معًا: EXECUTE **و**قدرةَ المالك على
+--   القراءة — فدالّةٌ تفقد `security definer` تفشل بـ42501 رغم بقاء EXECUTE.
+--
+-- ⚠️ أمّا `Dxtm` القائمة لـ`service_role` (وللدورين الآخرين) فمن ACL المشروع
+--   الافتراضيّ على **كل** جدول — ⛔ ولا تمنحها هذه الحزمة ولا تسحبها: سحبُها
+--   قرار عابر للحزم يمسّ مسارات خادمية خارج نطاقها. تُبلَّغ في POSTCHECK 🟡
+--   ولا تُفشل، ⛔ ولا يُفترض غيابها. 🔵 مسجَّل كقرار مفتوح.
+--
+-- 🔴 وإن ظهر غدًا مستهلك خادميّ مباشر، فالعلاج `grant select` **وحده** هنا —
+--    ⛔ ولا INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN.
+--    واختبار `service_role_grant_missing` يمسح المستودع ويطالب بها تلقائيًّا.
+-- ════════════════════════════════════════════════════════════════════════════
 
 revoke execute on function public.custody_inv_employee_report_incident(jsonb) from public, anon;
 revoke execute on function public.custody_inv_admin_incident_action(uuid,text,text,boolean) from public, anon;

@@ -202,10 +202,43 @@ begin
       v_bad := v_bad || format('authenticated يملك صلاحية كتابة على عمود في %s', v_tbl);
     end if;
 
-    -- service_role: العقد يشترط بقاء القراءة (مسارات الخادم).
-    if to_regrole('service_role') is not null
-       and not has_table_privilege('service_role','public.'||v_tbl,'SELECT') then
-      v_bad := v_bad || format('service_role لا يقرأ %s', v_tbl);
+    -- ════════════════════════════════════════════════════════════════════
+    -- 🔴 service_role: **لا SELECT مباشر** — قرارٌ بالدليل لا بالثقة
+    --
+    -- ★ ما كان هنا خطأً ★ اشتراط `has_table_privilege('service_role', …,
+    --   'SELECT')`. أوقف POSTCHECK على Preview بثلاثة أسطر حمراء، ⛔ **ولم يكن
+    --   الخلل في القاعدة**: الـACL الافتراضيّ للمُنشئ postgres على public هو
+    --   `anon=Dxtm · authenticated=Dxtm · service_role=Dxtm` — ولا SELECT في
+    --   أيٍّ منها. فالفحص اشترط امتيازًا **لا يمنحه أحد ولا يحتاجه أحد**.
+    --
+    -- ★ مسح المستهلكين (app/ · lib/ · components/ · scripts/ · supabase/) ★
+    --   الإشارة الوحيدة لأيّ من الجداول الثلاثة في كود التطبيق:
+    --     lib/portal/custodyEnterprise.ts:75 — custodyListIncidents
+    --   وتمرّ عبر `pget` ⇒ `lib/portal/client.ts:71` الذي يرسل
+    --   `apikey: ANON` + `Bearer <access_token للمستخدم>` ⇒ الدور
+    --   **authenticated** تحت RLS. ⛔ وليس service_role.
+    --   وكرون العهدة (`app/api/cron/custody-alerts/route.ts`) يستدعي
+    --   `rpcAsService('custody_run_alerts')` — **EXECUTE على دالّة** لا قراءة
+    --   جدول؛ و`selectAsService` هناك يقرأ `profiles` وحدها.
+    --   ⛔ ولا edge functions في المستودع، ولا مستهلك خادميّ آخر.
+    --
+    -- ⇒ منح SELECT لـservice_role توسيعٌ للـACL بلا مستهلك. والعقد: **لا**.
+    -- ════════════════════════════════════════════════════════════════════
+    if to_regrole('service_role') is not null then
+      -- 🔴 ما لا يمنحه الافتراضيّ ولا هذه الحزمة: قراءة أو كتابة صفوف.
+      --    ظهور أيٍّ منها يعني منحًا صريحًا من خارج العقد.
+      foreach v_p in array array['SELECT','INSERT','UPDATE','DELETE'] loop
+        if has_table_privilege('service_role','public.'||v_tbl, v_p) then
+          v_bad := array_append(v_bad,
+            format('service_role يملك %s على %s — ولا مستهلك خادميّ مباشر في المستودع', v_p, v_tbl));
+        end if;
+      end loop;
+      -- ⚠️ أمّا `Dxtm` (TRUNCATE · REFERENCES · TRIGGER · MAINTAIN) فموروثة من
+      --    ACL المشروع على **كل** جدول، ⛔ ولا تمنحها هذه الحزمة. تضييقها قرار
+      --    عابر للحزم ⇒ يُبلَّغ ولا يُفشل، ⛔ ولا يُفترض غيابه أيضًا.
+      if has_table_privilege('service_role','public.'||v_tbl,'TRUNCATE') then
+        raise notice '🟡 service_role يملك TRUNCATE على % — موروث من ACL المشروع، خارج نطاق هذه الحزمة.', v_tbl;
+      end if;
     end if;
   end loop;
 
@@ -226,6 +259,60 @@ begin
     raise exception E'🔴 ACL غير مطابق للعقد:\n  %', array_to_string(v_bad, E'\n  ');
   end if;
   raise notice '✅ ACL مطابق: anon=لا شيء · PUBLIC=لا شيء · authenticated=SELECT فقط.';
+end $$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 البديل عن SELECT المباشر — يُبرهَن، لا يُفترض
+--
+-- إن لم يقرأ service_role الجداول، فكيف يعمل المسار الخادميّ؟ عبر
+-- `custody_run_alerts()` وأخواتها: **SECURITY DEFINER**، تُنفَّذ بصلاحيات
+-- **مالكها** لا بصلاحيات المستدعي. والبرهان جزآن لا يُغني أحدهما عن الآخر:
+--   ١. service_role يملك EXECUTE على المحرّك.
+--   ٢. الدوالّ SECURITY DEFINER فعلًا، **ومالكها** يقرأ الجداول الثلاثة.
+-- ⛔ وEXECUTE على دالّة **ليس** SELECT على جدول: دالّة تفقد `security definer`
+--    تُنفَّذ بصلاحيات service_role ⇒ تفشل بـ42501 رغم بقاء EXECUTE سليمًا.
+--    ولهذا يُفحص الطرفان معًا لا أحدهما.
+-- ════════════════════════════════════════════════════════════════════════════
+do $$
+declare
+  v_fn text; v_tbl text; v_owner text; v_secdef boolean;
+  v_bad text[] := '{}';
+begin
+  foreach v_fn in array array['custody_run_alerts','civ_alert_once',
+                              'custody_inv_employee_report_incident',
+                              'custody_inv_admin_incident_action']
+  loop
+    select pg_get_userbyid(p.proowner), p.prosecdef into v_owner, v_secdef
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = v_fn
+     limit 1;
+    if v_owner is null then
+      v_bad := array_append(v_bad, format('%s مفقودة', v_fn)); continue;
+    end if;
+    if not v_secdef then
+      v_bad := array_append(v_bad,
+        format('%s ليست SECURITY DEFINER — تُنفَّذ بصلاحيات المستدعي، وservice_role لا يقرأ الجداول', v_fn));
+      continue;
+    end if;
+    foreach v_tbl in array array['custody_incidents','custody_incident_actions','custody_alert_deliveries']
+    loop
+      if not has_table_privilege(v_owner, 'public.'||v_tbl, 'SELECT') then
+        v_bad := array_append(v_bad, format('مالك %s (%s) لا يقرأ %s', v_fn, v_owner, v_tbl));
+      end if;
+    end loop;
+  end loop;
+
+  -- الطرف الثاني: EXECUTE نفسه.
+  if to_regrole('service_role') is null then
+    v_bad := array_append(v_bad, 'الدور service_role غير موجود');
+  elsif not has_function_privilege('service_role','public.custody_run_alerts()','EXECUTE') then
+    v_bad := array_append(v_bad, 'service_role لا ينفّذ custody_run_alerts() — فلا مسار خادميّ إطلاقًا');
+  end if;
+
+  if array_length(v_bad,1) > 0 then
+    raise exception E'🔴 مسار SECURITY DEFINER غير مُثبت:\n  %', array_to_string(v_bad, E'\n  ');
+  end if;
+  raise notice '✅ service_role: EXECUTE على المحرّك · والمالك يقرأ الجداول · ⛔ ولا SELECT مباشر.';
 end $$;
 
 -- عرضٌ قرائيّ للـACL كما هو — ليقرأه إنسان بجانب النتيجة أعلاه.
