@@ -38,7 +38,7 @@ begin
     raise exception '🔴 ops_job_permits مفقود — هذه الحزمة تمتدّ عليه ولا تستبدله';
   end if;
   -- التنبيهات تعتمد مساعدات العهدة القائمة. غيابها يُعطّل §4 وحدها لا الحزمة.
-  if to_regproc('public.civ_alert_once(text,text,text,uuid)') is null then
+  if to_regprocedure('public.civ_alert_once(text,text,text,uuid)') is null then
     raise notice '⚠️ civ_alert_once مفقود — §4 ستُنشأ لكنّها سترجع disabled حتى تُطبَّق حزمة العهدة';
   end if;
 end $$;
@@ -327,8 +327,8 @@ begin
   -- الخطأ أو لا يُطلق أصلًا.
   v_today := (now() at time zone 'Asia/Riyadh')::date;
 
-  if to_regproc('public.civ_alert_once(text,text,text,uuid)') is null
-     or to_regproc('public.civ_notify_managers(text,uuid,text,text)') is null then
+  if to_regprocedure('public.civ_alert_once(text,text,text,uuid)') is null
+     or to_regprocedure('public.civ_notify_managers(text,uuid,text,text)') is null then
     -- حزمة العهدة غير مطبَّقة ⇒ يُعلن التعطيل ولا يُخترع مسار تسليم ثانٍ.
     return jsonb_build_object('ok', true, 'disabled', true, 'reason', 'notification_helpers_missing');
   end if;

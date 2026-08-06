@@ -1,0 +1,298 @@
+// ════════════════════════════════════════════════════════════════════════════
+// tests/wave4_dependency_contract.test.js
+//
+// يحرس عقد اعتمادات Wave 4 والعيب الجذريّ الذي كشفه:
+//
+//   `to_regproc` تأخذ **اسمًا مجرّدًا**، لا توقيعًا بأقواس. وتمريرُ توقيع
+//   يجعلها تُعيد NULL **دائمًا** — فيُبلَّغ عن دالّة موجودة أنّها مفقودة،
+//   أو يُتخطّى حارس صلاحية بصمت. الصحيح `to_regprocedure`.
+//
+// ⛔ لا قاعدة ولا شبكة: تحليل نصّيّ ساكن.
+// ════════════════════════════════════════════════════════════════════════════
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const ROOT = path.resolve(__dirname, "..");
+const DOCS = path.join(ROOT, "docs");
+const REL = path.join(DOCS, "release");
+
+/** يجرّد تعليقات `--` ويُبقي السلاسل. */
+function code(sql) {
+  let out = "", i = 0, q = false;
+  while (i < sql.length) {
+    const c = sql[i];
+    if (q) { if (c === "'") q = false; out += c; i++; continue; }
+    if (c === "'") { q = true; out += c; i++; continue; }
+    if (sql.startsWith("--", i)) { while (i < sql.length && sql[i] !== "\n") { out += " "; i++; } continue; }
+    out += c; i++;
+  }
+  return out;
+}
+const R = (p) => fs.readFileSync(path.join(DOCS, p), "utf8");
+const C = (p) => code(R(p));
+
+const RUNME = "wave4_crm_business_RUNME.sql";
+const PRE = "wave4_crm_business_PREFLIGHT.sql";
+const POST = "wave4_crm_business_POSTCHECK.sql";
+
+// ─── ١ · 🔴 العيب الجذريّ: لا توقيع يُمرَّر إلى to_regproc — في المستودع كلّه ─
+test("🔴 لا ملفّ SQL يمرّر توقيعًا إلى to_regproc", () => {
+  const bad = [];
+  for (const f of fs.readdirSync(DOCS).filter((x) => x.endsWith(".sql"))) {
+    for (const m of C(f).match(/to_regproc\(\s*'[a-z0-9_.]+\([^']*\)'/gi) ?? []) {
+      bad.push(`${f}: ${m}`);
+    }
+  }
+  assert.deepEqual(bad, [],
+    "to_regproc بتوقيع تُعيد NULL دائمًا ⇒ بلاغ كاذب أو حارس مُتخطّى:\n" + bad.join("\n"));
+});
+
+test("🔴 كل فحص توقيع يستعمل to_regprocedure", () => {
+  for (const f of [PRE, POST]) {
+    const t = C(f);
+    if (!/\(\s*'[a-z0-9_.]+\(/.test(t)) continue;
+    assert.match(t, /to_regprocedure\s*\(/,
+      `${f}: يفحص تواقيع بلا to_regprocedure`);
+  }
+});
+
+// ⚠️ الحارس الأهمّ: fail-open في البحث الشامل كان ناتجًا مباشرًا للعيب.
+test("🔴 بوّابة can_access_project لا تُتخطّى في البحث الشامل", () => {
+  const t = C("wave7_global_search_RUNME.sql");
+  const guards = [...t.matchAll(/\(\s*to_regproc(edure)?\s*\(\s*'public\.can_access_project\(uuid\)'\s*\)\s*is null\s*or/gi)];
+  assert.ok(guards.length > 0, "لم يُعثر على حارس الوصول — هل غُيّر شكله؟");
+  for (const g of guards) {
+    assert.equal(g[1], "edure",
+      "🔴 `to_regproc(...) is null` صحيحة دائمًا ⇒ يُتخطّى can_access_project ⇒ " +
+      "البحث يُعيد كل مشروع ومخرَج لأيّ مستدعٍ");
+  }
+});
+
+test("🔴 بوّابة نافذة السداد تُنفَّذ فعلًا في رابط التسليم", () => {
+  const t = C("wave5_delivery_rights_RUNME.sql");
+  assert.match(t, /to_regprocedure\s*\(\s*'public\.pc_release_window_ok\(uuid\)'\s*\)\s*is not null/i,
+    "🔴 الحارس بـto_regproc ⇒ لا يُنفَّذ أبدًا ⇒ الرابط يلتفّ على بوّابة السداد");
+});
+
+// ─── ٢ · PREFLIGHT: تصنيف صحيح + فشل حقيقيّ ────────────────────────────────
+test("🔴 ما تُنشئه RUNME مصنَّف EXPECTED_ABSENT لا BLOCK", () => {
+  const t = C(PRE);
+  const created = C(RUNME).match(/create table if not exists public\.(crm_[a-z_]+)/gi)
+    ?.map((m) => m.split(".").pop()) ?? [];
+  assert.ok(created.length >= 2, "لم تُستخرج جداول RUNME");
+  const expected = t.slice(t.indexOf("EXPECTED_ABSENT"));
+  for (const c of created) {
+    assert.ok(expected.includes(c), `${c} تُنشئه RUNME ولم يُصنَّف EXPECTED_ABSENT`);
+  }
+  // ⛔ ولا يُدرج ضمن الاعتمادات المطلوبة.
+  const required = t.slice(t.indexOf("REQUIRED_DEPENDENCY"), t.indexOf("REQUIRED_GATE"));
+  for (const c of created) {
+    assert.ok(!required.includes(c), `🔴 ${c} مُدرج كاعتماد مطلوب وهو من إنتاج الحزمة`);
+  }
+});
+
+test("🔴 PREFLIGHT يفشل فعليًّا لا طباعةً", () => {
+  const t = C(PRE);
+  assert.match(t, /raise exception/i, "لا استثناء — الفشل طباعة فقط وخروج 0");
+  assert.match(t, /WAVE 4 PREFLIGHT FAILED/, "رسالة الفشل غير واضحة");
+  // ⛔ ولا كتابة.
+  for (const w of [/\binsert\s+into\b/i, /\bupdate\s+\w+\s+set\b/i, /\bdelete\s+from\b/i,
+                   /\bcreate\s+(table|function)\b/i, /\balter\s+table\b/i, /\bgrant\b/i]) {
+    assert.ok(!w.test(t), `PREFLIGHT يكتب: ${w}`);
+  }
+});
+
+test("🔴 الاعتمادات الاختيارية لا تُحتسب في الحسم", () => {
+  const t = C(PRE);
+  const decide = t.slice(t.indexOf("do $$"));
+  for (const opt of ["kian_testimonials", "can_see_financials"]) {
+    assert.ok(!decide.includes(opt),
+      `🔴 ${opt} اختياريّ ومُدرج في بلوك الحسم — سيحجب Wave 4 بلا سبب`);
+  }
+  // والمطلوبة محتسَبة.
+  for (const req of ["crm_opportunities", "crm_can_manage()", "pgcrypto"]) {
+    assert.ok(decide.includes(req), `${req} مطلوب وغير محتسَب في الحسم`);
+  }
+});
+
+// ─── ٣ · الشهادات اختيارية ولا تحجب ────────────────────────────────────────
+test("🔴 لا مفتاح أجنبيّ غير مشروط على kian_testimonials", () => {
+  const t = C(RUNME);
+  const ddl = t.slice(t.indexOf("create table if not exists public.crm_testimonial_invites"));
+  const tableEnd = ddl.indexOf(");");
+  const body = ddl.slice(0, tableEnd);
+  assert.ok(!/references\s+public\.kian_testimonials/i.test(body),
+    "🔴 مفتاح أجنبيّ داخل DDL ⇒ غياب جدول **اختياريّ** يُفشل إنشاء الجدول ويحجب الحزمة");
+  assert.match(body, /testimonial_id\s+uuid\s*,/, "عمود الربط مفقود");
+});
+
+test("قيد الشهادات يُضاف شرطيًّا وidempotent", () => {
+  const t = C(RUNME);
+  assert.match(t, /to_regclass\('public\.kian_testimonials'\)\s+is null/i,
+    "لا فحص وجود لجدول الشهادات");
+  assert.match(t, /add constraint crm_ti_testimonial_fk[\s\S]{0,160}references public\.kian_testimonials/i,
+    "القيد الشرطيّ غير مضاف");
+  assert.match(t, /not exists\s*\([\s\S]{0,200}conname\s*=\s*'crm_ti_testimonial_fk'/i,
+    "القيد ليس idempotent — إعادة التشغيل ستفشل");
+  // ⛔ ولا تُنشئ Wave 4 جدول الشهادات (نظام موازٍ).
+  assert.ok(!/create table[^;]*kian_testimonials/i.test(t),
+    "🔴 Wave 4 تُنشئ جدول الشهادات — نظام موازٍ");
+});
+
+test("🔴 الشهادات مصنَّفة OPTIONAL في PREFLIGHT وفي المصفوفة", () => {
+  assert.match(C(PRE), /OPTIONAL_DEPENDENCY[\s\S]{0,200}kian_testimonials/,
+    "PREFLIGHT لا يصنّفها اختيارية");
+  const matrix = fs.readFileSync(path.join(REL, "SQL_RELEASE_SELECTION_MATRIX.md"), "utf8");
+  const row = matrix.split("\n").find((l) => l.includes("kian_testimonials_v1_RUNME.sql") && l.startsWith("|"));
+  assert.ok(row, "المصفوفة لا تذكر ملفّ الشهادات في جدولها");
+  assert.match(row, /RUNME OPTIONAL/i, "المصفوفة لا تصنّفها RUNME OPTIONAL");
+});
+
+// ─── ٤ · بوّابات CRM: prerequisite رسميّ، ولا نسخ ──────────────────────────
+test("🔴 بوّابات CRM مطلوبة ومصدرها مذكور", () => {
+  const t = C(PRE);
+  for (const sig of ["public.crm_can_manage()",
+                     "public.crm_can_read_opportunity(uuid)",
+                     "public.crm_can_edit_opportunity(uuid)"]) {
+    assert.ok(t.includes(sig), `البوّابة ${sig} ليست ضمن الاعتمادات المطلوبة`);
+  }
+  assert.match(R(PRE), /crm_sales_FOUNDATION_RUNME\.sql/,
+    "مصدر البوّابات غير مذكور في PREFLIGHT");
+});
+
+test("⛔ Wave 4 لا تُنشئ بوّابات CRM — لا نظام صلاحيات موازٍ", () => {
+  const t = C(RUNME);
+  for (const g of ["crm_can_manage", "crm_can_read_opportunity", "crm_can_edit_opportunity"]) {
+    assert.ok(!new RegExp(`create\\s+(or replace\\s+)?function\\s+public\\.${g}\\b`, "i").test(t),
+      `🔴 Wave 4 تُعرّف ${g} — تعريفان متنافسان لنفس البوّابة`);
+  }
+});
+
+test("ترتيب الإصدار يضع FOUNDATION قبل Wave 4", () => {
+  const map = fs.readFileSync(path.join(REL, "WAVE_4_DEPENDENCY_MAP.md"), "utf8");
+  const f = map.indexOf("crm_sales_FOUNDATION_RUNME.sql");
+  const w = map.indexOf("wave4_crm_business_RUNME.sql", f);
+  assert.ok(f > -1 && w > f, "🔴 الترتيب لا يضع FOUNDATION قبل Wave 4");
+});
+
+// ─── ٥ · المالية fail-closed ───────────────────────────────────────────────
+test("🔴 حارس المالية fail-closed ولا يفترض true", () => {
+  const t = C(RUNME);
+  assert.match(t, /coalesce\(\s*\(select public\.can_see_financials\(\)[\s\S]{0,200}?false\s*\)/i,
+    "🔴 لا coalesce إلى false — الغياب قد يُقرأ NULL ثمّ يُعامَل كشفًا");
+  assert.match(t, /to_regprocedure\('public\.can_see_financials\(\)'\)/,
+    "الحارس ما يزال بـto_regproc ⇒ الهامش محجوب دائمًا حتّى للمخوَّل");
+  // ⛔ ولا افتراض true في أيّ مكان.
+  assert.ok(!/v_fin\s*:=\s*true/i.test(t), "🔴 افتراض رؤية المالية");
+  assert.match(t, /'margin_visible',\s*v_fin/, "لا يُعلَن أنّ الهامش محجوب");
+  assert.match(t, /'avg_margin_pct',\s*null/, "الهامش يُعاد رقمًا بدل null");
+});
+
+test("⛔ لا وجود لاسم crm_see_financials في المستودع", () => {
+  const hits = [];
+  for (const f of fs.readdirSync(DOCS).filter((x) => x.endsWith(".sql"))) {
+    // ⚠️ يُفحص **الكود** لا التعليقات: الوثائق تذكر الاسم الخاطئ عمدًا لتشرح
+    //    أنّه لا وجود له، وذكرُه في شرحٍ ليس استعمالًا.
+    if (C(f).includes("crm_see_financials")) hits.push(f);
+  }
+  assert.deepEqual(hits, [],
+    "ظهر اسم crm_see_financials — الاسم الصحيح can_see_financials");
+});
+
+// ─── ٦ · POSTCHECK: مطابقة تواقيع + نطاق + فشل حقيقيّ ──────────────────────
+test("🔴 POSTCHECK يطابق الاسم + قائمة الأنواع", () => {
+  const t = C(POST);
+  assert.match(t, /oidvectortypes\s*\(\s*p\.proargtypes\s*\)\s*=\s*k\.fargs/,
+    "لا مطابقة على قائمة الأنواع");
+  assert.ok(!/pg_get_function_identity_arguments/.test(t),
+    "🔴 تُعيد أسماء الوسائط مع الأنواع ⇒ لا تطابق أبدًا");
+});
+
+test("🔴 تواقيع POSTCHECK تطابق مِنَح RUNME حرفًا بحرف", () => {
+  const grants = new Map();
+  for (const m of R(RUNME).matchAll(/on function public\.(crm_[a-z_]+)\(([^)]*)\)/g)) {
+    grants.set(m[1], m[2].split(",").map((x) => x.trim()).filter(Boolean));
+  }
+  const t = C(POST);
+  const block = t.slice(t.indexOf("with pkg(fname, fargs)"), t.indexOf("select 'الدوالّ الثماني"));
+  const rows = [...block.matchAll(/\(\s*'(crm_[a-z_]+)'\s*,\s*'([^']*)'\s*\)/g)];
+  assert.equal(rows.length, 8, `عدد التواقيع ${rows.length} ≠ 8`);
+  const alias = { int: "integer" };
+  for (const [, fname, fargs] of rows) {
+    const g = grants.get(fname);
+    assert.ok(g, `🔴 ${fname} في POSTCHECK ولا مِنحة له في RUNME`);
+    const expected = g.map((x) => alias[x] ?? x).join(", ");
+    assert.equal(fargs, expected,
+      `🔴 ${fname}: POSTCHECK يتوقّع (${fargs}) وRUNME يمنح (${expected})`);
+  }
+});
+
+test("🔴 POSTCHECK يفشل فعليًّا، ونطاقه crm_ وحده", () => {
+  const t = C(POST);
+  assert.match(t, /raise exception/i, "لا استثناء — فشل دلاليّ بلا فشل فعليّ");
+  assert.match(t, /WAVE 4 POSTCHECK FAILED/, "رسالة الفشل غير واضحة");
+  // ⛔ ولا يفحص حزمًا أخرى.
+  assert.ok(!/prodops_/.test(t), "🔴 يفحص prodops_ — سيحمرّ بسبب حزمة أخرى");
+  assert.match(t, /routine_name like 'crm\\?_%'/, "النطاق ليس crm_");
+});
+
+test("🔴 لا sql_identifier[] = text[] في حزمة Wave 4", () => {
+  for (const f of [PRE, POST]) {
+    const t = C(f);
+    for (const m of t.match(/array_agg\s*\(\s*(?:distinct\s+)?(grantee|routine_name|table_name)\b(?!\s*::\s*text)/gi) ?? []) {
+      assert.fail(`${f}: ${m} بلا ::text`);
+    }
+    for (const m of t.match(/array_agg[^=]*=\s*array\s*\[[^\]]*\](?!\s*::\s*text\s*\[)/gi) ?? []) {
+      assert.fail(`${f}: مقارنة بلا ::text[] ⇒ ${m.slice(0, 60)}`);
+    }
+  }
+});
+
+test("🔴 anon: دالّة التحقّق وحدها", () => {
+  const t = C(POST);
+  assert.match(t, /array\['crm_testimonial_invite_check'\]::text\[\]/,
+    "التوقّع ليس دالّة التحقّق وحدها");
+  const runme = C(RUNME);
+  const anonGrants = [...runme.matchAll(/grant execute on function public\.(crm_[a-z_]+)\([^)]*\)[^;]*to[^;]*anon/gi)]
+    .map((m) => m[1]);
+  assert.deepEqual(anonGrants, ["crm_testimonial_invite_check"],
+    `🔴 مِنَح anon في RUNME: ${anonGrants.join(", ")}`);
+});
+
+// ─── ٧ · تغيير قائمة الاعتمادات أو ترتيبها يكسر الاختبار ──────────────────
+test("🔴 قائمة الاعتمادات المطلوبة مثبَّتة", () => {
+  const t = C(PRE);
+  const block = t.slice(t.indexOf("REQUIRED_DEPENDENCY"), t.indexOf("REQUIRED_GATE"));
+  const names = [...block.matchAll(/\(\s*'([a-z0-9_]+)'\s*,/g)].map((m) => m[1]);
+  assert.deepEqual(names, [
+    "crm_opportunities", "crm_companies", "crm_activities",
+    "project_shoot_sessions", "project_closure_requests",
+    "fin_payment_milestones", "fin_collections",
+  ], "🔴 تغيّرت قائمة الاعتمادات المطلوبة أو ترتيبها — راجع خريطة الاعتمادات");
+});
+
+test("🔴 ترتيب الإصدار المعدَّل مثبَّت", () => {
+  const map = fs.readFileSync(path.join(REL, "WAVE_4_DEPENDENCY_MAP.md"), "utf8");
+  const order = [...map.matchAll(/^\s*\d+\.\s+([a-z0-9_]+\.sql)/gim)].map((m) => m[1]);
+  assert.deepEqual(order, [
+    "wave3_production_ops_RUNME.sql",
+    "wave3_permits_media_RUNME.sql",
+    "wave3_calendar_tokens_RUNME.sql",
+    "crm_sales_FOUNDATION_RUNME.sql",
+    "wave4_crm_business_RUNME.sql",
+    "wave6_assets_archive_RUNME.sql",
+    "wave6_compliance_knowledge_RUNME.sql",
+    "wave6_case_study_generator_RUNME.sql",
+    "wave7_global_search_RUNME.sql",
+    "wave7_audit_viewer_RUNME.sql",
+  ], "🔴 تغيّر ترتيب الإصدار — يجب أن يبقى FOUNDATION قبل Wave 4");
+});
+
+test("FOUNDATION له رفاقه الثلاثة", () => {
+  for (const k of ["PREFLIGHT", "POSTCHECK", "ROLLBACK"]) {
+    assert.ok(fs.existsSync(path.join(DOCS, `crm_sales_FOUNDATION_${k}.sql`)),
+      `crm_sales_FOUNDATION_${k}.sql مفقود — prerequisite بلا رفيق`);
+  }
+});

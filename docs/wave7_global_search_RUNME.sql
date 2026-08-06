@@ -101,7 +101,7 @@ begin
              'rank', ts_rank(public.search_vector(coalesce(p.name,'')), v_q)) as x
       from public.projects p
      where public.search_vector(coalesce(p.name,'')) @@ v_q
-       and (to_regproc('public.can_access_project(uuid)') is null
+       and (to_regprocedure('public.can_access_project(uuid)') is null
             or public.can_access_project(p.id))
      order by 1 limit v_lim) s;
   v_rows := v_rows || v_part;
@@ -115,7 +115,7 @@ begin
                'rank', ts_rank(public.search_vector(coalesce(d.title,'')), v_q)) as x
         from public.deliverables d
        where public.search_vector(coalesce(d.title,'')) @@ v_q
-         and (to_regproc('public.can_access_project(uuid)') is null
+         and (to_regprocedure('public.can_access_project(uuid)') is null
               or public.can_access_project(d.project_id))
        order by 1 limit v_lim) s;
     v_rows := v_rows || v_part;
@@ -123,7 +123,7 @@ begin
 
   -- ★ المعدّات — بوّابة الأصول القائمة. ⛔ ولا سعر ولا قيمة في النتيجة.
   if to_regclass('public.custody_inventory_assets') is not null
-     and to_regproc('public.civ_can_view_assets()') is not null then
+     and to_regprocedure('public.civ_can_view_assets()') is not null then
     if public.civ_can_view_assets() then
       select coalesce(jsonb_agg(x), '[]'::jsonb) into v_part from (
         select jsonb_build_object(
@@ -140,7 +140,7 @@ begin
 
   -- ★ العملاء — للمخوَّلين وحدهم. ⛔ ولا هاتف ولا بريد في النتيجة.
   if to_regclass('public.clients') is not null
-     and to_regproc('public.can_manage_projects()') is not null then
+     and to_regprocedure('public.can_manage_projects()') is not null then
     if public.can_manage_projects() then
       select coalesce(jsonb_agg(x), '[]'::jsonb) into v_part from (
         select jsonb_build_object(

@@ -194,7 +194,7 @@ begin
     updated_at = now();
 
   -- سجلّ تدقيق في السجلّ القائم — ⛔ لا سجلّ ثانٍ.
-  if to_regproc('public.log_activity(text,text,uuid,jsonb)') is not null then
+  if to_regprocedure('public.log_activity(text,text,uuid,jsonb)') is not null then
     perform public.log_activity('deemed_approval_config', 'project', p_project,
                                 jsonb_build_object('enabled', v_enable));
   end if;

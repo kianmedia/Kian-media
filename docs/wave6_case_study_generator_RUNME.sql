@@ -165,7 +165,7 @@ begin
    where id = p_id;
 
   -- التدقيق في سجلّ المنصّة القائم — ⛔ لا سجلّ ثانٍ.
-  if to_regproc('public.log_activity(text,text,uuid,jsonb)') is not null then
+  if to_regprocedure('public.log_activity(text,text,uuid,jsonb)') is not null then
     perform public.log_activity('cs_exported', 'case_study', p_id,
                                 jsonb_build_object('target', p_target));
   end if;

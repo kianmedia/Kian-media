@@ -408,7 +408,8 @@ test("(L-2) ★★★ التحقّق العامّ: حارس قبل SELECT · ر�
   assert.match(fn, /opens_used = opens_used \+ 1/, "🔴 العدّاد لا يُزاد");
 
   catches("تجاوز بوّابة السداد", DR(),
-    (m) => m.replace(/  if to_regproc\('public\.pc_release_window_ok\(uuid\)'\) is not null then[\s\S]*?  end if;\n/, ""),
+    // ⚠️ حُدِّث بعد تصحيح `to_regproc` ← `to_regprocedure`.
+    (m) => m.replace(/  if to_regprocedure\('public\.pc_release_window_ok\(uuid\)'\) is not null then[\s\S]*?  end if;\n/, ""),
     (m) => {
       const tt = noComments(m); const j = tt.indexOf("function public.delivery_link_check");
       assert.match(tt.slice(j, tt.indexOf("$$;", j)), /pc_release_window_ok/);

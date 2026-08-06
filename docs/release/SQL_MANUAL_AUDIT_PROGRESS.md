@@ -83,7 +83,7 @@
 
 | التصنيف | العدد | ملاحظة |
 |---|---|---|
-| **RUNME REQUIRED** | **٩** | كلّها اجتازت §٧ كاملة |
+| **RUNME REQUIRED** | **١٠** | التسعة + `crm_sales_FOUNDATION_RUNME.sql` (prerequisite لـWave 4) |
 | **RUNME OPTIONAL** | ٢ | `wave8_push_tokens` · `kian_testimonials_v1` |
 | **PREFLIGHT** | ٣٤ | |
 | **POSTCHECK** | ٣٥ | |
@@ -119,3 +119,30 @@
 - ⛔ **ولم يُشغَّل ملفّ واحد.**
 - ⛔ ولا `DO NOT RUN` بلا دليل — و«غير مراجَع» ≠ «آمن» و≠ «خطر».
 - ⚠️ الأعداد في §٥ **مقيسة** من نظام الملفّات، لا مُقدَّرة.
+
+
+---
+
+## ٨. حسم تعارض `kian_testimonials` (٦ أغسطس ٢٠٢٦)
+
+**التعارض:** المصفوفة تصنّف `kian_testimonials_v1_RUNME.sql` **RUNME OPTIONAL**،
+بينما كان PREFLIGHT لـWave 4 يعامل جدولها كاعتماد **مطلوب**، وRUNME يربطه بمفتاح
+أجنبيّ **غير مشروط** داخل الـDDL.
+
+**القرار: OPTIONAL** — والتصنيف في المصفوفة كان صحيحًا، والخطأ في Wave 4.
+
+**الدليل (من الاستخدام لا من الاسم):**
+- الميزة خلف علم `NEXT_PUBLIC_SHOW_TESTIMONIALS` **مطفأ**.
+- الاستخدام الوحيد كان **قيد مفتاح أجنبيّ**؛ ⛔ ولا دالّة تقرأ الجدول أو تكتب فيه.
+
+**العلاج:** المفتاح الأجنبيّ صار **شرطيًّا وidempotent** داخل RUNME.
+⇒ جدولٌ اختياريّ لم يعد يُفشل إنشاء جدول CRM ويحجب الحزمة كلّها.
+
+## ٩. `crm_sales_FOUNDATION` — من NEEDS MANUAL REVIEW إلى RUNME REQUIRED
+
+بوّابات `crm_can_manage()` و`crm_can_read_opportunity(uuid)` و
+`crm_can_edit_opportunity(uuid)` تُستدعى داخل Wave 4 **بلا حارس وجود**.
+⇒ prerequisite حقيقيّ، أُضيف رسميًّا إلى الترتيب بموضع **٤**، ورفاقه الثلاثة
+(PREFLIGHT/POSTCHECK/ROLLBACK) موجودة.
+
+⛔ **ولم تُنسخ البوّابات إلى Wave 4** — ذلك يصنع تعريفين متنافسين لنفس البوّابة.

@@ -96,7 +96,9 @@ test("(S-4) ★★★ التصفية داخل الاستعلام — لا جمع
   }
 
   catches("إسقاط بوّابة المشاريع",
-    (m) => m.replace("       and (to_regproc('public.can_access_project(uuid)') is null\n            or public.can_access_project(p.id))\n", ""),
+    // ⚠️ حُدِّث النصّ بعد تصحيح `to_regproc` ← `to_regprocedure`: الطفرة بالنصّ
+    //    القديم صارت بلا أثر، فرصدها الاختبار بحقّ («الطفرة لم تغيّر شيئًا»).
+    (m) => m.replace("       and (to_regprocedure('public.can_access_project(uuid)') is null\n            or public.can_access_project(p.id))\n", ""),
     (m) => assert.match(bodyOf(m, "global_search"), /can_access_project\(p\.id\)/));
 });
 

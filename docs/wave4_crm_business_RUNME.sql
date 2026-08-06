@@ -91,7 +91,11 @@ create table if not exists public.crm_testimonial_invites (
                 check (status in ('active','used','revoked','expired')),
   expires_at    timestamptz not null,
   used_at       timestamptz,
-  testimonial_id uuid references public.kian_testimonials(id) on delete set null,
+  -- 🔴 بلا مفتاح أجنبيّ **هنا**. ميزة الشهادات اختيارية (خلف علم مطفأ،
+  -- و`kian_testimonials_v1_RUNME.sql` مصنَّف RUNME OPTIONAL)، وربطُها مباشرةً
+  -- في الـDDL كان يجعل غياب جدول اختياريّ **يُفشل إنشاء الجدول كلّه** فيحجب
+  -- Wave 4 بأكملها. القيد يُضاف شرطيًّا في §١-ب أدناه إن وُجد الجدول.
+  testimonial_id uuid,
   issued_by     uuid references auth.users(id),
   issued_at     timestamptz not null default now(),
   revoked_at    timestamptz,
@@ -118,6 +122,29 @@ create policy crm_tender_read on public.crm_opportunity_tender
   using (public.crm_can_read_opportunity(opportunity_id));
 
 drop policy if exists crm_ti_read on public.crm_testimonial_invites;
+-- ─── §1-ب · قيد المفتاح الأجنبيّ للشهادات — **شرطيّ وidempotent** ──────────
+-- ⚠️ يُضاف فقط إن كان جدول الشهادات مطبَّقًا. ولو طُبِّق لاحقًا، فإعادة تشغيل
+--    هذه الحزمة تُضيفه — فالحزمة تبقى صالحة لإعادة التشغيل في الحالتين.
+-- ⛔ ولا يُنشئ هذا الملفّ `kian_testimonials`: إنشاؤها مسؤولية حزمتها وحدها،
+--    وبناؤها هنا كان سيصنع نظام شهادات موازيًا.
+do $$
+begin
+  if to_regclass('public.kian_testimonials') is null then
+    raise notice '🟡 kian_testimonials غير مطبَّق — يُتخطّى قيد المفتاح الأجنبيّ. '
+                 'الدعوات تعمل، والربط المرجعيّ يُضاف عند تطبيق حزمة الشهادات.';
+  elsif not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.crm_testimonial_invites'::regclass
+       and conname  = 'crm_ti_testimonial_fk'
+  ) then
+    alter table public.crm_testimonial_invites
+      add constraint crm_ti_testimonial_fk
+      foreign key (testimonial_id) references public.kian_testimonials(id)
+      on delete set null;
+    raise notice '✅ أُضيف قيد المفتاح الأجنبيّ للشهادات.';
+  end if;
+end $$;
+
 create policy crm_ti_read on public.crm_testimonial_invites
   for select to authenticated using (public.crm_can_manage());
 
@@ -171,7 +198,7 @@ begin
   v_fin := coalesce(
     (select public.can_see_financials()
        from (select 1) s
-      where to_regproc('public.can_see_financials()') is not null),
+      where to_regprocedure('public.can_see_financials()') is not null),
     false);
 
   select jsonb_build_object(

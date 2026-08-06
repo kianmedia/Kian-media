@@ -52,7 +52,8 @@ Zoho · تطابق العملات · صحّة الأرقام التاريخية.
 
 ## ٤. SQL — غير مطبَّقة
 
-**٣٤١ ملفًّا · ٩ `RUNME REQUIRED` · ٠ مطبَّقة · ٠ `DO NOT RUN` · ٢٤٣ للمراجعة.**
+**٣٤١ ملفًّا · **١٠** `RUNME REQUIRED` · ٠ مطبَّقة · ٠ `DO NOT RUN` · ٢٤٣ للمراجعة.**
+(أُضيف `crm_sales_FOUNDATION_RUNME.sql` كـprerequisite رسميّ — `WAVE_4_DEPENDENCY_MAP.md`.)
 
 **الترتيب الدقيق** (PREFLIGHT ← قراءة ← RUNME ← POSTCHECK، ملفًّا ملفًّا):
 
@@ -60,12 +61,13 @@ Zoho · تطابق العملات · صحّة الأرقام التاريخية.
 1. wave3_production_ops_RUNME.sql        ← يشترط operations_center_RUNME مطبَّقًا
 2. wave3_permits_media_RUNME.sql         ← يعتمد على 1
 3. wave3_calendar_tokens_RUNME.sql       ← يعتمد على 1 · 🔴 يمنح anon · العلم يبقى OFF
-4. wave4_crm_business_RUNME.sql          ← ⚠️ يمنح anon أيضًا (فحص رمز محايد)
-5. wave6_assets_archive_RUNME.sql
-6. wave6_compliance_knowledge_RUNME.sql
-7. wave6_case_study_generator_RUNME.sql  ← يشترط case_studies_platform_RUNME مطبَّقًا
-8. wave7_global_search_RUNME.sql         ← ⚠️ فهارس GIN قد تُطيل القفل
-9. wave7_audit_viewer_RUNME.sql
+4. crm_sales_FOUNDATION_RUNME.sql        ← 🆕 prerequisite رسميّ لـ5 (بوّابات CRM)
+5. wave4_crm_business_RUNME.sql          ← يشترط 4 · ⚠️ يمنح anon (فحص رمز محايد)
+6. wave6_assets_archive_RUNME.sql
+7. wave6_compliance_knowledge_RUNME.sql
+8. wave6_case_study_generator_RUNME.sql  ← يشترط case_studies_platform_RUNME مطبَّقًا
+9. wave7_global_search_RUNME.sql         ← ⚠️ فهارس GIN قد تُطيل القفل
+10. wave7_audit_viewer_RUNME.sql
 ```
 
 ⛔ **ولا تشغيل جماعيّ.** وأيّ توقُّف في PREFLIGHT يعني **التوقّف**.

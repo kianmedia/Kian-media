@@ -299,7 +299,7 @@ begin
   end if;
 
   -- 🔴 بوّابة السداد القائمة تُحترم كما هي — الرابط لا يلتفّ عليها.
-  if to_regproc('public.pc_release_window_ok(uuid)') is not null then
+  if to_regprocedure('public.pc_release_window_ok(uuid)') is not null then
     if not public.pc_release_window_ok(r.project_id) then
       return jsonb_build_object('ok', false);
     end if;
@@ -336,7 +336,7 @@ begin
    where id = p_deliverable;
   if not found then raise exception 'not_found'; end if;
 
-  if to_regproc('public.log_activity(text,text,uuid,jsonb)') is not null then
+  if to_regprocedure('public.log_activity(text,text,uuid,jsonb)') is not null then
     perform public.log_activity('deliverable_rights_set', 'deliverable', p_deliverable,
                                 jsonb_build_object('showreel_allowed', v_showreel, 'confidential', v_conf));
   end if;

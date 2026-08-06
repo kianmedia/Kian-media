@@ -127,16 +127,23 @@
 > ⚠️ ولكلّ خطوة: PREFLIGHT قبلها وPOSTCHECK بعدها — **خارج هذه القائمة**.
 
 ```
-1. wave3_production_ops_RUNME.sql        ← الأساس، مستقلّ
+1. wave3_production_ops_RUNME.sql        ← يشترط operations_center_RUNME مطبَّقًا
 2. wave3_permits_media_RUNME.sql         ← مقترن بـ1
 3. wave3_calendar_tokens_RUNME.sql       ← مقترن بـ1 · 🔴 عالي المخاطرة · العلم يبقى OFF
-4. wave4_crm_business_RUNME.sql          ← مستقلّ
-5. wave6_assets_archive_RUNME.sql        ← مستقلّ
-6. wave6_compliance_knowledge_RUNME.sql  ← مستقلّ
-7. wave6_case_study_generator_RUNME.sql  ← مستقلّ
-8. wave7_global_search_RUNME.sql         ← مستقلّ · ⚠️ فهارس GIN
-9. wave7_audit_viewer_RUNME.sql          ← مستقلّ
+4. crm_sales_FOUNDATION_RUNME.sql        ← 🆕 **prerequisite رسميّ لـ5** (بوّابات CRM)
+5. wave4_crm_business_RUNME.sql          ← يشترط 4
+6. wave6_assets_archive_RUNME.sql        ← مستقلّ
+7. wave6_compliance_knowledge_RUNME.sql  ← مستقلّ
+8. wave6_case_study_generator_RUNME.sql  ← يشترط case_studies_platform_RUNME
+9. wave7_global_search_RUNME.sql         ← مستقلّ · ⚠️ فهارس GIN
+10. wave7_audit_viewer_RUNME.sql         ← مستقلّ
 ```
+
+🔴 **إضافة `crm_sales_FOUNDATION_RUNME.sql` (٤) ليست تفضيلًا:** الحزمة ٥ تستدعي
+`crm_can_manage()` **سبع مرّات بلا حارس وجود**، فغيابها خطأ `42883` عند أوّل نداء.
+والتفصيل الكامل في `WAVE_4_DEPENDENCY_MAP.md`.
+⚠️ وجداول FOUNDATION موجودة على Preview بينما بُلِّغت بوّاباته مفقودة — **بفحص
+معطوب** (`to_regproc` بتوقيع)، لا بنقص حقيقيّ. شغّل PREFLIGHT المصحَّح أوّلًا.
 
 🔴 **تصحيح جوهريّ على الترتيب (من المراجعة اليدوية):** الخطوتان ١ و٧ **ليستا
 مستقلّتين**. كلتاهما `ALTER` على منصّة قائمة، وتشترطان تطبيق
@@ -145,6 +152,9 @@
 وصفهما بـ«مستقلّ» في نسخة سابقة من هذه الوثيقة **كان خطأً**.
 
 **اختياريّة — ⛔ خارج الترتيب أعلاه:**
+⚠️ `kian_testimonials_v1_RUNME.sql` **لا تحجب Wave 4**: القيد المرجعيّ صار
+شرطيًّا. وتطبيقها **بعد** Wave 4 يستلزم إعادة تشغيل Wave 4 لإضافة القيد.
+
 `wave8_push_tokens_RUNME.sql` (لا لزوم قبل تطبيق جوال) ·
 `kian_testimonials_v1_RUNME.sql` (تابع لقرار محتوى).
 

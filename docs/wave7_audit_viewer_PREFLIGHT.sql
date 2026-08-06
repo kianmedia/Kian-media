@@ -2,7 +2,7 @@
 select 'TABLE' as kind, 'activity_log' as name,
        case when to_regclass('public.activity_log') is null then '🔴 مفقود' else '✅ موجود' end as status;
 select 'GATE' as kind, 'can_manage_projects' as name,
-       case when to_regproc('public.can_manage_projects()') is null then '🔴 مفقود' else '✅ موجود' end as status;
+       case when to_regprocedure('public.can_manage_projects()') is null then '🔴 مفقود' else '✅ موجود' end as status;
 -- كم سجلّ تدقيق يوجد فعلًا؟ مدخل قرار W7-1.
 select 'AUDIT_SOURCES' as kind, c.relname as name, '📋 قائم' as status
 from pg_class c join pg_namespace n on n.oid=c.relnamespace

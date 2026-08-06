@@ -157,7 +157,7 @@ begin
     end if;
   end loop;
 
-  if to_regproc('public.log_activity(text,text,uuid,jsonb)') is not null then
+  if to_regprocedure('public.log_activity(text,text,uuid,jsonb)') is not null then
     perform public.log_activity('sop_attached_to_task', 'task', p_task,
                                 jsonb_build_object('source_id', p_source, 'items', v_n));
   end if;
