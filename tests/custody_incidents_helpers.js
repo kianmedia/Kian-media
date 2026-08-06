@@ -276,6 +276,31 @@ function auditPackage(dir) {
   }
   if (!/'SELECT'/.test(post)) fail("post_no_select_contract", "POSTCHECK لا يُثبت SELECT لـauthenticated");
 
+  // ── ١٠-ب-٢ · بناء قائمة الصلاحيات: صياغة صالحة + الحارس + MAINTAIN ──────
+  // 🔴 هذا هو العطب الذي أوقف POSTCHECK على Preview فعليًّا، ويُفحص هنا
+  //    **بمحاكاة البلوك** لا بمطابقة نصّ: القاعدة هي قاعدة PostgreSQL.
+  for (const f of PKG_FILES) {
+    for (const hit of arrayLiteralAppends(F[f])) {
+      fail("array_literal_append",
+        `${f}:${hit.line} — «${hit.varName} || 'نصّ'» يُفسَّر حرفيّةَ مصفوفة: ${hit.text.slice(0, 70)}`);
+    }
+  }
+  try {
+    const pg16 = simulatePrivList(F[POST], 160000);
+    const pg17 = simulatePrivList(F[POST], 170000);
+    const base = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
+    for (const p of base) {
+      if (!pg16.includes(p)) fail("priv_list_incomplete", `قائمة الفحص بلا ${p}`);
+    }
+    // 🔴 MAINTAIN أُضيفت في PostgreSQL 17: أيّ عتبة أدنى تُمرّرها إلى خادم
+    //    يرمي «unrecognized privilege type» — وهو خطأ لا نتيجة سالبة.
+    if (pg16.includes("MAINTAIN")) fail("maintain_unguarded", "MAINTAIN تُفحص على خادم أقدم من 17");
+    if (!pg17.includes("MAINTAIN")) fail("maintain_missing", "MAINTAIN لا تُفحص على PostgreSQL 17+");
+  } catch (e) {
+    if (e instanceof MalformedArrayLiteral) fail("array_literal_append", `بناء v_privs يفشل: ${e.message}`);
+    else fail("priv_list_unparsable", `تعذّر تتبّع بناء v_privs: ${e.message}`);
+  }
+
   // ── ١٠-ج · Cron: حارس to_regclass ثمّ SQL ديناميكيّ ──────────────────────
   // 🔴 `case when to_regclass('cron.job') is null then … when (select … from
   //    cron.job)` **لا يحرس شيئًا**: الجملة تُحلَّل كاملةً قبل التنفيذ.
@@ -336,6 +361,61 @@ function auditPackage(dir) {
   return bad;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// محاكاة بناء المصفوفات في plpgsql — بقاعدة PostgreSQL الفعليّة
+//
+// 🔴 `text[] || 'X'` **ليس** إلحاق عنصر. لمعامل `||` ثلاثة تحمّلات
+//    (`anyarray||anyelement` · `anyelement||anyarray` · `anyarray||anyarray`)،
+//    والحرف غير المُنمَّط يُحسم لصالح الأخير ⇒ يُفسَّر النصّ حرفيّةَ مصفوفة:
+//        ERROR: malformed array literal: "MAINTAIN"
+//    وهذا ما أوقف POSTCHECK على Preview.
+// ✅ الصيغ الصحيحة: `array_append(x,'X')` · `x || array['X']` · `x || (expr)`
+//    حيث `expr` نصّ **مُنمَّط** (نتيجة `||` بين حرف ومتغيّر text مثلًا).
+// ════════════════════════════════════════════════════════════════════════════
+class MalformedArrayLiteral extends Error {}
+
+/** كل موضع يُلحق حرفًا غير مُنمَّط بمصفوفة — أي كل تكرار للعطب. */
+function arrayLiteralAppends(sql) {
+  const out = [];
+  const lines = stripComments(sql).split("\n");
+  lines.forEach((ln, i) => {
+    const m = ln.match(/(v_[a-z_]+)\s*:=\s*\1\s*\|\|\s*'/);
+    if (m) out.push({ line: i + 1, varName: m[1], text: ln.trim() });
+  });
+  return out;
+}
+
+/**
+ * يُحاكي بناء `v_privs` داخل بلوك صلاحيات الجداول ويُعيد القائمة الفعليّة.
+ * يرمي `MalformedArrayLiteral` تمامًا حيث يرمي PostgreSQL.
+ * @param {number} serverVersionNum قيمة `server_version_num` المُحاكاة (16 ⇒ 160000).
+ *   ⚠️ عدد لا منطقيّ **عمدًا**: العتبة المكتوبة في الملفّ هي ما يُقاس، فتغييرها
+ *   إلى 160000 يُرصد بدل أن يمرّ كما لو كان الحارس سليمًا.
+ */
+function simulatePrivList(postSql, serverVersionNum) {
+  const code = stripComments(postSql);
+  const seed = code.match(/v_privs\s*:=\s*array\[([^\]]*)\]/i);
+  if (!seed) throw new Error("لم يُعثر على تهيئة v_privs");
+  let privs = [...seed[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+
+  // الحارس: MAINTAIN لا تُضاف إلّا على 17+.
+  const guard = code.match(
+    /if\s+current_setting\('server_version_num'\)::int\s*>=\s*(\d+)\s*then([\s\S]*?)end if;/i,
+  );
+  // ⛔ بلا حارس ⇒ يُطبَّق على كل إصدار (وهو بالضبط العطب الذي يُرصد).
+  const applies = guard ? serverVersionNum >= Number(guard[1]) : true;
+  const body = guard ? guard[2] : code.slice(seed.index + seed[0].length);
+
+  for (const st of body.split(";")) {
+    const bad = st.match(/v_privs\s*:=\s*v_privs\s*\|\|\s*'([^']+)'/);
+    if (bad) throw new MalformedArrayLiteral(`malformed array literal: "${bad[1]}"`);
+    const ok = st.match(/v_privs\s*:=\s*array_append\(\s*v_privs\s*,\s*'([^']+)'\s*\)/)
+            ?? st.match(/v_privs\s*:=\s*v_privs\s*\|\|\s*array\[\s*'([^']+)'\s*\]/i);
+    if (ok && applies) privs = [...privs, ok[1]];
+  }
+  return privs;
+}
+
 // ─── مُستخرِجات من RUNME (مصدر الحقيقة) ────────────────────────────────────
 /** جسم دالّة باسمها. */
 function fnBody(runCode, name) {
@@ -372,5 +452,6 @@ function requiredGates(runRaw) {
 module.exports = {
   RUNME, PRE, POST, ROLL, PKG_FILES,
   auditPackage, stripComments, stripBodies,
+  MalformedArrayLiteral, arrayLiteralAppends, simulatePrivList,
   createdFunctions, createdTables, requiredTables, requiredGates, fnBody,
 };

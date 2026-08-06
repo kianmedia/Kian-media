@@ -454,3 +454,65 @@ test("طفرة: RUNME يُفرّغ الجداول", () => {
   const bad = mutate((io) => io.edit(H.RUNME, "commit;", "truncate table public.custody_incidents;\ncommit;"));
   caught(bad, "runme_truncates", "«إصلاح» بمحو البيانات");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// الجولة الثالثة — طفرات عطب `malformed array literal: "MAINTAIN"`
+// ⚠️ ولا تُطابَق نصوص هنا: المُدقِّق يُحاكي بناء المصفوفة بقاعدة PostgreSQL.
+// ════════════════════════════════════════════════════════════════════════════
+
+test("طفرة: إزالة array_append ⇒ الصيغة التي أوقفت Preview", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "v_privs := array_append(v_privs, 'MAINTAIN');", "v_privs := v_privs || 'MAINTAIN';"));
+  caught(bad, "array_literal_append", 'ERROR: malformed array literal: "MAINTAIN"');
+});
+
+test("طفرة: نفس العطب في مسار فشل (PREFLIGHT) ⇒ رسالة مضلِّلة وقت الحاجة", () => {
+  const bad = mutate((io) => io.edit(H.PRE,
+    "v_missing := array_append(v_missing, 'PARTIAL on_hold بنوع مخالف');",
+    "v_missing := v_missing || 'PARTIAL on_hold بنوع مخالف';"));
+  caught(bad, "array_literal_append", "الانفجار يقع بالضبط حين يرصد الفحص خللًا حقيقيًّا");
+});
+
+test("طفرة: نفس العطب في ROLLBACK", () => {
+  const bad = mutate((io) => io.edit(H.ROLL,
+    "v_left := array_append(v_left, 'TRIGGER trg_civ_item_hold');",
+    "v_left := v_left || 'TRIGGER trg_civ_item_hold';"));
+  caught(bad, "array_literal_append", "تحقّق ما بعد التراجع ينفجر بدل أن يُبلّغ");
+});
+
+test("طفرة: `|| array[...]` تُجرَّد من ARRAY", () => {
+  const bad = mutate((io) => {
+    let s = io.read(H.POST).replace("v_privs := array_append(v_privs, 'MAINTAIN');",
+                                    "v_privs := v_privs || array['MAINTAIN'];");
+    io.write(H.POST, s.replace("v_privs := v_privs || array['MAINTAIN'];",
+                               "v_privs := v_privs || 'MAINTAIN';"));
+  });
+  caught(bad, "array_literal_append", "البديل الصحيح الثاني مجرَّدًا من تنميطه");
+});
+
+test("طفرة: حارس PostgreSQL 17 محذوف ⇒ MAINTAIN على خادم أقدم", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "  if current_setting('server_version_num')::int >= 170000 then\n    v_privs := array_append(v_privs, 'MAINTAIN');\n  end if;",
+    "  v_privs := array_append(v_privs, 'MAINTAIN');"));
+  caught(bad, "maintain_unguarded", "«unrecognized privilege type: MAINTAIN» على PostgreSQL 16");
+});
+
+test("طفرة: عتبة الحارس خاطئة (16 بدل 17)", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    ">= 170000 then\n    v_privs := array_append", ">= 160000 then\n    v_privs := array_append"));
+  caught(bad, "maintain_unguarded", "العتبة الخاطئة تُمرّر MAINTAIN إلى خادم لا يعرفها");
+});
+
+test("طفرة: MAINTAIN محذوفة من الفحص كليًّا", () => {
+  const bad = mutate((io) => io.write(H.POST, io.read(H.POST)
+    .replace(/\s*if current_setting\('server_version_num'\)::int >= 170000 then\n\s*v_privs := array_append\(v_privs, 'MAINTAIN'\);\n\s*end if;/, "")
+    .replace(/MAINTAIN/g, "—")));
+  caught(bad, "post_missing_priv", "حرف m في Dxtm يخرج من المراقبة بحجّة إصلاح خطأ صياغة");
+});
+
+test("طفرة: صلاحية من الأساس تُحذف من قائمة الفحص", () => {
+  const bad = mutate((io) => io.edit(H.POST,
+    "array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']",
+    "array['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER']"));
+  caught(bad, "priv_list_incomplete", "TRUNCATE يخرج من القائمة التي تُبنى فعلًا");
+});

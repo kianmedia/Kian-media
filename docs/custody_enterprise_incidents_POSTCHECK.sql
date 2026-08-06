@@ -147,9 +147,18 @@ declare
 begin
   -- ⚠️ MAINTAIN لم توجد قبل PostgreSQL 17، وتمريرها لخادم أقدم **خطأ** لا
   --    نتيجة سالبة. فتُضاف بالإصدار لا بالتمنّي.
+  --
+  -- 🔴 و`array_append` لا `|| 'MAINTAIN'`. الصيغة الثانية أوقفت Preview:
+  --      ERROR: malformed array literal: "MAINTAIN"
+  --    السبب أنّ `'MAINTAIN'` حرفٌ **غير مُنمَّط** (unknown)، ولمعامل `||`
+  --    ثلاثة تحمّلات: `anyarray||anyelement` و`anyelement||anyarray`
+  --    و`anyarray||anyarray`. فيُحسم الغموض لصالح **الأخير**، ويُفسَّر النصّ
+  --    على أنّه حرفيّة مصفوفة ⇒ تحليلها يفشل. والعلاج تنميط الطرف الثاني:
+  --    `array_append(v_privs,'MAINTAIN')` أو `v_privs || array['MAINTAIN']`.
+  --    ⛔ ولا يُحلّ بحذف MAINTAIN من الفحص: العطب في الصياغة لا في الشرط.
   v_privs := array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'];
   if current_setting('server_version_num')::int >= 170000 then
-    v_privs := v_privs || 'MAINTAIN';
+    v_privs := array_append(v_privs, 'MAINTAIN');
   end if;
 
   foreach v_tbl in array array['custody_incidents','custody_incident_actions','custody_alert_deliveries']
@@ -211,7 +220,7 @@ begin
      where s.relkind='S' and sn.nspname='public' and tn.nspname='public'
        and t.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')
        and (a.grantee = 0 or a.grantee in (to_regrole('anon')::oid, to_regrole('authenticated')::oid)))
-  then v_bad := v_bad || 'تسلسلة تابعة للحزمة ممنوحة لـanon/authenticated/PUBLIC'; end if;
+  then v_bad := array_append(v_bad, 'تسلسلة تابعة للحزمة ممنوحة لـanon/authenticated/PUBLIC'); end if;
 
   if array_length(v_bad,1) > 0 then
     raise exception E'🔴 ACL غير مطابق للعقد:\n  %', array_to_string(v_bad, E'\n  ');
@@ -308,16 +317,16 @@ begin
   select t.tgtype into v_type from pg_trigger t join pg_class c on c.oid=t.tgrelid
    where t.tgname='trg_civ_item_hold' and not t.tgisinternal
      and c.relname='custody_inventory_assignment_items';
-  if v_type is null then v_fail := v_fail || 'مُشغِّل الحجز مفقود أو على جدول خاطئ';
+  if v_type is null then v_fail := array_append(v_fail, 'مُشغِّل الحجز مفقود أو على جدول خاطئ');
   else
-    if (v_type & 4) = 0  then v_fail := v_fail || 'المُشغِّل لا يعمل على الإدراج'; end if;
-    if (v_type & 16) = 0 then v_fail := v_fail || 'المُشغِّل لا يعمل على التحديث — تجاوز الحجز ممكن'; end if;
+    if (v_type & 4) = 0  then v_fail := array_append(v_fail, 'المُشغِّل لا يعمل على الإدراج'); end if;
+    if (v_type & 16) = 0 then v_fail := array_append(v_fail, 'المُشغِّل لا يعمل على التحديث — تجاوز الحجز ممكن'); end if;
   end if;
 
   select p.prosrc into v_src from pg_proc p join pg_namespace n on n.oid=p.pronamespace
    where n.nspname='public' and p.proname='custody_inv_employee_report_incident';
   if v_src is null or v_src !~* 'asset_not_in_assignment' or v_src !~* 'asset_not_yours' then
-    v_fail := v_fail || 'ربط الحادثة بالأصل ليس fail-closed';
+    v_fail := array_append(v_fail, 'ربط الحادثة بالأصل ليس fail-closed');
   end if;
 
   -- ⚠️ ACL الجداول حُسم أعلاه بـ`has_table_privilege` وبكتالوج ACL، ويرفع
@@ -329,28 +338,28 @@ begin
                        lateral aclexplode(coalesce(c.relacl,'{}'::aclitem[])) a
                       where n.nspname='public' and c.relname='custody_incidents'
                         and a.grantee = to_regrole('authenticated')::oid and a.privilege_type='SELECT') then
-    v_fail := v_fail || 'منح SELECT لـauthenticated ليس صريحًا في ACL — لا تعتمد على الوراثة';
+    v_fail := array_append(v_fail, 'منح SELECT لـauthenticated ليس صريحًا في ACL — لا تعتمد على الوراثة');
   end if;
 
   if to_regrole('anon') is not null then
     if has_function_privilege('anon','public.custody_run_alerts()','EXECUTE')
        or has_function_privilege('anon','public.custody_inv_admin_incident_action(uuid,text,text,boolean)','EXECUTE') then
-      v_fail := v_fail || 'anon ينفّذ دالّة من الحزمة';
+      v_fail := array_append(v_fail, 'anon ينفّذ دالّة من الحزمة');
     end if;
   end if;
   if to_regrole('authenticated') is not null
      and has_function_privilege('authenticated','public.custody_run_alerts()','EXECUTE') then
-    v_fail := v_fail || 'authenticated ينفّذ محرّك التنبيهات';
+    v_fail := array_append(v_fail, 'authenticated ينفّذ محرّك التنبيهات');
   end if;
   if to_regrole('service_role') is not null
      and not has_function_privilege('service_role','public.custody_run_alerts()','EXECUTE') then
-    v_fail := v_fail || 'service_role لا ينفّذ المحرّك';
+    v_fail := array_append(v_fail, 'service_role لا ينفّذ المحرّك');
   end if;
 
   if (select count(*) from pg_policy pol join pg_class c on c.oid=pol.polrelid
        where c.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')
          and pg_get_expr(pol.polqual, pol.polrelid) !~* '(civ_can_manage|auth\.uid)') > 0 then
-    v_fail := v_fail || 'سياسة مفتوحة بلا شرط';
+    v_fail := array_append(v_fail, 'سياسة مفتوحة بلا شرط');
   end if;
 
   if array_length(v_fail,1) > 0 then

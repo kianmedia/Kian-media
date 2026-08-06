@@ -78,7 +78,7 @@ begin
     if to_regprocedure(v_sig) is not null then v_left := v_left || ('FUNCTION '||v_sig); end if;
   end loop;
   if exists (select 1 from pg_trigger where tgname='trg_civ_item_hold' and not tgisinternal) then
-    v_left := v_left || 'TRIGGER trg_civ_item_hold';
+    v_left := array_append(v_left, 'TRIGGER trg_civ_item_hold');
   end if;
   if array_length(v_left,1) > 0 then
     raise exception E'🔴 ROLLBACK ناقص — بقي:\n  %', array_to_string(v_left, E'\n  ');

@@ -236,3 +236,63 @@ test("PREFLIGHT يصنّف الحالتين ويوقف عند الهجينة", (
   // 🔴 والتصنيف يُحتسب في الحسم لا يُعرض فقط.
   assert.match(pre, /if v_present not in \(0, ?3\) then/, "PARTIAL معروض ولا يُحتسب");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// ١٢ · بناء قائمة الصلاحيات — العطب الذي أوقف POSTCHECK على Preview
+//
+//   ERROR: malformed array literal: "MAINTAIN"
+//   QUERY: v_privs := v_privs || 'MAINTAIN'
+//
+// السبب ليس MAINTAIN ولا الحارس: `text[] || 'نصّ'` **ليس** إلحاق عنصر. لمعامل
+// `||` ثلاثة تحمّلات، والحرف غير المُنمَّط يُحسم لصالح `anyarray||anyarray`
+// فيُفسَّر النصّ حرفيّةَ مصفوفة. والعلاج تنميط الطرف الثاني.
+//
+// 🔴 والاختبار **يُحاكي البلوك** لا يطابق نصًّا: القائمة الناتجة هي المقياس.
+// ════════════════════════════════════════════════════════════════════════════
+const BASE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
+
+test("🔴 بناء v_privs ينجح ويُعطي القائمة الصحيحة على 16 و17", () => {
+  const post = R(H.POST);
+  assert.deepEqual(H.simulatePrivList(post, 160000), BASE_PRIVS,
+    "PostgreSQL 16: القائمة يجب أن تكون السبعة بلا MAINTAIN");
+  assert.deepEqual(H.simulatePrivList(post, 170000), [...BASE_PRIVS, "MAINTAIN"],
+    "PostgreSQL 17+: القائمة يجب أن تضيف MAINTAIN");
+});
+
+test("🔴 المحاكاة نفسها ترصد الصيغة المعطوبة (وإلّا فهي بلا قيمة)", () => {
+  // ⚠️ تُثبَّت الأداة على نصّ **مُصطنَع** يحمل العطب الأصليّ حرفيًّا.
+  const broken = `
+do $$ declare v_privs text[];
+begin
+  v_privs := array['SELECT','INSERT'];
+  if current_setting('server_version_num')::int >= 170000 then
+    v_privs := v_privs || 'MAINTAIN';
+  end if;
+end $$;`;
+  assert.throws(() => H.simulatePrivList(broken, 170000), H.MalformedArrayLiteral,
+    "المحاكاة لا ترصد الصيغة التي أوقفت Preview");
+  // ✅ وتقبل البديلين الصحيحين.
+  assert.deepEqual(
+    H.simulatePrivList(broken.replace("v_privs || 'MAINTAIN'", "array_append(v_privs, 'MAINTAIN')"), 170000),
+    ["SELECT", "INSERT", "MAINTAIN"]);
+  assert.deepEqual(
+    H.simulatePrivList(broken.replace("v_privs || 'MAINTAIN'", "v_privs || array['MAINTAIN']"), 170000),
+    ["SELECT", "INSERT", "MAINTAIN"]);
+});
+
+test("⛔ لا `v_x := v_x || 'نصّ'` في أيّ ملفّ من الحزمة", () => {
+  // 🔴 نفس العطب كان في **١٤ موضعًا**: واحد في مسار النجاح (v_privs) وهو الذي
+  //    ظهر، وثلاثة عشر في مسارات الفشل — أي أنّها كانت ستنفجر برسالة مضلِّلة
+  //    في اللحظة التي يرصد فيها الفحص خللًا حقيقيًّا، فتحجب النتيجة الحقيقية.
+  const hits = [];
+  for (const f of H.PKG_FILES) {
+    for (const h of H.arrayLiteralAppends(R(f))) hits.push(`${f}:${h.line} ${h.text.slice(0, 60)}`);
+  }
+  assert.deepEqual(hits, [], "مواضع معطوبة:\n" + hits.join("\n"));
+});
+
+test("🔴 حارس PostgreSQL 17 موجود وبالعتبة الصحيحة", () => {
+  const post = H.stripComments(R(H.POST));
+  assert.match(post, /current_setting\('server_version_num'\)::int\s*>=\s*170000/,
+    "MAINTAIN تُفحص بلا حارس إصدار — خادم أقدم يرمي «unrecognized privilege type»");
+});

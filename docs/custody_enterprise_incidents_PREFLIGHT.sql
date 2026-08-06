@@ -235,12 +235,12 @@ begin
   if exists (select 1 from information_schema.columns
               where table_schema='public' and table_name::text='custody_inventory_assets'
                 and column_name::text='on_hold' and data_type <> 'boolean') then
-    v_missing := v_missing || 'PARTIAL on_hold بنوع مخالف';
+    v_missing := array_append(v_missing, 'PARTIAL on_hold بنوع مخالف');
   end if;
   if exists (select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid
               where t.tgname='trg_civ_item_hold' and not t.tgisinternal
                 and c.relname <> 'custody_inventory_assignment_items') then
-    v_missing := v_missing || 'PARTIAL trg_civ_item_hold على جدول آخر';
+    v_missing := array_append(v_missing, 'PARTIAL trg_civ_item_hold على جدول آخر');
   end if;
 
   foreach v_t in array array['incidents','asset_incidents','custody_holds','alert_log',
