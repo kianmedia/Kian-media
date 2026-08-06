@@ -108,11 +108,18 @@ NULL دائمًا ⇒ `v_fin` كان **`false` أبدًا** ⇒ الهامش م�
 4. crm_sales_FOUNDATION_RUNME.sql          ← PREFLIGHT/POSTCHECK/ROLLBACK موجودة
 5. wave4_crm_business_RUNME.sql
 6. wave6_assets_archive_RUNME.sql
-7. wave6_compliance_knowledge_RUNME.sql
-8. wave6_case_study_generator_RUNME.sql    ← يشترط case_studies_platform
-9. wave7_global_search_RUNME.sql
-10. wave7_audit_viewer_RUNME.sql
+--- ⬇ جديد: prerequisite رسميّ لحزمة الامتثال ⬇ ---
+7. custody_enterprise_incidents_RUNME.sql  ← يُنشئ custody_incidents
+8. wave6_compliance_knowledge_RUNME.sql    ← يشترط ٧
+9. wave6_case_study_generator_RUNME.sql    ← يشترط case_studies_platform
+10. wave7_global_search_RUNME.sql
+11. wave7_audit_viewer_RUNME.sql
 ```
+
+⚠️ **الموضع ٧ أُضيف بعد هذه الخريطة** (تدقيق `custody_enterprise_03_..._PATCH`):
+`hse_register_v` في حزمة الامتثال تقرأ `public.custody_incidents` في فرع `union`
+**بلا حارس وجود**، فغياب الجدول يُفشل `create view` ويُسقط الحزمة كلّها — وهو
+**نفس نمط العطب** الموصوف في §٤-١ لـ`kian_testimonials`.
 
 **اختياريّة — خارج الترتيب:** `kian_testimonials_v1_RUNME.sql` ·
 `wave8_push_tokens_RUNME.sql`.

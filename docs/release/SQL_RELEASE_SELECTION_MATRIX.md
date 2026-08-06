@@ -141,10 +141,11 @@
 4. crm_sales_FOUNDATION_RUNME.sql        ← 🆕 **prerequisite رسميّ لـ5** (بوّابات CRM)
 5. wave4_crm_business_RUNME.sql          ← يشترط 4
 6. wave6_assets_archive_RUNME.sql        ← يشترط asset_intelligence_RUNME مطبَّقًا (بوّابات الأصول)
-7. wave6_compliance_knowledge_RUNME.sql  ← مستقلّ
-8. wave6_case_study_generator_RUNME.sql  ← يشترط case_studies_platform_RUNME
-9. wave7_global_search_RUNME.sql         ← مستقلّ · ⚠️ فهارس GIN
-10. wave7_audit_viewer_RUNME.sql         ← مستقلّ
+7. custody_enterprise_incidents_RUNME.sql ← 🆕 **prerequisite رسميّ لـ8** (يُنشئ custody_incidents)
+8. wave6_compliance_knowledge_RUNME.sql  ← يشترط 7
+9. wave6_case_study_generator_RUNME.sql  ← يشترط case_studies_platform_RUNME
+10. wave7_global_search_RUNME.sql        ← مستقلّ · ⚠️ فهارس GIN
+11. wave7_audit_viewer_RUNME.sql         ← مستقلّ
 ```
 
 🔴 **إضافة `crm_sales_FOUNDATION_RUNME.sql` (٤) ليست تفضيلًا:** الحزمة ٥ تستدعي
@@ -152,6 +153,12 @@
 والتفصيل الكامل في `WAVE_4_DEPENDENCY_MAP.md`.
 ⚠️ وجداول FOUNDATION موجودة على Preview بينما بُلِّغت بوّاباته مفقودة — **بفحص
 معطوب** (`to_regproc` بتوقيع)، لا بنقص حقيقيّ. شغّل PREFLIGHT المصحَّح أوّلًا.
+
+🔴 **إضافة `custody_enterprise_incidents_RUNME.sql` (٧):** حزمة الامتثال تقرأ
+`public.custody_incidents` في فرع `union` **بلا حارس وجود** داخل `hse_register_v`،
+فغياب الجدول يُفشل `create view` ويُسقط حزمتها كلّها. والمنشئ الوحيد للجدول هو
+هذه الحزمة (كان `custody_enterprise_03_..._PATCH.sql` وصار **SUPERSEDED**:
+ثلاث معاملات مستقلّة وتحقّق بلا توقّف).
 
 🔴 **تصحيح جوهريّ على الترتيب (من المراجعة اليدوية):** الخطوتان ١ و٧ **ليستا
 مستقلّتين**. كلتاهما `ALTER` على منصّة قائمة، وتشترطان تطبيق

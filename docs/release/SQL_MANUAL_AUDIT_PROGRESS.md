@@ -83,7 +83,7 @@
 
 | التصنيف | العدد | ملاحظة |
 |---|---|---|
-| **RUNME REQUIRED** | **١٠** | التسعة + `crm_sales_FOUNDATION_RUNME.sql` (prerequisite لـWave 4) |
+| **RUNME REQUIRED** | **١١** | + `custody_enterprise_incidents_RUNME.sql` (prerequisite لحزمة الامتثال) |
 | **RUNME OPTIONAL** | ٢ | `wave8_push_tokens` · `kian_testimonials_v1` |
 | **PREFLIGHT** | ٣٤ | |
 | **POSTCHECK** | ٣٥ | |
@@ -146,3 +146,14 @@
 (PREFLIGHT/POSTCHECK/ROLLBACK) موجودة.
 
 ⛔ **ولم تُنسخ البوّابات إلى Wave 4** — ذلك يصنع تعريفين متنافسين لنفس البوّابة.
+
+
+## ١٠. `custody_enterprise_03_incidents_alerts_PATCH.sql` ⇒ **LEGACY / SUPERSEDED**
+
+أوّل ملفّ يُصنَّف كذلك **بدليل**: حلّت محلّه حزمة
+`custody_enterprise_incidents_{PREFLIGHT,RUNME,POSTCHECK,ROLLBACK}.sql`.
+
+**السبب:** ثلاث معاملات مستقلّة (`begin`…`commit` ×٣) ⇒ فشلُ جزء لاحق يترك
+الجداول مطبَّقة **بلا RLS ولا صلاحيات**؛ وقسم التحقّق `select` فقط فينتهي
+بحالة خروج 0. وفيه عيبان أُصلحا: مُشغِّل الحجز على الإدراج وحده، وإمكان ربط
+حادثة بأصل لا يخصّ الموظّف.

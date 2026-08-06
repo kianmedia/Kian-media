@@ -1,6 +1,12 @@
 > 🔴 **مُحدَّث ٤ أغسطس ٢٠٢٦:** التصنيف الحاكم صار في
 > **`docs/release/SQL_RELEASE_SELECTION_MATRIX.md`** — وهو يفصل ما يُشغَّل
-> (**٩ ملفّات `RUNME REQUIRED`**) عمّا لا يُشغَّل، من أصل ٣٤١ ملفًّا.
+> (**١١ ملفًّا `RUNME REQUIRED`**) عمّا لا يُشغَّل، من أصل ٣٤٥ ملفًّا.
+>
+> 🔴 **مُحدَّث ٦ أغسطس ٢٠٢٦:** أُضيف `custody_enterprise_incidents_RUNME.sql`
+> **prerequisite رسميًّا قبل** `wave6_compliance_knowledge_RUNME.sql` (الموضع ٧).
+> وهو يحلّ محلّ `custody_enterprise_03_incidents_alerts_PATCH.sql` — **SUPERSEDED**
+> (ثلاث معاملات مستقلّة · تحقّق بلا توقّف · مُشغِّل حجز على الإدراج وحده ·
+> ربط حادثة بأصل لا يخصّ الموظّف).
 > ⚠️ وهذا الملفّ يبقى للسياق التاريخيّ. وعند أيّ اختلاف، **المصفوفة هي المرجع**.
 
 # RELEASE_SQL_MANIFEST — كل حزمة SQL تنتظر التطبيق اليدويّ

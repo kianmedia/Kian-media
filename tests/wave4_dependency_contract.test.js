@@ -283,11 +283,26 @@ test("🔴 ترتيب الإصدار المعدَّل مثبَّت", () => {
     "crm_sales_FOUNDATION_RUNME.sql",
     "wave4_crm_business_RUNME.sql",
     "wave6_assets_archive_RUNME.sql",
+    // ⬇ أُضيف بعد تدقيق `custody_enterprise_03_..._PATCH`: `hse_register_v`
+    //   تقرأ `custody_incidents` في فرع `union` بلا حارس ⇒ prerequisite رسميّ.
+    "custody_enterprise_incidents_RUNME.sql",
     "wave6_compliance_knowledge_RUNME.sql",
     "wave6_case_study_generator_RUNME.sql",
     "wave7_global_search_RUNME.sql",
     "wave7_audit_viewer_RUNME.sql",
   ], "🔴 تغيّر ترتيب الإصدار — يجب أن يبقى FOUNDATION قبل Wave 4");
+});
+
+// 🔴 والترتيبان يجب أن يتطابقا: الخريطة والمصفوفة مصدران يقرأهما بشرٌ مختلفون،
+//    وانحرافهما يعني أنّ أحدهما يكذب على مَن يشغّل الإصدار.
+test("🔴 ترتيب الخريطة = ترتيب المصفوفة", () => {
+  const map = fs.readFileSync(path.join(REL, "WAVE_4_DEPENDENCY_MAP.md"), "utf8");
+  const fromMap = [...map.matchAll(/^\s*\d+\.\s+([a-z0-9_]+\.sql)/gim)].map((m) => m[1]);
+  const mx = fs.readFileSync(path.join(REL, "SQL_RELEASE_SELECTION_MATRIX.md"), "utf8");
+  const fence = (mx.split("PROPOSED PRODUCTION RUN ORDER")[1] ?? "").match(/```[\s\S]*?```/);
+  assert.ok(fence, "كتلة الترتيب مفقودة من المصفوفة");
+  const fromMatrix = [...fence[0].matchAll(/([a-z0-9_]+\.sql)/gi)].map((m) => m[1]);
+  assert.deepEqual(fromMap, fromMatrix, "🔴 الخريطة والمصفوفة تعطيان ترتيبين مختلفين");
 });
 
 test("FOUNDATION له رفاقه الثلاثة", () => {

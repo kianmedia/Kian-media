@@ -1,25 +1,51 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- 🔴 SUPERSEDED — ⛔ لا يُشغَّل. مرجع تاريخيّ فقط.
+-- CUSTODY ENTERPRISE · INCIDENTS + HOLD + ALERTS — حزمة إصدار ذرّية
 --
--- حلّت محلّه حزمة الإصدار:
---   docs/custody_enterprise_incidents_PREFLIGHT.sql
---   docs/custody_enterprise_incidents_RUNME.sql
---   docs/custody_enterprise_incidents_POSTCHECK.sql
---   docs/custody_enterprise_incidents_ROLLBACK.sql
+-- تحلّ محلّ `custody_enterprise_03_incidents_alerts_PATCH.sql` كحزمة تشغيل.
+-- ⚠️ ويبقى ملفّ الـPATCH في المستودع **مرجعًا تاريخيًّا فقط** — ⛔ لا يُشغَّل.
 --
--- ولماذا: هذا الملفّ **ثلاث معاملات مستقلّة**، ففشلُ جزء لاحق يترك الجداول
--- مطبَّقة بلا RLS ولا صلاحيات. وقسم التحقّق فيه `select` فقط فينتهي بحالة 0.
--- وفيه كذلك عيبان أُصلحا في الحزمة الجديدة: مُشغِّل الحجز على الإدراج وحده،
--- وربطُ حادثة بأصل لا يخصّ الموظّف.
--- ════════════════════════════════════════════════════════════════════════════
--- ════════════════════════════════════════════════════════════════════════════
--- Custody Enterprise Suite — Patch 03: Incidents + Hold + Alerts/Escalation engine
--- يُشغَّل بعد patch 02. idempotent.
+-- ★★ 🔴 لماذا حزمة جديدة لا تشغيل الـPATCH ★★
+--   الـPATCH يحوي **ثلاث معاملات مستقلّة** (`begin`…`commit` ×٣). فلو فشل
+--   الجزء الثاني أو الثالث، بقي الأوّل مطبَّقًا: أعمدة وحوادث بلا RLS ولا
+--   صلاحيات — وهي أسوأ حالة ممكنة (بيانات بلا حارس). هنا **معاملة واحدة**.
+--   وقسم التحقّق فيه `select` فقط، فينتهي بحالة خروج 0 مهما كان الناقص.
+--
+-- 🔴 **prerequisite رسميّ لـ`wave6_compliance_knowledge_RUNME.sql`**: تلك الحزمة
+--    تقرأ `public.custody_incidents` في فرع `union` **بلا حارس وجود** داخل
+--    `hse_register_v`، فغياب الجدول يُفشل `create view` ويُسقط حزمتها كلّها.
+--
+-- ⚠️ شغّل بـ`psql -v ON_ERROR_STOP=1` — أيّ خطأ يُرجع حالة غير صفرية ويتراجع الكلّ.
+-- ⛔ ولا بذور · لا تنبيهات تُنشأ · لا cron · لا اتصال خارجيّ.
 -- ════════════════════════════════════════════════════════════════════════════
 
 begin;
 
--- ─── 1) Hold على الأصل (يمنع الصرف عبر كل المسارات بمُشغّل واحد) ───
+-- ─── §0 · حارس اعتمادات صلب داخل المعاملة ─────────────────────────────────
+-- ⚠️ PREFLIGHT يُشغَّل منفصلًا وقد يُنسى. هذا الحارس يجعل التشغيل فوق قاعدة
+--    ناقصة **مستحيلًا** لا غير محبَّذ.
+do $$
+declare v_missing text[] := '{}'; v_t text; v_sig text;
+begin
+  foreach v_t in array array['custody_inventory_assets','custody_inventory_assignments',
+                             'custody_inventory_assignment_items','custody_enterprise_settings']
+  loop
+    if to_regclass('public.'||v_t) is null then v_missing := v_missing || ('TABLE '||v_t); end if;
+  end loop;
+  -- 🔴 التواقيع بـ`to_regprocedure`: `to_regproc` لا تقبل توقيعًا وتُعيد NULL دائمًا.
+  foreach v_sig in array array['public.is_staff()','public.civ_flag(text)',
+                               'public.civ_gen_no(text)','public.civ_can_manage()',
+                               'public.civ_notify(uuid,text,uuid,text,text)',
+                               'public.civ_notify_managers(text,uuid,text,text)',
+                               'public.custody_audit(text,text,uuid,jsonb)']
+  loop
+    if to_regprocedure(v_sig) is null then v_missing := v_missing || ('GATE '||v_sig); end if;
+  end loop;
+  if array_length(v_missing,1) > 0 then
+    raise exception E'🔴 CUSTODY INCIDENTS: اعتمادات مفقودة:\n  %', array_to_string(v_missing, E'\n  ');
+  end if;
+end $$;
+
+-- ─── §1 · Hold على الأصل ───────────────────────────────────────────────────
 alter table public.custody_inventory_assets add column if not exists on_hold boolean not null default false;
 alter table public.custody_inventory_assets add column if not exists hold_reason text;
 
@@ -31,11 +57,18 @@ begin
   end if;
   return new;
 end; $$;
+
+-- 🔴 `insert or update of asset_id` لا `insert` وحده.
+-- المُشغِّل الأصليّ كان على الإدراج فقط، فتغييرُ `asset_id` في صفّ قائم كان
+-- يتجاوز الحجز تمامًا. ومسحُ المستودع أثبت أنّ **لا مسار واحد يعدّل `asset_id`**
+-- اليوم (كل التحديثات على status/quantity/notes) ⇒ التوسعة **محايدة سلوكيًّا
+-- الآن** وتُغلق الثغرة إن أُضيف مسار لاحقًا. تشديدٌ بالدليل لا بالتخمين.
 drop trigger if exists trg_civ_item_hold on public.custody_inventory_assignment_items;
-create trigger trg_civ_item_hold before insert on public.custody_inventory_assignment_items
+create trigger trg_civ_item_hold
+  before insert or update of asset_id on public.custody_inventory_assignment_items
   for each row execute function public.civ_item_hold_check();
 
--- ─── 2) الحوادث والبلاغات ───
+-- ─── §2 · الحوادث والبلاغات ────────────────────────────────────────────────
 create table if not exists public.custody_incidents (
   id                uuid primary key default gen_random_uuid(),
   incident_number   text not null unique,
@@ -74,19 +107,57 @@ create table if not exists public.custody_incident_actions (
   created_at   timestamptz not null default now()
 );
 
--- بلاغ الموظف: يضع الأصل على Hold + إشعار عاجل. لا يغيّر الحالة إلى مفقود/تالف نهائيًا.
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 بلاغ الموظّف — مع إصلاح ربط الحادثة بالأصل
+--
+-- ★ العيب في النسخة السابقة ★
+--   كانت تتحقّق أنّ `assignment_id` **للموظّف نفسه**، ⛔ ولا تتحقّق إطلاقًا أنّ
+--   `asset_id` ينتمي إلى تلك العهدة ولا إلى الموظّف أصلًا. فكان بإمكانه تسجيل
+--   حادثة تربط عهدته برقم أصل **يخصّ موظّفًا آخر** — سجلّ كاذب في نظام قد
+--   يُبنى عليه تحميل مسؤولية أو مطالبة تأمين.
+--   (الحجز التلقائيّ كان محميًّا، لكنّ **صفّ الحادثة نفسه** لم يكن.)
+--
+-- ★ العقد الآن — fail-closed ★
+--   • `asset_id` وحده ⇒ يجب أن يكون ضمن عهدة (حالية أو سابقة) لهذا الموظّف.
+--   • `asset_id` + `assignment_id` ⇒ يجب أن يكون بندًا في **تلك العهدة** بعينها.
+--   • ⛔ وإلّا رُفض البلاغ — ولا يُسجَّل ثمّ يُصحَّح لاحقًا.
+--   ⚠️ ورسائل الرفض لا تكشف مالك الأصل ولا وجوده من عدمه.
+-- ════════════════════════════════════════════════════════════════════════════
 create or replace function public.custody_inv_employee_report_incident(p_data jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare v_emp uuid := auth.uid(); v_asset uuid; v_assign uuid; v_no text; v_id uuid;
+        v_asset_is_his boolean := false;
 begin
   if v_emp is null then raise exception 'unauthenticated'; end if;
   if not public.is_staff() then raise exception 'not authorized'; end if;
   if not public.civ_flag('incident_reporting_enabled') then raise exception 'incidents_disabled'; end if;
   v_assign := nullif(p_data->>'assignment_id','')::uuid;
   v_asset  := nullif(p_data->>'asset_id','')::uuid;
-  -- إن ارتبط بعهدة، تأكد أنها للموظف نفسه.
-  if v_assign is not null and not exists (select 1 from public.custody_inventory_assignments where id = v_assign and employee_user_id = v_emp and is_deleted=false)
-    then raise exception 'not_your_assignment'; end if;
+
+  -- العهدة — إن ذُكرت — للموظّف نفسه.
+  if v_assign is not null and not exists (
+       select 1 from public.custody_inventory_assignments
+        where id = v_assign and employee_user_id = v_emp and is_deleted = false)
+  then raise exception 'not_your_assignment'; end if;
+
+  -- 🔴 الأصل — إن ذُكر — يجب أن يعود إليه فعلًا.
+  if v_asset is not null then
+    if v_assign is not null then
+      -- كلاهما ⇒ الأصل بندٌ في **تلك** العهدة تحديدًا.
+      select exists (
+        select 1 from public.custody_inventory_assignment_items i
+         where i.assignment_id = v_assign and i.asset_id = v_asset) into v_asset_is_his;
+      if not v_asset_is_his then raise exception 'asset_not_in_assignment'; end if;
+    else
+      -- الأصل وحده ⇒ ضمن أيّ عهدة له (حالية أو سابقة).
+      select exists (
+        select 1 from public.custody_inventory_assignment_items i
+          join public.custody_inventory_assignments a on a.id = i.assignment_id
+         where i.asset_id = v_asset and a.employee_user_id = v_emp) into v_asset_is_his;
+      if not v_asset_is_his then raise exception 'asset_not_yours'; end if;
+    end if;
+  end if;
+
   v_no := public.civ_gen_no('INC');
   insert into public.custody_incidents(incident_number, assignment_id, asset_id, incident_type, occurred_at, location_text,
     gps_lat, gps_lng, description, witnesses, used_by, was_work_stopped, immediate_action, external_reported, police_ref, reported_by)
@@ -95,20 +166,24 @@ begin
     nullif(trim(p_data->>'description'),''), nullif(trim(p_data->>'witnesses'),''), v_emp, coalesce((p_data->>'was_work_stopped')::boolean,false),
     nullif(trim(p_data->>'immediate_action'),''), coalesce((p_data->>'external_reported')::boolean,false), nullif(trim(p_data->>'police_ref'),''), v_emp)
   returning id into v_id;
-  -- Hold تلقائي فقط إن كان الأصل ضمن عهدة (حالية/سابقة) لنفس الموظف — يمنع أن يحتجز
-  -- موظف أي أصل عشوائيًا (DoS على الصرف). خلاف ذلك يُسجَّل البلاغ بلا Hold ويقرّر المسؤول.
-  if v_asset is not null and exists (
-      select 1 from public.custody_inventory_assignment_items i
-      join public.custody_inventory_assignments a on a.id = i.assignment_id
-      where i.asset_id = v_asset and a.employee_user_id = v_emp) then
-    update public.custody_inventory_assets set on_hold = true, hold_reason = 'incident ' || v_no where id = v_asset;
+
+  -- ⚠️ الحجز التلقائيّ: الملكية أُثبتت أعلاه، فلا فحص ثانٍ. ولا يحجز موظّفٌ
+  --    أصلًا ليس له (منعُ تعطيل الصرف).
+  if v_asset is not null and v_asset_is_his then
+    update public.custody_inventory_assets
+       set on_hold = true, hold_reason = 'incident ' || v_no
+     where id = v_asset;
   end if;
+
   perform public.custody_audit('incident_reported', 'custody_incidents', v_id, jsonb_build_object('type', p_data->>'incident_type'));
   perform public.civ_notify_managers('custody_incident_reported', v_id, 'بلاغ حادث/تلف: ' || v_no, 'Incident reported: ' || v_no);
   return jsonb_build_object('ok', true, 'id', v_id, 'incident_number', v_no);
 end; $$;
 
--- إجراء الإدارة: تحويل/إغلاق + تحرير أو إبقاء Hold.
+-- ─── إجراء الإدارة: تحويل/إغلاق + تحرير أو إبقاء Hold ─────────────────────
+-- 🔴 رفع الحجز يتطلّب `civ_can_manage()` **و**`p_release_hold = true` صراحةً.
+-- ⚠️ و`hold_reason` تُصفَّر مع `on_hold` معًا — فلا تبقى حالة متناقضة
+--    (`on_hold=false` مع سبب حجز معلّق).
 create or replace function public.custody_inv_admin_incident_action(p_incident uuid, p_status text, p_note text, p_release_hold boolean) returns boolean
 language plpgsql security definer set search_path = public as $$
 declare v_asset uuid;
@@ -128,12 +203,8 @@ begin
   return true;
 end; $$;
 
-commit;
-
--- ════════════════════════════════════════════════════════════════════════════
--- 3) محرك التنبيهات والتصعيد (dedup + delivery log). يُستدعى من cron endpoint.
--- ════════════════════════════════════════════════════════════════════════════
-begin;
+-- ─── §3 · محرّك التنبيهات (سجلّ التسليم + إزالة التكرار) ───────────────────
+-- ⛔ لا يُشغَّل المحرّك هنا، ولا يُنشأ تنبيه واحد أثناء التطبيق.
 create table if not exists public.custody_alert_deliveries (
   id            uuid primary key default gen_random_uuid(),
   dedup_key     text not null unique,          -- يمنع تكرار نفس التنبيه
@@ -148,7 +219,11 @@ create table if not exists public.custody_alert_deliveries (
 );
 create index if not exists idx_civ_alert_deliv on public.custody_alert_deliveries(alert_type, created_at desc);
 
--- يُنشئ التنبيه مرة واحدة فقط لكل dedup_key. آمن الفشل.
+-- ⚠️ **`when others then return false` مُبقًى كما هو — عن قصد.**
+--    يُخفي أخطاء تشغيلية (مثل عمود مفقود) خلف «لم يُنشأ تنبيه»، وهو سلوك يستحقّ
+--    المراجعة. ⛔ لكنّ تغييره يغيّر سلوك محرّك التنبيهات كلّه، ولا يُغيَّر بلا
+--    اختبار على قاعدة — وهذا خارج نطاق هذه الحزمة.
+--    🔵 مسجَّل كقرار مفتوح في OVERNIGHT_DECISIONS_REQUIRED.md.
 create or replace function public.civ_alert_once(p_key text, p_type text, p_etype text, p_eid uuid) returns boolean
 language plpgsql security definer set search_path = public as $$
 begin
@@ -157,7 +232,6 @@ begin
 exception when unique_violation then return false; when others then return false;
 end; $$;
 
--- المحرك: يفحص الاستحقاق/التأخير/التصعيد/الضمانات وينشئ إشعارات بوابة بلا تكرار.
 create or replace function public.custody_run_alerts() returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare r record; v_esc int; v_due int := 0; v_over int := 0; v_esc_n int := 0; v_warr int := 0; v_pend int := 0; v_day text := to_char(now(),'YYYYMMDD');
@@ -208,12 +282,8 @@ begin
   return jsonb_build_object('ok', true, 'due_soon', v_due, 'overdue', v_over, 'escalated', v_esc_n, 'return_pending', v_pend, 'warranty', v_warr);
 end; $$;
 
-commit;
 
--- ════════════════════════════════════════════════════════════════════════════
--- 4) RLS + GRANTS
--- ════════════════════════════════════════════════════════════════════════════
-begin;
+-- ─── §4 · RLS والسياسات ───────────────────────────────────────────────────
 alter table public.custody_incidents          enable row level security;
 alter table public.custody_incident_actions   enable row level security;
 alter table public.custody_alert_deliveries   enable row level security;
@@ -225,20 +295,24 @@ create policy civ_incident_actions_read on public.custody_incident_actions for s
 drop policy if exists civ_alert_deliv_read on public.custody_alert_deliveries;
 create policy civ_alert_deliv_read on public.custody_alert_deliveries for select to authenticated using (public.civ_can_manage());
 
+-- ⛔ ولا صلاحيات هنا: كلّها في §5 موضعًا **واحدًا**. وتكرارها في موضعين يجعل
+--    حذف أحدهما بلا أثر ظاهر، فيمرّ إسقاطُ حارسٍ صامتًا.
+
+-- ─── §5 · الصلاحيات — REVOKE أوّلًا ثمّ منح محدَّد ─────────────────────────
 grant select on public.custody_incidents, public.custody_incident_actions, public.custody_alert_deliveries to authenticated;
-revoke execute on function public.custody_inv_employee_report_incident(jsonb), public.custody_inv_admin_incident_action(uuid,text,text,boolean) from public, anon;
+
+revoke execute on function public.custody_inv_employee_report_incident(jsonb) from public, anon;
+revoke execute on function public.custody_inv_admin_incident_action(uuid,text,text,boolean) from public, anon;
 grant execute on function public.custody_inv_employee_report_incident(jsonb) to authenticated;
 grant execute on function public.custody_inv_admin_incident_action(uuid,text,text,boolean) to authenticated;
--- custody_run_alerts / civ_alert_once / civ_item_hold_check: تُستدعى من الخادم/المُشغّل فقط.
+
+-- 🔴 المحرّك ودالّة إزالة التكرار ودالّة المُشغِّل: خادميّة بحتة.
 revoke execute on function public.custody_run_alerts() from public, anon, authenticated;
 revoke execute on function public.civ_alert_once(text,text,text,uuid) from public, anon, authenticated;
-grant  execute on function public.custody_run_alerts() to service_role;   -- يستدعيها مسار cron بمفتاح الخدمة
+revoke execute on function public.civ_item_hold_check() from public, anon, authenticated;
+grant  execute on function public.custody_run_alerts() to service_role;
+
 commit;
 
+-- ⚠️ **بعد** COMMIT فقط: إشعار PostgREST بإعادة تحميل المخطّط.
 notify pgrst, 'reload schema';
-
--- VALIDATION
-select 'incidents' as k, count(*) from information_schema.tables where table_name='custody_incidents';
-select 'hold_trigger' as k, count(*) from pg_trigger where tgname='trg_civ_item_hold';
-select 'alert_rpcs' as k, count(*) from pg_proc where proname in ('custody_run_alerts','custody_inv_employee_report_incident','custody_inv_admin_incident_action');
-select 'on_hold_col' as k, count(*) from information_schema.columns where table_name='custody_inventory_assets' and column_name='on_hold';
