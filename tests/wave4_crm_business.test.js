@@ -372,8 +372,17 @@ test("(G-1) ★★★ كلّ دالّة محصَّنة · anon يملك التح
   assert.doesNotMatch(c, /grant\s+all\b/i, "🔴 منح شامل");
   // RLS على الجدولين، ولا صلاحية جدول لـanon.
   assert.equal((c.match(/enable row level security/gi) || []).length, 2, "RLS ناقص");
-  assert.match(c, /revoke all on public\.crm_opportunity_tender\s+from anon, public/, "🔴 جدول بلا REVOKE");
-  assert.match(c, /revoke all on public\.crm_client_health_v from anon, public/, "🔴 العرض بلا REVOKE");
+  // 🔴 السحب المبكّر باقٍ، **والنهائيّ** في §5 يشمل authenticated أيضًا:
+  //    تشخيص Preview أظهر Dxtm باقية لـauthenticated لأنّ السحب كان anon/public
+  //    فقط، وACL المشروع الافتراضيّ يمنح الباقي. وRLS لا تحكم TRUNCATE.
+  assert.match(c, /revoke all on public\.crm_opportunity_tender\s+from anon, public/, "🔴 جدول بلا REVOKE مبكّر");
+  for (const o of ["crm_opportunity_tender", "crm_testimonial_invites", "crm_client_health_v"]) {
+    assert.match(c, new RegExp(`revoke all privileges on table public\\.${o}\\s+from public, anon, authenticated;`),
+      `🔴 ${o}: السحب النهائيّ لا يشمل authenticated`);
+  }
+  // ⛔ ولا منحة على العرض المشتقّ: بلا مستهلك مباشر، وبلا حارس صلاحية داخله.
+  assert.ok(!/grant\s[^;]*\bcrm_client_health_v\b[^;]*to\s/i.test(c),
+    "🔴 منحة على crm_client_health_v — تجاوزٌ لعزل الشركات");
   assert.doesNotMatch(c, /create policy[^;]*for\s+(insert|update|delete)/i,
     "🔴 سياسة كتابة تتجاوز الدوالّ المحروسة");
 

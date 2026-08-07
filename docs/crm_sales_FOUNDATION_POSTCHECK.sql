@@ -18,33 +18,156 @@ from (values ('crm_settings'),('crm_teams'),('crm_team_members'),('crm_companies
 
 -- ─── 2) لا سياسة كتابة مباشرة على أيّ جدول ────────────────────────────────
 -- متوقّع: صفر صفّ. أيّ صفّ هنا يعني أنّ الكتابة تتجاوز الـRPC.
+-- ⚠️ النطاق: كائنات Foundation وحدها. ومسحُ فضاء crm_% يلتقط دوالّ
+--    Wave 4 (8 منها) فيُدين حزمةً بجارٍ لها في الاسم.
 select tablename, policyname, cmd from pg_policies
-where schemaname = 'public' and tablename like 'crm\_%' and cmd <> 'SELECT';
+where schemaname = 'public' and cmd <> 'SELECT'
+  and tablename::text in ('crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests');
 
 -- ─── 3) لا صلاحية anon — لا على جدول ولا على دالّة ────────────────────────
 -- متوقّع: صفر صفّ في كليهما.
+-- ⛔ والنطاق هنا أيضًا **جداول Foundation العشرون** لا فضاء crm_%:
+--    `crm_opportunity_tender` و`crm_testimonial_invites`
+--    و`crm_client_health_v` من إنتاج Wave 4، وACL كلٍّ منها مسؤولية حزمته.
 select table_name, privilege_type, grantee from information_schema.role_table_grants
-where table_schema = 'public' and table_name like 'crm\_%' and grantee = 'anon';
+where table_schema = 'public' and grantee = 'anon'
+  and table_name::text in ('crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests');
 
-select p.proname, pg_get_function_identity_arguments(p.oid) as args
-from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname like 'crm\_%'
-  and exists (select 1 from pg_roles where rolname = 'anon')
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 النطاق: دوالّ **Foundation** وحدها — لا مسحُ فضاء الأسماء crm_%
+--
+-- ★ الإنذار الكاذب الذي أعطاه هذا الفحص على Preview ★
+--   `proname like 'crm\_%'` يمسح **كلّ** ما يبدأ بـcrm، فالتقط
+--   `crm_testimonial_invite_check(text)` — وهي دالّة **Wave 4**، وanon يملك
+--   تنفيذها **عمدًا**: فحص رمز دعوة الشهادة قبل تسجيل الدخول
+--   (`wave4_crm_business_RUNME.sql:528`). ⇒ حزمةٌ سليمة تُبلَّغ مخالِفة
+--   بسبب جارٍ لها في فضاء الأسماء.
+--
+-- ⛔ ولا يُعالَج باستثناء اسمٍ بعينه: ذلك يُخفي أيّ دالّة Wave 4 لاحقة تُمنح
+--    لـanon بالخطأ. العلاج **حصر النطاق**: قائمة Foundation مستخرَجة من
+--    `crm_sales_FOUNDATION_RUNME.sql` بالاسم **والتوقيع** (93 دالّة).
+-- ⚠️ والمقارنة بـ`oidvectortypes` لا `pg_get_function_identity_arguments`:
+--    الأخيرة تُعيد أسماء الوسائط مع أنواعها، فلا تُطابِق توقيعًا مكتوبًا.
+-- ════════════════════════════════════════════════════════════════════════════
+with foundation_fn(fname, fargs) as (values
+  ('crm_perm','text'),
+  ('crm_perm_key_exists','text'),
+  ('crm_is_owner_role',''),
+  ('crm_can_manage',''),
+  ('crm_can_view',''),
+  ('crm_is_client',''),
+  ('crm_can_view_commission','uuid'),
+  ('crm_can_manage_commission',''),
+  ('crm_can_manage_targets',''),
+  ('crm_can_approve_changes',''),
+  ('crm_can_manage_pipeline',''),
+  ('crm_can_manage_scoring',''),
+  ('crm_can_import',''),
+  ('crm_can_view_team',''),
+  ('crm_can_see_owner','uuid'),
+  ('crm_can_read_lead','uuid'),
+  ('crm_can_edit_lead','uuid'),
+  ('crm_can_read_opportunity','uuid'),
+  ('crm_can_edit_opportunity','uuid'),
+  ('crm_can_read_activity','uuid'),
+  ('crm_log','text, text, uuid, jsonb'),
+  ('crm_notify','uuid, text, uuid, text, text'),
+  ('crm_norm_text','text'),
+  ('crm_norm_email','text'),
+  ('crm_norm_phone','text'),
+  ('crm_normalize_lead',''),
+  ('crm_normalize_contact',''),
+  ('crm_normalize_company',''),
+  ('crm_normalize_competitor',''),
+  ('crm_touch',''),
+  ('crm_setting_int','text, integer'),
+  ('crm_setting_text','text, text'),
+  ('crm_project_label','uuid'),
+  ('crm_quote_ref','uuid'),
+  ('crm_next_code','text'),
+  ('crm_score_core','uuid'),
+  ('crm_duplicate_core','text, text, text, text, uuid'),
+  ('crm_readiness_core','uuid'),
+  ('crm_visible_leads',''),
+  ('crm_visible_opportunities',''),
+  ('crm_access',''),
+  ('crm_lookups',''),
+  ('crm_leads_list','jsonb'),
+  ('crm_lead_detail','uuid'),
+  ('crm_duplicates','jsonb'),
+  ('crm_opportunities_list','jsonb'),
+  ('crm_opportunity_detail','uuid'),
+  ('crm_pipeline_board','jsonb'),
+  ('crm_forecast','jsonb'),
+  ('crm_stale_alerts','jsonb'),
+  ('crm_activities_list','jsonb'),
+  ('crm_targets_list','jsonb'),
+  ('crm_commission_list','jsonb'),
+  ('crm_dashboard','jsonb'),
+  ('crm_export','text, jsonb'),
+  ('crm_audit_list','jsonb'),
+  ('crm_approvals_list','jsonb'),
+  ('crm_import_preview','jsonb, text'),
+  ('crm_company_upsert','jsonb'),
+  ('crm_contact_upsert','jsonb'),
+  ('crm_competitor_upsert','jsonb'),
+  ('crm_lead_upsert','jsonb'),
+  ('crm_lead_set_status','uuid, text, text'),
+  ('crm_lead_score_adjust','jsonb'),
+  ('crm_lead_convert','uuid, jsonb'),
+  ('crm_lead_delete','uuid, text'),
+  ('crm_opportunity_upsert','jsonb'),
+  ('crm_opportunity_link_quote','uuid, uuid'),
+  ('crm_opportunity_set_stage','uuid, uuid, text'),
+  ('crm_opportunity_close','uuid, text, jsonb'),
+  ('crm_opportunity_reopen','uuid, text'),
+  ('crm_opportunity_delete','uuid, text'),
+  ('crm_handoff_confirm','uuid, jsonb'),
+  ('crm_activity_log','jsonb'),
+  ('crm_activity_delete','uuid, text'),
+  ('crm_score_rule_upsert','jsonb'),
+  ('crm_settings_set','text, jsonb'),
+  ('crm_team_upsert','jsonb'),
+  ('crm_team_member_set','jsonb'),
+  ('crm_approval_submit_core','text, uuid, uuid, jsonb, text'),
+  ('crm_target_apply_core','jsonb, uuid'),
+  ('crm_target_upsert','jsonb'),
+  ('crm_target_delete','uuid, text'),
+  ('crm_commission_recalc_core','uuid'),
+  ('crm_commission_recalc','uuid'),
+  ('crm_commission_plan_apply_core','jsonb, uuid'),
+  ('crm_commission_plan_upsert','jsonb'),
+  ('crm_commission_assign_core','jsonb, uuid'),
+  ('crm_commission_assign','jsonb'),
+  ('crm_approval_decide','uuid, text, text'),
+  ('crm_approval_withdraw','uuid, text'),
+  ('crm_commission_set_status','uuid, text, text'),
+  ('crm_import_leads','jsonb, text')
+)
+select p.proname, pg_catalog.oidvectortypes(p.proargtypes) as args
+from foundation_fn k
+join pg_proc p on p.proname = k.fname
+             and p.pronamespace = 'public'::regnamespace
+             and pg_catalog.oidvectortypes(p.proargtypes) = k.fargs
+where exists (select 1 from pg_roles where rolname = 'anon')
   and has_function_privilege('anon', p.oid, 'EXECUTE');
 
 -- ─── 4) الجداول: SELECT فقط لـauthenticated ──────────────────────────────
 -- متوقّع: صفر صفّ (لا INSERT/UPDATE/DELETE ممنوحة).
 select table_name, privilege_type from information_schema.role_table_grants
-where table_schema = 'public' and table_name like 'crm\_%' and grantee = 'authenticated'
-  and privilege_type <> 'SELECT';
+where table_schema = 'public' and grantee = 'authenticated'
+  and privilege_type <> 'SELECT'
+  and table_name::text in ('crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests');
 
 -- ─── 5) كلّ دوالّ الموديول SECURITY DEFINER بمسار بحث مثبَّت ─────────────
 -- متوقّع: كلّ الصفوف security_definer = true وpinned_search_path = true.
 select p.proname,
        p.prosecdef as security_definer,
        (coalesce(array_to_string(p.proconfig, ','), '') ilike '%search_path%') as pinned_search_path
+-- ⚠️ النطاق: كائنات Foundation وحدها. ومسحُ فضاء crm_% يلتقط دوالّ
+--    Wave 4 (8 منها) فيُدين حزمةً بجارٍ لها في الاسم.
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname like 'crm\_%'
+where n.nspname = 'public' and p.proname in ('crm_access','crm_activities_list','crm_activity_delete','crm_activity_log','crm_approval_decide','crm_approval_submit_core','crm_approval_withdraw','crm_approvals_list','crm_audit_list','crm_can_approve_changes','crm_can_edit_lead','crm_can_edit_opportunity','crm_can_import','crm_can_manage','crm_can_manage_commission','crm_can_manage_pipeline','crm_can_manage_scoring','crm_can_manage_targets','crm_can_read_activity','crm_can_read_lead','crm_can_read_opportunity','crm_can_see_owner','crm_can_view','crm_can_view_commission','crm_can_view_team','crm_commission_assign','crm_commission_assign_core','crm_commission_list','crm_commission_plan_apply_core','crm_commission_plan_upsert','crm_commission_recalc','crm_commission_recalc_core','crm_commission_set_status','crm_company_upsert','crm_competitor_upsert','crm_contact_upsert','crm_dashboard','crm_duplicate_core','crm_duplicates','crm_export','crm_forecast','crm_handoff_confirm','crm_import_leads','crm_import_preview','crm_is_client','crm_is_owner_role','crm_lead_convert','crm_lead_delete','crm_lead_detail','crm_lead_score_adjust','crm_lead_set_status','crm_lead_upsert','crm_leads_list','crm_log','crm_lookups','crm_next_code','crm_norm_email','crm_norm_phone','crm_norm_text','crm_normalize_company','crm_normalize_competitor','crm_normalize_contact','crm_normalize_lead','crm_notify','crm_opportunities_list','crm_opportunity_close','crm_opportunity_delete','crm_opportunity_detail','crm_opportunity_link_quote','crm_opportunity_reopen','crm_opportunity_set_stage','crm_opportunity_upsert','crm_perm','crm_perm_key_exists','crm_pipeline_board','crm_project_label','crm_quote_ref','crm_readiness_core','crm_score_core','crm_score_rule_upsert','crm_setting_int','crm_setting_text','crm_settings_set','crm_stale_alerts','crm_target_apply_core','crm_target_delete','crm_target_upsert','crm_targets_list','crm_team_member_set','crm_team_upsert','crm_touch','crm_visible_leads','crm_visible_opportunities')
 order by p.proname;
 
 -- ─── 6) الدوالّ الداخلية لا تُنفَّذ من الواجهة ────────────────────────────
@@ -121,13 +244,13 @@ select (public.crm_norm_text('شركة الكِيان') = public.crm_norm_text('
 -- متوقّع: صفر صفّ. أيّ صفّ = خرق العقد.
 select p.proname
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname like 'crm\_%'
+where n.nspname = 'public' and p.proname in ('crm_access','crm_activities_list','crm_activity_delete','crm_activity_log','crm_approval_decide','crm_approval_submit_core','crm_approval_withdraw','crm_approvals_list','crm_audit_list','crm_can_approve_changes','crm_can_edit_lead','crm_can_edit_opportunity','crm_can_import','crm_can_manage','crm_can_manage_commission','crm_can_manage_pipeline','crm_can_manage_scoring','crm_can_manage_targets','crm_can_read_activity','crm_can_read_lead','crm_can_read_opportunity','crm_can_see_owner','crm_can_view','crm_can_view_commission','crm_can_view_team','crm_commission_assign','crm_commission_assign_core','crm_commission_list','crm_commission_plan_apply_core','crm_commission_plan_upsert','crm_commission_recalc','crm_commission_recalc_core','crm_commission_set_status','crm_company_upsert','crm_competitor_upsert','crm_contact_upsert','crm_dashboard','crm_duplicate_core','crm_duplicates','crm_export','crm_forecast','crm_handoff_confirm','crm_import_leads','crm_import_preview','crm_is_client','crm_is_owner_role','crm_lead_convert','crm_lead_delete','crm_lead_detail','crm_lead_score_adjust','crm_lead_set_status','crm_lead_upsert','crm_leads_list','crm_log','crm_lookups','crm_next_code','crm_norm_email','crm_norm_phone','crm_norm_text','crm_normalize_company','crm_normalize_competitor','crm_normalize_contact','crm_normalize_lead','crm_notify','crm_opportunities_list','crm_opportunity_close','crm_opportunity_delete','crm_opportunity_detail','crm_opportunity_link_quote','crm_opportunity_reopen','crm_opportunity_set_stage','crm_opportunity_upsert','crm_perm','crm_perm_key_exists','crm_pipeline_board','crm_project_label','crm_quote_ref','crm_readiness_core','crm_score_core','crm_score_rule_upsert','crm_setting_int','crm_setting_text','crm_settings_set','crm_stale_alerts','crm_target_apply_core','crm_target_delete','crm_target_upsert','crm_targets_list','crm_team_member_set','crm_team_upsert','crm_touch','crm_visible_leads','crm_visible_opportunities')
   and (pg_get_functiondef(p.oid) ~* '(insert\s+into|update|delete\s+from)\s+(public\.)?(projects|project_core|deliverables|deliverable_internal|project_transition_requests)\b'
     or pg_get_functiondef(p.oid) ~* '(insert\s+into|update|delete\s+from)\s+(public\.)?quote_requests\b');
 
 -- متوقّع: صفر صفّ — لا دالّة crm_* تتّكئ على can_manage_projects.
 select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname like 'crm\_%'
+where n.nspname = 'public' and p.proname in ('crm_access','crm_activities_list','crm_activity_delete','crm_activity_log','crm_approval_decide','crm_approval_submit_core','crm_approval_withdraw','crm_approvals_list','crm_audit_list','crm_can_approve_changes','crm_can_edit_lead','crm_can_edit_opportunity','crm_can_import','crm_can_manage','crm_can_manage_commission','crm_can_manage_pipeline','crm_can_manage_scoring','crm_can_manage_targets','crm_can_read_activity','crm_can_read_lead','crm_can_read_opportunity','crm_can_see_owner','crm_can_view','crm_can_view_commission','crm_can_view_team','crm_commission_assign','crm_commission_assign_core','crm_commission_list','crm_commission_plan_apply_core','crm_commission_plan_upsert','crm_commission_recalc','crm_commission_recalc_core','crm_commission_set_status','crm_company_upsert','crm_competitor_upsert','crm_contact_upsert','crm_dashboard','crm_duplicate_core','crm_duplicates','crm_export','crm_forecast','crm_handoff_confirm','crm_import_leads','crm_import_preview','crm_is_client','crm_is_owner_role','crm_lead_convert','crm_lead_delete','crm_lead_detail','crm_lead_score_adjust','crm_lead_set_status','crm_lead_upsert','crm_leads_list','crm_log','crm_lookups','crm_next_code','crm_norm_email','crm_norm_phone','crm_norm_text','crm_normalize_company','crm_normalize_competitor','crm_normalize_contact','crm_normalize_lead','crm_notify','crm_opportunities_list','crm_opportunity_close','crm_opportunity_delete','crm_opportunity_detail','crm_opportunity_link_quote','crm_opportunity_reopen','crm_opportunity_set_stage','crm_opportunity_upsert','crm_perm','crm_perm_key_exists','crm_pipeline_board','crm_project_label','crm_quote_ref','crm_readiness_core','crm_score_core','crm_score_rule_upsert','crm_setting_int','crm_setting_text','crm_settings_set','crm_stale_alerts','crm_target_apply_core','crm_target_delete','crm_target_upsert','crm_targets_list','crm_team_member_set','crm_team_upsert','crm_touch','crm_visible_leads','crm_visible_opportunities')
   and pg_get_functiondef(p.oid) ilike '%can_manage_projects%';
 
 -- ─── 14) ★ فصل صلاحية العمولة عن إدارة المبيعات ─────────────────────────
@@ -193,10 +316,12 @@ from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname = 'crm_import_preview';
 
 -- ─── 20) عدد الدوالّ المنشأة ─────────────────────────────────────────────
--- متوقّع: 93 دالّة crm_* (84 في الأساس + 9 من عقدَي الاعتماد والمعاينة).
-select count(*) as crm_functions
+-- متوقّع: 93 دالّة **Foundation**.
+-- 🔴 وكان العدّ على فضاء crm_% كلّه، فتطبيقُ Wave 4 يرفعه إلى 101 ويُظهر
+--    Foundation ناقصةً أو زائدة — إنذار كاذب مؤجَّل. النطاق يحسمه.
+select count(*) as crm_foundation_functions
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname like 'crm\_%';
+where n.nspname = 'public' and p.proname in ('crm_access','crm_activities_list','crm_activity_delete','crm_activity_log','crm_approval_decide','crm_approval_submit_core','crm_approval_withdraw','crm_approvals_list','crm_audit_list','crm_can_approve_changes','crm_can_edit_lead','crm_can_edit_opportunity','crm_can_import','crm_can_manage','crm_can_manage_commission','crm_can_manage_pipeline','crm_can_manage_scoring','crm_can_manage_targets','crm_can_read_activity','crm_can_read_lead','crm_can_read_opportunity','crm_can_see_owner','crm_can_view','crm_can_view_commission','crm_can_view_team','crm_commission_assign','crm_commission_assign_core','crm_commission_list','crm_commission_plan_apply_core','crm_commission_plan_upsert','crm_commission_recalc','crm_commission_recalc_core','crm_commission_set_status','crm_company_upsert','crm_competitor_upsert','crm_contact_upsert','crm_dashboard','crm_duplicate_core','crm_duplicates','crm_export','crm_forecast','crm_handoff_confirm','crm_import_leads','crm_import_preview','crm_is_client','crm_is_owner_role','crm_lead_convert','crm_lead_delete','crm_lead_detail','crm_lead_score_adjust','crm_lead_set_status','crm_lead_upsert','crm_leads_list','crm_log','crm_lookups','crm_next_code','crm_norm_email','crm_norm_phone','crm_norm_text','crm_normalize_company','crm_normalize_competitor','crm_normalize_contact','crm_normalize_lead','crm_notify','crm_opportunities_list','crm_opportunity_close','crm_opportunity_delete','crm_opportunity_detail','crm_opportunity_link_quote','crm_opportunity_reopen','crm_opportunity_set_stage','crm_opportunity_upsert','crm_perm','crm_perm_key_exists','crm_pipeline_board','crm_project_label','crm_quote_ref','crm_readiness_core','crm_score_core','crm_score_rule_upsert','crm_setting_int','crm_setting_text','crm_settings_set','crm_stale_alerts','crm_target_apply_core','crm_target_delete','crm_target_upsert','crm_targets_list','crm_team_member_set','crm_team_upsert','crm_touch','crm_visible_leads','crm_visible_opportunities');
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -215,37 +340,239 @@ where n.nspname = 'public' and p.proname like 'crm\_%';
 do $verdict$
 declare v_fail text[] := '{}'; v_o text;
 begin
+  -- 🔴 النطاق: جداول Foundation العشرون **حصرًا**. وكائنات Wave 4 يفحصها
+  --    `wave4_crm_business_POSTCHECK.sql` — ⛔ ولا تتقاطع الحزمتان.
   if (select count(*) from information_schema.role_table_grants
        where table_schema='public' and grantee::text in ('anon','PUBLIC')
-         and table_name::text like 'crm\_%') > 0 then
-    v_fail := array_append(v_fail, 'صلاحية جدول لـanon/PUBLIC');
+         and table_name::text in ('crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests')) > 0 then
+    v_fail := array_append(v_fail, 'صلاحية جدول لـanon/PUBLIC على جدول Foundation');
   end if;
   -- 🔴 REQUIRED BLOCKER: تنفيذ دالّة من الموديول لـanon.
-  if exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-              where n.nspname='public' and p.proname like 'crm\_%'
-                and exists (select 1 from pg_roles where rolname='anon')
-                and has_function_privilege('anon', p.oid, 'EXECUTE')) then
-    v_fail := array_append(v_fail, 'anon ينفّذ دالّة من موديول CRM');
+  -- 🔴 وبالتوقيع: 93 دالّة Foundation. ⛔ ولا استثناء بالاسم — النطاق هو العلاج.
+  if exists (
+    with foundation_fn(fname, fargs) as (values
+      ('crm_perm','text'),
+  ('crm_perm_key_exists','text'),
+  ('crm_is_owner_role',''),
+  ('crm_can_manage',''),
+  ('crm_can_view',''),
+  ('crm_is_client',''),
+  ('crm_can_view_commission','uuid'),
+  ('crm_can_manage_commission',''),
+  ('crm_can_manage_targets',''),
+  ('crm_can_approve_changes',''),
+  ('crm_can_manage_pipeline',''),
+  ('crm_can_manage_scoring',''),
+  ('crm_can_import',''),
+  ('crm_can_view_team',''),
+  ('crm_can_see_owner','uuid'),
+  ('crm_can_read_lead','uuid'),
+  ('crm_can_edit_lead','uuid'),
+  ('crm_can_read_opportunity','uuid'),
+  ('crm_can_edit_opportunity','uuid'),
+  ('crm_can_read_activity','uuid'),
+  ('crm_log','text, text, uuid, jsonb'),
+  ('crm_notify','uuid, text, uuid, text, text'),
+  ('crm_norm_text','text'),
+  ('crm_norm_email','text'),
+  ('crm_norm_phone','text'),
+  ('crm_normalize_lead',''),
+  ('crm_normalize_contact',''),
+  ('crm_normalize_company',''),
+  ('crm_normalize_competitor',''),
+  ('crm_touch',''),
+  ('crm_setting_int','text, integer'),
+  ('crm_setting_text','text, text'),
+  ('crm_project_label','uuid'),
+  ('crm_quote_ref','uuid'),
+  ('crm_next_code','text'),
+  ('crm_score_core','uuid'),
+  ('crm_duplicate_core','text, text, text, text, uuid'),
+  ('crm_readiness_core','uuid'),
+  ('crm_visible_leads',''),
+  ('crm_visible_opportunities',''),
+  ('crm_access',''),
+  ('crm_lookups',''),
+  ('crm_leads_list','jsonb'),
+  ('crm_lead_detail','uuid'),
+  ('crm_duplicates','jsonb'),
+  ('crm_opportunities_list','jsonb'),
+  ('crm_opportunity_detail','uuid'),
+  ('crm_pipeline_board','jsonb'),
+  ('crm_forecast','jsonb'),
+  ('crm_stale_alerts','jsonb'),
+  ('crm_activities_list','jsonb'),
+  ('crm_targets_list','jsonb'),
+  ('crm_commission_list','jsonb'),
+  ('crm_dashboard','jsonb'),
+  ('crm_export','text, jsonb'),
+  ('crm_audit_list','jsonb'),
+  ('crm_approvals_list','jsonb'),
+  ('crm_import_preview','jsonb, text'),
+  ('crm_company_upsert','jsonb'),
+  ('crm_contact_upsert','jsonb'),
+  ('crm_competitor_upsert','jsonb'),
+  ('crm_lead_upsert','jsonb'),
+  ('crm_lead_set_status','uuid, text, text'),
+  ('crm_lead_score_adjust','jsonb'),
+  ('crm_lead_convert','uuid, jsonb'),
+  ('crm_lead_delete','uuid, text'),
+  ('crm_opportunity_upsert','jsonb'),
+  ('crm_opportunity_link_quote','uuid, uuid'),
+  ('crm_opportunity_set_stage','uuid, uuid, text'),
+  ('crm_opportunity_close','uuid, text, jsonb'),
+  ('crm_opportunity_reopen','uuid, text'),
+  ('crm_opportunity_delete','uuid, text'),
+  ('crm_handoff_confirm','uuid, jsonb'),
+  ('crm_activity_log','jsonb'),
+  ('crm_activity_delete','uuid, text'),
+  ('crm_score_rule_upsert','jsonb'),
+  ('crm_settings_set','text, jsonb'),
+  ('crm_team_upsert','jsonb'),
+  ('crm_team_member_set','jsonb'),
+  ('crm_approval_submit_core','text, uuid, uuid, jsonb, text'),
+  ('crm_target_apply_core','jsonb, uuid'),
+  ('crm_target_upsert','jsonb'),
+  ('crm_target_delete','uuid, text'),
+  ('crm_commission_recalc_core','uuid'),
+  ('crm_commission_recalc','uuid'),
+  ('crm_commission_plan_apply_core','jsonb, uuid'),
+  ('crm_commission_plan_upsert','jsonb'),
+  ('crm_commission_assign_core','jsonb, uuid'),
+  ('crm_commission_assign','jsonb'),
+  ('crm_approval_decide','uuid, text, text'),
+  ('crm_approval_withdraw','uuid, text'),
+  ('crm_commission_set_status','uuid, text, text'),
+  ('crm_import_leads','jsonb, text')
+    )
+    select 1 from foundation_fn k
+    join pg_proc p on p.proname = k.fname
+                 and p.pronamespace = 'public'::regnamespace
+                 and pg_catalog.oidvectortypes(p.proargtypes) = k.fargs
+    where exists (select 1 from pg_roles where rolname='anon')
+      and has_function_privilege('anon', p.oid, 'EXECUTE')) then
+    v_fail := array_append(v_fail, 'anon ينفّذ دالّة من Foundation');
   end if;
 
   -- 🔴 REQUIRED BLOCKER: authenticated بأكثر من SELECT (الكتابة عبر RPC حصرًا).
   if (select count(*) from information_schema.role_table_grants
-       where table_schema='public' and table_name::text like 'crm\_%'
-         and grantee::text='authenticated' and privilege_type::text <> 'SELECT') > 0 then
-    v_fail := array_append(v_fail, 'authenticated يملك أكثر من SELECT على جداول CRM');
+       where table_schema='public' and grantee::text='authenticated'
+         and privilege_type::text <> 'SELECT'
+         and table_name::text in ('crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests')) > 0 then
+    v_fail := array_append(v_fail, 'authenticated يملك أكثر من SELECT على جدول Foundation');
   end if;
 
   -- 🔴 REQUIRED BLOCKER: سياسة كتابة مباشرة تلتفّ على الـRPC.
   if exists (select 1 from pg_policies
-              where schemaname='public' and tablename like 'crm\_%' and cmd <> 'SELECT') then
+              where schemaname='public' and cmd <> 'SELECT'
+                and tablename::text in ('crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests')) then
     v_fail := array_append(v_fail, 'سياسة كتابة مباشرة على جدول CRM');
   end if;
 
   -- 🔴 REQUIRED BLOCKER: SECURITY DEFINER بلا مسار بحث مثبَّت.
-  if exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-              where n.nspname='public' and p.proname like 'crm\_%' and p.prosecdef
-                and coalesce(array_to_string(p.proconfig,','),'') not ilike '%search_path%') then
-    v_fail := array_append(v_fail, 'دالّة CRM مرتفعة الصلاحية بلا search_path مثبَّت');
+  if exists (
+    with foundation_fn(fname, fargs) as (values
+      ('crm_perm','text'),
+  ('crm_perm_key_exists','text'),
+  ('crm_is_owner_role',''),
+  ('crm_can_manage',''),
+  ('crm_can_view',''),
+  ('crm_is_client',''),
+  ('crm_can_view_commission','uuid'),
+  ('crm_can_manage_commission',''),
+  ('crm_can_manage_targets',''),
+  ('crm_can_approve_changes',''),
+  ('crm_can_manage_pipeline',''),
+  ('crm_can_manage_scoring',''),
+  ('crm_can_import',''),
+  ('crm_can_view_team',''),
+  ('crm_can_see_owner','uuid'),
+  ('crm_can_read_lead','uuid'),
+  ('crm_can_edit_lead','uuid'),
+  ('crm_can_read_opportunity','uuid'),
+  ('crm_can_edit_opportunity','uuid'),
+  ('crm_can_read_activity','uuid'),
+  ('crm_log','text, text, uuid, jsonb'),
+  ('crm_notify','uuid, text, uuid, text, text'),
+  ('crm_norm_text','text'),
+  ('crm_norm_email','text'),
+  ('crm_norm_phone','text'),
+  ('crm_normalize_lead',''),
+  ('crm_normalize_contact',''),
+  ('crm_normalize_company',''),
+  ('crm_normalize_competitor',''),
+  ('crm_touch',''),
+  ('crm_setting_int','text, integer'),
+  ('crm_setting_text','text, text'),
+  ('crm_project_label','uuid'),
+  ('crm_quote_ref','uuid'),
+  ('crm_next_code','text'),
+  ('crm_score_core','uuid'),
+  ('crm_duplicate_core','text, text, text, text, uuid'),
+  ('crm_readiness_core','uuid'),
+  ('crm_visible_leads',''),
+  ('crm_visible_opportunities',''),
+  ('crm_access',''),
+  ('crm_lookups',''),
+  ('crm_leads_list','jsonb'),
+  ('crm_lead_detail','uuid'),
+  ('crm_duplicates','jsonb'),
+  ('crm_opportunities_list','jsonb'),
+  ('crm_opportunity_detail','uuid'),
+  ('crm_pipeline_board','jsonb'),
+  ('crm_forecast','jsonb'),
+  ('crm_stale_alerts','jsonb'),
+  ('crm_activities_list','jsonb'),
+  ('crm_targets_list','jsonb'),
+  ('crm_commission_list','jsonb'),
+  ('crm_dashboard','jsonb'),
+  ('crm_export','text, jsonb'),
+  ('crm_audit_list','jsonb'),
+  ('crm_approvals_list','jsonb'),
+  ('crm_import_preview','jsonb, text'),
+  ('crm_company_upsert','jsonb'),
+  ('crm_contact_upsert','jsonb'),
+  ('crm_competitor_upsert','jsonb'),
+  ('crm_lead_upsert','jsonb'),
+  ('crm_lead_set_status','uuid, text, text'),
+  ('crm_lead_score_adjust','jsonb'),
+  ('crm_lead_convert','uuid, jsonb'),
+  ('crm_lead_delete','uuid, text'),
+  ('crm_opportunity_upsert','jsonb'),
+  ('crm_opportunity_link_quote','uuid, uuid'),
+  ('crm_opportunity_set_stage','uuid, uuid, text'),
+  ('crm_opportunity_close','uuid, text, jsonb'),
+  ('crm_opportunity_reopen','uuid, text'),
+  ('crm_opportunity_delete','uuid, text'),
+  ('crm_handoff_confirm','uuid, jsonb'),
+  ('crm_activity_log','jsonb'),
+  ('crm_activity_delete','uuid, text'),
+  ('crm_score_rule_upsert','jsonb'),
+  ('crm_settings_set','text, jsonb'),
+  ('crm_team_upsert','jsonb'),
+  ('crm_team_member_set','jsonb'),
+  ('crm_approval_submit_core','text, uuid, uuid, jsonb, text'),
+  ('crm_target_apply_core','jsonb, uuid'),
+  ('crm_target_upsert','jsonb'),
+  ('crm_target_delete','uuid, text'),
+  ('crm_commission_recalc_core','uuid'),
+  ('crm_commission_recalc','uuid'),
+  ('crm_commission_plan_apply_core','jsonb, uuid'),
+  ('crm_commission_plan_upsert','jsonb'),
+  ('crm_commission_assign_core','jsonb, uuid'),
+  ('crm_commission_assign','jsonb'),
+  ('crm_approval_decide','uuid, text, text'),
+  ('crm_approval_withdraw','uuid, text'),
+  ('crm_commission_set_status','uuid, text, text'),
+  ('crm_import_leads','jsonb, text')
+    )
+    select 1 from foundation_fn k
+    join pg_proc p on p.proname = k.fname
+                 and p.pronamespace = 'public'::regnamespace
+                 and pg_catalog.oidvectortypes(p.proargtypes) = k.fargs
+    where p.prosecdef
+      and coalesce(array_to_string(p.proconfig,','),'') not ilike '%search_path%') then
+    v_fail := array_append(v_fail, 'دالّة Foundation مرتفعة الصلاحية بلا search_path مثبَّت');
   end if;
   foreach v_o in array array['public.crm_settings','public.crm_teams','public.crm_team_members','public.crm_companies','public.crm_contacts','public.crm_competitors','public.crm_lead_score_rules','public.crm_leads','public.crm_pipelines','public.crm_stages','public.crm_opportunities','public.crm_stage_history','public.crm_activities','public.crm_targets','public.crm_commission_plans','public.crm_commission_assignments','public.crm_commission_records','public.crm_import_batches','public.crm_audit','public.crm_approval_requests'] loop
     if to_regclass(v_o) is null then v_fail := array_append(v_fail, 'جدول مفقود '||v_o); end if;

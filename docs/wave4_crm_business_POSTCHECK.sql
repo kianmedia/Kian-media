@@ -62,6 +62,12 @@ select 'anon يملك crm_testimonial_invite_check فقط' as check,
             then '✅' else '🔴 '||array_to_string(
                  array_agg(routine_name::text order by routine_name::text), ', ') end as result
 from information_schema.role_routine_grants
+-- ⚠️ ويبقى المسح على `crm_%` هنا **عن قصد**: الفحص يشترط أن تكون القائمة
+--    الناتجة **مساوية تمامًا** لـ`['crm_testimonial_invite_check']` — أي أنّه
+--    يُثبت المنحة المقصودة إيجابًا ويرفض أيّ منحة أخرى في آن. وحصرُ النطاق هنا
+--    كان سيُفرغه من معناه: القائمة تصير فارغة فتخالف المتوقَّع دائمًا.
+-- ⛔ والفرق عن فحص Foundation: ذاك يمسح فضاء أسماء **لا يملكه**، وهذا يفحص
+--    عقد حزمته هو، ويسمّي الاستثناء المقصود صراحةً بدل أن يُخفيه.
 where routine_schema='public' and grantee::text='anon' and routine_name like 'crm_%';
 
 select 'لا صلاحية جدول لـanon' as check,
@@ -128,6 +134,103 @@ where to_regclass('public.crm_client_health_v') is not null;
 
 -- 🔴 والاختبار الحاسم: **تنفيذ** SELECT فعليًّا. تعريفٌ سليم لا يعني استعلامًا
 --    ناجحًا (عمود مفقود يظهر وقت التنفيذ لا وقت الإنشاء في بعض الحالات).
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 ACL كائنات Wave 4 — **صلاحيات فعليّة** لا معلَنة
+--
+-- ★ ما كشفه تشخيص Preview ★
+--     crm_opportunity_tender   authenticated = Dxtm
+--     crm_testimonial_invites  authenticated = Dxtm
+--     crm_client_health_v      authenticated = rDxtm
+--   موروثة من ACL المشروع الافتراضيّ، ⛔ ولم تسحبها Wave 4 (سحبت من
+--   `anon, public` فقط). و`information_schema.role_table_grants` وحده لا
+--   يكفي: لا يرى الموروث عن PUBLIC ولا ACL الأعمدة.
+--
+-- ★ العقد ★ anon: لا شيء · PUBLIC: لا شيء ·
+--   authenticated: SELECT على الجدولين، **ولا شيء** على العرض المشتقّ.
+-- ⚠️ و`MAINTAIN` لم توجد قبل PostgreSQL 17: تُضاف بالإصدار لا بالتمنّي،
+--    و`array_append` لا `|| 'MAINTAIN'` (الأخيرة تُفسَّر حرفيّة مصفوفة).
+-- ════════════════════════════════════════════════════════════════════════════
+do $acl$
+declare
+  v_rel text; v_p text; v_privs text[]; v_bad text[] := '{}';
+  v_readable text[] := array['crm_opportunity_tender','crm_testimonial_invites'];
+begin
+  v_privs := array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'];
+  if current_setting('server_version_num')::int >= 170000 then
+    v_privs := array_append(v_privs, 'MAINTAIN');
+  end if;
+
+  foreach v_rel in array array['crm_opportunity_tender','crm_testimonial_invites','crm_client_health_v']
+  loop
+    if to_regclass('public.'||v_rel) is null then
+      v_bad := array_append(v_bad, v_rel||': الكائن مفقود'); continue;
+    end if;
+    foreach v_p in array v_privs loop
+      -- anon: لا شيء إطلاقًا.
+      if to_regrole('anon') is not null and has_table_privilege('anon','public.'||v_rel, v_p) then
+        v_bad := array_append(v_bad, format('anon يملك %s على %s', v_p, v_rel));
+      end if;
+      -- authenticated: SELECT على الجدولين وحدهما، ولا شيء على العرض.
+      if to_regrole('authenticated') is not null then
+        if v_p = 'SELECT' and v_rel = any(v_readable) then
+          if not has_table_privilege('authenticated','public.'||v_rel, v_p) then
+            v_bad := array_append(v_bad,
+              format('authenticated لا يقرأ %s — سياسة القراءة ميتة بلا منحة', v_rel));
+          end if;
+        elsif has_table_privilege('authenticated','public.'||v_rel, v_p) then
+          v_bad := array_append(v_bad, format('authenticated يملك %s على %s', v_p, v_rel));
+        end if;
+      end if;
+    end loop;
+
+    -- PUBLIC من الكتالوج: ليس دورًا فلا تقبله دوالّ الصلاحيات.
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace,
+                 lateral aclexplode(coalesce(c.relacl,'{}'::aclitem[])) a
+                where n.nspname='public' and c.relname=v_rel and a.grantee = 0) then
+      v_bad := array_append(v_bad, format('PUBLIC يملك صلاحية مباشرة على %s', v_rel));
+    end if;
+
+    -- ACL الأعمدة: غير مرئيّ لأيّ فحص جدوليّ.
+    if to_regrole('anon') is not null
+       and has_any_column_privilege('anon','public.'||v_rel,'SELECT,INSERT,UPDATE,REFERENCES') then
+      v_bad := array_append(v_bad, format('anon يملك صلاحية على عمود في %s', v_rel));
+    end if;
+    if to_regrole('authenticated') is not null
+       and has_any_column_privilege('authenticated','public.'||v_rel,'INSERT,UPDATE,REFERENCES') then
+      v_bad := array_append(v_bad, format('authenticated يملك كتابة على عمود في %s', v_rel));
+    end if;
+  end loop;
+
+  -- 🔴 والعقد المقصود لـanon: EXECUTE على فحص رمز الدعوة **وحده**، بلا وصول جدوليّ.
+  if to_regrole('anon') is not null then
+    if not has_function_privilege('anon','public.crm_testimonial_invite_check(text)','EXECUTE') then
+      v_bad := array_append(v_bad, 'anon فقد EXECUTE على crm_testimonial_invite_check(text) — عقد مقصود');
+    end if;
+    foreach v_p in array array['crm_tender_upsert(uuid,jsonb)','crm_win_rate_report(jsonb)',
+                               'crm_seasonality_report(integer)','crm_silent_clients(integer)',
+                               'crm_weekly_digest(date)','crm_testimonial_invite_issue(uuid,integer)',
+                               'crm_testimonial_invite_revoke(uuid,text)']
+    loop
+      if to_regprocedure('public.'||v_p) is not null
+         and has_function_privilege('anon','public.'||v_p,'EXECUTE') then
+        v_bad := array_append(v_bad, 'anon ينفّذ '||v_p);
+      end if;
+    end loop;
+  end if;
+
+  if array_length(v_bad,1) > 0 then
+    raise exception E'🔴 ACL كائنات Wave 4 غير مطابق للعقد:\n  %', array_to_string(v_bad, E'\n  ');
+  end if;
+  raise notice '✅ ACL Wave 4: anon=لا شيء · PUBLIC=لا شيء · authenticated=SELECT على الجدولين فقط.';
+end $acl$;
+
+-- عرضٌ قرائيّ للـACL كما هو — بجانب النتيجة أعلاه.
+select 'ACL كما هو' as check,
+       c.relname::text||': '||coalesce(array_to_string(c.relacl,' · '),'(بلا ACL صريح)') as result
+from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname='public'
+  and c.relname in ('crm_opportunity_tender','crm_testimonial_invites','crm_client_health_v');
+
 do $$
 declare v_n bigint;
 begin

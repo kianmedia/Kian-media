@@ -206,11 +206,11 @@ test("طفرة: حذف بلوك الحسم كليًّا (العودة إلى sel
 
 test("طفرة: إسقاط شرط anon من حسم CRM", () => {
   mutate("crm_sales_FOUNDATION_POSTCHECK.sql",
-    "'صلاحية جدول لـanon/PUBLIC'", "'(تشخيصيّ)'",
+    "'صلاحية جدول لـanon/PUBLIC على جدول Foundation'", "'(تشخيصيّ)'",
     (s) => {
       const v = verdictOf(s) ?? "";
       assert.match(v, /role_table_grants[\s\S]{0,200}'anon','PUBLIC'/);
-      assert.match(v, /صلاحية جدول لـanon/);
+      assert.match(v, /صلاحية جدول لـanon\/PUBLIC على جدول Foundation/);
     });
 });
 

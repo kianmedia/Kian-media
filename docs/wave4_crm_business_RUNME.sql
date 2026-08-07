@@ -149,6 +149,8 @@ create policy crm_ti_read on public.crm_testimonial_invites
   for select to authenticated using (public.crm_can_manage());
 
 -- ⛔ لا سياسة كتابة: الكتابة عبر الدوالّ المحروسة وحدها. ولا شيء لـanon.
+-- ⚠️ السحب النهائيّ في §5 (من PUBLIC وanon **وauthenticated**). ويبقى هذا
+--    السطر هنا حتّى لا تُترك الجداول بلا حماية بين §1 و§5 داخل المعاملة.
 revoke all on public.crm_opportunity_tender  from anon, public;
 revoke all on public.crm_testimonial_invites from anon, public;
 
@@ -528,8 +530,77 @@ revoke all on function public.crm_testimonial_invite_check(text) from public;
 grant execute on function public.crm_testimonial_invite_check(text) to anon, authenticated;
 
 -- العرض المشتقّ: قراءة للمخوَّلين فقط، ولا شيء لـanon.
-revoke all on public.crm_client_health_v from anon, public;
-grant select on public.crm_client_health_v to authenticated;
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 ACL كائنات Wave 4 — والعطب الذي كشفه تشخيص Preview
+--
+-- ★ الحالة المرصودة ★
+--     crm_opportunity_tender   authenticated = Dxtm
+--     crm_testimonial_invites  authenticated = Dxtm
+--     crm_client_health_v      authenticated = rDxtm
+--   (D=TRUNCATE · x=REFERENCES · t=TRIGGER · m=MAINTAIN)
+--
+-- ★ السبب ★ السحب أعلاه كان من `anon, public` **فقط**. وACL المشروع
+--   الافتراضيّ يمنح `Dxtm` لكلّ دور على كلّ جدول جديد، فبقيت لـauthenticated.
+--   ⛔ ولا يكفي أنّ RLS مفعّلة: **RLS لا تحكم TRUNCATE** — تُرشّح
+--   SELECT/INSERT/UPDATE/DELETE وحدها. أيّ حامل لـTRUNCATE يمحو الجدول كلّه.
+--
+-- ★ العقد النهائيّ، من الاستخدام لا من التخمين ★
+--
+--   • `crm_opportunity_tender`  → authenticated: **SELECT فقط**.
+--     الدليل: سياسة `crm_tender_read … for select to authenticated` محروسة
+--     بـ`crm_can_read_opportunity(opportunity_id)`. وسياسةُ قراءةٍ بلا منحة
+--     جدولية **ميتة**: الصلاحية تُفحص قبل RLS (درس `whatsapp_inbox_grants_FIX`).
+--
+--   • `crm_testimonial_invites` → authenticated: **SELECT فقط**.
+--     الدليل: `crm_ti_read … using (crm_can_manage())`.
+--
+--   • `crm_client_health_v`    → ⛔ **لا منحة إطلاقًا** (كانت SELECT).
+--     الدليل مزدوج:
+--       ١. ولا مستهلك مباشر: صفر إشارة في app/ وlib/ وcomponents/، وقارئاها
+--          الوحيدان `crm_silent_clients` و`crm_weekly_digest` كلتاهما
+--          SECURITY DEFINER ⇒ تقرآن بصلاحيات المالك بلا حاجة إلى منحة.
+--       ٢. وهي عرضٌ **ليس** `security_invoker` وبلا حارس صلاحية في شرطه
+--          (فقط `is_deleted = false`) ⇒ يعمل بصلاحيات مالكه، ومنحُ SELECT
+--          يجعل كلّ مُصادَق يقرأ صحّة **كلّ** العملاء متجاوزًا RLS الشركات.
+--     ⇒ المنحة كانت توسيعًا بلا مستهلك وتجاوزًا لعزل البيانات معًا.
+--     ⚠️ وإن لزمت واجهة مباشرة لاحقًا فالعلاج `security_invoker = true` أو
+--        دالّة محروسة — ⛔ لا منحة عريضة على عرضٍ بلا حارس.
+--
+-- ★ إعادة التطبيق (MATCHING_REAPPLY) ★ هذا القسم **منح وسحب فقط**: لا إنشاء
+--   ولا إسقاط ولا لمس صفّ. فإعادة تشغيل RUNME فوق Preview الحالية تُصلح الـACL
+--   ⛔ بلا فقد بيانات ولا إعادة بناء.
+-- ⚠️ و`service_role` والمالك لا يُمسّان: صلاحياتهما من إعداد المشروع،
+--    وتضييقهما قرار عابر للحزم يحتاج جرد مستهلكيه.
+-- ════════════════════════════════════════════════════════════════════════════
+revoke all privileges on table public.crm_opportunity_tender  from public, anon, authenticated;
+revoke all privileges on table public.crm_testimonial_invites from public, anon, authenticated;
+revoke all privileges on table public.crm_client_health_v     from public, anon, authenticated;
+
+-- ⚠️ ACL الأعمدة لا يمسّه السحب الجدوليّ ولا يظهر في أيّ فحص جدوليّ.
+--    يُنظَّف من `pg_attribute.attacl` نفسه، ⛔ ولا يصدر أمر إن لم يكن هناك ما يُسحب.
+do $acl$
+declare r record;
+begin
+  for r in
+    select c.relname as rel, a.attname as col
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname in ('crm_opportunity_tender','crm_testimonial_invites','crm_client_health_v')
+       and a.attnum > 0 and not a.attisdropped and a.attacl is not null
+  loop
+    execute format('revoke all privileges (%I) on table public.%I from public, anon, authenticated',
+                   r.col, r.rel);
+  end loop;
+end $acl$;
+
+-- 🔴 والمنح الوحيد: قراءة للمُصادَق على الجدولين اللذين لهما سياسة قراءة.
+--    ⛔ ولا INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN لأيّ دور
+--    عميل — الكتابة عبر دوالّ SECURITY DEFINER وحدها.
+grant select on table public.crm_opportunity_tender  to authenticated;
+grant select on table public.crm_testimonial_invites to authenticated;
+-- ⛔ ولا منحة على crm_client_health_v — انظر الدليل أعلاه.
 
 commit;
 
