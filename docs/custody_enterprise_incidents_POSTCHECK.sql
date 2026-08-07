@@ -249,7 +249,7 @@ begin
       join pg_depend d on d.objid = s.oid and d.classid = 'pg_class'::regclass and d.deptype in ('a','i')
       join pg_class t on t.oid = d.refobjid
       join pg_namespace tn on tn.oid = t.relnamespace,
-      lateral aclexplode(coalesce(s.relacl,'{}'::aclitem[])) a
+      lateral aclexplode(s.relacl) a
      where s.relkind='S' and sn.nspname='public' and tn.nspname='public'
        and t.relname in ('custody_incidents','custody_incident_actions','custody_alert_deliveries')
        and (a.grantee = 0 or a.grantee in (to_regrole('anon')::oid, to_regrole('authenticated')::oid)))
