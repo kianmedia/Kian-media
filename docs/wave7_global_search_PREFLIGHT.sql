@@ -38,6 +38,46 @@ select 'REQUIRED_COLUMN' as kind, 'projects.project_name' as name,
               then '✅ موجود · text'
          else '🔴 موجود بنوع غير text — راجع المخطّط' end as status;
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- §2-ب · 🔴 أعمدة **كلّ** مصدر — لا فحص جدول بلا فحص أعمدته
+--
+-- ★ عيب التصميم الذي كُرِّر مرّتين ★ الفحص كان يقول «✅ الجدول موجود» فيمضي
+--   التطبيق حتّى يصطدم بعمود مفقود في §2. حدث مع `projects.name`، ثمّ مع
+--   `clients.company_name` — والثاني كان يمكن تفاديه لو فُحصت الأعمدة أوّل مرّة.
+--
+-- ⚠️ الأعمدة الاختيارية تُفحص **إن وُجد جدولها فقط**: غياب الجدول يُتخطّى
+--    بحارس داخل الدالّة، ⛔ لكنّ وجوده بلا عموده **يُفشل** التطبيق.
+-- ════════════════════════════════════════════════════════════════════════════
+select 'SOURCE_COLUMN' as kind, v.t||'.'||v.c as name,
+       case
+         when to_regclass('public.'||v.t) is null then '⚪️ الجدول غائب — المصدر يُتخطّى'
+         when not exists (select 1 from information_schema.columns
+                           where table_schema='public' and table_name::text=v.t
+                             and column_name::text=v.c)
+              then '🔴 مفقود — ⛔ لا تُشغّل RUNME'
+         when exists (select 1 from information_schema.columns
+                       where table_schema='public' and table_name::text=v.t
+                         and column_name::text=v.c and data_type='text')
+              then '✅ موجود · text'
+         else '🔴 موجود بنوع غير text' end as status
+from (values
+  -- 🔴 عقد عنوان العميل: `company` وإن خلا فـ`full_name`. مُستخرَج من
+  --    المستهلكين: large-projects.ts:1172 · commercial_subscriptions:2252 ·
+  --    deliverable_delivery_audit:85 — ثلاثتها `company` ثمّ `full_name`.
+  ('clients','company'), ('clients','full_name'),
+  ('deliverables','title'),
+  ('custody_inventory_assets','asset_name'), ('custody_inventory_assets','asset_code')
+) v(t, c);
+
+-- ⛔ والعمود الذي اختُرع: `clients.company_name` **لا وجود له** — واسمه الحقيقيّ
+--    يخصّ جدولًا آخر (`crm_leads.company_name`). يُطبع تشخيصًا لا شرطًا.
+select 'INFO_WRONG_COLUMN' as kind, 'clients.company_name' as name,
+       case when exists (select 1 from information_schema.columns
+                          where table_schema='public' and table_name::text='clients'
+                            and column_name::text='company_name')
+            then '🟡 موجود — ⛔ ومع ذلك لا تستعمله الحزمة'
+            else '✅ غير موجود — وهو ما تقوله رسالة الخطأ' end as status;
+
 -- ⚠️ تشخيصيّ لا شرط: وجود `projects.name` أو غيابه **لا يغيّر** العقد —
 --    الحزمة تقرأ `project_name` وحده. يُطبع لأنّ رسالة الخطأ الأصلية تُوهم
 --    بأنّ العمود «ضاع»، والحقيقة أنّه لم يوجد قطّ.
@@ -126,7 +166,7 @@ order by 2;
 -- ⛔ ولا يُحتسب OPTIONAL_*: غيابها يُتخطّى بحارس داخل الدالّة.
 -- ════════════════════════════════════════════════════════════════════════════
 do $$
-declare v_missing text[] := '{}'; v_present int; v_t text;
+declare v_missing text[] := '{}'; v_present int; v_t text; v_pair text;
 begin
   if to_regclass('public.projects') is null then
     v_missing := array_append(v_missing, 'TABLE public.projects');
@@ -140,6 +180,20 @@ begin
                        and column_name::text='project_name' and data_type='text') then
     v_missing := array_append(v_missing, 'COLUMN projects.project_name ليس text');
   end if;
+
+  -- 🔴 أعمدة المصادر الاختيارية: تُحتسب **إن وُجد جدولها**.
+  foreach v_pair in array array['clients.company','clients.full_name',
+                                'deliverables.title',
+                                'custody_inventory_assets.asset_name',
+                                'custody_inventory_assets.asset_code']
+  loop
+    if to_regclass('public.'||split_part(v_pair,'.',1)) is not null
+       and not exists (select 1 from information_schema.columns
+                        where table_schema='public'
+                          and table_name::text  = split_part(v_pair,'.',1)
+                          and column_name::text = split_part(v_pair,'.',2))
+    then v_missing := array_append(v_missing, 'COLUMN '||v_pair||' — الجدول موجود وعموده ليس كذلك'); end if;
+  end loop;
 
   if to_regprocedure('public.can_access_project(uuid)') is null then
     v_missing := array_append(v_missing,

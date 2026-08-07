@@ -140,19 +140,19 @@ test("⛔ ولا `p.name` في أيّ ملفّ من الحزمة", () => {
 });
 
 // 🔴 والاستبدال **مُحكَم**: أعمدة المصادر الأخرى صحيحة ولا تُمسّ.
-test("🔴 company_name وtitle وasset_name لم تتغيّر", () => {
+test("🔴 عمود كل مصدر — دُقِّق مقابل مُنشئه ولم يتغيّر إلّا ما ثبت خطؤه", () => {
   const body = globalSearchBody(R(RUNME));
-  for (const [col, why] of [
-    ["c.company_name", "العملاء"], ["d.title", "المخرَجات"], ["a.asset_name", "المعدّات"],
+  // ⚠️ `d.title` و`a.asset_name` و`a.asset_code` صحيحة بالدليل (§٦) ⇒ لا تُمسّ.
+  for (const [col, why, n] of [
+    ["d.title", "المخرَجات", 3], ["a.asset_name", "المعدّات", 3], ["a.asset_code", "المعدّات", 3],
   ]) {
-    assert.equal((body.match(new RegExp(col.replace(".", "\\."), "g")) ?? []).length, 3,
-      `${why}: ${col} لم يعد في ثلاثة مواضع — استبدالٌ عامّ أصاب ما لا يخصّه`);
+    assert.equal((body.match(new RegExp(col.replace(".", "\\."), "g")) ?? []).length, n,
+      `${why}: ${col} لم يعد في ${n} مواضع — استبدالٌ عامّ أصاب ما لا يخصّه`);
   }
   const t = code(R(RUNME));
-  assert.match(t, /coalesce\(company_name,/, "فهرس العملاء تغيّر");
   assert.match(t, /coalesce\(title,/, "فهرس المخرَجات تغيّر");
   assert.match(t, /coalesce\(asset_name,/, "فهرس المعدّات تغيّر");
-  assert.ok(!/c\.project_name|d\.project_name|a\.project_name/.test(t),
+  assert.ok(!/d\.project_name|a\.project_name|c\.project_name/.test(t),
     "🔴 استبدال عامّ: عمود مصدر آخر صار project_name");
 });
 
@@ -278,12 +278,11 @@ test("طفرة: إعادة `p.name` داخل WHERE", () => {
   }, "شرط المطابقة على عمود غير موجود");
 });
 
-test("طفرة: استبدال عامّ يصيب company_name", () => {
-  const m = mutated(RUNME, "c.company_name", "c.project_name");
+test("طفرة: استبدال عامّ يصيب d.title", () => {
+  const m = mutated(RUNME, "d.title", "d.project_name");
   expectCaught(m, (read) => {
-    const body = globalSearchBody(read(RUNME));
-    assert.equal((body.match(/c\.company_name/g) ?? []).length, 3);
-  }, "عمود العملاء الصحيح تغيّر");
+    assert.equal((globalSearchBody(read(RUNME)).match(/d\.title/g) ?? []).length, 3);
+  }, "عمود المخرَجات الصحيح تغيّر");
 });
 
 test("طفرة: حذف فحص العمود من PREFLIGHT", () => {
@@ -321,4 +320,203 @@ test("طفرة: PREFLIGHT يطبع ولا يوقف", () => {
   expectCaught(m, (read) => {
     assert.match(code(read(PRE)), /raise exception/);
   }, "🔴 مطبوع مع حالة خروج 0");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ٦ · عقد اسم العميل — `company` وإن خلا فـ`full_name`
+//
+// ★ الأدلّة التي حسمته (⛔ لا تخمين) ★
+//   `lib/portal/large-projects.ts:1172` → `c.company || c.full_name || null`
+//   `commercial_subscriptions_RUNME.sql:2252` → `coalesce(c.company, c.full_name, '—')`
+//   `deliverable_delivery_audit_RUNME.sql:85` → `coalesce(c.company, c.full_name, …)`
+//   وحزم التأجير تفحص `coalesce(pr.company,'') <> ''` ⇒ الشركة **الفارغة** حالة
+//   قائمة، فلزم `nullif(btrim(...),'')` لا `coalesce` وحدها.
+// ⛔ و`company_name` عمودُ `crm_leads` — جدولٌ آخر تمامًا.
+// ════════════════════════════════════════════════════════════════════════════
+const CLIENT_FN = "coalesce(nullif(btrim(c.company),''), c.full_name, '')";
+const CLIENT_IDX = "coalesce(nullif(btrim(company),''''), full_name, '''')";
+
+test("⛔ ولا `clients.company_name` في أيّ ملفّ من الحزمة", () => {
+  for (const f of PKG) {
+    const t = codeNoStrings(R(f));
+    assert.ok(!/\bc\.company_name\b|\bclients\.company_name\b/.test(t), `${f}: بقي company_name`);
+    assert.ok(!/coalesce\(company_name\s*,/.test(t), `${f}: فهرس على company_name`);
+  }
+});
+
+test("🔴 عقد العميل في المواضع الثلاثة", () => {
+  const body = globalSearchBody(R(RUNME));
+  assert.ok(body.includes(`'title', ${CLIENT_FN}`), "عنوان JSON ليس عقد العميل");
+  assert.ok(body.includes(`ts_rank(public.search_vector(${CLIENT_FN})`), "الترتيب ليس عقد العميل");
+  assert.ok(body.includes(`where public.search_vector(${CLIENT_FN}) @@ v_q`), "الشرط ليس عقد العميل");
+  assert.equal((body.match(/nullif\(btrim\(c\.company\)/g) ?? []).length, 3, "المواضع الثلاثة بالضبط");
+});
+
+// 🔴 الأهمّ: تعبير **الفهرس** = تعبير **البحث** حرفًا بحرف. واختلافهما لا يُنتج
+//    خطأً — يُنتج فهرسًا يُبنى ثمّ **لا يُستعمل أبدًا**: مسحٌ تسلسليّ صامت.
+/** تعبير `using gin (...)` بعد فكّ تهريب `execute '...'`. */
+function indexExpr(sqlText, idxName) {
+  const m = sqlText.match(new RegExp(`execute '((?:[^']|'')*${idxName}(?:[^']|'')*)'`));
+  assert.ok(m, `${idxName}: تعريف الفهرس غير موجود`);
+  const decoded = m[1].replace(/''/g, "'");
+  const e = decoded.match(/using gin \(([\s\S]*)\)\s*$/);
+  assert.ok(e, `${idxName}: تعبير الفهرس غير مقروء`);
+  return e[1].trim();
+}
+
+test("🔴 تعبير الفهرس مطابق لتعبير البحث — لكل مصدر", () => {
+  const t = code(R(RUNME));
+  const body = globalSearchBody(R(RUNME));
+  for (const [idx, alias, label] of [
+    ["clients_fts_idx", "c.", "العملاء"],
+    ["deliverables_fts_idx", "d.", "المخرَجات"],
+    ["assets_fts_idx", "a.", "المعدّات"],
+  ]) {
+    const expr = indexExpr(t, idx);
+    const aliased = expr.replace(/\b(company|full_name|title|asset_name|asset_code)\b/g, `${alias}$1`);
+    // ⚠️ تُجرَّد المسافات: PostgreSQL يطابق **شجرة الإعراب** لا النصّ، فـ
+    //    `a || b` و`a||b` تعبيرٌ واحد. والمقارنة الحرفية هنا تُعطي إنذارًا كاذبًا.
+    const flat = (x) => x.replace(/\s+/g, "");
+    assert.ok(flat(body).includes(flat(aliased)),
+      `🔴 ${label}: تعبير الفهرس لا يطابق تعبير البحث ⇒ الفهرس لا يُستعمل أبدًا\n  ${aliased}`);
+  }
+});
+
+// 🔴 تهريب مزدوج: داخل `$$…$$` مستوى واحد لا اثنان.
+//    `''''` تُنتج حرف `'` لا نصًّا فارغًا · و`'' ''` سلسلتان متجاورتان = خطأ نحويّ.
+test("🔴 لا تهريب مزدوج في تعريفات الفهارس", () => {
+  for (const m of code(R(RUNME)).matchAll(/execute '((?:[^']|'')*)'/g)) {
+    const d = m[1].replace(/''/g, "'");
+    assert.ok(!/,\s*''''\s*\)/.test(d), `🔴 الافتراض حرف اقتباس لا نصّ فارغ:\n${d}`);
+    assert.ok(!/''\s+''/.test(d), `🔴 سلسلتان فارغتان متجاورتان — خطأ نحويّ:\n${d}`);
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ٧ · أعمدة المصادر الأخرى — دُقِّقت مقابل مُنشئها ولم تتغيّر
+// ════════════════════════════════════════════════════════════════════════════
+test("🔴 deliverables.title صحيح — من phase0_migration", () => {
+  const ddl = fs.readFileSync(path.join(DOCS, "phase0_migration.sql"), "utf8");
+  const i = ddl.indexOf("create table public.deliverables");
+  assert.notEqual(i, -1, "مُنشئ deliverables غير موجود");
+  assert.match(ddl.slice(i, ddl.indexOf(");", i)), /\btitle\s+text\s+not null/,
+    "المُنشئ لا يعرّف title — راجع قبل الاعتماد");
+  assert.match(globalSearchBody(R(RUNME)), /coalesce\(d\.title,''\)/, "البحث لا يستعمل d.title");
+});
+
+test("🔴 asset_name وasset_code صحيحان — من منشئ العهدة", () => {
+  const ddl = fs.readFileSync(path.join(DOCS, "portal_custody_inventory_system_v1_RUNME.sql"), "utf8");
+  const i = ddl.indexOf("create table if not exists public.custody_inventory_assets");
+  assert.notEqual(i, -1, "مُنشئ الأصول غير موجود");
+  const block = ddl.slice(i, ddl.indexOf(");", i));
+  assert.match(block, /\basset_name\s+text\s+not null/, "asset_name غير معرَّف");
+  assert.match(block, /\basset_code\s+text\s+not null/, "asset_code غير معرَّف");
+  const body = globalSearchBody(R(RUNME));
+  assert.match(body, /coalesce\(a\.asset_name,''\)/, "البحث لا يستعمل asset_name");
+  assert.match(body, /coalesce\(a\.asset_code,''\)/, "البحث لا يستعمل asset_code");
+});
+
+test("🔴 PREFLIGHT يفحص أعمدة المصادر لا الجداول وحدها", () => {
+  const t = code(R(PRE));
+  assert.match(t, /SOURCE_COLUMN/, "لا فحص لأعمدة المصادر");
+  const decide = t.slice(t.indexOf("do $$"));
+  for (const pair of ["clients.company", "clients.full_name", "deliverables.title",
+                      "custody_inventory_assets.asset_name", "custody_inventory_assets.asset_code"]) {
+    const [tbl, col] = pair.split(".");
+    assert.ok(t.includes(`('${tbl}','${col}')`), `PREFLIGHT لا يعرض ${pair}`);
+    assert.ok(decide.includes(`'${pair}'`), `${pair} معروض ولا يُحتسب في الحسم`);
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ٨ · طفرات عقد العميل والتهريب وفحص الأعمدة
+// ════════════════════════════════════════════════════════════════════════════
+test("طفرة: إعادة company_name إلى الفهرس", () => {
+  const m = mutated(RUNME, CLIENT_IDX, "coalesce(company_name,'''')");
+  // ⚠️ تعريف الفهرس يعيش **داخل** سلسلة `execute`، فـ`codeNoStrings` يمحوه.
+  //    يُفكّ التهريب ويُفحص النصّ المنفَّذ فعلًا.
+  expectCaught(m, (read) => {
+    assert.ok(!/coalesce\(company_name\s*,/.test(indexExpr(code(read(RUNME)), "clients_fts_idx")));
+  }, 'ERROR: column "company_name" does not exist');
+});
+
+test("طفرة: إعادة company_name إلى JSON title", () => {
+  const m = mutated(RUNME, `'title', ${CLIENT_FN}`, "'title', c.company_name");
+  expectCaught(m, (read) => {
+    assert.ok(globalSearchBody(read(RUNME)).includes(`'title', ${CLIENT_FN}`));
+  }, "عنوان العميل من عمود غير موجود");
+});
+
+test("طفرة: إعادة company_name إلى rank", () => {
+  const m = mutated(RUNME, `ts_rank(public.search_vector(${CLIENT_FN})`,
+                           "ts_rank(public.search_vector(coalesce(c.company_name,''))");
+  expectCaught(m, (read) => {
+    assert.ok(globalSearchBody(read(RUNME)).includes(`ts_rank(public.search_vector(${CLIENT_FN})`));
+  }, "ترتيب العملاء من عمود غير موجود");
+});
+
+test("طفرة: إعادة company_name إلى WHERE", () => {
+  const m = mutated(RUNME, `where public.search_vector(${CLIENT_FN}) @@ v_q`,
+                           "where public.search_vector(coalesce(c.company_name,'')) @@ v_q");
+  expectCaught(m, (read) => {
+    assert.ok(globalSearchBody(read(RUNME)).includes(`where public.search_vector(${CLIENT_FN}) @@ v_q`));
+  }, "شرط مطابقة العملاء من عمود غير موجود");
+});
+
+// 🔴 الأخطر: عمودٌ **موجود** لكنّه يخالف تعبير البحث ⇒ لا خطأ SQL، ولا فهرس.
+test("طفرة: تعبير الفهرس ينحرف عن تعبير البحث بلا خطأ SQL", () => {
+  const m = mutated(RUNME, CLIENT_IDX, "coalesce(company,'''')");
+  expectCaught(m, (read) => {
+    const expr = indexExpr(code(read(RUNME)), "clients_fts_idx");
+    assert.ok(globalSearchBody(read(RUNME))
+      .includes(expr.replace(/\b(company|full_name)\b/g, "c.$1")));
+  }, "فهرس يُبنى ثمّ لا يُستعمل — مسح تسلسليّ صامت مع كل بحث");
+});
+
+test("طفرة: إعادة التهريب المزدوج", () => {
+  const m = mutated(RUNME, "coalesce(title,'''')", "coalesce(title,'''''''')");
+  expectCaught(m, (read) => {
+    for (const mm of code(read(RUNME)).matchAll(/execute '((?:[^']|'')*)'/g)) {
+      assert.ok(!/,\s*''''\s*\)/.test(mm[1].replace(/''/g, "'")));
+    }
+  }, "الافتراض حرف اقتباس لا نصّ فارغ ⇒ الفهرس لا يطابق البحث");
+});
+
+test("طفرة: مسافة الأصول تعود سلسلتين فارغتين", () => {
+  // ⚠️ المرساة تشمل `coalesce(asset_code` لأنّ **الشرح** أعلى الملفّ يحوي
+  //    الشكل المعطوب نفسه، ومرساةٌ أقصر كانت تُشوّه تعليقًا فلا يتغيّر شيء.
+  const m = mutated(RUNME,
+    "coalesce(asset_name,'''') || '' '' || coalesce(asset_code,'''')",
+    "coalesce(asset_name,'''') || '''' '''' || coalesce(asset_code,'''')");
+  expectCaught(m, (read) => {
+    for (const mm of code(read(RUNME)).matchAll(/execute '((?:[^']|'')*)'/g)) {
+      assert.ok(!/''\s+''/.test(mm[1].replace(/''/g, "'")));
+    }
+  }, "خطأ نحويّ في فهرس المعدّات — الخطأ الثالث في السلسلة");
+});
+
+for (const pair of ["clients.company", "deliverables.title",
+                    "custody_inventory_assets.asset_name", "custody_inventory_assets.asset_code"]) {
+  test(`طفرة: حذف فحص ${pair} من حسم PREFLIGHT`, () => {
+    // ⚠️ آخر عنصر في المصفوفة بلا فاصلة لاحقة، وفاصلتُه السابقة على سطر آخر.
+    const esc = pair.replace(/\./g, "\\.");
+    const src = R(PRE);
+    const from = src.includes(`'${pair}',`)
+      ? new RegExp(`'${esc}',`)
+      : new RegExp(`,\\s*'${esc}'`);
+    const m = mutated(PRE, from, "");
+    expectCaught(m, (read) => {
+      const t = code(read(PRE));
+      assert.ok(t.slice(t.indexOf("do $$")).includes(`'${pair}'`));
+    }, "الجدول يُفحص وعموده لا — وهو العيب الذي تكرّر مرّتين");
+  });
+}
+
+test("طفرة: PREFLIGHT يمرّ مع Schema ناقصة (فحص الجدول وحده)", () => {
+  const m = mutated(PRE, /foreach v_pair in array array\['clients\.company'[\s\S]*?end loop;/,
+                         "-- (حُذف فحص الأعمدة)");
+  expectCaught(m, (read) => {
+    const t = code(read(PRE));
+    assert.ok(t.slice(t.indexOf("do $$")).includes("'clients.company'"));
+  }, "فحصُ وجود الجدول بلا أعمدته هو ما سمح بالانفجار في §2 مرّتين");
 });
