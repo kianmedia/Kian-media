@@ -8,7 +8,26 @@ const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
+/**
+ * ⚠️ يجرّد تعليقات `--` ويُبقي السلاسل. وكل تأكيدات هذه الحزمة عن **الكود**،
+ *    فشرحٌ يذكر `TRUNCATE` أو `service_role` كان يُدين الملفّ بما يوثّقه —
+ *    وقد وقع ذلك فعلًا عند توثيق عقد الـACL.
+ */
+function sqlCode(src) {
+  let out = "", i = 0, q = false;
+  while (i < src.length) {
+    const c = src[i];
+    if (q) { if (c === "'") q = false; out += c; i++; continue; }
+    if (c === "'") { q = true; out += c; i++; continue; }
+    if (src.startsWith("--", i)) { while (i < src.length && src[i] !== "\n") { out += " "; i++; } continue; }
+    out += c; i++;
+  }
+  return out;
+}
+// ⚠️ `SQL` يبقى **خامًا**: أقسام الملفّ تُقتطع بعلامات `§` داخل التعليقات،
+//    فتجريدُها يُفرغ الشرائح. و`SQL_CODE` للتأكيدات التي تخصّ الكود وحده.
 const SQL = read("docs/operations_center_RUNME.sql");
+const SQL_CODE = sqlCode(SQL);
 
 /**
  * حزمة التشغيل لم تعد ملفًّا واحدًا: Wave 3 أضافت امتدادات على النطاق نفسه
@@ -74,4 +93,4 @@ const CHILD_KINDS = [
   "delay", "call_sheet",
 ];
 
-module.exports = { ROOT, read, SQL, OPS_PACKAGE, funcBody, funcDecl, TABLES, WRITE_FNS, READ_FNS, PUBLIC_FNS, CHILD_KINDS };
+module.exports = { ROOT, read, SQL, SQL_CODE, sqlCode, OPS_PACKAGE, funcBody, funcDecl, TABLES, WRITE_FNS, READ_FNS, PUBLIC_FNS, CHILD_KINDS };

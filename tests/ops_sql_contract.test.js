@@ -8,7 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { ROOT, read, SQL, funcBody, funcDecl, TABLES, WRITE_FNS, CHILD_KINDS } = require("./ops_helpers.js");
+const { ROOT, read, SQL, SQL_CODE, funcBody, funcDecl, TABLES, WRITE_FNS, CHILD_KINDS } = require("./ops_helpers.js");
 
 const PREFLIGHT = read("docs/operations_center_PREFLIGHT.sql");
 const POSTCHECK = read("docs/operations_center_POSTCHECK.sql");
@@ -64,7 +64,8 @@ test("Idempotency: بذر مفاتيح الصلاحيات وقائمة السل�
 test("لا حذف بيانات في RUNME: صفر DROP TABLE/COLUMN وصفر TRUNCATE وصفر DELETE", () => {
   assert.doesNotMatch(SQL, /drop\s+table/i, "DROP TABLE في ترحيلة إضافية");
   assert.doesNotMatch(SQL, /drop\s+column/i, "DROP COLUMN");
-  assert.doesNotMatch(SQL, /truncate/i, "TRUNCATE");
+  // ⚠️ على الكود لا على الشرح: شرحُ أنّ RLS لا تحكم TRUNCATE ليس TRUNCATE.
+  assert.doesNotMatch(SQL_CODE, /truncate/i, "TRUNCATE");
   assert.doesNotMatch(SQL, /^\s*delete\s+from/im, "DELETE في الترحيلة");
   // drop trigger/policy/function مسموح لأنّه إعادة تعريف لا فقدان بيانات
   assert.doesNotMatch(SQL, /drop function/i, "DROP FUNCTION في RUNME (يكسر التبعيات)");

@@ -2598,9 +2598,15 @@ begin
     'public.prodops_is_post_assignee(uuid)',
     'public.prodops_perm(text)'
   ] loop
+    -- ⚠️ نفس علّة (ج): `exception when undefined_object then null` تبتلع فشل
+    --    السحب بصمت. والشرط الصحيح **وجود الدور** لا التقاط أيّ خطأ.
     execute format('revoke all on function %s from public', f);
-    begin execute format('revoke all on function %s from anon', f); exception when undefined_object then null; end;
-    begin execute format('grant execute on function %s to authenticated', f); exception when undefined_object then null; end;
+    if to_regrole('anon') is not null then
+      execute format('revoke all on function %s from anon', f);
+    end if;
+    if to_regrole('authenticated') is not null then
+      execute format('grant execute on function %s to authenticated', f);
+    end if;
   end loop;
 
   -- (ب) الدوالّ الداخلية: لا تُمنح لأحد — تُنفَّذ ضمن سلسلة SECURITY DEFINER فقط.
@@ -2622,24 +2628,95 @@ begin
     'public.prodops_notify(uuid,text,uuid,text,text)'
   ] loop
     execute format('revoke all on function %s from public', f);
-    begin execute format('revoke all on function %s from anon', f); exception when undefined_object then null; end;
-    begin execute format('revoke all on function %s from authenticated', f); exception when undefined_object then null; end;
+    if to_regrole('anon') is not null then
+      execute format('revoke all on function %s from anon', f);
+    end if;
+    if to_regrole('authenticated') is not null then
+      execute format('revoke all on function %s from authenticated', f);
+    end if;
   end loop;
 
-  -- (ج) الجداول: قراءة فقط لـauthenticated (وRLS هي الفاصل)، ولا شيء لـanon.
+  -- ════════════════════════════════════════════════════════════════════════
+  -- (ج) 🔴 عقد ACL جداول المركز — **وهذا الملفّ مالكه**
+  --
+  -- `ops_call_sheets` و`ops_job_weather` يُنشآن هنا (السطران ٥٤٦ و٣٨٨)،
+  -- ⛔ ولا ملفّ آخر في المستودع يمنحهما أو يسحب منهما شيئًا. فحزمة
+  -- `wave3_production_ops` **تمدّدهما ولا تملكهما**، وإصلاح الـACL هناك كان
+  -- سيصنع مالكَين لعقد واحد.
+  --
+  -- ★ العقد ★ anon: لا شيء · PUBLIC: لا شيء · authenticated: **SELECT فقط**
+  --   (لكلّ جدول هنا سياسة `…_read … for select to authenticated` في §5،
+  --    وسياسةُ قراءةٍ بلا منحة جدولية **ميتة**: الصلاحية تُفحص قبل RLS).
+  --   ⛔ و`service_role` والمالك لا يُمسّان: بلا جرد مستهلكين لا يُسحب شيء.
+  --
+  -- ★ 🔴 ولماذا تغيّرت هذه الكتلة ★ تشخيص Preview أظهر على الجدولين
+  --   `anon=Dxtm` و`authenticated=rDxtm`. و`r` تُثبت أنّ المنحة نُفّذت،
+  --   بينما `Dxtm` على anon تُثبت أنّ السحب **لم يُنفَّذ**. والفارق الوحيد
+  --   بينهما كان `exception when undefined_object then null` حول سطر anon:
+  --   مِصْيَدةٌ تبتلع الفشل بصمت وتترك الدور ممتلكًا لما ورثه من ACL المشروع
+  --   الافتراضيّ (`TRUNCATE · REFERENCES · TRIGGER · MAINTAIN`).
+  --   ⚠️ وTRUNCATE **خارج نطاق RLS** — فوجود سياسة لا يحمي منه.
+  --   ⇒ المِصْيَدة صارت مشروطة بغياب الدور فعلًا، وتُسجَّل عند وقوعها،
+  --     ويليها **تحقّق داخل المعاملة** يمنع المرور الصامت.
+  -- ════════════════════════════════════════════════════════════════════════
   foreach t in array array['ops_locations','ops_vehicles','ops_jobs','ops_job_crew','ops_job_equipment',
     'ops_job_permits','ops_job_travel','ops_job_accommodation','ops_job_vehicles','ops_job_hse',
     'ops_job_weather','ops_media_cards','ops_media_backups','ops_ingest_jobs','ops_post_handoff',
     'ops_daily_reports','ops_incidents','ops_delays','ops_call_sheets','ops_audit'] loop
-    execute format('revoke all on table public.%I from public', t);
-    begin execute format('revoke all on table public.%I from anon', t); exception when undefined_object then null; end;
-    execute format('revoke all on table public.%I from authenticated', t);
-    begin execute format('grant select on table public.%I to authenticated', t); exception when undefined_object then null; end;
+    execute format('revoke all privileges on table public.%I from public', t);
+    if to_regrole('anon') is not null then
+      execute format('revoke all privileges on table public.%I from anon', t);
+    else
+      raise notice '🟡 الدور anon غير موجود — تُخطّي السحب على %', t;
+    end if;
+    if to_regrole('authenticated') is not null then
+      execute format('revoke all privileges on table public.%I from authenticated', t);
+      execute format('grant select on table public.%I to authenticated', t);
+    else
+      raise notice '🟡 الدور authenticated غير موجود — لا منحة قراءة على %', t;
+    end if;
+
+    -- ⚠️ ACL الأعمدة لا يمسّه السحب الجدوليّ ولا يظهر في أيّ فحص جدوليّ.
+    declare r record;
+    begin
+      for r in select a.attname as col from pg_attribute a
+                where a.attrelid = ('public.'||t)::regclass
+                  and a.attnum > 0 and not a.attisdropped and a.attacl is not null
+      loop
+        execute format('revoke all privileges (%I) on table public.%I from public, anon, authenticated',
+                       r.col, t);
+      end loop;
+    end;
   end loop;
 
+  -- 🔴 تحقّق **داخل المعاملة**: أيّ صلاحية باقية لـanon/PUBLIC تُلغي التطبيق كلّه.
+  --    ⛔ ولا يُكتفى بأنّ الأوامر صدرت: يُقرأ الـACL الناتج من الكتالوج.
+  declare v_left text[] := '{}';
+  begin
+    foreach t in array array['ops_locations','ops_vehicles','ops_jobs','ops_job_crew','ops_job_equipment',
+      'ops_job_permits','ops_job_travel','ops_job_accommodation','ops_job_vehicles','ops_job_hse',
+      'ops_job_weather','ops_media_cards','ops_media_backups','ops_ingest_jobs','ops_post_handoff',
+      'ops_daily_reports','ops_incidents','ops_delays','ops_call_sheets','ops_audit'] loop
+      if exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+                   lateral aclexplode(coalesce(c.relacl,'{}'::aclitem[])) a
+                  where n.nspname='public' and c.relname = t
+                    and (a.grantee = 0
+                      or (to_regrole('anon') is not null and a.grantee = to_regrole('anon')::oid))) then
+        v_left := array_append(v_left, t);
+      end if;
+    end loop;
+    if array_length(v_left,1) > 0 then
+      raise exception E'🔴 بقيت صلاحيات لـanon/PUBLIC بعد السحب على:\n  %', array_to_string(v_left, E'\n  ');
+    end if;
+  end;
+
   execute 'revoke all on sequence public.ops_job_code_seq from public';
-  begin execute 'revoke all on sequence public.ops_job_code_seq from anon'; exception when undefined_object then null; end;
-  begin execute 'revoke all on sequence public.ops_job_code_seq from authenticated'; exception when undefined_object then null; end;
+  if to_regrole('anon') is not null then
+    execute 'revoke all on sequence public.ops_job_code_seq from anon';
+  end if;
+  if to_regrole('authenticated') is not null then
+    execute 'revoke all on sequence public.ops_job_code_seq from authenticated';
+  end if;
 end $g$;
 
 -- ════════════════════════════════════════════════════════════════════════════

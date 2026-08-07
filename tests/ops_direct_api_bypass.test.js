@@ -37,8 +37,8 @@ test("كلّ جدول عليه RLS مفعّلة — لا جدول يُنسى ف�
 });
 
 test("anon لا يملك شيئًا: لا جدول ولا دالّة ولا تسلسل", () => {
-  assert.match(GRANTS, /revoke all on table public\.%I from public/i, "لا سحب عامّ على الجداول");
-  assert.match(GRANTS, /revoke all on table public\.%I from anon/i, "لا سحب صريح من anon");
+  assert.match(GRANTS, /revoke all privileges on table public\.%I from public/i, "لا سحب عامّ على الجداول");
+  assert.match(GRANTS, /revoke all privileges on table public\.%I from anon/i, "لا سحب صريح من anon");
   assert.match(GRANTS, /revoke all on function %s from anon/i, "لا سحب صريح من anon على الدوالّ");
   assert.match(GRANTS, /revoke all on sequence public\.ops_job_code_seq from anon/i,
     "تسلسل رقم المهمّة مكشوف لـanon");

@@ -7,7 +7,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { read, SQL, funcBody, TABLES, PUBLIC_FNS } = require("./ops_helpers.js");
+const { read, SQL, SQL_CODE, funcBody, TABLES, PUBLIC_FNS } = require("./ops_helpers.js");
 
 test("العميل مستبعد بنيويًّا: بوّابة العرض تشترط is_staff", () => {
   const b = funcBody("prodops_can_view");
@@ -72,7 +72,7 @@ test("تجاوز الواجهة: التقرير والتسليم لا يُقرآ
 
 test("صفر صلاحية anon: سحب صريح لكلّ دالّة وكلّ جدول", () => {
   assert.match(SQL, /revoke all on function %s from anon/i, "لا سحب anon عن الدوالّ");
-  assert.match(SQL, /revoke all on table public\.%I from anon/i, "لا سحب anon عن الجداول");
+  assert.match(SQL, /revoke all privileges on table public\.%I from anon/i, "لا سحب anon عن الجداول");
   assert.doesNotMatch(SQL, /grant\s+[a-z ,]*\s+on\s+(function|table)[^;]*\bto\s+anon\b/i, "منح لـanon");
   assert.doesNotMatch(SQL, /to anon\b/i, "ذكر منح لـanon");
   // الدوالّ الداخلية تُسحب حتى من authenticated
@@ -99,7 +99,8 @@ test("العميل لا يُشعَر ولا يُذكر: الإشعار لمست�
 });
 
 test("لا مسار خادم يتجاوز RLS: صفر service_role وصفر مفتاح خدمة في الموديول", () => {
-  assert.doesNotMatch(SQL, /service_role/i, "منح لـservice_role في حزمة تشغيلية");
+  // ⚠️ على الكود لا على الشرح: توثيق قرار «service_role لا يُمسّ» ليس منحة.
+  assert.doesNotMatch(SQL_CODE, /service_role/i, "منح لـservice_role في حزمة تشغيلية");
   const ts = read("lib/portal/opsCenter.ts");
   assert.doesNotMatch(ts, /service_role|SERVICE_KEY|SUPABASE_SERVICE/i, "مفتاح خدمة في طبقة المتصفّح");
   assert.match(ts, /from "\.\/client"/, "لا يستعمل عميل البوابة الموحّد");
