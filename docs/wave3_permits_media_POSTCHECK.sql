@@ -175,3 +175,39 @@ select 'الجدولان فارغان (لا بيانات مخترعة)' as check
        case when (select count(*) from public.ops_permits) = 0
              and (select count(*) from public.ops_media)   = 0
             then '✅ فارغان' else '🟡 فيهما صفوف — تحقّق من مصدرها' end as result;
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 الحسم — يفشل فعليًّا لا طباعةً
+--
+-- ★ لماذا أُضيف ★ Final Preview Sweep أعطى «11/11 PASSED» بحالة خروج 0 بينما
+--   كانت السجلّات تحمل صفوفًا حمراء. والسبب أنّ هذا الملفّ كان **SELECT صِرفًا**:
+--   يطبع 🔴 ثمّ ينتهي بحالة 0، فالمِكنسة تقيس خروج psql لا نتيجة الفحص.
+--   ⇒ فحصٌ بلا `raise exception` **لا يحرس شيئًا**، مهما كثرت صفوفه.
+--
+-- ⚠️ ولا يُحوَّل تشخيصيّ إلى حاجب بلا دليل: المحسوب هنا هو **REQUIRED BLOCKER**
+--    فقط (وجود الكائنات · RLS · تسريب صلاحية · نظام موازٍ). وما يعتمد على
+--    البيانات أو على حزمة اختيارية يبقى مطبوعًا خارج الحسم.
+-- ⚠️ شغّل بـ`psql -v ON_ERROR_STOP=1`.
+-- ════════════════════════════════════════════════════════════════════════════
+do $verdict$
+declare v_fail text[] := '{}'; v_o text;
+begin
+  if (select count(*) from information_schema.role_table_grants
+       where table_schema='public' and grantee::text in ('anon','PUBLIC')
+         and table_name::text in ('ops_permits','ops_media')) > 0 then
+    v_fail := array_append(v_fail, 'صلاحية جدول لـanon/PUBLIC');
+  end if;
+  foreach v_o in array array['ops_permits','ops_media'] loop
+    if not coalesce((select c.relrowsecurity from pg_class c
+                       join pg_namespace n on n.oid=c.relnamespace
+                      where n.nspname='public' and c.relname=v_o), false) then
+      v_fail := array_append(v_fail, 'RLS مطفأ على '||v_o);
+    end if;
+  end loop;
+
+  if array_length(v_fail,1) > 0 then
+    raise exception E'🔴 WAVE 3 PERMITS MEDIA POSTCHECK FAILED:\n  %', array_to_string(v_fail, E'\n  ');
+  end if;
+  raise notice '✅ WAVE 3 PERMITS MEDIA POSTCHECK PASSED.';
+end $verdict$;

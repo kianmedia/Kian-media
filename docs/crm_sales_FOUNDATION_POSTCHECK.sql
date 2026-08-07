@@ -197,3 +197,69 @@ where n.nspname = 'public' and p.proname = 'crm_import_preview';
 select count(*) as crm_functions
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname like 'crm\_%';
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 الحسم — يفشل فعليًّا لا طباعةً
+--
+-- ★ لماذا أُضيف ★ Final Preview Sweep أعطى «11/11 PASSED» بحالة خروج 0 بينما
+--   كانت السجلّات تحمل صفوفًا حمراء. والسبب أنّ هذا الملفّ كان **SELECT صِرفًا**:
+--   يطبع 🔴 ثمّ ينتهي بحالة 0، فالمِكنسة تقيس خروج psql لا نتيجة الفحص.
+--   ⇒ فحصٌ بلا `raise exception` **لا يحرس شيئًا**، مهما كثرت صفوفه.
+--
+-- ⚠️ ولا يُحوَّل تشخيصيّ إلى حاجب بلا دليل: المحسوب هنا هو **REQUIRED BLOCKER**
+--    فقط (وجود الكائنات · RLS · تسريب صلاحية · نظام موازٍ). وما يعتمد على
+--    البيانات أو على حزمة اختيارية يبقى مطبوعًا خارج الحسم.
+-- ⚠️ شغّل بـ`psql -v ON_ERROR_STOP=1`.
+-- ════════════════════════════════════════════════════════════════════════════
+do $verdict$
+declare v_fail text[] := '{}'; v_o text;
+begin
+  if (select count(*) from information_schema.role_table_grants
+       where table_schema='public' and grantee::text in ('anon','PUBLIC')
+         and table_name::text like 'crm\_%') > 0 then
+    v_fail := array_append(v_fail, 'صلاحية جدول لـanon/PUBLIC');
+  end if;
+  -- 🔴 REQUIRED BLOCKER: تنفيذ دالّة من الموديول لـanon.
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+              where n.nspname='public' and p.proname like 'crm\_%'
+                and exists (select 1 from pg_roles where rolname='anon')
+                and has_function_privilege('anon', p.oid, 'EXECUTE')) then
+    v_fail := array_append(v_fail, 'anon ينفّذ دالّة من موديول CRM');
+  end if;
+
+  -- 🔴 REQUIRED BLOCKER: authenticated بأكثر من SELECT (الكتابة عبر RPC حصرًا).
+  if (select count(*) from information_schema.role_table_grants
+       where table_schema='public' and table_name::text like 'crm\_%'
+         and grantee::text='authenticated' and privilege_type::text <> 'SELECT') > 0 then
+    v_fail := array_append(v_fail, 'authenticated يملك أكثر من SELECT على جداول CRM');
+  end if;
+
+  -- 🔴 REQUIRED BLOCKER: سياسة كتابة مباشرة تلتفّ على الـRPC.
+  if exists (select 1 from pg_policies
+              where schemaname='public' and tablename like 'crm\_%' and cmd <> 'SELECT') then
+    v_fail := array_append(v_fail, 'سياسة كتابة مباشرة على جدول CRM');
+  end if;
+
+  -- 🔴 REQUIRED BLOCKER: SECURITY DEFINER بلا مسار بحث مثبَّت.
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+              where n.nspname='public' and p.proname like 'crm\_%' and p.prosecdef
+                and coalesce(array_to_string(p.proconfig,','),'') not ilike '%search_path%') then
+    v_fail := array_append(v_fail, 'دالّة CRM مرتفعة الصلاحية بلا search_path مثبَّت');
+  end if;
+  foreach v_o in array array['public.crm_settings','public.crm_teams','public.crm_team_members','public.crm_companies','public.crm_contacts','public.crm_competitors','public.crm_lead_score_rules','public.crm_leads','public.crm_pipelines','public.crm_stages','public.crm_opportunities','public.crm_stage_history','public.crm_activities','public.crm_targets','public.crm_commission_plans','public.crm_commission_assignments','public.crm_commission_records','public.crm_import_batches','public.crm_audit','public.crm_approval_requests'] loop
+    if to_regclass(v_o) is null then v_fail := array_append(v_fail, 'جدول مفقود '||v_o); end if;
+  end loop;
+  foreach v_o in array array['crm_settings','crm_teams','crm_team_members','crm_companies','crm_contacts','crm_competitors','crm_lead_score_rules','crm_leads','crm_pipelines','crm_stages','crm_opportunities','crm_stage_history','crm_activities','crm_targets','crm_commission_plans','crm_commission_assignments','crm_commission_records','crm_import_batches','crm_audit','crm_approval_requests'] loop
+    if not coalesce((select c.relrowsecurity from pg_class c
+                       join pg_namespace n on n.oid=c.relnamespace
+                      where n.nspname='public' and c.relname=v_o), false) then
+      v_fail := array_append(v_fail, 'RLS مطفأ على '||v_o);
+    end if;
+  end loop;
+
+  if array_length(v_fail,1) > 0 then
+    raise exception E'🔴 CRM SALES FOUNDATION POSTCHECK FAILED:\n  %', array_to_string(v_fail, E'\n  ');
+  end if;
+  raise notice '✅ CRM SALES FOUNDATION POSTCHECK PASSED.';
+end $verdict$;

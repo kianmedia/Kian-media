@@ -97,3 +97,56 @@ select 'FEED_FAIL_CLOSED' as kind, v.needle as name,
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace,
      (values ('revoked'),('expired'),('exhausted'),('max_opens')) v(needle)
 where n.nspname = 'public' and p.proname = 'prodops_calendar_feed';
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 الحسم — يفشل فعليًّا لا طباعةً
+--
+-- ★ لماذا أُضيف ★ Final Preview Sweep أعطى «11/11 PASSED» بحالة خروج 0 بينما
+--   كانت السجلّات تحمل صفوفًا حمراء. والسبب أنّ هذا الملفّ كان **SELECT صِرفًا**:
+--   يطبع 🔴 ثمّ ينتهي بحالة 0، فالمِكنسة تقيس خروج psql لا نتيجة الفحص.
+--   ⇒ فحصٌ بلا `raise exception` **لا يحرس شيئًا**، مهما كثرت صفوفه.
+--
+-- ⚠️ ولا يُحوَّل تشخيصيّ إلى حاجب بلا دليل: المحسوب هنا هو **REQUIRED BLOCKER**
+--    فقط (وجود الكائنات · RLS · تسريب صلاحية · نظام موازٍ). وما يعتمد على
+--    البيانات أو على حزمة اختيارية يبقى مطبوعًا خارج الحسم.
+-- ⚠️ شغّل بـ`psql -v ON_ERROR_STOP=1`.
+-- ════════════════════════════════════════════════════════════════════════════
+do $verdict$
+declare v_fail text[] := '{}'; v_o text;
+begin
+  if (select count(*) from information_schema.role_table_grants
+       where table_schema='public' and grantee::text in ('anon','PUBLIC')
+         and table_name::text in ('ops_calendar_tokens')) > 0 then
+    v_fail := array_append(v_fail, 'صلاحية جدول لـanon/PUBLIC');
+  end if;
+  foreach v_o in array array['ops_calendar_tokens'] loop
+    if not coalesce((select c.relrowsecurity from pg_class c
+                       join pg_namespace n on n.oid=c.relnamespace
+                      where n.nspname='public' and c.relname=v_o), false) then
+      v_fail := array_append(v_fail, 'RLS مطفأ على '||v_o);
+    end if;
+  end loop;
+  -- 🔴 REQUIRED BLOCKER: التغذية تستقبل بصمة بدل الرمز الخام، أو لا تحسبها
+  --    داخليًّا. كلاهما كان مطبوعًا «توقّف» ثمّ يمرّ بحالة 0.
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+              where n.nspname='public' and p.proname='prodops_calendar_feed'
+                and pg_get_function_identity_arguments(p.oid) ilike '%hash%') then
+    v_fail := array_append(v_fail, 'التغذية ما تزال تستقبل بصمة كوسيط');
+  end if;
+  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+                  where n.nspname='public' and p.proname='prodops_calendar_feed'
+                    and p.prosrc ilike '%digest(%') then
+    v_fail := array_append(v_fail, 'التغذية لا تحسب البصمة داخليًّا');
+  end if;
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+              where n.nspname='public' and p.proname='prodops_calendar_feed' and p.prosecdef
+                and coalesce(array_to_string(p.proconfig,','),'') not ilike '%search_path%') then
+    v_fail := array_append(v_fail, 'التغذية غير محصَّنة بمسار بحث مثبَّت');
+  end if;
+
+  if array_length(v_fail,1) > 0 then
+    raise exception E'🔴 WAVE 3 CALENDAR TOKENS POSTCHECK FAILED:\n  %', array_to_string(v_fail, E'\n  ');
+  end if;
+  raise notice '✅ WAVE 3 CALENDAR TOKENS POSTCHECK PASSED.';
+end $verdict$;

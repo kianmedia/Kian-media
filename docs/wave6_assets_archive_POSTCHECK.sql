@@ -16,12 +16,25 @@ where table_schema='public' and grantee::text in ('anon','PUBLIC')
   and table_name::text in ('asset_insurance_coverage','archive_media','archive_project_links',
                      'music_licenses','music_license_project_links','model_releases');
 
--- 🔴 لا رابط تخزين مخزَّن في أيّ من الجدولين الحسّاسين.
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 لا رابط تخزين مخزَّن — والفحص الذي طبع أحمر ثمّ PASS على Preview
+--
+-- ★ السبب ★ النمط كان `(^|_)(url|href|signed)`، فالتقط **`signed_at`**.
+--   و`signed_at date` عمودٌ مشروع ومطلوب: تاريخ توقيع إذن الظهور، وقيدُ الحزمة
+--   نفسها `mr_window` يقارن به (`expires_at >= signed_at`). ⇒ **إنذار كاذب**.
+--   المقصود كان `signed_url` (رابط موقَّع)، لا كل ما يبدأ بـ«signed».
+--
+-- ★ العقد الحقيقيّ ★ المستند يُخزَّن `bucket` + `path`، ⛔ ولا رابط: القيدان
+--   `mr_doc_pair` و`ml_proof_pair` يفرضان الاقتران ويمنعان `^https?://`.
+-- ⛔ ولم يُخفَ بتغيير نصّ: النمط صار يستهدف **مقطع اسم** رابطًا فعليًّا
+--   (`url` · `href` · `link` · `uri`) — و`signed_url` يبقى ملتقَطًا عبر `url`.
+-- ════════════════════════════════════════════════════════════════════════════
 select 'لا عمود رابط في المستندات' as check,
-       case when count(*)=0 then '✅' else '🔴 '||string_agg(table_name||'.'||column_name,', ') end as result
+       case when count(*)=0 then '✅ bucket+path فقط'
+            else '🔴 '||string_agg(table_name::text||'.'||column_name::text,', ') end as result
 from information_schema.columns
-where table_schema='public' and table_name in ('model_releases','music_licenses')
-  and column_name ~* '(^|_)(url|href|signed)';
+where table_schema='public' and table_name::text in ('model_releases','music_licenses')
+  and column_name::text ~* '(^|_)(url|uri|href|link)($|_)';
 
 select 'قيود المستندات (bucket+path معًا، ولا http)' as check,
        case when count(*)=2 then '✅ 2/2' else '🔴 '||count(*)::text||'/2' end as result
@@ -234,6 +247,16 @@ begin
                                   'model_release_upsert','model_release_withdraw')
                 and p.prosrc ~* '(custody_incidents|ai_knowledge_sources|ops_job_hse|ops_incidents|sop_items|hse_register|prodops_can_view)') then
     v_fail := v_fail || 'اعتماد عرضيّ على Compliance Knowledge';
+  end if;
+
+  -- 🔴 REQUIRED BLOCKER: رابط تخزين مخزَّن يخالف عقد الحزمة (bucket+path).
+  --    كان مطبوعًا خارج الحسم، فمرّ 🔴 بحالة خروج 0. (والنمط القديم كان
+  --    يلتقط `signed_at` — تاريخ توقيع مشروع — فأنتج الإنذار الكاذب أصلًا.)
+  if exists (select 1 from information_schema.columns
+              where table_schema='public'
+                and table_name::text in ('model_releases','music_licenses')
+                and column_name::text ~* '(^|_)(url|uri|href|link)($|_)') then
+    v_fail := v_fail || 'عمود رابط في جدول مستندات — العقد bucket+path';
   end if;
 
   if array_length(v_fail,1) > 0 then

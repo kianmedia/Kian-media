@@ -68,10 +68,31 @@ select 'بوّابة المشروع fail-closed' as check,
 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
 where n.nspname='public' and p.proname='global_search';
 
--- ⚠️ وأعمدة المصادر الأخرى **لم تتغيّر**: company_name · title · asset_name.
-select 'أعمدة المصادر الأخرى كما هي' as check,
-       case when p.prosrc ~ 'c\.company_name' and p.prosrc ~ 'd\.title' and p.prosrc ~ 'a\.asset_name'
-            then '✅ الثلاثة سليمة' else '🔴 عمود مصدر تغيّر بلا داعٍ' end as result
+-- ════════════════════════════════════════════════════════════════════════════
+-- 🔴 أعمدة المصادر الأخرى — والفحص الذي طبع أحمر ثمّ PASS على Preview
+--
+-- ★ السبب ★ كان يشترط `c.company_name`. وهو **العمود الذي حذفناه عمدًا** بعد
+--   أن أثبتت Preview أنّه لا وجود له في `public.clients` (اسمٌ يخصّ
+--   `crm_leads`). فالفحص بقي على العقد القديم بعد تغيّر العقد ⇒ **إنذار كاذب**
+--   يشترط عودة العطب.
+-- ⛔ ولم يُخفَ بتغيير لون ولا نصّ: صار يشترط **العقد المعتمد** حرفيًّا، ودخل
+--   بلوك الحسم فيُفشل التشغيل بدل أن يُطبع ويُتجاوز.
+--
+-- العقد المعتمد لكل مصدر:
+--   projects   → p.project_name
+--   clients    → coalesce(nullif(btrim(c.company),''), c.full_name, '')
+--   deliverables → d.title
+--   assets     → a.asset_name + a.asset_code
+-- ════════════════════════════════════════════════════════════════════════════
+select 'أعمدة المصادر — العقد المعتمد' as check,
+       case
+         when p.prosrc is null then '🔴 global_search مفقودة'
+         when p.prosrc ~ 'c\.company_name' then '🔴 عاد عمود clients.company_name غير الموجود'
+         when p.prosrc !~ 'nullif\(btrim\(c\.company\)' then '🔴 عقد اسم العميل ليس company ثمّ full_name'
+         when p.prosrc !~ 'c\.full_name' then '🔴 لا احتياط full_name'
+         when p.prosrc !~ 'd\.title' then '🔴 عمود المخرَجات تغيّر'
+         when p.prosrc !~ 'a\.asset_name' or p.prosrc !~ 'a\.asset_code' then '🔴 عمود المعدّات تغيّر'
+         else '✅ الأربعة على العقد المعتمد' end as result
 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
 where n.nspname='public' and p.proname='global_search';
 
@@ -98,6 +119,18 @@ begin
     end if;
     if v_src !~ 'can_access_project\(p\.id\)' then
       v_fail := array_append(v_fail, 'بوّابة المشاريع غائبة من WHERE');
+    end if;
+
+    -- 🔴 عقد أعمدة المصادر — محسوب في الحسم لا مطبوع فقط.
+    if v_src ~ 'c\.company_name' then
+      v_fail := array_append(v_fail, 'clients.company_name عاد — عمود لا وجود له');
+    end if;
+    if v_src !~ 'nullif\(btrim\(c\.company\)' or v_src !~ 'c\.full_name' then
+      v_fail := array_append(v_fail, 'عقد اسم العميل ليس company ثمّ full_name');
+    end if;
+    if v_src !~ 'd\.title' then v_fail := array_append(v_fail, 'deliverables.title تغيّر'); end if;
+    if v_src !~ 'a\.asset_name' or v_src !~ 'a\.asset_code' then
+      v_fail := array_append(v_fail, 'أعمدة المعدّات تغيّرت');
     end if;
   end if;
 
